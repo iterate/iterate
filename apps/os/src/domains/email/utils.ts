@@ -1,5 +1,5 @@
 // First-party outbound email (the `itx.email` capability). Pure helpers only —
-// the env-touching send orchestration lives in rpc-targets.ts's EmailRpcTarget.
+// the env-touching send orchestration lives in rpc-targets.ts's EmailCapabilityRpcTarget.
 // Inbound routing (project/agent inboxes) is the follow-up half of
 // tasks/os-agent-email-cloudflare-workers.md.
 

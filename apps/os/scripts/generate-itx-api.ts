@@ -30,28 +30,19 @@ const rpcTargetsPath = path.join(projectDir, "src/rpc-targets.ts");
 const outPath = path.join(projectDir, "src/itx-api.generated.ts");
 
 /**
- * Classes whose public interface name is not simply the class name minus the
- * "RpcTarget" suffix. `null` means "never emit an interface for this class" —
- * signatures mentioning it are rewritten to the mapped contract name instead.
+ * Relay classes: thin passthroughs that don't define a surface of their own but
+ * forward to an existing hand-authored contract (a subscription handle, a
+ * processor RPC facade, a dynamic proxy). Instead of emitting an interface from
+ * the class's members, the generator renames mentions of the class to the named
+ * contract and emits THAT (from the discovered named-type registry). The class
+ * stays honest either by `implements <contract>` or by the `return new …()`
+ * call site in rpc-targets.ts being typed as the contract.
+ *
+ * This is the ONLY class-name mapping. Every other class publishes under its
+ * name minus the `RpcTarget` suffix, so a capability that wants a different
+ * public name is named to match (e.g. `SlackCapabilityRpcTarget` → `SlackCapability`).
  */
-const CLASS_NAME_OVERRIDES: Record<string, string> = {
-  ProjectRpcTarget: "Project",
-  SlackRpcTarget: "SlackCapability",
-  GmailRpcTarget: "GmailCapability",
-  EmailRpcTarget: "EmailCapability",
-  IntegrationsRpcTarget: "ProjectIntegrations",
-};
-
-/**
- * Classes that relay an existing named contract rather than defining a surface
- * of their own. Mentions are renamed; the contract is emitted from the
- * discovered named-type registry (the hand-authored type alias / interface in
- * its domain module), not from the class members. This is how a thin
- * runtime class (a subscription handle, a passthrough RPC relay) publishes a
- * hand-authored shape while the class itself is checked against it at the
- * `return new …RpcTarget()` call site in rpc-targets.ts.
- */
-const CLASS_TO_CONTRACT: Record<string, string> = {
+const RELAY_CONTRACTS: Record<string, string> = {
   ProcessorRelayRpcTarget: "StreamProcessorRpc",
   StreamProcessorRpcTarget: "StreamProcessorRpc",
   McpClientRpcTarget: "McpClientRpc",
@@ -62,8 +53,13 @@ const CLASS_TO_CONTRACT: Record<string, string> = {
   ProjectEgressInterceptRpcTarget: "ProjectEgressIntercept",
 };
 
-/** Public members that are host-side plumbing, never part of the RPC contract. */
-const SKIPPED_MEMBER_NAMES = new Set(["props", "projectProps", "durableObjectStub"]);
+/**
+ * Public members that are host-side plumbing, never part of the RPC contract.
+ * A member whose TYPE is a `DurableObjectStub` is excluded structurally (see
+ * `emitClass`) so it can never leak regardless of name — these are the
+ * remaining object-typed plumbing fields.
+ */
+const SKIPPED_MEMBER_NAMES = new Set(["props", "projectProps"]);
 
 /** Ambient names that need no emission (runtime globals the REPL/editor shims). */
 const AMBIENT_NAMES = new Set([
@@ -113,12 +109,12 @@ export function generateItxApi(): string {
   /** emitted interface name -> class, for classes that DO define a surface. */
   const classByPublicName = new Map<string, ts.ClassDeclaration>();
   for (const [className, decl] of classesByName) {
-    const contract = CLASS_TO_CONTRACT[className];
-    if (contract) {
-      renameMap.set(className, contract);
+    const relayContract = RELAY_CONTRACTS[className];
+    if (relayContract) {
+      renameMap.set(className, relayContract);
       continue;
     }
-    const publicName = CLASS_NAME_OVERRIDES[className] ?? className.replace(/RpcTarget$/, "");
+    const publicName = className.replace(/RpcTarget$/, "");
     renameMap.set(className, publicName);
     classByPublicName.set(publicName, decl);
   }
@@ -146,6 +142,14 @@ export function generateItxApi(): string {
         list.push(statement);
         namedDecls.set(statement.name.text, list);
       }
+    }
+  }
+
+  // Every relay must forward to a contract that actually exists as a hand-authored
+  // named type — otherwise a typo'd or missing entry would emit a dangling name.
+  for (const contract of Object.values(RELAY_CONTRACTS)) {
+    if (!namedDecls.has(contract)) {
+      throw new Error(`RELAY_CONTRACTS points at "${contract}", which no module exports as a type`);
     }
   }
 
@@ -220,6 +224,9 @@ export function generateItxApi(): string {
 
   const printType = (type: ts.Type, location: ts.Node): string =>
     checker.typeToString(type, location, typeFlags);
+
+  /** True when an emitted member type is a Durable Object stub (host plumbing). */
+  const isDurableObjectStub = (typeText: string): boolean => /\bDurableObjectStub\b/.test(typeText);
 
   /** The last JSDoc block in a declaration's leading trivia, verbatim. */
   const jsDocOf = (decl: ts.Node): string | undefined => {
@@ -298,6 +305,10 @@ export function generateItxApi(): string {
       if (ts.isGetAccessorDeclaration(member)) {
         const typeText =
           member.type?.getText() ?? printType(checker.getTypeAtLocation(member), member);
+        // A member typed as a Durable Object stub is host plumbing, never the
+        // public contract — exclude it structurally so it can't leak via a
+        // forgotten `@internal` tag or an unlisted name.
+        if (isDurableObjectStub(typeText)) continue;
         if (doc) lines.push(doc);
         // `X | undefined` getters are optional members of the contract.
         const optionalMatch = typeText.match(/^(.*?)\s*\|\s*undefined$/);
@@ -312,6 +323,7 @@ export function generateItxApi(): string {
       if (ts.isPropertyDeclaration(member)) {
         const typeText =
           member.type?.getText() ?? printType(checker.getTypeAtLocation(member), member);
+        if (isDurableObjectStub(typeText)) continue;
         if (doc) lines.push(doc);
         lines.push(`  ${memberName}: ${typeText};`);
       }

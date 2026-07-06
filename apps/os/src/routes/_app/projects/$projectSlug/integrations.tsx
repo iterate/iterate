@@ -16,14 +16,14 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
-import type { Project as ProjectRpcTarget } from "../../../../itx-api.generated.ts";
+import type { Project } from "../../../../itx-api.generated.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
-type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<Project["integrations"]["getConnection"]>>;
 
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),

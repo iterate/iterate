@@ -711,7 +711,7 @@ class AiRpcTarget extends RpcTarget {
  * authorization uses the project's stored bot token through the secret
  * substitution egress pipeline (domains/integrations/slack-api.ts).
  */
-class SlackRpcTarget extends RpcTarget {
+class SlackCapabilityRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -759,7 +759,7 @@ class SlackRpcTarget extends RpcTarget {
 }
 
 /** The `itx.integrations.gmail` built-in: Gmail REST proxy for the project's Google account. */
-class GmailRpcTarget extends RpcTarget {
+class GmailCapabilityRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -798,7 +798,7 @@ class GmailRpcTarget extends RpcTarget {
  * (`<slug>@<first project hostname base>`). Every send appends an
  * `email/sent` audit event to the project's /integrations/email stream.
  */
-class EmailRpcTarget extends RpcTarget {
+class EmailCapabilityRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -879,7 +879,7 @@ class EmailRpcTarget extends RpcTarget {
  * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
  * OAuth state minted by startOAuthFlow, verified itx-side.
  */
-class IntegrationsRpcTarget extends RpcTarget {
+class ProjectIntegrationsRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -902,15 +902,15 @@ class IntegrationsRpcTarget extends RpcTarget {
     });
   }
 
-  get gmail(): GmailRpcTarget {
-    return new GmailRpcTarget({
+  get gmail(): GmailCapabilityRpcTarget {
+    return new GmailCapabilityRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
   }
 
-  get slack(): SlackRpcTarget {
-    return new SlackRpcTarget({
+  get slack(): SlackCapabilityRpcTarget {
+    return new SlackCapabilityRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
@@ -1990,8 +1990,8 @@ export class ProjectRpcTarget extends RpcTarget {
   }
 
   /** Project email: send(...) and the connection-scoped inbound address. */
-  get email(): EmailRpcTarget {
-    return new EmailRpcTarget({
+  get email(): EmailCapabilityRpcTarget {
+    return new EmailCapabilityRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });
@@ -2003,8 +2003,8 @@ export class ProjectRpcTarget extends RpcTarget {
   }
 
   /** Slack/Google connections + the connection-scoped API proxies (`integrations.gmail`, `integrations.slack`). */
-  get integrations(): IntegrationsRpcTarget {
-    return new IntegrationsRpcTarget({
+  get integrations(): ProjectIntegrationsRpcTarget {
+    return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });
@@ -2520,7 +2520,10 @@ export class ProjectEgressInterceptRpcTarget extends RpcTarget {
 export class StreamProcessorRpcTarget<
   Contract extends StreamProcessorContract,
   PublicState = ProcessorState<Contract>,
-> extends RpcTarget {
+>
+  extends RpcTarget
+  implements StreamProcessorRpc<PublicState>
+{
   readonly #processor: StreamProcessor<Contract, object>;
   readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
   readonly #publicState: ((state: ProcessorState<Contract>) => PublicState) | undefined;
@@ -2648,7 +2651,7 @@ function exampleSummary(example: ItxExample): ItxExampleSummary {
  * each method awaits the resolved processor stub, then makes a plain method
  * call on it.
  */
-class ProcessorRelayRpcTarget<State> extends RpcTarget {
+class ProcessorRelayRpcTarget<State> extends RpcTarget implements StreamProcessorRpc<State> {
   readonly #resolveProcessor: () => PromiseLike<unknown>;
 
   constructor(resolveProcessor: () => PromiseLike<unknown>) {

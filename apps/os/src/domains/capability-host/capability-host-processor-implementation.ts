@@ -6,7 +6,7 @@ import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
-import type { CapabilityHost, Project as ProjectRpcTarget } from "../../itx-api.generated.ts";
+import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type {
   CapabilityProvidedPayload,
@@ -97,7 +97,7 @@ export type ParentCapabilityHost = {
 
 export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
-  #itx: ProjectRpcTarget;
+  #itx: Project;
   #path: string;
   #dynamicWorkers: DynamicWorkerRunner;
   #parent: ParentCapabilityHost | undefined;
@@ -105,7 +105,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   constructor(
     args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
-      itx: ProjectRpcTarget;
+      itx: Project;
       path: string;
       /** Runs run-script workers in this scope. */
       dynamicWorkers: DynamicWorkerRunner;

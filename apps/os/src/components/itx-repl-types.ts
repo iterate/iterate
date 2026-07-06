@@ -34,7 +34,7 @@ export const itxTypesDeclaration: string = ITX_TYPES_SOURCE;
  * `ExecutionContext` — the editor's lib is es2022 + dom), and global aliases
  * so snippets can name the types without importing them.
  *
- * The REPL handle is typed `Session & ProjectRpcTarget` — the same pragmatic intersection
+ * The REPL handle is typed `Session & Project` — the same pragmatic intersection
  * `~/itx/itx-react.tsx` uses: a project REPL holds the project itx, the
  * global/admin REPL holds the Session catalog, and a wrong call for the
  * context fails at runtime exactly like a missing capability would. Dynamic
@@ -72,7 +72,6 @@ declare global {
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Session = itxTypes.Session;
   type Project = itxTypes.Project;
-  type ProjectRpcTarget = itxTypes.Project;
   type Agent = itxTypes.Agent;
   type AgentChat = itxTypes.AgentChat;
   type Stream = itxTypes.Stream;
