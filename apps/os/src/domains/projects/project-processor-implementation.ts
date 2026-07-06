@@ -1,4 +1,5 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import type { EmittedInput } from "../streams/processor-contracts.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
@@ -6,6 +7,7 @@ import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.gener
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AgentProcessorContract,
@@ -24,7 +26,9 @@ import { SlackAgentProcessorContract } from "../integrations/slack-agent-process
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
+import type { ProjectCustomDomainCloudflareSnapshot } from "./project-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+import type { ProjectCustomDomainProvisioner } from "./custom-domains.ts";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -85,12 +89,17 @@ const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
+type CustomDomainDeps = ProjectCustomDomainProvisioner & {
+  readProject(): Promise<ProjectDirectoryRecord | null>;
+};
+
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,
   {
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
     itx: ProjectRpcTarget;
+    customDomains?: CustomDomainDeps;
   }
 > {
   readonly contract = ProjectProcessorContract;
@@ -115,6 +124,55 @@ export class ProjectProcessor extends StreamProcessor<
         return { ...state, created: true };
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
+      case "events.iterate.com/project/custom-domain-add-requested":
+        return upsertCustomDomain(state, {
+          cloudflareHostnameId: null,
+          createdAt: event.createdAt,
+          error: null,
+          hostname: event.payload.hostname,
+          hostnameStatus: null,
+          ownershipVerification: null,
+          sslStatus: null,
+          status: "requested",
+          updatedAt: event.createdAt,
+          validationRecords: [],
+          wildcard: true,
+        });
+      case "events.iterate.com/project/custom-domain-cloudflare-observed":
+        return upsertCustomDomain(state, {
+          ...event.payload,
+          createdAt:
+            state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
+              ?.createdAt ?? event.createdAt,
+          updatedAt: event.createdAt,
+        });
+      case "events.iterate.com/project/custom-domain-provision-failed":
+        return upsertCustomDomain(state, {
+          cloudflareHostnameId:
+            state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
+              ?.cloudflareHostnameId ?? null,
+          createdAt:
+            state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
+              ?.createdAt ?? event.createdAt,
+          error: event.payload.error,
+          hostname: event.payload.hostname,
+          hostnameStatus: null,
+          ownershipVerification: null,
+          sslStatus: null,
+          status: "failed",
+          updatedAt: event.createdAt,
+          validationRecords: [],
+          wildcard: true,
+        });
+      case "events.iterate.com/project/custom-domain-remove-requested":
+        return markCustomDomainRemoving(state, event.payload.hostname, event.createdAt);
+      case "events.iterate.com/project/custom-domain-removed":
+        return {
+          ...state,
+          customDomains: state.customDomains.filter(
+            (domain) => domain.hostname !== event.payload.hostname,
+          ),
+        };
       case "events.iterate.com/stream/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
         return recordStream(state, event.payload.path, event.createdAt);
@@ -208,6 +266,69 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
+      case "events.iterate.com/project/custom-domain-add-requested": {
+        blockProcessorWhile(async () => {
+          await appendCustomDomainObservation({
+            append,
+            eventOffset: event.offset,
+            hostname: event.payload.hostname,
+            operation: async () => {
+              const customDomains = assertCustomDomainProvisioner(this.deps.customDomains);
+              const project =
+                (await customDomains.readProject()) ??
+                projectRecordFromState(state, this.deps.itx.projectId);
+              return await customDomains.ensure({ hostname: event.payload.hostname, project });
+            },
+            projectId: this.deps.itx.projectId,
+          });
+        });
+        return;
+      }
+      case "events.iterate.com/project/custom-domain-refresh-requested": {
+        blockProcessorWhile(async () => {
+          await appendCustomDomainObservation({
+            append,
+            eventOffset: event.offset,
+            hostname: event.payload.hostname,
+            operation: async () => {
+              const customDomains = assertCustomDomainProvisioner(this.deps.customDomains);
+              const project =
+                (await customDomains.readProject()) ??
+                projectRecordFromState(state, this.deps.itx.projectId);
+              return await customDomains.refresh({
+                hostname: event.payload.hostname,
+                project,
+              });
+            },
+            projectId: this.deps.itx.projectId,
+          });
+        });
+        return;
+      }
+      case "events.iterate.com/project/custom-domain-remove-requested": {
+        blockProcessorWhile(async () => {
+          const hostname = event.payload.hostname;
+          try {
+            const domain = state.customDomains.find((candidate) => candidate.hostname === hostname);
+            await assertCustomDomainProvisioner(this.deps.customDomains).remove({
+              cloudflareHostnameId: domain?.cloudflareHostnameId,
+              hostname,
+            });
+            await append({
+              type: "events.iterate.com/project/custom-domain-removed",
+              idempotencyKey: `project/custom-domain-removed:${this.deps.itx.projectId}:${event.offset}`,
+              payload: { hostname },
+            });
+          } catch (error) {
+            await append({
+              type: "events.iterate.com/project/custom-domain-provision-failed",
+              idempotencyKey: `project/custom-domain-remove-failed:${this.deps.itx.projectId}:${event.offset}`,
+              payload: { error: errorMessage(error), hostname },
+            });
+          }
+        });
+        return;
+      }
       case "events.iterate.com/stream/child-stream-created": {
         const childPath = event.payload.childPath;
         if (!childPath.startsWith("/agents/") && !childPath.startsWith("/secrets/")) return;
@@ -293,6 +414,78 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
+}
+
+function assertCustomDomainProvisioner(
+  provisioner: CustomDomainDeps | undefined,
+): CustomDomainDeps {
+  if (!provisioner) throw new Error("Custom-domain provisioning is not configured.");
+  return provisioner;
+}
+
+function projectRecordFromState(
+  state: { createRequest: { projectId: string; slug: string } | null },
+  projectId: string,
+): ProjectDirectoryRecord {
+  const slug = state.createRequest?.slug ?? projectId;
+  return { id: projectId, slug, organizationId: null, name: slug };
+}
+
+async function appendCustomDomainObservation(input: {
+  append: (...input: EmittedInput<typeof ProjectProcessorContract>[]) => Promise<StreamEvent[]>;
+  eventOffset: number;
+  hostname: string;
+  operation: () => Promise<ProjectCustomDomainCloudflareSnapshot>;
+  projectId: string;
+}): Promise<void> {
+  try {
+    const snapshot = await input.operation();
+    await input.append({
+      type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+      idempotencyKey: `project/custom-domain-observed:${input.projectId}:${input.eventOffset}`,
+      payload: snapshot,
+    });
+  } catch (error) {
+    await input.append({
+      type: "events.iterate.com/project/custom-domain-provision-failed",
+      idempotencyKey: `project/custom-domain-failed:${input.projectId}:${input.eventOffset}`,
+      payload: { error: errorMessage(error), hostname: input.hostname },
+    });
+  }
+}
+
+function upsertCustomDomain<State extends { customDomains: ProjectCustomDomainState[] }>(
+  state: State,
+  domain: ProjectCustomDomainState,
+): State {
+  const next = [
+    ...state.customDomains.filter((candidate) => candidate.hostname !== domain.hostname),
+    domain,
+  ].sort((a, b) => a.hostname.localeCompare(b.hostname));
+  return { ...state, customDomains: next };
+}
+
+function markCustomDomainRemoving<State extends { customDomains: ProjectCustomDomainState[] }>(
+  state: State,
+  hostname: string,
+  updatedAt: string,
+): State {
+  const domain = state.customDomains.find((candidate) => candidate.hostname === hostname);
+  if (!domain) return state;
+  return upsertCustomDomain(state, {
+    ...domain,
+    status: "removing",
+    updatedAt,
+  });
+}
+
+type ProjectCustomDomainState = ProjectCustomDomainCloudflareSnapshot & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** THE place the "agent path decides the reply door" rule lives: Slack thread

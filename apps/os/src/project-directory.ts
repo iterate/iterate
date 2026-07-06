@@ -16,7 +16,7 @@
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import type { AppConfig } from "./config.ts";
 
-type ProjectDirectoryRecord = {
+export type ProjectDirectoryRecord = {
   id: string;
   slug: string;
   organizationId: string | null;
@@ -33,6 +33,10 @@ function slugKey(slug: string) {
 
 function projectKey(projectId: string) {
   return `project:${projectId}`;
+}
+
+function hostnameKey(hostname: string) {
+  return `hostname:${hostname}`;
 }
 
 /** Resolve a slug (or a `prj_` id, passed through) to a project id. */
@@ -122,6 +126,36 @@ export async function primeProjectDirectory(
   await writeThrough(directory, record).catch(() => {});
 }
 
+/** Exact custom-hostname registration, without app-subdomain fallback. */
+export async function readProjectHostnameRegistration(
+  directory: KVNamespace,
+  hostname: string,
+): Promise<ProjectDirectoryRecord | null> {
+  return await directory
+    .get<ProjectDirectoryRecord>(hostnameKey(hostname), "json")
+    .catch(() => null);
+}
+
+/**
+ * Custom-domain routing projection. The parent-domain key is enough for ingress:
+ * `garple.com` resolves exact, and `counter.garple.com` falls back to it with
+ * `appSlug: "counter"`.
+ */
+export async function primeProjectHostname(
+  directory: KVNamespace,
+  hostname: string,
+  record: ProjectDirectoryRecord,
+): Promise<void> {
+  await directory.put(hostnameKey(hostname), JSON.stringify(record));
+}
+
+export async function deleteProjectHostname(
+  directory: KVNamespace,
+  hostname: string,
+): Promise<void> {
+  await directory.delete(hostnameKey(hostname));
+}
+
 function memoize(slug: string, record: ProjectDirectoryRecord | null) {
   slugMemo.set(slug, { expiresAt: Date.now() + MEMO_TTL_MS, record });
 }
@@ -165,16 +199,15 @@ async function lookupAuthWorker(
  * Custom-hostname resolution: `bla.com` set as a project's custom hostname
  * serves the project worker; `someapp.bla.com` serves it with that app
  * selected. Registrations live under `hostname:<host>` KV keys — written by
- * custom-hostname provisioning (tasks/os-project-archival.md; until it lands the lane is wired
- * but nothing populates it). No auth-worker fallback yet: the directory has
- * no byHostname endpoint (also tasks/os-project-archival.md).
+ * custom-hostname provisioning. No auth-worker fallback yet: these mappings
+ * are deployment-global to apps/os.
  */
 export async function readProjectByHostname(
   directory: KVNamespace,
   host: string,
 ): Promise<{ record: ProjectDirectoryRecord; appSlug: string | null } | null> {
   const exact = await directory
-    .get<ProjectDirectoryRecord>(`hostname:${host}`, "json")
+    .get<ProjectDirectoryRecord>(hostnameKey(host), "json")
     .catch(() => null);
   if (exact) return { record: exact, appSlug: null };
 
@@ -183,7 +216,7 @@ export async function readProjectByHostname(
   const appSlug = host.slice(0, dotIndex);
   const parent = host.slice(dotIndex + 1);
   const parentRecord = await directory
-    .get<ProjectDirectoryRecord>(`hostname:${parent}`, "json")
+    .get<ProjectDirectoryRecord>(hostnameKey(parent), "json")
     .catch(() => null);
   if (parentRecord) return { record: parentRecord, appSlug };
 
