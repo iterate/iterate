@@ -19,6 +19,11 @@ export function toStreamWebSocketUrl(args: { path: string; projectId?: string })
   const url = new URL(streamRpcPath({ path, projectId: args.projectId }), e2eWorkerUrl());
   if (url.protocol === "http:") url.protocol = "ws:";
   if (url.protocol === "https:") url.protocol = "wss:";
+  // Deployed playgrounds are admin-only; WebSockets cannot carry headers from
+  // every client, so the forge-minted e2e bearer rides as a query param
+  // (accepted only on /api/streams — see src/worker.ts). Unset locally.
+  const token = process.env.STREAMS_PLAYGROUND_TOKEN?.trim();
+  if (token) url.searchParams.set("access_token", token);
   return url.toString();
 }
 

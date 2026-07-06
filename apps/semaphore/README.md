@@ -86,6 +86,20 @@ preview inventory from this package, run:
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
+## Dashboard
+
+The signed-in dashboard at `/resources/` shows the preview-slot fleet as a
+grid sorted by most recent activity: card color is lease state (amber =
+leased, green = available), and each card carries the holder (linked to its
+PR), lease expiry, last acquired/released times, per-app links, and an
+expandable raw JSON view. Two operator actions run against the coordinator:
+
+- **Release** (leased slots) — confirm-gated; evicts the current lease.
+- **Claim for PR…** (available slots) — records a `pr-<n>` holder with the
+  standard 24h preview lease, the dashboard equivalent of
+  `pnpm preview acquire`. Claiming marks ownership so CI will not deploy
+  over the slot; deploying to it remains the PR flow's job.
+
 ## Contract
 
 `src/contract.ts` contains the oRPC contract, schemas, and local client helper.

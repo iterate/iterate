@@ -1145,7 +1145,27 @@ function StreamSidebar({
       />
       <InsertEventsTool streamStore={streamStore} streamPath={streamView.path} />
       <StreamControlTool snapshot={snapshot} streamStore={streamStore} />
+      <SidebarFooter />
     </aside>
+  );
+}
+
+/**
+ * Sign-out link. Deployed playgrounds are admin-only (iterate-auth relying
+ * party), so a signed-in operator always has somewhere to go; the link hits
+ * the relying-party logout handler, which clears the session and returns
+ * here. On auth-less local dev there is no handler, but the link is harmless.
+ */
+function SidebarFooter() {
+  return (
+    <div className="mt-4 border-t border-[#e8ebf0] pt-3 text-xs">
+      <a
+        className="text-[#6b7280] underline underline-offset-2 hover:text-[#111827]"
+        href="/api/iterate-auth/logout"
+      >
+        Sign out
+      </a>
+    </div>
   );
 }
 

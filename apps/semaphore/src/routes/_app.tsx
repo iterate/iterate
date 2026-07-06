@@ -14,7 +14,8 @@ export const Route = createFileRoute("/_app")({
   // The whole dashboard requires a signed-in iterate admin — the same
   // apps/auth identity the API lanes verify. Unauthenticated visitors go
   // through the relying-party login handler (served by the request
-  // middleware, outside the route tree — hence redirect by href).
+  // middleware, outside the route tree — hence redirect by href); signed-in
+  // non-admins go to /not-an-admin, which offers a sign-out button.
   beforeLoad: async ({ location }) => {
     const auth = await fetchAuthSnapshot();
     if (!auth.authenticated) {
@@ -25,9 +26,7 @@ export const Route = createFileRoute("/_app")({
       });
     }
     if (!auth.isAdmin) {
-      throw new Error(
-        `Signed in${auth.email ? ` as ${auth.email}` : ""}, but semaphore is operator tooling and requires an iterate admin. Sign out at /api/iterate-auth/logout.`,
-      );
+      throw redirect({ to: "/not-an-admin/" });
     }
     return { auth };
   },

@@ -281,6 +281,12 @@ export interface StreamsExampleEnv {
   workerName: string;
   /** workers.dev origin (the account's workers.dev subdomain is fixed). */
   baseUrl: string;
+  /**
+   * The env's apps/auth deployment. The playground is a relying party of the
+   * same issuer as os: deploys bake the issuer's JWKS and requests
+   * authenticate with iterate sessions or bearer access tokens.
+   */
+  authBaseUrl: string;
 }
 
 function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
@@ -289,6 +295,7 @@ function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
     dopplerConfig: `preview_${n}`,
     workerName: `streams-example-app-preview-${n}`,
     baseUrl: `https://streams-example-app-preview-${n}.iterate-dev-preview.workers.dev`,
+    authBaseUrl: `https://auth.iterate-preview-${n}.com`,
   };
 }
 
@@ -298,6 +305,7 @@ export const streamsExampleEnvs = {
     dopplerConfig: "prd",
     workerName: "streams-example-app-prd",
     baseUrl: "https://streams-example-app-prd.iterate.workers.dev",
+    authBaseUrl: "https://auth.iterate.com",
   },
   preview_1: streamsExamplePreviewSlot(1),
   preview_2: streamsExamplePreviewSlot(2),
