@@ -630,3 +630,48 @@ and appends `secret/leak-blocked`.
 E2e for every stage lives in new, separate spec files with their own
 well-documented helpers (no retrofitting into existing suites). All stages
 land on PR #1508.
+
+---
+
+## 8. Implementation status (2026-07-06)
+
+Built and proven (PR #1508):
+
+- **S0 `apps/dummy-petshop`** — deployed (preview_3:
+  `https://dummy-petshop.iterate-preview-3.com`). OAuth 2.0 (Basic client
+  auth), Waitrose-style `/api/legacy-login`, bearer API, HMAC-signed
+  webhooks, a `/__backdoor` console, **plus** an MCP server (`/mcp`),
+  oRPC + OpenAPI (`/rpc`, `/api/v2`, `/openapi.json`), and a Discord-style
+  **WebSocket gateway** (`/gateway`, credential in an IDENTIFY frame).
+- **S1** — secret material is any serializable value; `getSecret(path[, field])`
+  header placeholders; multi-secret header chaining with per-hop pins;
+  `hmac`/`matches`; the virtual platform-secret resolver.
+- **S2** — the secret worker runtime: a stateless dynamic worker overrides
+  the secret's `fetch()`, jailed via one `SecretEntrypoint` stub that is both
+  `env.SECRET` (read/update/fetch) and the pinned `globalOutbound`. Refresh
+  is private worker code (401 → refresh → retry); no `refresh()` convention.
+- **S4 (petshop half)** — the Discord-style frame-credential transport exists
+  on the third-party side (petshop `/gateway`).
+- **S5** — the round trip, proven live against preview_3
+  (`integrations-petshop.e2e.test.ts`): **userspace** lane (two OAuth clients,
+  two connections, connect → authed call → backdoor-forced-expiry refresh →
+  webhook verify) and the **first-party** lane (same worker, app credential
+  from the platform secret). Plus a Playwright consent spec
+  (`e2e/playwright/petshop-oauth-consent.spec.ts`).
+
+Deferred to follow-ups (not required to prove the model; the abstraction is
+exercised directly through `itx.egress`/`itx.secrets`):
+
+- The integration-tree ergonomics of **S3** (first-class `integrations.<slug>`
+  RpcTargets with `connect`/`completeConnect`/`handleWebhook`, the
+  `IntegrationInfo` describe extras, the generic OAuth callback door, the
+  external-id fan-in directory + claim-conflict error, a connect UI). The
+  proof mounts secrets + workers directly; the tree is sugar over that.
+- The **OS-side** Discord gateway worker and OpenAI relay worker (S4). The
+  jail's outbound WebSocket path (frame substitution vs. `read()`-then-frame)
+  wants the ~30-min workerd spike the mechanics review called for before it is
+  load-bearing; petshop `/gateway` is ready to be the target.
+- Porting the live **Slack** path onto the tree and deleting the old one (S6).
+- The Gmail conversion (deleting `google-tokens.ts`), the takeover
+  interstitial, alarm-driven proactive refresh, and the exit tripwire — see
+  §6 "Future work".

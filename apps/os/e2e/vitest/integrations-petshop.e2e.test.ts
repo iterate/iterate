@@ -172,4 +172,54 @@ describe("dummy-petshop userspace integration", () => {
     expect(await homeAppSecret.matches({ field: "verifyToken", value: verifyToken })).toBe(true);
     expect(await homeAppSecret.matches({ field: "verifyToken", value: "wrong" })).toBe(false);
   });
+
+  // The first-party lane (design §4, R4): the EXACT SAME refresh worker, but its
+  // app credential comes from a virtual platform secret backed by deployment
+  // config (APP_CONFIG_INTEGRATIONS__PETSHOP) — no project app-secret DO, no
+  // platform bytes ever in the jail. Only `appSecretPath` differs from the
+  // userspace lane above. Requires the OS deployment's config to carry the
+  // petshop client (the seeded default client).
+  test("first-party lane: app credential resolves from a platform secret, same worker", async () => {
+    const petshop = petshopBaseUrl();
+    const slug = `petshop-firstparty-${RUN}`;
+    const connectionPath = `/secrets/integrations/${slug}/acme`;
+    // The platform secret is virtual — resolved from AppConfig, never a DO.
+    const appSecretPath = "/secrets/platform/integrations/petshop";
+    const { clientId, clientSecret } = PETSHOP_DEFAULT_CLIENT;
+
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `petshop-fp-${RUN}` });
+    await project.__describe();
+
+    const code = await petshopAuthorize({ clientId, redirectUri: REDIRECT_URI });
+    const tokens = await petshopExchangeCode({
+      clientId,
+      clientSecret,
+      code,
+      redirectUri: REDIRECT_URI,
+    });
+
+    using connectionSecret = project.secrets.get(connectionPath);
+    await connectionSecret.update({
+      egress: { urls: [petshop] },
+      material: { accessToken: tokens.access_token, refreshToken: tokens.refresh_token },
+      worker: petshopWorkerRef({ appSecretPath, tokenUrl: `${petshop}/oauth/token` }),
+    });
+    await waitForCondition(async () => (await connectionSecret.describe()).hasWorker, {
+      description: "first-party connection worker to install",
+    });
+
+    const me = await callThroughConnection(project, connectionPath, "/api/me");
+    expect(me.status).toBe(200);
+    expect(me.body).toMatchObject({ clientId });
+
+    // Force a 401 and prove the worker refreshes using the PLATFORM app
+    // credential (base64 client auth composed by the platform resolver from
+    // deployment config) — the jail never holds it.
+    await petshopExpireTokens();
+    const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
+    expect(afterExpiry.status).toBe(200);
+    expect(afterExpiry.body).toMatchObject({ clientId });
+  });
 });

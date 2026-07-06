@@ -50,6 +50,10 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_GEMINI_API_KEY",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
+  // The first-party dummy-petshop client credentials (integration proofs);
+  // backs /secrets/platform/integrations/petshop. Optional — only preview/dev
+  // envs running the petshop e2e carry it.
+  "APP_CONFIG_INTEGRATIONS__PETSHOP",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
