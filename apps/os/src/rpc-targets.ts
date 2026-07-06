@@ -60,7 +60,7 @@ import {
   operationBodySchema,
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
-import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
+import { callMcpToolPath, listMcpTools } from "./domains/itx/mcp-client.ts";
 import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
@@ -78,6 +78,7 @@ import type {
   AgentCollection,
   Ai,
   CfExecutionContext,
+  Description,
   ItxAuth,
   ProjectRpcTarget as ProjectRpcTargetContract,
   ItxExampleCatalog,
@@ -88,6 +89,7 @@ import type {
   McpClientRpc,
   OpenApiCollection,
   OpenApiConnectInput,
+  OpenApiRpc,
   ProjectCollection,
   ProjectListEntry,
   ProjectRepoCollection,
@@ -132,6 +134,16 @@ import {
   EMAIL_INTEGRATION_STREAM_PATH,
   EMAIL_SENT_EVENT_TYPE,
 } from "./domains/email/utils.ts";
+
+type FetchOnly = Pick<Fetcher, "fetch">;
+
+const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
+const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
+const PLATFORM_FETCHER: FetchOnly = {
+  fetch(input, init) {
+    return fetch(input, init);
+  },
+};
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -1605,6 +1617,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].api.request({ path }); other slugs resolve through the project capability table.',
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
+  parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
@@ -1828,6 +1841,30 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new OpenApiCollectionRpcTarget({
       egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
     });
+  }
+
+  get parallel(): OpenApiRpc {
+    const apiKey = parseConfig(env).integrations.parallel?.apiKey.exposeSecret();
+    if (!apiKey) {
+      throw new Error("Parallel is not configured for this OS deployment.");
+    }
+
+    return OpenApiRpcTarget.createLazyClient(
+      {
+        baseUrl: PARALLEL_API_BASE_URL,
+        headers: { "x-api-key": apiKey },
+        specUrl: PARALLEL_OPENAPI_SPEC_URL,
+      },
+      {
+        description: {
+          instructions:
+            "Parallel API using Iterate's platform API key. Methods are raw OpenAPI operationIds discovered from Parallel's OpenAPI spec.",
+          parent: "a project itx (itx.parallel)",
+          types: "export type Parallel = OpenApiRpc;",
+        },
+        egress: PLATFORM_FETCHER,
+      },
+    );
   }
 
   get repos() {
@@ -2507,7 +2544,14 @@ class ProcessorStateSubscriptionRpcTarget
   }
 }
 
-type McpClientDeps = { egress: Fetcher };
+type LazyClientDescription = Pick<Partial<Description>, "instructions" | "parent" | "types">;
+
+function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
+}
+
+type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
 // Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
 // it gives every project web search with zero setup.
@@ -2535,18 +2579,33 @@ class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollect
   }
 
   get exa(): McpClientRpc {
-    return new McpClientRpcTarget({ config: { url: EXA_MCP_URL }, egress: this.props.egress });
+    return McpClientRpcTarget.createLazyClient(
+      { url: EXA_MCP_URL },
+      {
+        description: {
+          instructions:
+            "Public Exa MCP server: web search and page reading. Tool names are discovered from the MCP server.",
+          parent: "a project itx (itx.mcp.exa)",
+        },
+        egress: this.props.egress,
+      },
+    );
   }
 }
 
 class McpClientRpcTarget extends RpcTarget {
+  static createLazyClient(input: McpClientConnectInput, deps: McpClientDeps) {
+    return new McpClientRpcTarget({ config: input, ...deps });
+  }
+
   static async connect(input: McpClientConnectInput, deps: McpClientDeps) {
-    return new McpClientRpcTarget({ config: input, egress: deps.egress });
+    return McpClientRpcTarget.createLazyClient(input, deps);
   }
 
   constructor(
     readonly props: {
       config: McpClientConnectInput;
+      description?: LazyClientDescription;
       egress: Fetcher;
     },
   ) {
@@ -2555,9 +2614,20 @@ class McpClientRpcTarget extends RpcTarget {
   }
 
   async __describe() {
+    const tools = await listMcpTools({
+      config: this.props.config,
+      egress: this.props.egress,
+    });
+
     return describeNode({
-      instructions: `An ad-hoc MCP client for ${this.props.config.url} — a flattened dispatcher: any dotted call is one MCP tool invocation (\`client.someTool(input)\` calls the tool "someTool"). Tool names come from the server, not from this node; list them with the server's own discovery if it offers one.`,
-      parent: "itx.mcp (connect(url), or the built-in exa)",
+      instructions:
+        this.props.description?.instructions ??
+        `An ad-hoc MCP client for ${this.props.config.url}: a flattened dispatcher; client.someTool(input) calls the tool "someTool".`,
+      types: this.props.description?.types,
+      children: Object.fromEntries(
+        tools.map((tool) => [tool.name, tool.description ?? "MCP tool"]),
+      ),
+      parent: this.props.description?.parent ?? "itx.mcp.connect(url)",
     });
   }
 
@@ -2575,7 +2645,12 @@ class McpClientRpcTarget extends RpcTarget {
 // power it receives is project egress, which is also the path a user-provided
 // dynamic worker would use through env.ITX. That keeps the built-in and dynamic
 // implementations aligned: fetch spec, derive operations, then dispatch calls.
-type OpenApiDeps = { egress: Fetcher };
+type OpenApiDeps = { description?: LazyClientDescription; egress: FetchOnly };
+
+type OpenApiReadyState = {
+  operations: OpenApiOperation[];
+  spec: Record<string, unknown>;
+};
 
 class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
   async __describe() {
@@ -2597,51 +2672,57 @@ class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection 
 }
 
 class OpenApiRpcTarget extends RpcTarget {
+  readonly #ready: () => Promise<OpenApiReadyState>;
+
+  static createLazyClient(input: OpenApiConnectInput, deps: OpenApiDeps) {
+    return new OpenApiRpcTarget({ config: input, ...deps });
+  }
+
   static async connect(input: OpenApiConnectInput, deps: OpenApiDeps) {
-    const spec = await fetchSpec(input, deps.egress);
-    return new OpenApiRpcTarget({
-      config: input,
-      egress: deps.egress,
-      operations: listOpenApiOperations(spec),
-      spec,
-    });
+    return OpenApiRpcTarget.createLazyClient(input, deps);
   }
 
   constructor(
     readonly props: {
       config: OpenApiConnectInput;
-      egress: Fetcher;
-      operations: OpenApiOperation[];
-      spec: Record<string, unknown>;
+      description?: LazyClientDescription;
+      egress: FetchOnly;
     },
   ) {
     super();
+    this.#ready = lazyPromise(async () => {
+      const spec = await fetchSpec(props.config, props.egress);
+      return { operations: listOpenApiOperations(spec), spec };
+    });
     return withInvokeCapabilityFallback(this);
   }
 
   async __describe() {
+    const { operations } = await this.#ready();
+
     return describeNode({
       instructions:
-        "An ad-hoc OpenAPI client — a flat dispatcher: `client.someOperationId(input)` executes that operation against the spec's server. `children` lists the operations parsed from the spec.",
+        this.props.description?.instructions ??
+        "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
+      types: this.props.description?.types,
       children: Object.fromEntries(
-        this.props.operations.map((operation) => [
+        operations.map((operation) => [
           operation.operationId,
           `${operation.method.toUpperCase()} ${operation.path}`,
         ]),
       ),
-      parent: "itx.openapi.connect(spec)",
+      parent: this.props.description?.parent ?? "itx.openapi.connect(spec)",
     });
   }
 
   async invokeCapability({ args = [], path }: Parameters<CapabilityHost["invokeCapability"]>[0]) {
+    const { operations, spec } = await this.#ready();
     const operationId = path[0];
     if (!operationId) throw new Error("OpenAPI operation calls need an operationId path.");
     if (path.length > 1) {
       throw new Error(`OpenAPI operations are flat operationIds, got "${path.join(".")}".`);
     }
-    const operation = this.props.operations.find(
-      (candidate) => candidate.operationId === operationId,
-    );
+    const operation = operations.find((candidate) => candidate.operationId === operationId);
     if (!operation) {
       throw new Error(`Operation "${operationId}" is not in the OpenAPI spec.`);
     }
@@ -2650,14 +2731,14 @@ class OpenApiRpcTarget extends RpcTarget {
       input: args[0],
       operation,
       props: this.props.config,
-      spec: this.props.spec,
+      spec,
     });
   }
 }
 
 async function fetchSpec(
   props: OpenApiConnectInput,
-  egress: Fetcher,
+  egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
   const specHost = new URL(props.specUrl).host;
   const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
@@ -2678,7 +2759,7 @@ async function fetchSpec(
 }
 
 async function executeOperation(args: {
-  egress: Fetcher;
+  egress: FetchOnly;
   input: unknown;
   operation: OpenApiOperation;
   props: OpenApiConnectInput;

@@ -76,6 +76,21 @@ describe("AppConfig", () => {
     );
   });
 
+  it("accepts platform Parallel integration runtime config", () => {
+    const parsed = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: {
+        APP_CONFIG: JSON.stringify(baseConfig),
+        APP_CONFIG_INTEGRATIONS__PARALLEL: JSON.stringify({
+          apiKey: "parallel-api-key",
+        }),
+      },
+    });
+
+    expect(parsed.integrations.parallel?.apiKey.exposeSecret()).toEqual("parallel-api-key");
+  });
+
   it("requires an OpenAI API key for upcoming OS AI-backed features", () => {
     const { openAiApiKey: _openAiApiKey, ...missingOpenAiConfig } = baseConfig;
 

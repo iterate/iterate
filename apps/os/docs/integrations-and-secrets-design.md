@@ -13,6 +13,10 @@ statements:
 2. **Platform bytes never enter a jail.** Anything holding first-party
    credentials is platform code, or the credential rides a header
    placeholder substituted en route under its own host pin.
+3. **Integrations are just secret providers.** The secret system has no
+   concept of an integration; an integration is ordinary code that installs
+   secrets (and optionally secret workers) and vends handles. The dependency
+   points one way — integrations → secrets — and never back.
 
 The other big v6 simplification: the `refresh()` convention is deleted.
 **`fetch()` is the entire worker interface** — refresh is what a worker's
@@ -217,6 +221,13 @@ loudly; it is a tripwire, not a wall, and the doc says so.
 
 ### 2.3 Integrations
 
+> **Status:** this `Integration` interface is the TARGET shape — it is not yet
+> wired. The shipped proof (S5) drives the secrets layer directly
+> (`project.secrets.get(path).update({ worker })` + `project.egress.fetch`),
+> which is all the model needs. A _pre-v6_ integrations tree also already
+> exists in the repo (`src/domains/integrations/`: the capability-host Slack/
+> Google/GitHub builtins); replacing it with this interface is S3+S6 (§8).
+
 Plain RpcTargets, constructor args, like everything in rpc-targets.ts:
 
 ```ts
@@ -333,6 +344,15 @@ A webhook terminates where the integration's code lives.
 ---
 
 ## 3. Archetypes
+
+> The **shipped, proven** archetype is the petshop secret worker in
+> `apps/os/e2e/vitest/petshop-support.ts` (`petshopWorkerSource`) — a ~20-line
+> `fetch()`-override that reads its own tokens, substitutes the access token,
+> and on a 401 refreshes with the app credential as a `Basic getSecret(...)`
+> header, chaining to a userspace app secret OR a platform secret (only the
+> path differs). The samples below are the same shape for other providers,
+> written in future tense — none of these specific files exist yet, and
+> `google-tokens.ts` is not deleted until the Gmail conversion (§8, deferred).
 
 **Resend (the floor).** `connect({ form })` writes
 `{ material: { apiKey }, egress: { urls: ["https://api.resend.com/"] } }`,
@@ -657,16 +677,25 @@ Built and proven (PR #1508):
   two connections, connect → authed call → backdoor-forced-expiry refresh →
   webhook verify) and the **first-party** lane (same worker, app credential
   from the platform secret). Plus a Playwright consent spec
-  (`e2e/playwright/petshop-oauth-consent.spec.ts`).
+  (`e2e/playwright/petshop-oauth-consent.spec.ts`). The OS-side proof consumes
+  only petshop's OAuth + bearer API + webhook-signing surface; petshop's MCP,
+  oRPC/OpenAPI, and WS gateway are self-tested by petshop's own suites and
+  stand ready as targets for the deferred OS-side work below.
 
 Deferred to follow-ups (not required to prove the model; the abstraction is
 exercised directly through `itx.egress`/`itx.secrets`):
 
-- The integration-tree ergonomics of **S3** (first-class `integrations.<slug>`
-  RpcTargets with `connect`/`completeConnect`/`handleWebhook`, the
-  `IntegrationInfo` describe extras, the generic OAuth callback door, the
-  external-id fan-in directory + claim-conflict error, a connect UI). The
-  proof mounts secrets + workers directly; the tree is sugar over that.
+- **The v6 `Integration` interface (§2.3) is not wired.** A _pre-v6_
+  integrations tree already exists in the repo
+  (`src/domains/integrations/`: the capability-host Slack/Google/GitHub
+  builtins, `connect-flows.ts`, `oauth-state.ts`, `integration-streams.ts`'s
+  claim/unclaim directory) — it predates this design and is untouched by this
+  branch. S3 is _reconciling_ that tree with §2.3 (first-class
+  `integrations.<slug>` RpcTargets with `connect`/`completeConnect`/
+  `handleWebhook`, `IntegrationInfo` describe extras, the generic OAuth
+  callback door, the external-id fan-in directory + claim-conflict error, a
+  connect UI), not building a tree from nothing. The proof mounts secrets +
+  workers directly; the tree is ergonomic sugar over that.
 - The **OS-side** Discord gateway worker and OpenAI relay worker (S4). The
   jail's outbound WebSocket path (frame substitution vs. `read()`-then-frame)
   wants the ~30-min workerd spike the mechanics review called for before it is

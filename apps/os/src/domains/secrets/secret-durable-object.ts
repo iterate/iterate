@@ -23,6 +23,7 @@ import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   computeHmacHex,
+  type ResolvedFields,
   secretErrorResponse,
   secretReferencesFromHeaders,
   selectSecretField,
@@ -30,11 +31,6 @@ import {
   SecretSubstitutionError,
   timingSafeStringEqual,
 } from "./utils.ts";
-
-/** The substituted string a referenced secret owes each requested field of a
- * chained egress request. `field: undefined` (the whole-material placeholder)
- * is keyed by the empty string. See `resolveSecretReference`. */
-type ResolvedFields = Record<string, string>;
 
 type SecretState = InstanceType<typeof SecretProcessor>["state"];
 
@@ -207,7 +203,7 @@ export class SecretDurableObject extends DurableObject<Env> {
    * public `fetch`, a placeholder is not required — a worker that holds its own
    * bytes (Discord's frame token) still reaches its pinned hosts through here.
    */
-  substituteFetch(request: Request): Promise<Response> {
+  defaultFetch(request: Request): Promise<Response> {
     return this.#egressFetch(request, { requirePlaceholder: false });
   }
 
@@ -269,55 +265,35 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new SecretSubstitutionError("secret_not_allowed_for_origin");
       }
 
-      const fieldsByPath = new Map<string, Set<string>>();
+      // Group the requested fields by the secret that owns them (fields are
+      // already unique per header — secretReferencesFromHeaders dedupes).
+      const fieldsByPath = new Map<string, string[]>();
       for (const reference of references) {
-        const set = fieldsByPath.get(reference.path) ?? new Set<string>();
-        set.add(reference.field ?? "");
-        fieldsByPath.set(reference.path, set);
+        const fields = fieldsByPath.get(reference.path) ?? [];
+        fields.push(reference.field ?? "");
+        fieldsByPath.set(reference.path, fields);
       }
 
+      // Each referenced secret resolves its own fields and records the use:
+      // this secret inline (a same-DO method call), a virtual platform secret
+      // from config (§4), or another secret's DO — one mechanism, and every
+      // hop substitutes in trusted DO code, never in the jail (ADR 0005).
       const values = new Map<string, string>();
-      let ownMaterial: unknown;
-      let ownMaterialLoaded = false;
       for (const [path, fields] of fieldsByPath) {
-        if (path === this.#name.path) {
-          if (state.encryptedMaterial === null)
-            throw new SecretSubstitutionError("secret_not_found");
-          if (!ownMaterialLoaded) {
-            ownMaterial = await this.#decrypt(state.encryptedMaterial);
-            ownMaterialLoaded = true;
-          }
-          for (const field of fields) {
-            values.set(
-              `${path} ${field}`,
-              selectSecretField(ownMaterial, field === "" ? undefined : field),
-            );
-          }
-        } else {
-          // A foreign reference resolves either from a virtual platform secret
-          // (env-backed, design §4) or another secret's DO — each enforcing its
-          // own pin. Substitution stays in trusted DO code, never the jail.
-          const resolved = isPlatformSecretPath(path)
-            ? resolvePlatformSecretReference({
-                config: parseConfig(this.env),
-                fields: [...fields],
-                path,
+        const resolved = isPlatformSecretPath(path)
+          ? resolvePlatformSecretReference({ config: parseConfig(this.env), fields, path })
+          : path === this.#name.path
+            ? await this.resolveSecretReference({
+                fields,
+                url: request.url,
+                usedBy: this.#name.projectId,
               })
             : await this.env.SECRET.getByName(
                 DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
-              ).resolveSecretReference({
-                fields: [...fields],
-                url: request.url,
-                usedBy: this.#name.projectId,
-              });
-          for (const [field, value] of Object.entries(resolved))
-            values.set(`${path} ${field}`, value);
-        }
+              ).resolveSecretReference({ fields, url: request.url, usedBy: this.#name.projectId });
+        for (const [field, value] of Object.entries(resolved))
+          values.set(`${path} ${field}`, value);
       }
-      // The entry secret owns this outbound: record its use with the full URL
-      // (path included) — consumers of the audit trail match on the whole URL,
-      // e.g. slack.com/api/<method>, not just the origin the pin checks.
-      await this.#appendUsed(this.#name.projectId, request.url);
 
       const substituted = substituteSecretHeaders(request, (reference) => {
         const value = values.get(`${reference.path} ${reference.field ?? ""}`);

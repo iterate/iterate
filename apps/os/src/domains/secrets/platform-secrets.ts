@@ -1,5 +1,5 @@
 import { type AppConfig } from "../../config.ts";
-import { SecretSubstitutionError } from "./utils.ts";
+import { type ResolvedFields, SecretSubstitutionError } from "./utils.ts";
 
 /**
  * Virtual, env-backed platform secrets (design §4). A `/secrets/platform/**`
@@ -19,11 +19,6 @@ const PLATFORM_PREFIX = "/secrets/platform/";
 export function isPlatformSecretPath(path: string): boolean {
   return path.startsWith(PLATFORM_PREFIX);
 }
-
-/** The substituted string a platform secret owes each requested field; `""` is
- * the whole-material placeholder (unused for platform secrets — they are
- * structured). */
-type ResolvedFields = Record<string, string>;
 
 /**
  * Resolve the requested fields of a `/secrets/platform/integrations/<slug>`

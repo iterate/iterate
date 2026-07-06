@@ -210,6 +210,8 @@ export interface ProjectRpcTarget {
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
+  /** Parallel API, preconfigured with Iterate's platform API key. */
+  parallel: OpenApiRpc;
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;

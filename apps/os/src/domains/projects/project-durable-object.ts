@@ -127,8 +127,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (secretPaths.length === 0) return fetch(request);
 
     // A request may reference several secrets (app-tier + connection-tier).
-    // Hand it to any one of them — the Secret DO chains the rest, each hop
-    // enforcing its own host pin (see SecretDurableObject.#defaultFetch).
+    // Hand it to any one of them — the Secret DO's fetch() resolves each
+    // referenced secret, every hop enforcing its own host pin (see
+    // SecretDurableObject.resolveSecretReference).
     return this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,

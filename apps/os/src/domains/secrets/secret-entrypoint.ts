@@ -36,7 +36,7 @@ export class SecretEntrypoint extends WorkerEntrypoint<Env, SecretWorkerBindingP
   }
 
   fetch(request: Request): Promise<Response> {
-    return this.#stub.substituteFetch(request);
+    return this.#stub.defaultFetch(request);
   }
 
   read(): Promise<unknown> {
