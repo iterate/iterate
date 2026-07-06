@@ -25,7 +25,7 @@ export function EventDocsIndexPage(input: {
             {input.eventDocs.map((event) => (
               <Link
                 key={event.type}
-                to="/$eventDocsProcessorSlug/$"
+                to="/docs/streams/processors/$processorSlug/events/$"
                 params={event.routeParams}
                 className="block px-4 py-3 hover:bg-muted/60"
               >
@@ -47,7 +47,7 @@ export function EventDocsIndexPage(input: {
             {input.processorDocs.map((processor) => (
               <Link
                 key={processor.contractSlug}
-                to="/$eventDocsProcessorSlug"
+                to="/docs/streams/processors/$processorSlug"
                 params={processor.routeParams}
                 className="block px-4 py-3 hover:bg-muted/60"
               >
@@ -84,7 +84,7 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
                 {processor.events.map((event) => (
                   <Link
                     key={event.type}
-                    to="/$eventDocsProcessorSlug/$"
+                    to="/docs/streams/processors/$processorSlug/events/$"
                     params={event.routeParams}
                     className="block px-4 py-3 hover:bg-muted/60"
                   >
@@ -115,7 +115,7 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
                 {processor.dependencies.map((dep) => (
                   <Link
                     key={dep.contractSlug}
-                    to="/$eventDocsProcessorSlug"
+                    to="/docs/streams/processors/$processorSlug"
                     params={dep.routeParams}
                     className="block rounded-md border px-3 py-2 font-mono text-sm hover:bg-muted/60"
                   >
@@ -167,7 +167,7 @@ export function EventDocPage({ event }: { event: EventDoc }) {
           />
           <DocSection title="Processor">
             <Link
-              to="/$eventDocsProcessorSlug"
+              to="/docs/streams/processors/$processorSlug"
               params={event.processor.routeParams}
               className="block rounded-md border px-3 py-2 font-mono text-sm hover:bg-muted/60"
             >
@@ -226,7 +226,7 @@ function EventReferenceList(input: {
             event.href && event.routeParams ? (
               <Link
                 key={event.type}
-                to="/$eventDocsProcessorSlug/$"
+                to="/docs/streams/processors/$processorSlug/events/$"
                 params={event.routeParams}
                 className="block break-all px-4 py-3 font-mono text-sm hover:bg-muted/60"
               >

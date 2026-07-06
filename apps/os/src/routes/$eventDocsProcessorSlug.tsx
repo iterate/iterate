@@ -1,20 +1,16 @@
-import { Outlet, createFileRoute, notFound, useMatches } from "@tanstack/react-router";
-import { ProcessorOverviewPage } from "~/components/event-docs-pages.tsx";
+import { Outlet, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { getProcessorDocByPath } from "~/lib/event-docs.ts";
 
 export const Route = createFileRoute("/$eventDocsProcessorSlug")({
-  beforeLoad: ({ context }) => {
+  beforeLoad: ({ context, location, params }) => {
     if (!context.isEventDocsHost) throw notFound();
+
+    const pathSegments = location.pathname.split("/").filter(Boolean);
+    if (pathSegments.length !== 1) return;
+
+    const processor = getProcessorDocByPath(params.eventDocsProcessorSlug);
+    if (!processor) throw notFound();
+    throw redirect({ href: processor.href, replace: true });
   },
-  component: EventDocsProcessorRoute,
+  component: () => <Outlet />,
 });
-
-function EventDocsProcessorRoute() {
-  const matches = useMatches();
-  const { eventDocsProcessorSlug } = Route.useParams();
-  if (matches.at(-1)?.routeId === "/$eventDocsProcessorSlug/$") return <Outlet />;
-
-  const processor = getProcessorDocByPath(eventDocsProcessorSlug);
-  if (!processor) throw notFound();
-  return <ProcessorOverviewPage processor={processor} />;
-}

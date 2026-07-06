@@ -15,6 +15,7 @@ import { CoreProcessorContract } from "~/domains/streams/core-processor-contract
 
 const EVENT_TYPE_PREFIX = "events.iterate.com/";
 const EVENT_TYPE_URL_PREFIX = "https://events.iterate.com/";
+const PROCESSOR_DOCS_BASE_PATH = "/docs/streams/processors";
 
 type EventDefinitionForDocs = {
   description?: string;
@@ -73,7 +74,7 @@ export type EventReferenceDoc = {
 
 export type EventRouteParams = {
   _splat: string;
-  eventDocsProcessorSlug: string;
+  processorSlug: string;
 };
 
 export type ProcessorDoc = ProcessorReferenceDoc & {
@@ -88,9 +89,13 @@ export type ProcessorReferenceDoc = {
   description?: string;
   docsPath: string;
   href: string;
-  routeParams: { eventDocsProcessorSlug: string };
+  routeParams: { processorSlug: string };
   slug: string;
 };
+
+type EventDocsRouteTarget =
+  | { kind: "event"; event: EventDoc }
+  | { kind: "processor"; processor: ProcessorDoc };
 
 export const processorDocs = buildProcessorDocs();
 export const eventDocs = processorDocs.flatMap((processor) => processor.events);
@@ -116,6 +121,32 @@ export function getEventDocByPath(path: string) {
 
 export function getEventDocByType(type: string) {
   return eventsByType.get(type);
+}
+
+export function getEventDocByProcessorRoute(input: { eventPath: string; processorSlug: string }) {
+  const processor = getProcessorDocByPath(input.processorSlug);
+  if (!processor) return undefined;
+
+  const event =
+    getEventDocByPath(`${processor.slug}/${input.eventPath}`) ?? getEventDocByPath(input.eventPath);
+  if (event?.processor.slug !== processor.slug) return undefined;
+  return event;
+}
+
+export function getEventDocsRouteTarget(input: {
+  _splat?: string | undefined;
+  eventDocsProcessorSlug: string;
+}) {
+  if (!input._splat) {
+    const processor = getProcessorDocByPath(input.eventDocsProcessorSlug);
+    return processor ? ({ kind: "processor", processor } satisfies EventDocsRouteTarget) : null;
+  }
+
+  const event = getEventDocByProcessorRoute({
+    processorSlug: input.eventDocsProcessorSlug,
+    eventPath: input._splat,
+  });
+  return event ? ({ kind: "event", event } satisfies EventDocsRouteTarget) : null;
 }
 
 function buildProcessorDocs(): ProcessorDoc[] {
@@ -165,8 +196,8 @@ function processorReferenceDoc(contract: ProcessorContractForDocs): ProcessorRef
     ...(contract.description == null ? {} : { description: contract.description }),
     contractSlug: contract.slug,
     docsPath,
-    href: publicDocsPath(docsPath),
-    routeParams: { eventDocsProcessorSlug: docsPath },
+    href: processorDocsPathForSlug(docsPath),
+    routeParams: { processorSlug: docsPath },
     slug: docsPath,
   };
 }
@@ -178,17 +209,24 @@ function buildEventDoc(args: {
 }): EventDoc {
   const eventPath = eventPathFromType(args.type);
   const examples = eventExamples(args.definition.examples);
+  const processorEventPath = eventPathForProcessor({
+    eventPath,
+    processorSlug: args.processor.slug,
+  });
   return {
     ...(args.definition.description == null ? {} : { description: args.definition.description }),
     eventPath,
     examples,
-    href: publicDocsPath(eventPath),
+    href: `${processorDocsPathForSlug(args.processor.slug)}/events/${processorEventPath}`,
     payloadJsonSchema: eventPayloadJsonSchema({
       examples,
       payloadSchema: args.definition.payloadSchema,
     }),
     processor: args.processor,
-    routeParams: eventRouteParams(eventPath),
+    routeParams: {
+      processorSlug: args.processor.slug,
+      _splat: processorEventPath,
+    },
     type: args.type,
   };
 }
@@ -261,15 +299,17 @@ function eventPathFromType(type: string) {
   return cleanEventPath(type);
 }
 
-function eventRouteParams(eventPath: string): EventRouteParams {
-  const [eventDocsProcessorSlug = eventPath, ...splatParts] = eventPath.split("/");
-  return { eventDocsProcessorSlug, _splat: splatParts.join("/") };
-}
-
 function cleanEventPath(path: string) {
   return path.replace(/^\/+|\/+$/g, "");
 }
 
-function publicDocsPath(path: string) {
-  return `/${cleanEventPath(path)}`;
+function processorDocsPathForSlug(processorSlug: string) {
+  return `${PROCESSOR_DOCS_BASE_PATH}/${cleanEventPath(processorSlug)}`;
+}
+
+function eventPathForProcessor(input: { eventPath: string; processorSlug: string }) {
+  const processorPrefix = `${input.processorSlug}/`;
+  return input.eventPath.startsWith(processorPrefix)
+    ? input.eventPath.slice(processorPrefix.length)
+    : input.eventPath;
 }
