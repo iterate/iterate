@@ -9,10 +9,7 @@
  *      validate the exact runtime config with the worker's own zod schema —
  *      a config that would throw on every request fails HERE, not after
  *      shipping.
- *   2. Apply D1 migrations remotely (wrangler's d1_migrations table, which
- *      the alchemy deploys also used), then adopt the worker's Durable
- *      Object migration tag when the script predates wrangler-managed
- *      migrations (see deploy-helpers.ts adoptDoMigrationTag).
+ *   2. Apply D1 migrations remotely (wrangler's d1_migrations table).
  *   3. `vite build` with CLOUDFLARE_ENV=<env>, so the build output's
  *      wrangler.json is flattened for that env (name, route, bindings).
  *   4. `wrangler deploy --config <built config> --secrets-file <doppler>` —
@@ -27,6 +24,7 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { semaphoreEnvs } from "../../../envs.ts";
+import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
 import { parseConfig } from "../src/config.ts";
@@ -55,7 +53,17 @@ export default async function deploy(
     servingUrl: (env) => env.baseUrl,
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
-    prepare: (ctx, secretValues, credentials) => {
+    prepare: async (ctx, secretValues, credentials) => {
+      // Semaphore verifies iterate sessions and bearer tokens against a
+      // static JWKS baked at deploy time (issuer keys + forge public key) —
+      // the same relying-party model as apps/os.
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
+        authBaseUrl: ctx.env.authBaseUrl,
+        envName: ctx.name,
+        dopplerConfig: ctx.env.dopplerConfig,
+        secrets: ctx.secrets,
+      });
+
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });

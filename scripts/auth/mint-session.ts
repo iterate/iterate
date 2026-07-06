@@ -1,14 +1,8 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { SignJWT, importJWK, type JWK } from "jose";
-import {
-  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
-  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
-  ITERATE_IS_ADMIN_CLAIM,
-  ITERATE_ROLE_CLAIM,
-} from "@iterate-com/shared/auth-claims";
 import { readDevServerInfo } from "../../apps/os/scripts/lib/dev-server-info.ts";
+import { forgedSubjectForEmail, mintForgedAccessToken, mintForgedIdToken } from "./forge-token.ts";
 
 // Mint an OS session for any identity — dev, preview, and production.
 //
@@ -133,56 +127,39 @@ const resource =
   process.env.APP_CONFIG_ITERATE_AUTH__RESOURCE?.trim() ??
   (baseIsLoopback ? `http://${baseUrlHostname}` : baseUrl);
 
-const forgeJwk = JSON.parse(forgePrivateJwkJson) as JWK & { kid?: string; alg?: string };
-const alg = forgeJwk.alg ?? "EdDSA";
-const key = await importJWK(forgeJwk, alg);
-
 const email = args.email!;
-const sub = args.sub ?? `usr_forged_${email.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+const sub = args.sub ?? forgedSubjectForEmail(email);
 const name = args.name ?? email.split("@")[0]!;
 const ttlSeconds = Number(args.ttl);
 const now = Math.floor(Date.now() / 1000);
-const sid = `ses_forged_${Math.random().toString(36).slice(2, 10)}`;
 
 const orgs = args.orgs ? (JSON.parse(args.orgs) as unknown[]) : [];
 const projects = args.projects ? (JSON.parse(args.projects) as unknown[]) : [];
 const extraClaims = args.claims ? (JSON.parse(args.claims) as Record<string, unknown>) : {};
 
-const protectedHeader = { alg, kid: forgeJwk.kid } as const;
-
-const accessToken = await new SignJWT({
+const accessToken = await mintForgedAccessToken({
+  forgePrivateJwk: forgePrivateJwkJson,
+  issuer,
+  audience: resource,
   email,
-  scope: "openid profile email",
-  scopes: ["openid", "profile", "email"],
-  sid,
-  [ITERATE_IS_ADMIN_CLAIM]: args.admin,
-  [ITERATE_ROLE_CLAIM]: args.admin ? "admin" : null,
-  [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: orgs,
-  [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: projects,
-  ...extraClaims,
-})
-  .setProtectedHeader(protectedHeader)
-  .setSubject(sub)
-  .setIssuer(issuer)
-  .setAudience(resource)
-  .setIssuedAt(now)
-  .setExpirationTime(now + ttlSeconds)
-  .sign(key);
+  sub,
+  admin: args.admin,
+  ttlSeconds,
+  organizations: orgs,
+  projects,
+  claims: extraClaims,
+});
 
-const idToken = await new SignJWT({
+const idToken = await mintForgedIdToken({
+  forgePrivateJwk: forgePrivateJwkJson,
+  issuer,
+  clientId,
   email,
+  sub,
   name,
-  email_verified: true,
-  [ITERATE_IS_ADMIN_CLAIM]: args.admin,
-  [ITERATE_ROLE_CLAIM]: args.admin ? "admin" : null,
-})
-  .setProtectedHeader(protectedHeader)
-  .setSubject(sub)
-  .setIssuer(issuer)
-  .setAudience(clientId)
-  .setIssuedAt(now)
-  .setExpirationTime(now + ttlSeconds)
-  .sign(key);
+  admin: args.admin,
+  ttlSeconds,
+});
 
 const browserSignInUrl = `${baseUrl}/api/iterate-auth/session-from-token?${new URLSearchParams({
   access_token: accessToken,

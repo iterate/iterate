@@ -128,7 +128,8 @@ exposes `readFiles`/`listFiles` on the repo DO and the bundler runs on an
 in-memory vfs, so the whole path is: repo DO `readFiles(commit)` →
 @cloudflare/worker-bundler vfs → esbuild-wasm → R2 memo. No clone, no
 shell, no filesystem. Requires a new R2 bucket resource + binding
-(`ITX_BUILD_CACHE`) in alchemy.run.ts. No backcompat with the old
+(`ITX_BUILD_CACHE`) in the generated wrangler config
+(scripts/generate-wrangler-config.ts). No backcompat with the old
 checkout pipeline — `workerHost`/checkout storage dies with it.
 
 ## The "no longer special" checklist for the project worker

@@ -155,7 +155,7 @@ Every mixin needs:
 - A clear warning if it exposes storage, SQL, debug state, or unsafe behavior.
 - Comments beside type aliases when preserving `TBase`, `ReqEnv`, `Members`, protected members, or env lower-bounds.
 - README examples showing the call-site benefit, not just implementation details.
-- A note explaining any detached promises, synchronous KV, SQLite, D1, or Alchemy behavior that is not obvious.
+- A note explaining any detached promises, synchronous KV, SQLite, or D1 behavior that is not obvious.
 
 Do not write “magic” comments. Prefer:
 

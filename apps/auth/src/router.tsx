@@ -14,8 +14,7 @@ export type TanstackRouterContext = {
 
 // routeTree.gen.ts registers `router: ReturnType<typeof getRouter>` on Start's
 // Register interface, so this function's inferred return type IS the app's
-// router type. Two rules keep that inference acyclic (see
-// apps/os/docs/simplification-decisions.md §5):
+// router type. Two rules keep that inference acyclic:
 // - no explicit return/`Router<...>` annotations (they'd reference the tree,
 //   which references this function — TS4109/TS7023), and
 // - components passed as options are wrapped in lambdas, so checking them

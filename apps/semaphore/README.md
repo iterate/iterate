@@ -8,7 +8,30 @@ Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Dura
 - **Frontend:** TanStack Start + Router + Query
 - **DB:** sqlfu-generated D1 query wrappers (`sql/.generated/`)
 - **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
-- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). The bearer/operator token is `APP_CONFIG_SHARED_API_SECRET`; callers can expose the same value as `SEMAPHORE_API_TOKEN`.
+- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`)
+
+## Auth
+
+Semaphore sits behind the same apps/auth relying-party auth as apps/os — there
+is no shared API secret. Two credential lanes, both requiring an **iterate
+admin** identity:
+
+- **Browser:** sign in via `/api/iterate-auth/login` (OIDC against the env's
+  auth worker); the dashboard and its server functions use the
+  `iterate_session` cookie.
+- **API/CLI:** `Authorization: Bearer <access token>`, verified as a JWT
+  against the JWKS baked at deploy (issuer keys + forge public key). CLIs
+  mint admin tokens offline with the config's `AUTH_FORGE_PRIVATE_JWK`
+  (`scripts/auth/semaphore-token.ts`, same mechanism as `pnpm auth:mint`), or
+  accept a pre-minted token via `SEMAPHORE_API_TOKEN`.
+
+Provisioning: `pnpm preview provision-auth-preview-configs` seeds the preview
+slots (OAuth client + forge key per `semaphore/preview_N` Doppler config);
+`pnpm --dir apps/semaphore sync-auth-client` (run under
+`doppler run --project auth --config prd`) does the same for prd, including
+mirroring the forge key into `_shared/prd` for the repo-root preview CLI.
+Local dev sign-in needs `APP_CONFIG_ITERATE_AUTH__*` keys in `semaphore/dev`
+(and a baked `APP_CONFIG_ITERATE_AUTH__JWKS` for forge-minted bearers).
 
 ## Key files
 
@@ -55,13 +78,13 @@ preview CLI usually runs through the shared production Doppler config:
 doppler run --project _shared --config prd -- pnpm preview status
 ```
 
-The preview CLI reads `SEMAPHORE_API_TOKEN` first and falls back to `APP_CONFIG_SHARED_API_SECRET`. To seed or repair the preview inventory from this package, run:
+The preview CLI authenticates with a forge-minted admin bearer token (or an
+explicit `SEMAPHORE_API_TOKEN`) — see the Auth section. To seed or repair the
+preview inventory from this package, run:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
-
-The browser UI calls this value the operator token. Do not copy the token into source files, docs, or PR comments.
 
 ## Contract
 
