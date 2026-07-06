@@ -18,7 +18,7 @@
  * exactly those keys from process.env under `doppler run -- vite dev`.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { envs, type DeployedEnv } from "../../../envs.ts";
+import { envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -52,6 +52,10 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
+  // Local dev must load the baked auth JWKS too; otherwise forge-minted
+  // browser sessions from `pnpm auth:mint --browser-url` fail with
+  // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
+  "APP_CONFIG_ITERATE_AUTH__JWKS",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
   "APP_CONFIG_POSTHOG",
@@ -332,7 +336,12 @@ export const config = {
   // image on Docker/OrbStack and pairs each container with a proxy-everything
   // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
   dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
-  ...workerBindings({ workerName: "os", accountId: "" }),
+  // The dev/preview account, NOT "": local dev's ARTIFACTS binding is a
+  // REMOTE binding (wrangler proxies it to the real service), and the repo
+  // domain builds raw git remotes as https://<account>.artifacts.cloudflare.net/…
+  // — an empty account makes every local repo seed/clone fail instantly on an
+  // invalid host, which breaks project creation and sandbox provisioning.
+  ...workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
   secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },
