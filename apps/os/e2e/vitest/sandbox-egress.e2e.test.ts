@@ -31,7 +31,12 @@ function deployedBaseUrl(): string | null {
   const raw = process.env.APP_CONFIG_BASE_URL?.trim();
   if (!raw) return null;
   const url = new URL(raw);
-  if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return null;
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
+    url.hostname.endsWith(".localhost")
+  ) {
+    return null;
+  }
   return url.toString();
 }
 
