@@ -116,8 +116,9 @@ await itx.sandbox.configureEnvVars({
 
 It merges into the stored map (empty string clears a key), persists it in
 Durable Object storage, and re-applies it on every container start (so it
-survives sleep/restart). It records an `env-configured` **event** on the
-sandbox's stream carrying only the KEYS — values never touch the stream.
+survives sleep/restart). It records a `sandbox/configured` **event** on the
+sandbox's stream whose `env` carries only the KEYS — values never touch the
+stream.
 
 **The secret never enters the container.** A value like
 `getSecret({ path: "…" })` is set verbatim as the env var; when the coding

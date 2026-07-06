@@ -50,13 +50,13 @@ describe("SandboxProcessor", () => {
     });
   });
 
-  it("folds env-configured keys (union across configs)", async () => {
+  it("folds configured env keys (union across configs)", async () => {
     const processor = sandboxProcessor();
     await processor.ingest({
       events: [
-        event("events.iterate.com/sandbox/env-configured", { keys: ["ANTHROPIC_API_KEY"] }),
-        event("events.iterate.com/sandbox/env-configured", {
-          keys: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+        event("events.iterate.com/sandbox/configured", { env: ["ANTHROPIC_API_KEY"] }),
+        event("events.iterate.com/sandbox/configured", {
+          env: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
         }),
       ],
       streamMaxOffset: nextOffset,

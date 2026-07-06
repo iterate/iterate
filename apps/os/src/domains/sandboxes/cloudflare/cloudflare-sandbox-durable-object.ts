@@ -478,16 +478,16 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * Not guarded by `ensureProjectRepo()` (it's configuration, valid before the
    * container ever boots): the map is persisted now and re-applied during
    * provisioning; if a container is already running, the delta is applied to it
-   * immediately. Emits an `env-configured` event recording the KEYS (never the
-   * values) for the sandbox's stream/journal.
+   * immediately. Emits a `sandbox/configured` event whose `env` records the
+   * KEYS set (never the values) for the sandbox's stream/journal.
    */
   async configureEnvVars(vars: SandboxEnvVars): Promise<{ keys: string[] }> {
     const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
     const merged = { ...stored, ...vars };
     this.ctx.storage.kv.put(SANDBOX_ENV_STORAGE_KEY, merged);
     this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/env-configured",
-      payload: { keys: Object.keys(vars) },
+      type: "events.iterate.com/sandbox/configured",
+      payload: { env: Object.keys(vars) },
     });
     // Apply the delta to a running container so an in-flight session picks it
     // up without a restart; if it isn't provisioned yet, provisioning applies
