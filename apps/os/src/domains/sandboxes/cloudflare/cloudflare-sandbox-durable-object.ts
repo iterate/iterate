@@ -179,26 +179,48 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   override sleepAfter = "3m";
 
   /**
-   * Idle expiry DESTROYS the container instead of the SDK's stop (SIGTERM).
-   * A stopped container keeps its instance ASSIGNED to this Durable Object,
-   * and assignments count against the app's max_instances and never expire on
-   * their own (`wrangler containers info` on a slot mid-marathon: active 0,
-   * assigned 99 — including day-old idle slots still holding their last run's
+   * Idle expiry: SNAPSHOT `/workspace`, then DESTROY the container.
+   *
+   * This is the one moment a pre-sleep snapshot is possible — the idle timer
+   * fired but the container is STILL RUNNING (`onStop` is too late: the
+   * container is already gone, and that hook can even fire on a later wake).
+   * A backup failure must never wedge the container alive — it holds an
+   * instance slot against the namespace cap — so failures are logged and
+   * emitted as events, and the teardown proceeds regardless; the durable
+   * handle still points at the last good backup.
+   *
+   * DESTROY, not the SDK's stop (SIGTERM): a stopped container keeps its
+   * instance ASSIGNED to this Durable Object, and assignments count against
+   * the app's max_instances and never expire on their own
+   * (`wrangler containers info` on a slot mid-marathon: active 0, assigned 99
+   * — including day-old idle slots still holding their last run's
    * assignments; only destroy or an app rollout releases them). Every e2e
-   * fixture creates a fresh sandbox DO, so stop-on-idle leaks ~7-8 assignments
-   * per preview e2e run and the cap wedges every new sandbox start after
-   * ~a dozen runs — the real mechanism behind the recurring "Container is
-   * starting/provisioning" windows (docs/preview-e2e-flake-hunt.md flake 23,
-   * superseding the flake 19/20 theories). Destroy costs us nothing extra: a
-   * sandbox filesystem is ephemeral across sleep anyway (see class docs), so
-   * stop-then-wake and destroy-then-wake are the same cold boot + re-clone.
-   * The SDK's keepAlive guard is preserved (its own override skips shutdown
-   * when a caller enabled keepAlive; the field is private, hence the cast).
+   * fixture creates a fresh sandbox DO, so stop-on-idle leaks ~7-8
+   * assignments per preview e2e run and the cap wedges every new sandbox
+   * start after ~a dozen runs — the real mechanism behind the recurring
+   * "Container is starting/provisioning" windows
+   * (docs/preview-e2e-flake-hunt.md flake 23, superseding the flake 19/20
+   * theories). Destroy costs nothing BECAUSE of the snapshot above: the next
+   * wake restores `/workspace` from it, so destroy-then-wake and
+   * stop-then-wake land in the same place (destroy leaves Durable Object
+   * storage — the identity and backup handle — intact; the SDK's doDestroy
+   * deletes only its own port/tunnel/runtime keys). The SDK's keepAlive guard
+   * is preserved (its own override skips shutdown when a caller enabled
+   * keepAlive; the field is private, hence the cast).
    */
   override async onActivityExpired(): Promise<void> {
     const keepAlive = (this as unknown as { keepAliveEnabled?: boolean }).keepAliveEnabled === true;
     if (keepAlive) {
       return super.onActivityExpired();
+    }
+    try {
+      await this.#backupWorkspace();
+    } catch (error) {
+      console.error("sandbox workspace backup failed", error);
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/backup-failed",
+        payload: { error: String(error) },
+      });
     }
     await this.destroy();
   }
@@ -293,30 +315,6 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
         });
       }),
     );
-  }
-
-  /**
-   * The idle-timer hook: fires when `sleepAfter` expires and the container is
-   * STILL RUNNING — the one moment a pre-sleep snapshot is possible (`onStop`
-   * is too late: the container is already gone, and the hook can even fire on
-   * a later wake). Snapshot `/workspace`, then let the SDK stop the container.
-   *
-   * A backup failure must never wedge the container awake — the container
-   * holds an instance slot against the namespace cap — so failures are logged
-   * and emitted as events, and the stop proceeds regardless; the durable
-   * handle still points at the last good backup.
-   */
-  override async onActivityExpired(): Promise<void> {
-    try {
-      await this.#backupWorkspace();
-    } catch (error) {
-      console.error("sandbox workspace backup failed", error);
-      this.#emitLifecycleEvent({
-        type: "events.iterate.com/sandbox/backup-failed",
-        payload: { error: String(error) },
-      });
-    }
-    await super.onActivityExpired();
   }
 
   override async onStop(): Promise<void> {

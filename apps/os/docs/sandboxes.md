@@ -48,13 +48,15 @@ with the Sandbox SDK's
 hung off the SDK's own lifecycle hooks:
 
 - **`onActivityExpired`** (the idle-timer hook — the one moment the container
-  is still running but about to stop; `onStop` is too late, the container is
-  already gone) snapshots `/workspace` with
+  is still running but about to go away; `onStop` is too late, the container
+  is already gone) snapshots `/workspace` with
   [`createBackup`](https://developers.cloudflare.com/sandbox/api/backups/) —
-  gitignore-aware and `node_modules`-excluded, so archives stay small — and
-  stores the returned handle in Durable Object storage. A backup failure never
-  wedges the container awake; the handle keeps pointing at the last good
-  snapshot.
+  gitignore-aware and `node_modules`-excluded, so archives stay small — stores
+  the returned handle in Durable Object storage, then **destroys** the
+  container (not the SDK's stop: a stopped container keeps its instance
+  assignment against `max_instances` forever — see the method's docstring; the
+  snapshot is what makes destroy loss-free). A backup failure never wedges the
+  container alive; the handle keeps pointing at the last good snapshot.
 - **`onStart`** provisions the workspace in the background: restore the newest
   snapshot (seconds), then clone the repo if the checkout is still missing.
   `ensureProjectRepo()` is the awaitable guarantee.
