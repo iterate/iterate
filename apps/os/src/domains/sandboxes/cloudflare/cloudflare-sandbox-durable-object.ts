@@ -167,6 +167,12 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // reach the `outbound` handler and TLS traffic would bypass project policy.
   override interceptHttps = true;
 
+  // Tag every instance for the Containers dashboard/analytics, so sandbox
+  // instances are filterable apart from any other container class in the
+  // account. Static (app/component); per-sandbox identity already lives in the
+  // Durable Object name and the lifecycle stream. See docs/cloudflare-sandboxes.md.
+  override labels = { app: "iterate-os", component: "sandbox" };
+
   /**
    * The catch-all container-egress handler: EVERY outbound request a sandbox
    * container makes (HTTP and, via `interceptHttps`, HTTPS) arrives here and is

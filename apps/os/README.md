@@ -198,7 +198,8 @@ test coverage removed without replacement is
 
 - [itx README](./src/README.md)
 - [Worker Topology](./docs/worker-topology.md)
-- [Sandboxes](./docs/sandboxes.md) — Cloudflare Sandbox containers, incl. local dev with OrbStack
+- [Sandboxes](./docs/sandboxes.md) — how OUR sandbox works: identity, persistence, egress, the repo checkout (incl. local dev with OrbStack)
+- [Cloudflare Sandboxes & Containers](./docs/cloudflare-sandboxes.md) — platform guide: namespace layout, **SSH into an instance**, feature inventory, deprecations, ops
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)

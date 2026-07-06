@@ -1,5 +1,10 @@
 # Sandboxes
 
+> For the platform underneath this — namespace layout, **SSH into an
+> instance**, the full Cloudflare feature inventory, deprecations, and ops —
+> see [Cloudflare Sandboxes & Containers](./cloudflare-sandboxes.md). This doc
+> is how our sandbox itself works.
+
 Project-scoped Cloudflare Sandbox containers, addressed by path like every
 other domain object. A sandbox path may be ANY non-root project path,
 arbitrarily nested: sandboxes live in their own Durable Object namespace, so

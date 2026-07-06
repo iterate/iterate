@@ -99,6 +99,27 @@ function builderWorkerName(osWorkerName: string) {
   return `${osWorkerName}-builder`;
 }
 
+/**
+ * SSH keys authorized to `wrangler containers ssh` into ANY sandbox instance.
+ *
+ * Cloudflare Containers SSH is account-authenticated (you need Wrangler write
+ * access to the container) AND gated on the container class carrying your
+ * public key here — so this list, applied to the one sandbox container class,
+ * makes every sandbox instance reachable at once. It opens no public port
+ * (SSH tunnels through Wrangler/the control plane). SSH keys are public and
+ * reviewed like any other code; ed25519 only (the platform rejects other
+ * types). See docs/cloudflare-sandboxes.md.
+ *
+ * Add a teammate: append `{ name, public_key }` with their ed25519 key
+ * (`gh api users/<login>/keys`, or `~/.ssh/id_ed25519.pub`).
+ */
+const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
+  {
+    name: "jonastemplestein",
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB5Jd9GS/iVC1nWpIwrM3lhecTuXhsz8NoV8QcyOIuzK",
+  },
+];
+
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
@@ -181,6 +202,13 @@ function workerBindings(input: {
         // after ~5 back-to-back runs; lite instances bill on usage, not
         // reservation, so headroom is free.
         max_instances: input.maxContainerInstances ?? 40,
+        // Interactive shell into any running sandbox via `wrangler containers
+        // ssh <instance-id>` (find ids with `wrangler containers instances`).
+        // Account-authenticated + gated on the keys below; opens no public
+        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+        // the wrangler schema, so it is set explicitly.
+        ssh: { enabled: true },
+        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
       },
     ],
     secrets: { required: REQUIRED_SECRETS },
