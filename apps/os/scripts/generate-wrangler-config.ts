@@ -58,10 +58,10 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
   // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
-  // transfers (exact names the SDK reads). Optional: an env without them
-  // still runs sandboxes — backups fail loudly in logs and every container
-  // start falls back to a fresh repo clone. Local dev never needs them
-  // (SANDBOX_BACKUP_MODE=local streams through the local R2 binding).
+  // transfers (exact names the SDK reads). Optional: without them the
+  // sandbox DO falls back to streaming archives through the BACKUP_BUCKET
+  // binding (the SDK's localBucket mode — slower, but persistence still
+  // works; also the only mode local dev supports).
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
 ];

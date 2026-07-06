@@ -27,19 +27,25 @@ RUN npm install -g @openai/codex pnpm@10.24.0 && codex --version && pnpm --versi
 
 # Default Codex to gpt-5.5 with high reasoning for every sandbox (config.toml is
 # read from $HOME/.codex; the exec shell runs as root). A per-call `-m` / `-c`
-# still overrides. Verified: a headless gpt-5.5/high turn completes in ~8s.
+# still overrides. A headless gpt-5.5/high turn is ~8s warm.
 COPY apps/os/sandbox/root/ /root/
 
 # The warm-up script the sandbox Durable Object runs on the container during
 # provisioning (in the background) to log the baked tools in — see
 # CloudflareSandboxDurableObject#runWarmup, which references this exact path.
-# Kept as its own reviewable asset; extend the script, not the DO, to add setup.
+# Kept as its own reviewable asset; extend the script, not the DO, to add
+# setup. Deliberately NOT the image CMD (the SDK supports one): a CMD runs
+# before the DO has applied the env-var map the steps need, and has no way to
+# report into the sandbox's stream.
 COPY apps/os/sandbox/warmup.sh /opt/iterate/warmup.sh
 
 # Bake the Iterate monorepo with dependencies installed. The actual checkout
 # lives outside /workspace so workspace backup/restore cannot hide or strip its
 # node_modules; the Durable Object exposes it at
 # /workspace/repos/github.com/iterate/iterate with a symlink after restore.
+# A SNAPSHOT, not a checkout: .dockerignore excludes .git (and build/dist
+# debris), so git commands don't work in this tree and it ages until the next
+# image build — clone fresh for anything that needs history or push.
 WORKDIR /opt/iterate/iterate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches/ patches/

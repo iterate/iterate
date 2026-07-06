@@ -159,7 +159,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             idempotencyKey: `agent/sandbox-warmed-up@${event.offset}`,
             payload: {
               content:
-                "FYI (no reply needed): your sandbox finished warming up — the baked coding tools (e.g. `codex`) are logged in and ready, so you can run them directly with no per-command login. If you started a task before this arrived and hit an auth error, just retry.",
+                "FYI (no reply needed): your sandbox finished warming up — baked coding tools with a configured provider key (e.g. `codex` via the project's OpenAI secret) are logged in, no per-command login needed. If `codex` still reports an auth error, the project likely has no OpenAI key seeded — ask the user to add one rather than retrying.",
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
           }),

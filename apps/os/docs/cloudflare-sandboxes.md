@@ -130,7 +130,8 @@ await itx.sandbox.configureEnvVars({
 });
 ```
 
-It merges into the stored map (empty string clears a key), persists it in
+It merges into the stored map (keys are never deleted; set one to `""` to
+blank it, which also masks a default), persists it in
 Durable Object storage, and re-applies it on every container start (so it
 survives sleep/restart). It records a `sandbox/configured` **event** on the
 sandbox's stream whose `env` carries the map that was set (key → value). Values
@@ -149,20 +150,16 @@ system. The secret at that path must allow the provider host (e.g.
 `api.anthropic.com` / `api.openai.com`) in its egress allowlist.
 
 **The coding agent** is baked into our own image (`sandbox/Dockerfile`), not a
-Cloudflare image variant. The image also copies `sandbox/root/` into `/root/`
-and bakes this monorepo into `/opt/iterate/iterate` with `pnpm install` already
-run. The Durable Object exposes that checkout at
-`/workspace/repos/github.com/iterate/iterate` with a symlink after workspace
-restore, so the installed `node_modules` do not get stripped by workspace
-backups. We ship the **Codex CLI** (`codex`, on PATH), which uses
-`OPENAI_API_KEY`:
+Cloudflare image variant (what else the image bakes — `root/`, the platform
+monorepo — is [Sandboxes → Deployment](./sandboxes.md#deployment)'s story). We
+ship the **Codex CLI** (`codex`, on PATH), which uses `OPENAI_API_KEY`:
 
 ```ts
 // No login line needed — the warm-up script logs Codex in (reading the
 // OPENAI_API_KEY env placeholder) in the background during provisioning. Both
 // that login and the model call egress through project policy, which
-// substitutes the real key for the placeholder — verified live: `codex exec`
-// returned a completion and the secret's usedCount incremented.
+// substitutes the real key for the placeholder, so `codex exec` uses the
+// project's secret without the key ever entering the container.
 const r = await itx.sandbox.exec(
   "codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox" +
     ' "summarize README.md in one line"', // defaults to gpt-5.5/high
@@ -197,9 +194,9 @@ const { url } = await itx.sandbox.tunnels.get(8080); // https://<random>.tryclou
 ```
 
 It runs `cloudflared` in the container and returns a random
-`*.trycloudflare.com` URL. Requires `SANDBOX_TRANSPORT=rpc` (we set it).
-Verified live: the URL is publicly reachable, and cloudflared's outbound
-connection punches through our egress interception fine. The URL is
+`*.trycloudflare.com` URL. Requires `SANDBOX_TRANSPORT=rpc` (we set it). The
+URL is publicly reachable, and cloudflared's outbound connection works through
+our egress interception. The URL is
 **ephemeral** — it changes on container restart — so fetch it fresh each
 session; `tunnels.destroy(port)` closes it. Docs:
 <https://developers.cloudflare.com/sandbox/api/tunnels/>.
@@ -221,7 +218,7 @@ DNS writes.
 ## Observability & logging
 
 We deploy with full observability already (`OBSERVABILITY` in
-`scripts/lib/wrangler-config.ts`: `observability.enabled`, persisted logs +
+the repo-root `scripts/lib/wrangler-config.ts`: `observability.enabled`, persisted logs +
 traces, full sampling). Container stdout/stderr surfaces through the **Workers
 Logs** pipeline, so:
 
@@ -251,14 +248,14 @@ container FAQ <https://developers.cloudflare.com/containers/faq/>.
 
 ### Adopted
 
-| Feature                                              | Where                                | First-party docs                                                                                               |
-| ---------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| Backup / restore (workspace persistence)             | `CloudflareSandboxDurableObject`     | [api/backups](https://developers.cloudflare.com/sandbox/api/backups/)                                          |
-| Outbound egress control (project policy + MITM)      | `outbound` handler, `interceptHttps` | [guides/outbound-traffic](https://developers.cloudflare.com/sandbox/guides/outbound-traffic/)                  |
-| Git checkout per sandbox                             | `#cloneProjectRepo`                  | [guides/git-workflows](https://developers.cloudflare.com/sandbox/guides/git-workflows/)                        |
-| Idle → **destroy** (not stop) to free instance slots | `onActivityExpired`                  | [platform-details/scaling](https://developers.cloudflare.com/containers/platform-details/scaling-and-routing/) |
-| SSH into instances                                   | this PR                              | [containers/ssh](https://developers.cloudflare.com/containers/ssh/)                                            |
-| Instance labels                                      | this PR                              | [containers metrics]                                                                                           |
+| Feature                                              | Where                                                      | First-party docs                                                                                               |
+| ---------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Backup / restore (workspace persistence)             | `CloudflareSandboxDurableObject`                           | [api/backups](https://developers.cloudflare.com/sandbox/api/backups/)                                          |
+| Outbound egress control (project policy + MITM)      | `outbound` handler, `interceptHttps`                       | [guides/outbound-traffic](https://developers.cloudflare.com/sandbox/guides/outbound-traffic/)                  |
+| Git checkout per sandbox                             | `#cloneProjectRepo`                                        | [guides/git-workflows](https://developers.cloudflare.com/sandbox/guides/git-workflows/)                        |
+| Idle → **destroy** (not stop) to free instance slots | `onActivityExpired`                                        | [platform-details/scaling](https://developers.cloudflare.com/containers/platform-details/scaling-and-routing/) |
+| SSH into instances                                   | `ssh` + `authorized_keys` in `generate-wrangler-config.ts` | [containers/ssh](https://developers.cloudflare.com/containers/ssh/)                                            |
+| Instance labels                                      | `CloudflareSandboxDurableObject.labels`                    | [containers metrics]                                                                                           |
 
 ### Available and worth reaching for (not wired yet)
 
@@ -268,10 +265,12 @@ container FAQ <https://developers.cloudflare.com/containers/faq/>.
   A natural fit for agent "run this analysis" without shelling out.
 - **Sessions** — isolate shell state / env / cwd per workflow:
   `createSession` / `getSession`. [api/sessions](https://developers.cloudflare.com/sandbox/api/sessions/).
-- **Named tunnels** — stable public URL for a service in a sandbox (SSE-capable,
-  survives restart): `sandbox.tunnels.get(port, { name })`.
-  [api/tunnels](https://developers.cloudflare.com/sandbox/api/tunnels/). Prefer
-  over `exposePort` (below).
+- **Named tunnels** — stable public URL for a service in a sandbox
+  (`sandbox.tunnels.get(port, { name })`) — but **deliberately not used as the
+  SDK ships it**: it writes DNS at runtime with a broad token (see
+  [Public URLs](#public-urls-for-sandbox-services-quick-tunnels)). Only worth
+  reaching for via our own server-side provisioning; use quick tunnels until
+  that exists. [api/tunnels](https://developers.cloudflare.com/sandbox/api/tunnels/).
 - **Interactive terminal in the browser** — PTY over WebSocket via
   `sandbox.terminal(request)` + the shipped `@cloudflare/sandbox/xterm` addon;
   the in-product equivalent of SSH for end users.
@@ -338,5 +337,5 @@ pnpm exec wrangler tail                                  # stream logs (containe
 ```
 
 Our own sandbox smoke (proves repo checkout + cwd + egress on a real instance)
-lives in [Sandboxes → Deployment](./sandboxes.md); the R2 bucket for a new env is
+lives in [Sandboxes → Local dev](./sandboxes.md#local-dev-orbstack--docker); the R2 bucket for a new env is
 created by `pnpm ensure-resources --env <env>`.

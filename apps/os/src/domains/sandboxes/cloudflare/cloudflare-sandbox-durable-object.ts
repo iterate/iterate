@@ -39,20 +39,21 @@ const BAKED_ITERATE_REPO_WORKSPACE_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/github.
  * The sandbox warm-up script, baked into the image (see
  * `apps/os/sandbox/warmup.sh` and the `COPY` in `apps/os/sandbox/Dockerfile`).
  * The Durable Object runs it on the container during provisioning, in the
- * background, to get the baked coding tools logged in and ready (e.g. Codex).
- * Keeping the steps in a reviewable shell asset — rather than command strings
- * spread through this class — is what lets the whole start → restore/clone →
- * warm-up saga read as one thing and stay easy to extend.
+ * background, to get the baked coding tools logged in (e.g. Codex). Add
+ * container-side setup by extending the script, not this class.
  */
 const SANDBOX_WARMUP_SCRIPT_PATH = "/opt/iterate/warmup.sh";
 
 /**
  * How long a sandbox's workspace backup survives without the sandbox waking
- * again (the SDK GCs backups after their ttl). 90 days: long enough that any
- * plausibly-still-wanted workspace comes back intact, short enough that the
- * churn of short-lived sandboxes (e2e runs a fresh project per test) does not
- * accumulate in R2 forever. Durable work belongs in the repo (committed and
- * pushed); the workspace backup is for everything in flight around it.
+ * again. The SDK only CHECKS the ttl at restore time — it never deletes
+ * expired objects from R2; actual deletion is the bucket's lifecycle rule
+ * (prefix `backups/`, set by apps/os/scripts/ensure-resources.ts — keep the
+ * two aligned). 90 days: long enough that any plausibly-still-wanted
+ * workspace comes back intact, short enough that the churn of short-lived
+ * sandboxes (e2e runs a fresh project per test) does not accumulate in R2
+ * forever. Durable work belongs in the repo (committed and pushed); the
+ * workspace backup is for everything in flight around it.
  */
 const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
 
@@ -79,6 +80,12 @@ const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
  * only at egress, never entering the container.
  */
 const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
+
+/**
+ * The sandbox env-var map shape, shared by durable storage,
+ * {@link CloudflareSandboxDurableObject.configureEnvVars}, and
+ * {@link DEFAULT_SANDBOX_ENV} — one type so the three can't drift.
+ */
 type SandboxEnvVars = Record<string, string>;
 
 /**
@@ -162,9 +169,11 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *    `onActivityExpired` (the idle-timer hook, the one moment the container is
  *    still running but about to stop) snapshots `/workspace` to the env's
  *    {@link Env.BACKUP_BUCKET} R2 bucket, and the next `onStart` restores the
- *    newest snapshot before falling back to a fresh repo clone. Snapshots are
- *    gitignore-aware (no node_modules etc.), so they stay small and restore
- *    fast (~seconds, vs a cold clone).
+ *    newest snapshot before falling back to a fresh repo clone. Snapshots
+ *    exclude node_modules explicitly and honor gitignore rules where the SDK
+ *    finds a git checkout (the repo dir; `/workspace` itself is not a repo,
+ *    so top-level scratch is snapshotted verbatim), keeping them small and
+ *    restores fast (~seconds, vs a cold clone).
  *
  *    Known window: this is snapshot-granular. A container that CRASHES (rather
  *    than idling out) loses whatever changed since the last snapshot — durable
@@ -415,10 +424,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
   /**
    * Snapshot `/workspace` to R2 and move the durable handle to the new backup.
-   * Gitignore-aware and node_modules-free, so archives stay small and restores
-   * fast; reinstalling dependencies is the restored workspace's job. The
-   * handle is only overwritten AFTER `createBackup` succeeds, so a failed
-   * backup can never orphan the previous good snapshot.
+   * node_modules is excluded explicitly (gitignore rules apply only where the
+   * SDK finds a git checkout, and `/workspace` itself is not one), so archives
+   * stay small and restores fast; reinstalling dependencies is the restored
+   * workspace's job. The handle is only overwritten AFTER `createBackup`
+   * succeeds, so a failed backup can never orphan the previous good snapshot.
    *
    * Transfer mode is chosen by what the env provides: with R2 S3 credentials
    * the SDK presigns `*.r2.cloudflarestorage.com` URLs and the container
@@ -503,8 +513,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   /**
    * Set environment variables for the sandbox — the durable `Record<string,
    * string>` applied to every command (`exec`, `startProcess`, …). Merges into
-   * the stored map (pass a var with an empty string to clear it), so callers
-   * build the environment incrementally.
+   * the stored map, so callers build the environment incrementally; keys are
+   * never deleted, but setting one to `""` blanks it (which is also how to
+   * mask a {@link DEFAULT_SANDBOX_ENV} entry). Returns the merged map's keys.
    *
    * The intended value shape is a `getSecret({ path })` placeholder: the
    * material then stays in the secret system and is substituted only at egress
@@ -530,17 +541,16 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       type: "events.iterate.com/sandbox/configured",
       payload: { env: vars },
     });
-    // Apply the delta to a running container so an in-flight session picks it
-    // up without a restart; if it isn't provisioned yet, provisioning applies
-    // the full stored map. Best-effort — never fail configuration on a
-    // transient container hiccup.
-    if (this.#workspaceProvisioned) {
-      await super
-        .setEnvVars(vars)
-        .catch((error: unknown) =>
-          console.warn("sandbox configureEnvVars: applying to running container failed", error),
-        );
-    }
+    // Apply the delta immediately as well, so a running container — INCLUDING
+    // one still mid-provisioning, whose #applyStoredEnvVars already read the
+    // old map — picks it up without a restart. The SDK call is safe when no
+    // container is up (it only merges the in-memory map, never boots one).
+    // Best-effort — never fail configuration on a transient container hiccup.
+    await super
+      .setEnvVars(vars)
+      .catch((error: unknown) =>
+        console.warn("sandbox configureEnvVars: applying to running container failed", error),
+      );
     return { keys: Object.keys(merged) };
   }
 
@@ -564,22 +574,33 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    *
    * Emits `sandbox/warmed-up` on success (so the whole start → restore/clone →
    * warm-up saga is visible on the sandbox's stream) or `sandbox/warmup-failed`
-   * otherwise. Best-effort: a failure is logged and the memo cleared so a later
-   * provision retries; the script itself keeps each step optional, so a missing
-   * provider secret degrades to a tool that surfaces its own auth error on use,
-   * not a failed warm-up.
+   * otherwise. Best-effort in the sense that a failure never breaks the
+   * sandbox: it is logged, reported as an event, and the memo cleared so a
+   * later provision retries. A tool whose provider secret simply isn't seeded
+   * is a SKIP (success), not a failure — see the script.
+   *
+   * Every step after the exec checks the run is still current, like
+   * `#ensureWorkspace`: a container restart mid-warm-up resets `#warmup` in
+   * `onStart` and a newer warm-up may already be in flight — a stale run must
+   * neither emit events for the new container's epoch nor clobber its memo.
    */
   #runWarmup(): Promise<void> {
-    this.#warmup ??= (async () => {
+    if (this.#warmup !== undefined) return this.#warmup;
+    let run: Promise<void> | undefined = undefined;
+    run = (async () => {
       const result = await super.exec(`bash ${SANDBOX_WARMUP_SCRIPT_PATH}`);
       if (result.exitCode !== 0) {
-        throw new Error(`sandbox warm-up failed (exit ${result.exitCode}): ${result.stderr}`);
+        throw new Error(
+          `sandbox warm-up failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`,
+        );
       }
+      if (this.#warmup !== run) return; // container replaced mid-warm-up
       this.#emitLifecycleEvent({
         type: "events.iterate.com/sandbox/warmed-up",
         payload: {},
       });
     })().catch((error: unknown) => {
+      if (this.#warmup !== run) return; // stale failure: not this container's story
       console.warn("sandbox warm-up failed", error);
       this.#emitLifecycleEvent({
         type: "events.iterate.com/sandbox/warmup-failed",
@@ -587,7 +608,8 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       });
       this.#warmup = undefined; // let a later provision retry
     });
-    return this.#warmup;
+    this.#warmup = run;
+    return run;
   }
 
   // ---------------------------------------------------------------------------
@@ -733,12 +755,17 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // awaits) — initialized to undefined so TS's definite-assignment analysis
     // doesn't have to prove that ordering.
     let run: Promise<void> | undefined = undefined;
+    // Whether this run is still the registered one. False the moment a
+    // container restart resets `#workspaceReady` (onStart) or a newer run
+    // replaces it — a stale run's execs would land on the NEW container's
+    // disk, so every destructive step below re-checks this before acting.
+    const isCurrent = () => this.#workspaceReady === run;
     run = (async () => {
       const restored = await this.#restoreWorkspace();
       // Re-apply the durable env map onto THIS container (the SDK does not
       // document env persistence across restart), so every guarded command
       // below runs with the configured vars. Done BEFORE the clone so the
-      // background Codex login (which reads the env) can overlap it.
+      // background warm-up (which reads the env) can overlap it.
       await this.#applyStoredEnvVars();
       // Run the warm-up script in the BACKGROUND — it reads the env placeholders
       // (substituted at egress) to log the baked tools in, so they just work
@@ -749,14 +776,15 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       // Clone when the restore didn't produce a checkout (no backup yet, the
       // backup expired, or it somehow predates the repo). #cloneProjectRepo
       // probes the marker itself, so a restored checkout makes this a no-op.
-      await this.#cloneProjectRepo();
+      await this.#cloneProjectRepo(isCurrent);
+      if (!isCurrent()) return;
       await this.#ensureBakedIterateRepoLink();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag
       // would let the idle backup snapshot a half-provisioned /workspace over
       // the last good backup.
-      if (this.#workspaceReady !== run) return;
+      if (!isCurrent()) return;
       if (!restored) {
         this.#emitLifecycleEvent({
           type: "events.iterate.com/sandbox/workspace-cloned",
@@ -765,15 +793,17 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       }
       this.#workspaceProvisioned = true;
     })().catch((error: unknown) => {
+      // A stale run's failure is not this container's story: the newer run
+      // owns the events and the memo. Resolve quietly — the guard loop in
+      // ensureProjectRepo re-enters and picks up the current run.
+      if (!isCurrent()) return;
       console.error("sandbox workspace setup failed", error);
       this.#emitLifecycleEvent({
         type: "events.iterate.com/sandbox/workspace-setup-failed",
         payload: { error: String(error) },
       });
-      // Let the next ensure retry instead of caching the failure forever —
-      // but only clear OUR OWN registration; a stale failing run must not
-      // clobber the promise of the newer run that replaced it.
-      if (this.#workspaceReady === run) this.#workspaceReady = undefined;
+      // Let the next ensure retry instead of caching the failure forever.
+      this.#workspaceReady = undefined;
       throw error;
     });
     this.#workspaceReady = run;
@@ -811,7 +841,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // methods on THIS class are guarded by ensureProjectRepo() (see the
   // overrides above), and provisioning runs inside that guard — `this.*`
   // would deadlock on its own promise.
-  async #cloneProjectRepo(): Promise<void> {
+  async #cloneProjectRepo(isCurrent: () => boolean): Promise<void> {
     // Probe a marker only a completed clone has — a bare directory check
     // would treat the debris of an interrupted checkout as done and leave
     // the sandbox without the repo until the container is replaced.
@@ -838,6 +868,13 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // backoff instead of failing the sandbox start on one bad response.
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      // Execs are not bound to a container epoch: after a mid-clone restart
+      // this loop's retries would land on the NEW container, racing the new
+      // provisioning run's own clone with this `rm -rf`. Bail instead — the
+      // superseded-run catch in #ensureWorkspace swallows this quietly.
+      if (!isCurrent()) {
+        throw new Error("sandbox provisioning superseded by a container restart");
+      }
       await super.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
       try {
         const result = await super.gitCheckout(remote.toString(), {
@@ -859,15 +896,33 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     throw lastError;
   }
 
+  /**
+   * Expose the image-baked platform repo at the conventional workspace path.
+   * Re-made every provision because the symlink lives under `/workspace` but
+   * its target does not survive there: a workspace restore brings the link
+   * back only if the backup captured it, and a fresh container always starts
+   * without it. Probes the lockfile so an image without the bake no-ops.
+   *
+   * Replace ONLY a symlink (or nothing): the path is inside the persisted
+   * workspace, so an agent may have put a REAL checkout there (the baked tree
+   * has no `.git`, so cloning over it is the natural move for anyone wanting
+   * `git pull`) — a restore brings that directory back, and an unconditional
+   * `rm -rf` here would silently destroy it on the next provision.
+   */
   async #ensureBakedIterateRepoLink(): Promise<void> {
     const bakedRepo = await super.exists(`${BAKED_ITERATE_REPO_SOURCE_DIR}/pnpm-lock.yaml`);
-    if (!bakedRepo.exists) return;
+    if (!bakedRepo.exists) {
+      console.warn(
+        `sandbox image has no baked repo at ${BAKED_ITERATE_REPO_SOURCE_DIR} — skipping workspace link`,
+      );
+      return;
+    }
 
+    const link = BAKED_ITERATE_REPO_WORKSPACE_DIR;
     const result = await super.exec(
       [
         `mkdir -p ${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate`,
-        `rm -rf ${BAKED_ITERATE_REPO_WORKSPACE_DIR}`,
-        `ln -s ${BAKED_ITERATE_REPO_SOURCE_DIR} ${BAKED_ITERATE_REPO_WORKSPACE_DIR}`,
+        `if [ -L ${link} ] || [ ! -e ${link} ]; then rm -rf ${link} && ln -s ${BAKED_ITERATE_REPO_SOURCE_DIR} ${link}; fi`,
       ].join(" && "),
     );
     if (result.exitCode !== 0) {

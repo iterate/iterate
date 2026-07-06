@@ -388,7 +388,7 @@ function agentBirthCertificateEvents(input: {
         expression: ["sandboxes", ["get", input.childPath]],
         instructions:
           `THIS agent's own sandbox: the container at the agent's own path ("${input.childPath}"). ` +
-          "Full Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, …). " +
+          "Full Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, …). " +
           "The first command boots the container; it sleeps after idle. " +
           'The project repo is ALWAYS checked out at /workspace/repos/project, also the default working directory — a bare exec("ls") lists the project.',
       },

@@ -29,7 +29,8 @@ export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorCon
       case "events.iterate.com/sandbox/warmed-up":
         return { ...state, warmedUp: true };
       case "events.iterate.com/sandbox/configured":
-        // Merge the newly-configured env map over the known one (config merges).
+        // Later configs win per key; keys are never removed (a "" value is an
+        // override that blanks a default, and it stays visible here).
         return { ...state, env: { ...state.env, ...event.payload.env } };
       default:
         return state;

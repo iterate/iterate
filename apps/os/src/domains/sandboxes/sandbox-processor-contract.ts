@@ -10,7 +10,7 @@ import { defineProcessorContract } from "../streams/processor-contracts.ts";
 const SANDBOX_EVENTS = {
   "events.iterate.com/sandbox/container-started": {
     description:
-      "The sandbox container booted (the SDK's onStart hook). Workspace provisioning starts in the background right after this.",
+      "The sandbox container booted (the SDK's onStart hook). Workspace provisioning follows immediately — driven by the guarded command that booted the container, not by onStart itself.",
     payloadSchema: z.object({}),
   },
   "events.iterate.com/sandbox/container-stopped": {
@@ -34,12 +34,12 @@ const SANDBOX_EVENTS = {
   },
   "events.iterate.com/sandbox/warmed-up": {
     description:
-      "The sandbox warmup script (apps/os/sandbox/warmup.sh, baked into the image) ran to completion on the container — the baked coding tools are logged in and ready to use. Runs in the background during provisioning, overlapping the repo clone; this is the last step of the start → restore/clone → warm-up saga.",
+      "The sandbox warmup script (apps/os/sandbox/warmup.sh, baked into the image) completed: every baked tool whose provider key is configured is logged in; tools without a key were skipped and surface their own auth error if used. Runs in the background during provisioning, overlapping the repo clone — so it may land before workspace-cloned on the stream.",
     payloadSchema: z.object({}),
   },
   "events.iterate.com/sandbox/warmup-failed": {
     description:
-      "The sandbox warmup script exited non-zero. The sandbox is still usable (warm-up is best-effort — individual tool logins are self-healing), but a baked tool may need a manual login; the next provisioning run re-runs warm-up.",
+      "The sandbox warmup script reported a failing step (or didn't run). The sandbox is still usable — warm-up never blocks it — but a baked tool that should have logged in didn't; `error` carries the reason, and the next provisioning run retries.",
     payloadSchema: z.object({ error: z.string() }),
   },
   "events.iterate.com/sandbox/backup-created": {
@@ -69,7 +69,8 @@ const SANDBOX_EVENTS = {
  * projection and takes no actions (`emits: []`).
  *
  * Event order tells the persistence story: container-started →
- * workspace-restored | workspace-cloned → warmed-up → … → backup-created →
+ * workspace-restored | workspace-cloned → warmed-up (concurrent with the
+ * clone, so it may precede workspace-cloned) → … → backup-created →
  * container-stopped, then the next start restores the named backup.
  */
 export const SandboxProcessorContract = defineProcessorContract({
@@ -82,8 +83,8 @@ export const SandboxProcessorContract = defineProcessorContract({
     running: z.boolean().default(false),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
-    /** Whether the current container finished its warmup script (baked tools
-     * logged in and ready). Reset implicitly by the next container-started. */
+    /** Whether the current container's warmup script completed (keyed tools
+     * logged in, keyless ones skipped). Reset by the next container-started. */
     warmedUp: z.boolean().default(false),
     /** The sandbox's configured env-var map (key → getSecret placeholder /
      * literal), merged across all `configured` events. */

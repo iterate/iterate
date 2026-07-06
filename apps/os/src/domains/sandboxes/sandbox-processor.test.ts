@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { Stream, StreamEvent } from "../../types.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
@@ -66,9 +67,8 @@ describe("SandboxProcessor", () => {
       ],
       streamMaxOffset: nextOffset,
     });
-    const snap = (await processor.snapshot()) as {
-      state: { env: Record<string, string> };
-    };
+    const snap: { state: z.infer<typeof SandboxProcessorContract.stateSchema> } =
+      await processor.snapshot();
     expect(snap.state.env).toEqual({
       ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })',
       OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })',
