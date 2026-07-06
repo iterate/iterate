@@ -56,7 +56,11 @@ export type ProjectCustomDomainProvisioner = {
     hostname: string;
     project?: ProjectDirectoryRecord;
   }): Promise<ProjectCustomDomainCloudflareSnapshot>;
-  remove(input: { cloudflareHostnameId?: string | null; hostname: string }): Promise<void>;
+  remove(input: {
+    cloudflareHostnameId?: string | null;
+    hostname: string;
+    project: ProjectDirectoryRecord;
+  }): Promise<void>;
 };
 
 export function normalizeProjectCustomDomain(input: {
@@ -94,6 +98,7 @@ export function createCloudflareCustomDomainProvisioner(options: {
 
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
       const existing = await client.findCustomHostname(normalized);
+      if (existing) assertCloudflareHostnameBelongsToProject(existing, project);
       const customHostname =
         existing ??
         (await createCustomHostnameWithDuplicateRecovery({
@@ -102,8 +107,14 @@ export function createCloudflareCustomDomainProvisioner(options: {
           project,
         }));
 
-      await primeProjectHostname(options.directory, normalized, project);
-      return toProjectCustomDomainCloudflareSnapshot(customHostname, normalized);
+      const snapshot = toProjectCustomDomainCloudflareSnapshot(customHostname, normalized);
+      await primeProjectHostnameIfActive({
+        directory: options.directory,
+        hostname: normalized,
+        project,
+        snapshot,
+      });
+      return snapshot;
     },
 
     async refresh({ hostname, project }) {
@@ -117,25 +128,41 @@ export function createCloudflareCustomDomainProvisioner(options: {
         throw new Error(`Cloudflare custom hostname "${normalized}" was not found.`);
       }
       if (project) {
-        await assertHostnameAvailable({
+        assertCloudflareHostnameBelongsToProject(customHostname, project);
+        const snapshot = toProjectCustomDomainCloudflareSnapshot(customHostname, normalized);
+        await primeProjectHostnameIfActive({
           directory: options.directory,
           hostname: normalized,
-          projectId: project.id,
+          project,
+          snapshot,
         });
-        await primeProjectHostname(options.directory, normalized, project);
+        return snapshot;
       }
       return toProjectCustomDomainCloudflareSnapshot(customHostname, normalized);
     },
 
-    async remove({ cloudflareHostnameId, hostname }) {
+    async remove({ cloudflareHostnameId, hostname, project }) {
       const normalized = normalizeProjectCustomDomain({
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
+      await assertProjectHostnameRegistrationBelongsToProject({
+        directory: options.directory,
+        hostname: normalized,
+        projectId: project.id,
+      });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const id = cloudflareHostnameId ?? (await client.findCustomHostname(normalized))?.id ?? null;
+      const customHostname = await client.findCustomHostname(normalized);
+      if (customHostname) assertCloudflareHostnameBelongsToProject(customHostname, project);
+      const id = cloudflareHostnameId ?? customHostname?.id ?? null;
       if (id) await client.deleteCustomHostname(id);
-      await deleteProjectHostname(options.directory, normalized);
+      const registeredProject = await readProjectHostnameRegistration(
+        options.directory,
+        normalized,
+      );
+      if (registeredProject?.id === project.id) {
+        await deleteProjectHostname(options.directory, normalized);
+      }
     },
   };
 }
@@ -177,9 +204,48 @@ async function createCustomHostnameWithDuplicateRecovery(input: {
     });
   } catch (error) {
     const existing = await input.client.findCustomHostname(input.hostname).catch(() => null);
-    if (existing) return existing;
+    if (existing) {
+      assertCloudflareHostnameBelongsToProject(existing, input.project);
+      return existing;
+    }
     throw error;
   }
+}
+
+async function primeProjectHostnameIfActive(input: {
+  directory: KVNamespace;
+  hostname: string;
+  project: ProjectDirectoryRecord;
+  snapshot: ProjectCustomDomainCloudflareSnapshot;
+}): Promise<void> {
+  if (input.snapshot.status !== "active") return;
+  await assertHostnameAvailable({
+    directory: input.directory,
+    hostname: input.hostname,
+    projectId: input.project.id,
+  });
+  await primeProjectHostname(input.directory, input.hostname, input.project);
+}
+
+async function assertProjectHostnameRegistrationBelongsToProject(input: {
+  directory: KVNamespace;
+  hostname: string;
+  projectId: string;
+}): Promise<void> {
+  const registeredProject = await readProjectHostnameRegistration(input.directory, input.hostname);
+  if (registeredProject && registeredProject.id !== input.projectId) {
+    throw new Error(`"${input.hostname}" is already routed to another project.`);
+  }
+}
+
+function assertCloudflareHostnameBelongsToProject(
+  customHostname: CloudflareCustomHostname,
+  project: ProjectDirectoryRecord,
+): void {
+  const projectId = stringValue(customHostname.custom_metadata?.projectId);
+  if (projectId === project.id) return;
+  const hostname = customHostname.hostname ?? "custom hostname";
+  throw new Error(`Cloudflare custom hostname "${hostname}" is already owned by another project.`);
 }
 
 async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {

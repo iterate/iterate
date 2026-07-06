@@ -189,4 +189,42 @@ describe("ProjectProcessor custom domains", () => {
       },
     ]);
   });
+
+  it("does not remove a custom domain that is absent from project state", async () => {
+    const stream = new MemoryStream();
+    const customDomains = {
+      ensure: vi.fn(),
+      readProject: vi.fn(async () => project),
+      refresh: vi.fn(),
+      remove: vi.fn(),
+    };
+    const processor = new ProjectProcessor({
+      customDomains,
+      defaultLlmProvider: "openai-ws",
+      itx: {
+        projectId: project.id,
+        worker: { processEvent: vi.fn() },
+      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
+      stream,
+    });
+    const cursor = { offset: 0 };
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-remove-requested",
+        payload: { hostname: "garple.com" },
+      }),
+    );
+
+    await deliverNewEvents({ cursor, processor, stream });
+
+    expect(customDomains.remove).not.toHaveBeenCalled();
+    expect(stream.events.at(-1)).toMatchObject({
+      type: "events.iterate.com/project/custom-domain-provision-failed",
+      payload: {
+        error: 'Custom domain "garple.com" is not configured on this project.',
+        hostname: "garple.com",
+      },
+    });
+  });
 });

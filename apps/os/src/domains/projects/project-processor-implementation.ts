@@ -310,9 +310,17 @@ export class ProjectProcessor extends StreamProcessor<
           const hostname = event.payload.hostname;
           try {
             const domain = state.customDomains.find((candidate) => candidate.hostname === hostname);
-            await assertCustomDomainProvisioner(this.deps.customDomains).remove({
+            if (!domain) {
+              throw new Error(`Custom domain "${hostname}" is not configured on this project.`);
+            }
+            const customDomains = assertCustomDomainProvisioner(this.deps.customDomains);
+            const project =
+              (await customDomains.readProject()) ??
+              projectRecordFromState(state, this.deps.itx.projectId);
+            await customDomains.remove({
               cloudflareHostnameId: domain?.cloudflareHostnameId,
               hostname,
+              project,
             });
             await append({
               type: "events.iterate.com/project/custom-domain-removed",

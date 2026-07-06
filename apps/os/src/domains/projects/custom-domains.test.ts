@@ -52,7 +52,7 @@ describe("custom domain provisioning", () => {
     ).toThrow(/reserved/);
   });
 
-  it("creates a wildcard Cloudflare custom hostname and writes routing KV", async () => {
+  it("creates a wildcard Cloudflare custom hostname without routing before validation is active", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
     const createdBodies: unknown[] = [];
     let customHostname: Record<string, unknown> | null = null;
@@ -90,6 +90,11 @@ describe("custom domain provisioning", () => {
 
           createdBodies.push(await request.json());
           customHostname = {
+            custom_metadata: {
+              projectId: "prj_garple",
+              projectSlug: "garple",
+              source: "iterate-os",
+            },
             hostname: "garple.com",
             id: "custom-hostname-1",
             ownership_verification: {
@@ -143,17 +148,9 @@ describe("custom domain provisioning", () => {
       status: "pending_validation",
       wildcard: true,
     });
-    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
-      project,
-    );
-    await expect(readProjectByHostname(directory, "garple.com")).resolves.toEqual({
-      appSlug: null,
-      record: project,
-    });
-    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual({
-      appSlug: "counter",
-      record: project,
-    });
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
+    await expect(readProjectByHostname(directory, "garple.com")).resolves.toBeNull();
+    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toBeNull();
   });
 
   it("refreshes an existing Cloudflare hostname and heals missing routing KV", async () => {
@@ -190,6 +187,11 @@ describe("custom domain provisioning", () => {
             success: true,
             result: [
               {
+                custom_metadata: {
+                  projectId: "prj_garple",
+                  projectSlug: "garple",
+                  source: "iterate-os",
+                },
                 hostname: "garple.com",
                 id: "custom-hostname-1",
                 ssl: { status: "active", wildcard: true },
@@ -214,6 +216,133 @@ describe("custom domain provisioning", () => {
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
     );
+  });
+
+  it("refuses to adopt a Cloudflare hostname owned by another project", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+
+        if (url.pathname === "/client/v4/zones") {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "iterate.app" }],
+          });
+        }
+
+        if (
+          url.pathname === "/client/v4/zones/zone-1/custom_hostnames" &&
+          request.method === "GET"
+        ) {
+          return Response.json({
+            success: true,
+            result: [
+              {
+                custom_metadata: {
+                  projectId: "prj_other",
+                  projectSlug: "other",
+                  source: "iterate-os",
+                },
+                hostname: "garple.com",
+                id: "custom-hostname-1",
+                ssl: { status: "active", wildcard: true },
+                status: "active",
+              },
+            ],
+          });
+        }
+
+        return Response.json(
+          { success: false, errors: [{ message: "not found" }] },
+          { status: 404 },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(provisioner.ensure({ hostname: "garple.com", project })).rejects.toThrow(
+      /owned by another project/,
+    );
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
+  });
+
+  it("refuses to remove a Cloudflare hostname owned by another project", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    let deleteCount = 0;
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+
+        if (url.pathname === "/client/v4/zones") {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "iterate.app" }],
+          });
+        }
+
+        if (url.pathname === "/client/v4/zones/zone-1/custom_hostnames") {
+          if (request.method === "GET") {
+            return Response.json({
+              success: true,
+              result: [
+                {
+                  custom_metadata: {
+                    projectId: "prj_other",
+                    projectSlug: "other",
+                    source: "iterate-os",
+                  },
+                  hostname: "garple.com",
+                  id: "custom-hostname-1",
+                  ssl: { status: "active", wildcard: true },
+                  status: "active",
+                },
+              ],
+            });
+          }
+        }
+
+        if (url.pathname === "/client/v4/zones/zone-1/custom_hostnames/custom-hostname-1") {
+          deleteCount += 1;
+          return Response.json({ success: true, result: {} });
+        }
+
+        return Response.json(
+          { success: false, errors: [{ message: "not found" }] },
+          { status: 404 },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(
+      provisioner.remove({ cloudflareHostnameId: null, hostname: "garple.com", project }),
+    ).rejects.toThrow(/owned by another project/);
+    expect(deleteCount).toBe(0);
   });
 
   it("maps active Cloudflare hostname and SSL status to an active project domain", () => {
