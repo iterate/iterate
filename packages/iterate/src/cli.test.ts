@@ -1,5 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  defaultBareInvocationToChat,
+  ensureBearerAuthHeadersForChat,
   oauthResourceForOsBaseUrl,
   refreshOAuthSession,
   resolveChatProject,
@@ -137,6 +139,58 @@ describe("verifyOsSession", () => {
     });
     expect(description.principal).toBe("user_123");
     expect(fake.disposeAuthenticated).toHaveBeenCalledOnce();
+  });
+});
+
+describe("defaultBareInvocationToChat", () => {
+  test("runs chat for a bare invocation", () => {
+    expect(defaultBareInvocationToChat([])).toEqual(["chat"]);
+  });
+
+  test("leaves explicit commands and flags untouched", () => {
+    const explicit = ["chat", "--project", "prj_123"];
+    expect(defaultBareInvocationToChat(explicit)).toBe(explicit);
+
+    const help = ["--help"];
+    expect(defaultBareInvocationToChat(help)).toBe(help);
+  });
+});
+
+describe("ensureBearerAuthHeadersForChat", () => {
+  test("uses an existing bearer session without logging in", async () => {
+    const login = vi.fn();
+    await expect(
+      ensureBearerAuthHeadersForChat({
+        getAuthHeaders: async () => ({ authorization: "Bearer token_123" }),
+        login,
+        osBaseUrl: "https://os.iterate.com",
+      }),
+    ).resolves.toEqual({ authorization: "Bearer token_123" });
+
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  test("logs in when the stored session is not usable as a bearer token", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const login = vi.fn();
+    const getAuthHeaders = vi
+      .fn<() => Promise<{ authorization?: string; cookie?: string }>>()
+      .mockResolvedValueOnce({ cookie: "session=old" })
+      .mockResolvedValueOnce({ authorization: "Bearer token_new" });
+
+    await expect(
+      ensureBearerAuthHeadersForChat({
+        getAuthHeaders,
+        login,
+        osBaseUrl: "https://os.iterate.com",
+      }),
+    ).resolves.toEqual({ authorization: "Bearer token_new" });
+
+    expect(login).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Stored session for https://os.iterate.com cannot be used for chat. Starting browser login...",
+    );
+    consoleError.mockRestore();
   });
 });
 
