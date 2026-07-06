@@ -9,6 +9,18 @@ import type { StreamEvent } from "./schemas.ts";
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
 
+/** The read window accepted by `Stream.getEvents` / `Stream.readEvents`. */
+export type StreamEventReadInput = {
+  /** Exclusive lower bound. Defaults to 0. */
+  afterOffset?: number;
+  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  beforeOffset?: number | null;
+  /** Event types to include. Omit or include "*" for all; [] matches none. */
+  eventTypes?: readonly string[];
+  /** Page size, 1-500. Defaults to 500. */
+  limit?: number;
+};
+
 export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;

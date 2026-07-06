@@ -125,7 +125,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Slack testing](docs/slack-testing.md) — real Slack flows, preview app setup, and internal duplicate-bot caveats
 - [Slack preview OAuth clients](docs/slack-preview-oauth-clients.md) — bulk-create preview Slack apps and collect Doppler secrets
 - [Slack bot token migration](docs/slack-bot-token-migration.md) — per-app bot token fallback links and Doppler shape
-- [Testing](docs/testing.md) — test lanes, how to run them against any environment, and the canonical env vars
+- [Testing](docs/testing.md) — test lanes, how to run them against any environment, the canonical env vars, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 

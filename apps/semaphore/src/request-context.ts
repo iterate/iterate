@@ -1,4 +1,5 @@
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
+import type { SemaphorePrincipal } from "~/auth.ts";
 import type { AppConfig } from "~/config.ts";
 
 /**
@@ -14,6 +15,8 @@ export interface RequestContext {
   db: D1Database;
   log: SharedRequestLogger;
   rawRequest?: Request;
+  // Set by the iterate auth request middleware (src/start.ts).
+  principal?: SemaphorePrincipal | null;
 }
 
 // Registered on both packages: handler.fetch reads react-router's Register

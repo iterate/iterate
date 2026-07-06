@@ -140,6 +140,7 @@ import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
+  StreamEventReadInput,
   StreamProcessorRpc,
   StreamSubscriptionHandle,
 } from "./domains/streams/rpc-types.ts";
@@ -165,12 +166,13 @@ import {
 export class StreamRpcTarget extends RpcTarget {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
         getEvent: "One event by offset or idempotencyKey.",
-        getEvents: "Read a range of events.",
+        getEvents: "Read one bounded page of events.",
+        readEvents: "Create a pager for bounded event pages.",
         subscribe: "Live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
@@ -222,13 +224,18 @@ export class StreamRpcTarget extends RpcTarget {
     return this.durableObjectStub.getEvent(args);
   }
 
-  /** Read a range of committed events. */
-  getEvents(args?: {
-    afterOffset?: number;
-    beforeOffset?: number | null;
-    limit?: number;
-  }): Promise<StreamEvent[]> {
+  /** Read one bounded page of committed events (optionally filtered by type). */
+  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args);
+  }
+
+  /**
+   * A stateful pager over a read window: repeated `next()` calls walk forward
+   * through pages, `[]` means "caught up for now". Dispose it when finished
+   * (`using pager = stream.readEvents(...)`).
+   */
+  readEvents(args?: StreamEventReadInput): StreamEventPagerRpcTarget {
+    return new StreamEventPagerRpcTarget((pageArgs) => this.getEvents(pageArgs), args);
   }
 
   /**
@@ -2231,6 +2238,49 @@ export class UnauthenticatedOsRpcTarget extends RpcTarget {
 // ---------------------------------------------------------------------------
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
+
+/**
+ * Stateful page reader for one stream read window.
+ *
+ * A tiny object-capability cursor: it holds only the caller's read window and
+ * the last offset it returned, so there is no server-side snapshot or lease to
+ * maintain (events still come from the Stream DO on every page). This is not a
+ * live subscription; `[]` means "caught up for now". Dispose it when finished
+ * (`using pager = stream.readEvents(...)`).
+ */
+class StreamEventPagerRpcTarget extends RpcTarget {
+  readonly #input: Omit<StreamEventReadInput, "afterOffset">;
+  readonly #readPage: (input?: StreamEventReadInput) => Promise<StreamEvent[]>;
+  #afterOffset: number;
+  #disposed = false;
+
+  constructor(
+    readPage: (input?: StreamEventReadInput) => Promise<StreamEvent[]>,
+    input: StreamEventReadInput = {},
+  ) {
+    super();
+    const { afterOffset = 0, ...pageInput } = input;
+    this.#afterOffset = afterOffset;
+    this.#input = pageInput;
+    this.#readPage = readPage;
+  }
+
+  /** Returns [] when no newer matching page is currently available. */
+  async next(): Promise<StreamEvent[]> {
+    if (this.#disposed) throw new Error("stream event pager is disposed.");
+    const page = await this.#readPage({
+      ...this.#input,
+      afterOffset: this.#afterOffset,
+    });
+    const lastOffset = page.at(-1)?.offset;
+    if (lastOffset !== undefined) this.#afterOffset = lastOffset;
+    return page;
+  }
+
+  [Symbol.dispose](): void {
+    this.#disposed = true;
+  }
+}
 
 /**
  * Ownership handle for one `provideCapability()` call.

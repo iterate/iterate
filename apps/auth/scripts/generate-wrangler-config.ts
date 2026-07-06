@@ -121,8 +121,7 @@ const config = {
   main: "./src/server/worker.ts",
   compatibility_date: "2026-06-17",
   // nodejs_compat(+populate_process_env): hono's contextStorage needs
-  // node:async_hooks (alchemy's TanStackStart applied its "node" preset
-  // implicitly — these flags match the previously deployed worker).
+  // node:async_hooks (the worker runs under the "node" preset).
   // global_fetch_strictly_public: same-zone subrequests (e.g. SSR calling our
   // own /api/auth/get-session via the public hostname) must traverse Worker
   // routes instead of hanging against the originless zone for ~20s.

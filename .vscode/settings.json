@@ -35,7 +35,6 @@
     "**/node_modules": true,
     "**/dist": true,
     "**/build": true,
-    "**/.alchemy": true,
     "**/.git": true,
     "**/.repomix-*": true,
     "**/.next": true,
@@ -52,8 +51,7 @@
     "**/node_modules": true,
     "**/dist": true,
     "**/build": true,
-    "**/.wrangler": true,
-    "**/.alchemy": true
+    "**/.wrangler": true
   },
   "git.autorefresh": true,
   "git.autoRepositoryDetection": true,

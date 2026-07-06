@@ -45,8 +45,31 @@ class MemoryStream implements Stream {
     return this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
   }
 
-  async getEvents(): Promise<StreamEvent[]> {
-    return [...this.events];
+  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
+    const { afterOffset = 0, limit = 500 } = input;
+    const beforeOffset = input.beforeOffset ?? Number.MAX_SAFE_INTEGER;
+    return this.events
+      .filter((event) => event.offset > afterOffset)
+      .filter((event) => event.offset < beforeOffset)
+      .filter(
+        (event) =>
+          input.eventTypes === undefined ||
+          input.eventTypes.includes("*") ||
+          input.eventTypes.includes(event.type),
+      )
+      .slice(0, limit);
+  }
+
+  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
+    let afterOffset = input.afterOffset ?? 0;
+    return {
+      next: async () => {
+        const page = await this.getEvents({ ...input, afterOffset });
+        afterOffset = page.at(-1)?.offset ?? afterOffset;
+        return page;
+      },
+      [Symbol.dispose]() {},
+    };
   }
 
   async waitForEvent(input: {

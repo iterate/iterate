@@ -23,6 +23,9 @@ import {
   type StreamSubscriptionType,
 } from "./core-processor-contract.ts";
 
+const DEFAULT_GET_EVENTS_LIMIT = 500;
+const MAX_GET_EVENTS_LIMIT = 500;
+
 /**
  * Durable stream storage plus the stream's own ("core") processor.
  *
@@ -246,16 +249,25 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Synchronous committed-event range read. Keep await-free (see getEvent). */
   getEvents(
-    args: { afterOffset?: number; beforeOffset?: number | null; limit?: number } = {},
+    args: {
+      afterOffset?: number;
+      beforeOffset?: number | null;
+      eventTypes?: readonly string[];
+      limit?: number;
+    } = {},
   ): StreamEvent[] {
     const limit = args.limit;
     if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
       throw new Error("getEvents limit must be a positive integer.");
     }
+    if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
+      throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
+    }
     return this.#log.getRange({
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
-      limit: limit ?? Number.MAX_SAFE_INTEGER,
+      eventTypes: args.eventTypes,
+      limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
     });
   }
 

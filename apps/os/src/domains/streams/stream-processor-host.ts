@@ -368,14 +368,17 @@ export function createStreamProcessorHost(
       const entry = requireEntry(name);
       try {
         const { offset } = await entry.processor.snapshot();
-        const events = await options.stream.getEvents({ afterOffset: offset });
-        if (events.length === 0) return;
-        // Non-consumed event types reduce to no-ops but still advance the
-        // checkpoint, mirroring what a filtered subscription's cursor does.
-        await entry.processor.ingest({
-          events,
-          streamMaxOffset: events[events.length - 1]!.offset,
-        });
+        using pager = options.stream.readEvents({ afterOffset: offset, limit: 500 });
+        for (;;) {
+          const events = await pager.next();
+          if (events.length === 0) return;
+          // Non-consumed event types reduce to no-ops but still advance the
+          // checkpoint, mirroring what a filtered subscription's cursor does.
+          await entry.processor.ingest({
+            events,
+            streamMaxOffset: events.at(-1)!.offset,
+          });
+        }
       } catch (error) {
         console.error(
           `stream processor "${name}" catch-up failed; serving last ingested state`,

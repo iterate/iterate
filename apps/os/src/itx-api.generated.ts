@@ -136,12 +136,14 @@ export interface Stream {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
-  /** Read a range of committed events. */
-  getEvents(args?: {
-    afterOffset?: number;
-    beforeOffset?: number | null;
-    limit?: number;
-  }): Promise<StreamEvent[]>;
+  /** Read one bounded page of committed events (optionally filtered by type). */
+  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
+  /**
+   * A stateful pager over a read window: repeated `next()` calls walk forward
+   * through pages, `[]` means "caught up for now". Dispose it when finished
+   * (`using pager = stream.readEvents(...)`).
+   */
+  readEvents(args?: StreamEventReadInput): StreamEventPager;
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
@@ -292,6 +294,21 @@ export interface Project {
    * is one RPC end to end.
    */
   worker: DynamicWorkerCapability<ProjectWorker>;
+}
+
+/**
+ * Stateful page reader for one stream read window.
+ *
+ * A tiny object-capability cursor: it holds only the caller's read window and
+ * the last offset it returned, so there is no server-side snapshot or lease to
+ * maintain (events still come from the Stream DO on every page). This is not a
+ * live subscription; `[]` means "caught up for now". Dispose it when finished
+ * (`using pager = stream.readEvents(...)`).
+ */
+export interface StreamEventPager {
+  /** Returns [] when no newer matching page is currently available. */
+  next(): Promise<StreamEvent[]>;
+  [Symbol.dispose](): void;
 }
 
 export interface StreamProcessorRpc<State = unknown> {
@@ -778,6 +795,18 @@ export type StreamEvent = {
       }
     | undefined;
   idempotencyKey?: string | undefined;
+};
+
+/** The read window accepted by `Stream.getEvents` / `Stream.readEvents`. */
+export type StreamEventReadInput = {
+  /** Exclusive lower bound. Defaults to 0. */
+  afterOffset?: number;
+  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  beforeOffset?: number | null;
+  /** Event types to include. Omit or include "*" for all; [] matches none. */
+  eventTypes?: readonly string[];
+  /** Page size, 1-500. Defaults to 500. */
+  limit?: number;
 };
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
