@@ -572,6 +572,9 @@ export type SecretUpdateInput = {
    * the whole-material placeholder working; structured material is addressed
    * by `field` in placeholders (design §2.1). */
   material?: unknown;
+  /** The secret worker that overrides this secret's fetch() (design §2.2), or
+   * `null` to clear it. Omitted leaves any installed worker unchanged. */
+  worker?: DynamicWorkerRef | null;
 };
 
 /** Input to `Secret.hmac` — the field of material to sign under (whole material
@@ -591,6 +594,8 @@ export type SecretDescription = {
   };
   egress: { urls: string[] };
   hasMaterial: boolean;
+  /** Whether a secret worker overrides this secret's fetch() (design §2.2). */
+  hasWorker: boolean;
 };
 
 export type StreamListItem = {

@@ -2,14 +2,21 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { SecretComputeHmacInput, SecretDescription, SecretUpdateInput } from "../../types.ts";
+import type {
+  DynamicWorkerRef,
+  SecretComputeHmacInput,
+  SecretDescription,
+  SecretUpdateInput,
+} from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { loadResolvedWorker, resolveWorkerSource } from "../workers/worker-loader.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
+import { secretWorkerBinding } from "./secret-entrypoint.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
@@ -22,12 +29,12 @@ import {
   timingSafeStringEqual,
 } from "./utils.ts";
 
-/**
- * Values one referenced secret owes a chained egress request: the substituted
- * string for each requested field. `field: undefined` (the whole-material
- * placeholder) is keyed by the empty string. See `resolveSecretReference`.
- */
+/** The substituted string a referenced secret owes each requested field of a
+ * chained egress request. `field: undefined` (the whole-material placeholder)
+ * is keyed by the empty string. See `resolveSecretReference`. */
 type ResolvedFields = Record<string, string>;
+
+type SecretState = InstanceType<typeof SecretProcessor>["state"];
 
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -55,8 +62,13 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async update(input: SecretUpdateInput) {
-    if (input.material === undefined && input.egress === undefined) {
-      throw new Error("secret.update requires material or egress");
+    if (input.material === undefined && input.egress === undefined && input.worker === undefined) {
+      throw new Error("secret.update requires material, egress, or worker");
+    }
+    if (input.worker != null && input.worker.type !== "stateless") {
+      // Secret workers are stateless dynamic workers — the Secret DO owns all
+      // durability (design §2.2). A stateful ref has nowhere to live here.
+      throw new Error("secret worker must be a stateless dynamic worker");
     }
 
     const current = (await this.#secretProcessor.snapshot()).state;
@@ -83,6 +95,7 @@ export class SecretDurableObject extends DurableObject<Env> {
                 this.env.SECRET_ENCRYPTION_KEY,
               ),
             }),
+        ...(input.worker === undefined ? {} : { worker: input.worker }),
       },
     });
     return event!;
@@ -93,9 +106,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     // asynchronously; pull-through makes update() -> describe()
     // read-your-writes even when the configured subscription's wake is slow
     // or was dropped.
-    await this.#processorHost.catchUp(SecretProcessorContract.slug);
-    const { state } = await this.#secretProcessor.snapshot();
-    return describeSecretState(state);
+    return describeSecretState(await this.#snapshot());
   }
 
   /**
@@ -107,16 +118,22 @@ export class SecretDurableObject extends DurableObject<Env> {
    *
    * Deliberately NOT on the public Secret capability (rpc-targets.ts): agents
    * and project scripts can never call it. It is reachable only through the
-   * raw env.SECRET namespace stubs that platform code holds. Every reveal
-   * requires a live egress allowlist (disconnect empties it, killing reveals
-   * and substitutions alike) and lands on the audit trail with `usedBy`.
+   * raw env.SECRET namespace stubs that platform code holds.
    */
   async revealForPlatformUse(input: { usedBy: string }): Promise<string> {
     const material = await this.#readMaterial({ requireEgress: true });
     await this.#appendUsed(input.usedBy);
-    // Historically material was a bare string; whole-material reveal keeps that
-    // contract (JSON.stringify of a string is itself minus quotes on parse).
     return selectSecretField(material);
+  }
+
+  /**
+   * The worker's own material, for a secret worker inside the jail (design
+   * §2.2). Reachable only through the SECRET namespace stub / the SecretEntrypoint
+   * binding, never the public capability. Reading is fine: the jail's network
+   * reach is the secret's pinned hosts, so the bytes cannot leave (ADR 0005).
+   */
+  read(): Promise<unknown> {
+    return this.#readMaterial();
   }
 
   /**
@@ -165,61 +182,127 @@ export class SecretDurableObject extends DurableObject<Env> {
     return resolved;
   }
 
+  /**
+   * The public entry: a secret worker (if installed) overrides fetch, otherwise
+   * the default substituting egress runs (design §2.2). The dispatcher requires
+   * a placeholder in the no-worker case — that IS how you "use" a plain secret.
+   */
   async fetch(request: Request): Promise<Response> {
-    return await this.#defaultFetch(request);
+    const worker = (await this.#snapshot()).worker;
+    if (worker === null) return await this.#egressFetch(request, { requirePlaceholder: true });
+    return await this.#runWorker(worker, request);
   }
 
   /**
-   * The default secret behaviour: substitute every header placeholder and
-   * perform the terminal fetch. Placeholders may reference several secrets
-   * (app-tier + connection-tier); each is resolved by its owner — this secret
-   * inline, others by RPC to their DO — and each owner enforces its own pin
-   * against the destination. Substitution happens here, in trusted DO code,
-   * never in a jail (design §2.1–2.2). A secret worker (§2.2, added in S2)
-   * overrides `fetch` and calls back into this via its bound outbound.
-   *
-   * TODO(S4): handle websocket upgrade requests here so frame-time credentials
-   * (Discord) and relay handshakes (OpenAI) chain the same way.
+   * The default secret behaviour, exposed to the secret worker as both
+   * `env.SECRET.fetch` and its jail `globalOutbound` (see SecretEntrypoint):
+   * substitute header placeholders and perform the terminal fetch. Unlike the
+   * public `fetch`, a placeholder is not required — a worker that holds its own
+   * bytes (Discord's frame token) still reaches its pinned hosts through here.
    */
-  async #defaultFetch(request: Request): Promise<Response> {
+  substituteFetch(request: Request): Promise<Response> {
+    return this.#egressFetch(request, { requirePlaceholder: false });
+  }
+
+  /**
+   * Load and invoke the secret worker. Jailed exactly like every other dynamic
+   * worker (WorkerLoader), but with two swapped constructor arguments: the
+   * `env.SECRET` binding and the `globalOutbound` are one SecretEntrypoint stub
+   * pinned to this secret — so the isolate's only network reach is this
+   * secret's hosts and every call substitutes placeholders in trusted DO code
+   * (design §2.2, ADR 0005). Loaded on demand; eviction just reloads.
+   */
+  async #runWorker(worker: DynamicWorkerRef, request: Request): Promise<Response> {
+    if (worker.type !== "stateless") {
+      throw new Error("secret worker must be a stateless dynamic worker");
+    }
+    const binding = secretWorkerBinding(this.ctx.exports, {
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    });
+    const resolved = await resolveWorkerSource({
+      projectId: this.#name.projectId,
+      source: worker.source,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
+    const stub = loadResolvedWorker({
+      bindings: { SECRET: binding },
+      globalOutbound: binding,
+      projectId: this.#name.projectId,
+      ref: worker,
+      resolved,
+      scopePath: this.#name.path,
+    });
+    const entrypoint = stub.getEntrypoint(worker.entrypoint, {
+      props: worker.props ?? {},
+    }) as { fetch(request: Request): Promise<Response> };
+    return await entrypoint.fetch(request);
+  }
+
+  async #egressFetch(
+    request: Request,
+    { requirePlaceholder }: { requirePlaceholder: boolean },
+  ): Promise<Response> {
     let references;
     try {
       references = secretReferencesFromHeaders(request.headers);
     } catch {
       return secretErrorResponse("secret_reference_required", 400);
     }
-    if (references.length === 0) return secretErrorResponse("secret_reference_required", 400);
-
-    const origin = new URL(request.url).origin;
-    // Group requested fields by referenced secret path; "" is the
-    // whole-material placeholder.
-    const fieldsByPath = new Map<string, Set<string>>();
-    for (const reference of references) {
-      const set = fieldsByPath.get(reference.path) ?? new Set<string>();
-      set.add(reference.field ?? "");
-      fieldsByPath.set(reference.path, set);
+    if (requirePlaceholder && references.length === 0) {
+      return secretErrorResponse("secret_reference_required", 400);
     }
 
-    const values = new Map<string, string>();
+    const origin = new URL(request.url).origin;
     try {
-      for (const [path, fields] of fieldsByPath) {
-        const resolved =
-          path === this.#name.path
-            ? await this.resolveSecretReference({
-                fields: [...fields],
-                origin,
-                usedBy: this.#name.projectId,
-              })
-            : await this.env.SECRET.getByName(
-                DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
-              ).resolveSecretReference({
-                fields: [...fields],
-                origin,
-                usedBy: this.#name.projectId,
-              });
-        for (const [field, value] of Object.entries(resolved))
-          values.set(`${path} ${field}`, value);
+      const state = await this.#snapshot();
+      // This secret owns the outbound: the destination must be pinned here even
+      // when every placeholder is for another (app-tier) secret.
+      if (!state.egress.urls.some((url) => new URL(url).origin === origin)) {
+        throw new SecretSubstitutionError("secret_not_allowed_for_origin");
       }
+
+      const fieldsByPath = new Map<string, Set<string>>();
+      for (const reference of references) {
+        const set = fieldsByPath.get(reference.path) ?? new Set<string>();
+        set.add(reference.field ?? "");
+        fieldsByPath.set(reference.path, set);
+      }
+
+      const values = new Map<string, string>();
+      let ownMaterial: unknown;
+      let ownMaterialLoaded = false;
+      for (const [path, fields] of fieldsByPath) {
+        if (path === this.#name.path) {
+          if (state.encryptedMaterial === null)
+            throw new SecretSubstitutionError("secret_not_found");
+          if (!ownMaterialLoaded) {
+            ownMaterial = await this.#decrypt(state.encryptedMaterial);
+            ownMaterialLoaded = true;
+          }
+          for (const field of fields) {
+            values.set(
+              `${path} ${field}`,
+              selectSecretField(ownMaterial, field === "" ? undefined : field),
+            );
+          }
+        } else {
+          const resolved = await this.env.SECRET.getByName(
+            DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
+          ).resolveSecretReference({ fields: [...fields], origin, usedBy: this.#name.projectId });
+          for (const [field, value] of Object.entries(resolved))
+            values.set(`${path} ${field}`, value);
+        }
+      }
+      await this.#appendUsed(this.#name.projectId, origin);
+
+      const substituted = substituteSecretHeaders(request, (reference) => {
+        const value = values.get(`${reference.path} ${reference.field ?? ""}`);
+        if (value === undefined)
+          throw new SecretSubstitutionError("secret_reference_field_not_found");
+        return value;
+      });
+      return await fetch(substituted);
     } catch (error) {
       if (error instanceof SecretSubstitutionError) {
         return secretErrorResponse(
@@ -229,22 +312,15 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
       throw error;
     }
-
-    const substituted = substituteSecretHeaders(request, (reference) => {
-      const value = values.get(`${reference.path} ${reference.field ?? ""}`);
-      if (value === undefined)
-        throw new SecretSubstitutionError("secret_reference_field_not_found");
-      return value;
-    });
-    return fetch(substituted);
   }
 
-  /** Decrypt + parse this secret's material, optionally asserting a live egress
-   * allowlist and that a terminal origin is on it. Throws
-   * SecretSubstitutionError so `#defaultFetch` can map failures to 4xx. */
-  async #readMaterial(opts: { origin?: string; requireEgress?: boolean } = {}): Promise<unknown> {
+  async #snapshot(): Promise<SecretState> {
     await this.#processorHost.catchUp(SecretProcessorContract.slug);
-    const { state } = await this.#secretProcessor.snapshot();
+    return (await this.#secretProcessor.snapshot()).state;
+  }
+
+  async #readMaterial(opts: { origin?: string; requireEgress?: boolean } = {}): Promise<unknown> {
+    const state = await this.#snapshot();
     if (state.encryptedMaterial === null) throw new SecretSubstitutionError("secret_not_found");
     if (opts.requireEgress && state.egress.urls.length === 0) {
       throw new SecretSubstitutionError("secret_not_allowed_for_origin");
@@ -255,9 +331,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     ) {
       throw new SecretSubstitutionError("secret_not_allowed_for_origin");
     }
-    return JSON.parse(
-      await decryptSecretMaterial(state.encryptedMaterial, this.env.SECRET_ENCRYPTION_KEY),
-    );
+    return await this.#decrypt(state.encryptedMaterial);
+  }
+
+  async #decrypt(encrypted: NonNullable<SecretState["encryptedMaterial"]>): Promise<unknown> {
+    return JSON.parse(await decryptSecretMaterial(encrypted, this.env.SECRET_ENCRYPTION_KEY));
   }
 
   #appendUsed(usedBy: string, url?: string): Promise<unknown> {
@@ -278,12 +356,11 @@ function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
  * Shared by describe() and the processor facade's publicState so the two can
  * never disagree about what leaves the DO.
  */
-function describeSecretState(
-  state: InstanceType<typeof SecretProcessor>["state"],
-): SecretDescription {
+function describeSecretState(state: SecretState): SecretDescription {
   return {
     audit: state.audit,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
+    hasWorker: state.worker !== null,
   };
 }
