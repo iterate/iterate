@@ -203,12 +203,12 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, project-host patterns, and the provider-zone catch-all needed
- * for Cloudflare for SaaS custom hostnames. The zone is the hostname minus its
- * first label for app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
+ * catch-all routes. The zone is the hostname minus its first label for
+ * app/MCP/event-docs hosts; project bases are themselves zones.
  *
- * Project bases get a zone-wide catch-all for custom hostnames in the SaaS provider zone, plus
- * three built-in project-host patterns: `base/*`, `*.base/*`, and `*base/*`.
+ * Project bases get three built-in project-host patterns: `base/*`,
+ * `*.base/*`, and `*base/*`.
  * The `*base/*` pattern should subsume the first two, but the live preview zone
  * only reliably invoked the worker for project hosts once all three existed
  * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
@@ -219,16 +219,21 @@ function routes(env: DeployedEnv) {
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
   const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
+  const cloudflareForSaasBases = new Set(env.cloudflareForSaasProjectHostnameBases);
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
     { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
-    ...env.projectHostnameBases.flatMap((base) => [
-      { pattern: "*/*", zone_name: base },
-      { pattern: `${base}/*`, zone_name: base },
-      { pattern: `*.${base}/*`, zone_name: base },
-      { pattern: `*${base}/*`, zone_name: base },
-    ]),
+    ...env.projectHostnameBases.flatMap((base) => {
+      const projectRoutes = [
+        { pattern: `${base}/*`, zone_name: base },
+        { pattern: `*.${base}/*`, zone_name: base },
+        { pattern: `*${base}/*`, zone_name: base },
+      ];
+      return cloudflareForSaasBases.has(base)
+        ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
+        : projectRoutes;
+    }),
   ];
 }
 
