@@ -29,6 +29,21 @@ export function getSemaphoreResourceBases() {
   ];
 }
 
+/**
+ * The streams playground is a relying party like OS and semaphore (browser
+ * sign-in + bearer access tokens against its own workers.dev origin as the
+ * RFC 8707 resource). Local dev is auth-less by design and needs no entry.
+ */
+export function getStreamsExampleResourceBases() {
+  return [
+    "https://streams-example-app-prd.iterate.workers.dev",
+    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
+      (previewNumber) =>
+        `https://streams-example-app-preview-${previewNumber}.iterate-dev-preview.workers.dev`,
+    ),
+  ];
+}
+
 export function getOsMcpResourceBases() {
   return expandOAuthResourceAudienceVariants([
     "https://mcp.iterate.com",

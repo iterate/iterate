@@ -8,7 +8,7 @@
  *
  * The top-level config is local dev; each deployed environment gets an env
  * block expanded from its streamsExampleEnvs entry. The app is workers.dev
- * only: no routes, no DNS, no resources, no secrets. Its one binding is the
+ * only: no routes, no DNS, no resources. Its one binding is the
  * same-script STREAM Durable Object — the app re-exports apps/os's
  * StreamDurableObject from its own worker entry (src/worker.ts) via the `~`
  * alias, so the class lives in this script.
@@ -19,6 +19,30 @@ import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
+
+/**
+ * Secrets every deployment needs, sourced from the env's Doppler config.
+ * `deploy.ts` builds its --secrets-file from exactly this list and fails
+ * before deploying when the Doppler config is missing one. The playground is
+ * admin-only on deployed envs (see src/iterate-auth.ts); local dev carries
+ * none of these and stays auth-less.
+ */
+export const REQUIRED_SECRETS = [
+  "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
+  "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+];
+
+/**
+ * Env-shaping config that is NOT secret and already lives in envs.ts —
+ * emitted as per-env `vars` so the worker's runtime base URL and auth issuer
+ * can never drift from the envs.ts entry that names the worker.
+ */
+export function envShapedVars(env: StreamsExampleEnv) {
+  return {
+    APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+  };
+}
 
 /** Binding config identical across local dev and every deployed env. */
 function workerBindings() {
@@ -37,6 +61,8 @@ function envBlock(env: StreamsExampleEnv) {
     // The env's only public URL is its workers.dev origin (envs.ts baseUrl).
     workers_dev: true,
     ...workerBindings(),
+    secrets: { required: REQUIRED_SECRETS },
+    vars: envShapedVars(env),
   };
 }
 
@@ -48,11 +74,31 @@ const config = {
   name: "streams-example-app",
   main: "./src/worker.ts",
   compatibility_date: "2026-06-17",
-  compatibility_flags: ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  // global_fetch_strictly_public: the iterate-auth login handler fetches the
+  // auth worker for OIDC discovery + token exchange; without the flag,
+  // same-zone subrequests would go to the zone origin instead of through
+  // Worker routes (~20s hang then 500 — same incident class as os/auth/
+  // semaphore). workers.dev origins are cross-zone to auth today, but the
+  // flag keeps this safe if the app ever gets a custom domain.
+  compatibility_flags: [
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env",
+    "global_fetch_strictly_public",
+  ],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   migrations: [{ tag: "v1", new_sqlite_classes: ["StreamDurableObject"] }],
   ...workerBindings(),
+  // Local dev loads the iterate-auth keys from process.env when present (the
+  // vite plugin reads exactly `secrets.required`); absent keys leave the dev
+  // playground auth-less, which is the intended local mode.
+  secrets: {
+    required: [
+      ...REQUIRED_SECRETS,
+      "APP_CONFIG_ITERATE_AUTH__ISSUER",
+      "APP_CONFIG_ITERATE_AUTH__JWKS",
+    ],
+  },
   env: Object.fromEntries(
     Object.entries(streamsExampleEnvs).map(([name, env]) => [name, envBlock(env)]),
   ),
