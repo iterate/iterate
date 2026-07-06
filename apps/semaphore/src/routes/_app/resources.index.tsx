@@ -136,12 +136,16 @@ function ResourcesIndexPage() {
                 </p>
               </div>
 
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {resources.map((resource) => (
                   <a
                     key={`${resource.type}:${resource.slug}`}
                     href={`/resources/${encodeURIComponent(resource.type)}/${encodeURIComponent(resource.slug)}/`}
-                    className="block rounded-lg border bg-card p-4 transition-colors hover:border-foreground/30"
+                    className={`block rounded-lg border p-4 transition-colors hover:border-foreground/30 ${
+                      resource.leaseState === "leased"
+                        ? "border-amber-500/40 bg-amber-500/10"
+                        : "border-emerald-500/30 bg-emerald-500/10"
+                    }`}
                   >
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-4">
@@ -187,7 +191,7 @@ function PreviewEnvironmentsSection({ slots }: { slots: SerializableSemaphoreRes
         </p>
       </div>
 
-      <div className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {slots.map((slot) => (
           <PreviewSlotCard key={slot.slug} slot={slot} />
         ))}
@@ -196,14 +200,37 @@ function PreviewEnvironmentsSection({ slots }: { slots: SerializableSemaphoreRes
   );
 }
 
+/** A `key: value` row in a slot card's detail list. */
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd
+        className="truncate text-right"
+        title={typeof children === "string" ? children : undefined}
+      >
+        {children}
+      </dd>
+    </div>
+  );
+}
+
+function formatInstant(epochMs: number) {
+  return `${formatRelativeMs(epochMs - Date.now())} · ${new Date(epochMs).toISOString()}`;
+}
+
 function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
   const slotNumber = previewSlotNumber(slot.slug);
   const pullRequestUrl = holderPullRequestUrl(slot.holder);
   const leased = slot.leaseState === "leased";
 
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <div className="space-y-2">
+    <div
+      className={`rounded-lg border p-4 ${
+        leased ? "border-amber-500/40 bg-amber-500/10" : "border-emerald-500/30 bg-emerald-500/10"
+      }`}
+    >
+      <div className="space-y-2.5">
         <div className="flex items-start justify-between gap-4">
           <a
             href={`/resources/${ENVIRONMENT_CONFIG_LEASE_TYPE}/${encodeURIComponent(slot.slug)}/`}
@@ -214,37 +241,38 @@ function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
           <LeaseStateBadge leaseState={slot.leaseState} />
         </div>
 
-        {leased ? (
-          <p className="text-xs text-muted-foreground">
-            held by{" "}
-            {pullRequestUrl ? (
-              <a
-                href={pullRequestUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-foreground underline underline-offset-2"
-              >
-                {slot.holder}
-              </a>
-            ) : (
-              <span className="text-foreground">{slot.holder ?? "unknown holder"}</span>
-            )}
-            {slot.leasedUntil ? (
-              <>
-                {" "}
-                · expires {formatRelativeMs(slot.leasedUntil - Date.now())} (
-                {new Date(slot.leasedUntil).toISOString()})
-              </>
-            ) : null}
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            available now
-            {slot.lastReleasedAt
-              ? ` · released ${formatRelativeMs(slot.lastReleasedAt - Date.now())}`
-              : ""}
-          </p>
-        )}
+        <dl className="space-y-1 text-xs">
+          {leased ? (
+            <>
+              <DetailRow label="held by">
+                {pullRequestUrl ? (
+                  <a
+                    href={pullRequestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium underline underline-offset-2"
+                  >
+                    {slot.holder}
+                  </a>
+                ) : (
+                  <span className="font-medium">{slot.holder ?? "unknown holder"}</span>
+                )}
+              </DetailRow>
+              {slot.leasedUntil ? (
+                <DetailRow label="expires">{formatInstant(slot.leasedUntil)}</DetailRow>
+              ) : null}
+            </>
+          ) : null}
+          {slot.lastAcquiredAt ? (
+            <DetailRow label="last acquired">{formatInstant(slot.lastAcquiredAt)}</DetailRow>
+          ) : null}
+          {slot.lastReleasedAt ? (
+            <DetailRow label="last released">{formatInstant(slot.lastReleasedAt)}</DetailRow>
+          ) : null}
+          {typeof slot.data.dopplerConfig === "string" ? (
+            <DetailRow label="doppler config">{slot.data.dopplerConfig}</DetailRow>
+          ) : null}
+        </dl>
 
         {slotNumber !== null ? (
           <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
@@ -256,11 +284,20 @@ function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
                 rel="noreferrer"
                 className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
-                {app}.iterate-preview-{slotNumber}.com
+                {app}
               </a>
             ))}
           </p>
         ) : null}
+
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            raw state
+          </summary>
+          <pre className="mt-2 overflow-x-auto rounded-md bg-background/60 p-2">
+            {JSON.stringify(slot, null, 2)}
+          </pre>
+        </details>
       </div>
     </div>
   );
