@@ -54,7 +54,7 @@ describe("gateway hello", () => {
 describe("gateway identify", () => {
   test("a valid access token → ready then a pet.created dispatch", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const state = newGatewayConnection();
     const token = await sealedAccessToken(key, { sub: "Jonas", clientId: "petshop-default" });
 
@@ -76,7 +76,7 @@ describe("gateway identify", () => {
 
   test("after ready, further frames are echoed back verbatim", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const state = newGatewayConnection();
     await handleGatewayMessage(
       state,
@@ -91,7 +91,7 @@ describe("gateway identify", () => {
 
   test("a missing token → invalid + close 4001", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const state = newGatewayConnection();
     const reaction = await handleGatewayMessage(state, JSON.stringify({ op: "identify" }), deps);
     expect(parse(reaction.send)[0].op).toBe("invalid");
@@ -104,7 +104,7 @@ describe("gateway identify", () => {
 
   test("a garbage token → invalid + close 4001", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const reaction = await handleGatewayMessage(
       newGatewayConnection(),
       JSON.stringify({ op: "identify", token: "not-a-real-token" }),
@@ -115,7 +115,7 @@ describe("gateway identify", () => {
   });
 
   test("a token sealed under a different key → invalid + close 4001", async () => {
-    const deps: GatewayDeps = { sealKey: randomSealKey(), accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: randomSealKey(), getAccessTokenEpoch: async () => 0 };
     const foreign = await sealedAccessToken(randomSealKey());
     const reaction = await handleGatewayMessage(
       newGatewayConnection(),
@@ -127,7 +127,7 @@ describe("gateway identify", () => {
 
   test("an expired token → invalid + close 4001", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const token = await sealedAccessToken(key);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 121_000);
@@ -142,7 +142,7 @@ describe("gateway identify", () => {
   test("an epoch-revoked token → invalid + close 4001", async () => {
     const key = randomSealKey();
     // Token minted under epoch 0, but the shop has since bumped to epoch 1.
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 1 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 1 };
     const token = await sealedAccessToken(key, { epoch: 0 });
     const reaction = await handleGatewayMessage(
       newGatewayConnection(),
@@ -154,7 +154,7 @@ describe("gateway identify", () => {
 
   test("a non-identify first frame → invalid + close 4001", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const reaction = await handleGatewayMessage(
       newGatewayConnection(),
       JSON.stringify({ op: "heartbeat" }),
@@ -166,7 +166,7 @@ describe("gateway identify", () => {
 
   test("a non-JSON first frame → invalid + close 4001", async () => {
     const key = randomSealKey();
-    const deps: GatewayDeps = { sealKey: key, accessTokenEpoch: 0 };
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
     const reaction = await handleGatewayMessage(newGatewayConnection(), "not json at all", deps);
     expect(parse(reaction.send)[0].op).toBe("invalid");
     expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);

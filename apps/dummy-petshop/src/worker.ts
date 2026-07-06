@@ -478,7 +478,6 @@ async function gatewayUpgrade(request: Request, deps: PetshopDeps): Promise<Resp
       426,
     );
   }
-  const { accessTokenEpoch } = await deps.state.getState();
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
@@ -492,7 +491,10 @@ async function gatewayUpgrade(request: Request, deps: PetshopDeps): Promise<Resp
     const raw = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
     // Run the protocol, then apply its reaction to the socket. Any failure to
     // process a frame closes with the auth-failed code rather than throwing.
-    void handleGatewayMessage(connection, raw, { sealKey: deps.sealKey, accessTokenEpoch })
+    void handleGatewayMessage(connection, raw, {
+      sealKey: deps.sealKey,
+      getAccessTokenEpoch: () => deps.state.getState().then((s) => s.accessTokenEpoch),
+    })
       .then((reaction) => {
         for (const frame of reaction.send) server.send(frame);
         if (reaction.close) server.close(reaction.close.code, reaction.close.reason);
@@ -582,13 +584,20 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
   return json({ error: "not_found" }, 404);
 }
 
+// Seeded ONCE per isolate (not per request) so createPet / create_pet
+// mutations persist for the isolate's lifetime rather than resetting on the
+// next fetch. Still not durable across isolates — a deliberately simple demo
+// catalogue for a test fixture; the durable, backdoor-controlled state lives
+// in the Durable Object.
+const petCatalogue = seedPets();
+
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
     return handlePetshopRequest(request, {
       state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
       sealKey: env.PETSHOP_SEAL_KEY,
       backdoorSecret: env.PETSHOP_BACKDOOR_SECRET,
-      pets: seedPets(),
+      pets: petCatalogue,
     });
   },
 };

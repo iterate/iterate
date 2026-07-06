@@ -67,7 +67,10 @@ export function helloFrame(): string {
  */
 export interface GatewayDeps {
   sealKey: string;
-  accessTokenEpoch: number;
+  /** Reads the CURRENT access-token epoch at IDENTIFY time — not a value
+   * snapshotted at upgrade — so a token revoked by expire-tokens between
+   * upgrade and IDENTIFY is rejected, exactly like the HTTP routes. */
+  getAccessTokenEpoch: () => Promise<number>;
 }
 
 /**
@@ -92,7 +95,7 @@ async function accessGrantFromToken(
   if (typeof token !== "string" || token.length === 0) return null;
   const grant = await unseal<AccessPayload>(token, deps.sealKey);
   if (!grant || grant.t !== "access" || grant.exp < nowSeconds()) return null;
-  if (grant.epoch !== deps.accessTokenEpoch) return null;
+  if (grant.epoch !== (await deps.getAccessTokenEpoch())) return null;
   return grant;
 }
 
