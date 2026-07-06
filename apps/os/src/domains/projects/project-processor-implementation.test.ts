@@ -311,4 +311,82 @@ describe("ProjectProcessor custom domains", () => {
       },
     ]);
   });
+
+  it("preserves an existing Cloudflare snapshot when a domain is re-added", async () => {
+    const stream = new MemoryStream();
+    const activeSnapshot = {
+      cloudflareHostnameId: "custom-hostname-1",
+      error: null,
+      hostname: "garple.com",
+      hostnameStatus: "active",
+      ownershipVerification: {
+        name: "_cf-custom-hostname.garple.com",
+        value: "ownership-token",
+      },
+      sslStatus: "active",
+      status: "active" as const,
+      validationRecords: [
+        {
+          name: "_acme-challenge.garple.com",
+          status: "active",
+          value: "ssl-token",
+        },
+      ],
+      wildcard: true,
+    };
+    const customDomains = {
+      ensure: vi.fn(async () => activeSnapshot),
+      readProject: vi.fn(async () => project),
+      refresh: vi.fn(),
+      remove: vi.fn(),
+    };
+    const processor = new ProjectProcessor({
+      customDomains,
+      defaultLlmProvider: "openai-ws",
+      itx: {
+        projectId: project.id,
+        worker: { processEvent: vi.fn() },
+      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
+      stream,
+    });
+    const cursor = { offset: 0 };
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+        payload: activeSnapshot,
+      }),
+    );
+    await deliverNewEvents({ cursor, processor, stream });
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-add-requested",
+        payload: { hostname: "garple.com" },
+      }),
+    );
+    await deliverNewEvents({ cursor, processor, stream });
+
+    expect(processor.state.customDomains).toMatchObject([
+      {
+        cloudflareHostnameId: "custom-hostname-1",
+        error: null,
+        hostname: "garple.com",
+        hostnameStatus: "active",
+        ownershipVerification: {
+          name: "_cf-custom-hostname.garple.com",
+          value: "ownership-token",
+        },
+        sslStatus: "active",
+        status: "active",
+        validationRecords: [
+          {
+            name: "_acme-challenge.garple.com",
+            status: "active",
+            value: "ssl-token",
+          },
+        ],
+      },
+    ]);
+  });
 });

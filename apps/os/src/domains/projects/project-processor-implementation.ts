@@ -124,7 +124,17 @@ export class ProjectProcessor extends StreamProcessor<
         return { ...state, created: true };
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
-      case "events.iterate.com/project/custom-domain-add-requested":
+      case "events.iterate.com/project/custom-domain-add-requested": {
+        const existingDomain = state.customDomains.find(
+          (domain) => domain.hostname === event.payload.hostname,
+        );
+        if (existingDomain) {
+          return upsertCustomDomain(state, {
+            ...existingDomain,
+            error: null,
+            updatedAt: event.createdAt,
+          });
+        }
         return upsertCustomDomain(state, {
           cloudflareHostnameId: null,
           createdAt: event.createdAt,
@@ -138,6 +148,7 @@ export class ProjectProcessor extends StreamProcessor<
           validationRecords: [],
           wildcard: true,
         });
+      }
       case "events.iterate.com/project/custom-domain-cloudflare-observed":
         return upsertCustomDomain(state, {
           ...event.payload,
