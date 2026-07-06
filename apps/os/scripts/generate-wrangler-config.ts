@@ -203,14 +203,16 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, and the project-host patterns. The zone is the hostname minus
- * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, and the provider-zone catch-all needed
+ * for Cloudflare for SaaS custom hostnames. The zone is the hostname minus its
+ * first label for app/MCP/event-docs hosts; project bases are themselves zones.
  *
- * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
- * The catch-all `*base/*` should subsume the others, but the live preview
- * zone only reliably invoked the worker for project hosts once all three
- * existed (observed 2026-06) — kept verbatim; collapse only with an edge
- * experiment proving it.
+ * Project bases get a zone-wide catch-all for custom hostnames in the SaaS provider zone, plus
+ * three built-in project-host patterns: `base/*`, `*.base/*`, and `*base/*`.
+ * The `*base/*` pattern should subsume the first two, but the live preview zone
+ * only reliably invoked the worker for project hosts once all three existed
+ * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
+ * proving it.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
@@ -222,6 +224,7 @@ function routes(env: DeployedEnv) {
     { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
     ...env.projectHostnameBases.flatMap((base) => [
+      { pattern: "*/*", zone_name: base },
       { pattern: `${base}/*`, zone_name: base },
       { pattern: `*.${base}/*`, zone_name: base },
       { pattern: `*${base}/*`, zone_name: base },

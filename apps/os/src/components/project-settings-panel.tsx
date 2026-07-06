@@ -15,7 +15,7 @@ import {
   type Project,
 } from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { isValidCustomHostname, normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import type { ProjectCustomDomain, ProjectProcessorState } from "~/types.ts";
 
 export function ProjectSettingsPanel({
@@ -29,7 +29,7 @@ export function ProjectSettingsPanel({
 }) {
   const base = normalizeProjectHostnameBase(routeConfig.projectHostnameBases[0] ?? "");
   const defaultHostname = base ? `${project.slug}.${base}` : project.slug;
-  const customDomains = projectState?.customDomains ?? [];
+  const customDomains = projectState?.customDomains;
 
   return (
     <section className="flex flex-col gap-6" data-testid="project-settings-panel">
@@ -75,13 +75,16 @@ function CustomDomainsEditor({
   projectHostnameBase,
   projectId,
 }: {
-  domains: ProjectCustomDomain[];
+  domains?: ProjectCustomDomain[];
   projectHostnameBase: string;
   projectId: string;
 }) {
   const [hostname, setHostname] = useState("");
+  const cnameTarget = isValidCustomHostname(projectHostnameBase)
+    ? `cname.${projectHostnameBase}`
+    : null;
   const existingHostnames = useMemo(
-    () => new Set(domains.map((domain) => domain.hostname)),
+    () => new Set((domains ?? []).map((domain) => domain.hostname)),
     [domains],
   );
   const addDomain = useMutation({
@@ -121,7 +124,7 @@ function CustomDomainsEditor({
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     const trimmed = hostname.trim().toLowerCase();
-    if (!trimmed || existingHostnames.has(trimmed)) return;
+    if (!trimmed || existingHostnames.has(trimmed) || !cnameTarget) return;
     addDomain.mutate(trimmed);
   };
 
@@ -132,7 +135,7 @@ function CustomDomainsEditor({
           autoCapitalize="none"
           autoComplete="off"
           autoCorrect="off"
-          disabled={addDomain.isPending}
+          disabled={addDomain.isPending || !cnameTarget}
           onChange={(event) => setHostname(event.currentTarget.value)}
           placeholder="garple.com"
           spellCheck={false}
@@ -140,7 +143,7 @@ function CustomDomainsEditor({
         />
         <Button
           aria-label="Add custom domain"
-          disabled={addDomain.isPending || !hostname.trim()}
+          disabled={addDomain.isPending || !hostname.trim() || !cnameTarget}
           size="icon"
           type="submit"
         >
@@ -148,7 +151,13 @@ function CustomDomainsEditor({
         </Button>
       </form>
 
-      {domains.length === 0 ? (
+      {!cnameTarget ? (
+        <p className="text-xs text-muted-foreground">
+          Custom domains require a deployed DNS project hostname base.
+        </p>
+      ) : domains === undefined ? (
+        <p className="text-xs text-muted-foreground">Loading custom domains...</p>
+      ) : domains.length === 0 ? (
         <p className="text-xs text-muted-foreground">No custom domains configured.</p>
       ) : (
         <div className="divide-y rounded-md border">
@@ -158,9 +167,11 @@ function CustomDomainsEditor({
               key={domain.hostname}
               onRefresh={() => refreshDomain.mutate(domain.hostname)}
               onRemove={() => removeDomain.mutate(domain.hostname)}
-              projectHostnameBase={projectHostnameBase}
-              refreshPending={refreshDomain.isPending}
-              removePending={removeDomain.isPending}
+              cnameTarget={cnameTarget}
+              refreshPending={
+                refreshDomain.isPending && refreshDomain.variables === domain.hostname
+              }
+              removePending={removeDomain.isPending && removeDomain.variables === domain.hostname}
             />
           ))}
         </div>
@@ -171,29 +182,28 @@ function CustomDomainsEditor({
 
 function CustomDomainRow({
   domain,
+  cnameTarget,
   onRefresh,
   onRemove,
-  projectHostnameBase,
   refreshPending,
   removePending,
 }: {
   domain: ProjectCustomDomain;
+  cnameTarget: string;
   onRefresh: () => void;
   onRemove: () => void;
-  projectHostnameBase: string;
   refreshPending: boolean;
   removePending: boolean;
 }) {
-  const cnameTarget = projectHostnameBase ? `cname.${projectHostnameBase}` : null;
   const ownershipRecords = domain.ownershipVerification
     ? [{ ...domain.ownershipVerification, type: "TXT" }]
     : [];
-  const trafficRecords = cnameTarget
-    ? [
-        { name: domain.hostname, type: "CNAME / ALIAS", value: cnameTarget },
-        { name: `*.${domain.hostname}`, type: "CNAME", value: cnameTarget },
-      ]
-    : [];
+  const trafficRecords = [
+    { name: domain.hostname, type: "CNAME / ALIAS", value: cnameTarget },
+    ...(domain.wildcard
+      ? [{ name: `*.${domain.hostname}`, type: "CNAME", value: cnameTarget }]
+      : []),
+  ];
   const certificateRecords = domain.certificateDelegationCname
     ? [{ ...domain.certificateDelegationCname, type: "CNAME" }]
     : [];
@@ -244,6 +254,11 @@ function CustomDomainRow({
         title="Authorize domain"
       />
       <DomainSetupStep
+        note={
+          certificateRecords.length > 0
+            ? "Remove any existing TXT records at this _acme-challenge name before adding the CNAME."
+            : undefined
+        }
         fallbackRecords={certificateFallbackRecords}
         records={certificateRecords}
         status={domain.sslStatus}
@@ -256,11 +271,13 @@ function CustomDomainRow({
 
 function DomainSetupStep({
   fallbackRecords = [],
+  note,
   records,
   status,
   title,
 }: {
   fallbackRecords?: DnsDisplayRecord[];
+  note?: string;
   records: DnsDisplayRecord[];
   status?: string | null;
   title: string;
@@ -280,6 +297,7 @@ function DomainSetupStep({
           <DnsLine key={`${record.type}:${record.name}:${record.value}`} record={record} />
         ))}
       </div>
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
     </div>
   );
 }
@@ -290,20 +308,45 @@ function DnsLine({ record }: { record: DnsDisplayRecord }) {
   return (
     <div className="grid min-w-0 gap-1 sm:grid-cols-[6.25rem_minmax(0,1fr)_minmax(0,1.3fr)]">
       <code className="rounded bg-muted px-1.5 py-1 text-center">{record.type}</code>
-      <DnsCopyCell label="record name" value={record.name} />
-      <DnsCopyCell label="record value" value={record.value} />
+      <DnsCopyCell
+        copyLabel={`${record.type} name ${record.name}`}
+        label="Name"
+        value={record.name}
+      />
+      <DnsCopyCell
+        copyLabel={`${record.type} value for ${record.name}`}
+        label="Value"
+        value={record.value}
+      />
     </div>
   );
 }
 
-function DnsCopyCell({ label, value }: { label: string; value: string }) {
+function DnsCopyCell({
+  copyLabel,
+  label,
+  value,
+}: {
+  copyLabel: string;
+  label: string;
+  value: string;
+}) {
   return (
     <div className="flex min-w-0 items-stretch gap-1">
-      <code className="min-w-0 flex-1 rounded bg-muted px-1.5 py-1 break-all">{value}</code>
+      <code className="min-w-0 flex-1 rounded bg-muted px-1.5 py-1 break-all">
+        <span className="mr-1 font-sans text-[0.65rem] font-medium text-muted-foreground uppercase">
+          {label}
+        </span>
+        {value}
+      </code>
       <Button
-        aria-label={`Copy DNS ${label}`}
+        aria-label={`Copy DNS ${copyLabel}`}
         className="h-auto min-h-7 w-7 shrink-0"
         onClick={() => {
+          if (!navigator.clipboard) {
+            toast.error("Clipboard unavailable");
+            return;
+          }
           void navigator.clipboard.writeText(value).then(
             () => toast.success("Copied"),
             () => toast.error("Could not copy"),

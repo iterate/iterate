@@ -40,3 +40,14 @@ it("routes public event docs hosts to the os worker", () => {
     zone_name: "iterate.com",
   });
 });
+
+it("routes Cloudflare for SaaS custom hostnames through the project provider zone", () => {
+  expect(config.env.prd.routes ?? []).toContainEqual({
+    pattern: "*/*",
+    zone_name: "iterate.app",
+  });
+  expect(config.env.preview_6.routes ?? []).toContainEqual({
+    pattern: "*/*",
+    zone_name: "iterate-preview-6.app",
+  });
+});

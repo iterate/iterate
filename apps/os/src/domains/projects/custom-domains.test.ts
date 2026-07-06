@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../../config.ts";
 import {
+  primeProjectHostname,
   readProjectByHostname,
   readProjectHostnameRegistration,
   type ProjectDirectoryRecord,
@@ -97,24 +98,45 @@ describe("custom domain provisioning", () => {
             },
             hostname: "garple.com",
             id: "custom-hostname-1",
-            ownership_verification: {
-              name: "_cf-custom-hostname.garple.com",
-              value: "ownership-token",
-            },
             ssl: {
               status: "pending_validation",
-              validation_records: [
-                {
-                  status: "pending",
-                  txt_name: "_acme-challenge.garple.com",
-                  txt_value: "ssl-token",
-                },
-              ],
               wildcard: true,
             },
             status: "pending",
           };
           return Response.json({ success: true, result: customHostname });
+        }
+
+        if (url.pathname === "/client/v4/zones/zone-1/custom_hostnames/custom-hostname-1") {
+          return Response.json({
+            success: true,
+            result: {
+              ...customHostname,
+              hostname: "garple.com",
+              id: "custom-hostname-1",
+              custom_metadata: {
+                projectId: "prj_garple",
+                projectSlug: "garple",
+                source: "iterate-os",
+              },
+              ownership_verification: {
+                name: "_cf-custom-hostname.garple.com",
+                value: "ownership-token",
+              },
+              ssl: {
+                status: "pending_validation",
+                validation_records: [
+                  {
+                    status: "pending",
+                    txt_name: "_acme-challenge.garple.com",
+                    txt_value: "ssl-token",
+                  },
+                ],
+                wildcard: true,
+              },
+              status: "pending",
+            },
+          });
         }
 
         if (url.pathname === "/client/v4/zones/zone-1/dcv_delegation/uuid") {
@@ -157,6 +179,13 @@ describe("custom domain provisioning", () => {
       cloudflareHostnameId: "custom-hostname-1",
       hostname: "garple.com",
       status: "pending_validation",
+      validationRecords: [
+        {
+          name: "_acme-challenge.garple.com",
+          status: "pending",
+          value: "ssl-token",
+        },
+      ],
       wildcard: true,
     });
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
@@ -238,6 +267,86 @@ describe("custom domain provisioning", () => {
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
     );
+  });
+
+  it("removes same-project routing KV when a refreshed hostname is no longer active", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    let cloudflareStatus: "active" | "pending" = "active";
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+
+        if (url.pathname === "/client/v4/zones") {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "iterate.app" }],
+          });
+        }
+
+        if (
+          url.pathname === "/client/v4/zones/zone-1/custom_hostnames" &&
+          request.method === "GET"
+        ) {
+          return Response.json({
+            success: true,
+            result: [
+              {
+                custom_metadata: {
+                  projectId: "prj_garple",
+                  projectSlug: "garple",
+                  source: "iterate-os",
+                },
+                hostname: "garple.com",
+                id: "custom-hostname-1",
+                ssl: {
+                  status: cloudflareStatus === "active" ? "active" : "pending_validation",
+                  wildcard: true,
+                },
+                status: cloudflareStatus,
+              },
+            ],
+          });
+        }
+
+        if (url.pathname === "/client/v4/zones/zone-1/dcv_delegation/uuid") {
+          return Response.json({
+            success: true,
+            result: { uuid: "248299803bb79c97" },
+          });
+        }
+
+        return Response.json(
+          { success: false, errors: [{ message: "not found" }] },
+          { status: 404 },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(provisioner.refresh({ hostname: "garple.com", project })).resolves.toMatchObject({
+      status: "active",
+    });
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
+
+    cloudflareStatus = "pending";
+    await expect(provisioner.refresh({ hostname: "garple.com", project })).resolves.toMatchObject({
+      status: "pending_validation",
+    });
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
   });
 
   it("refuses to adopt a Cloudflare hostname owned by another project", async () => {
@@ -365,6 +474,60 @@ describe("custom domain provisioning", () => {
       provisioner.remove({ cloudflareHostnameId: null, hostname: "garple.com", project }),
     ).rejects.toThrow(/owned by another project/);
     expect(deleteCount).toBe(0);
+  });
+
+  it("treats stale Cloudflare delete ids as already removed and clears same-project routing", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    await primeProjectHostname(directory, "garple.com", project);
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+
+        if (url.pathname === "/client/v4/zones") {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "iterate.app" }],
+          });
+        }
+
+        if (
+          url.pathname === "/client/v4/zones/zone-1/custom_hostnames" &&
+          request.method === "GET"
+        ) {
+          return Response.json({ success: true, result: [] });
+        }
+
+        if (url.pathname === "/client/v4/zones/zone-1/custom_hostnames/stale-id") {
+          return Response.json(
+            { success: false, errors: [{ message: "not found" }] },
+            { status: 404 },
+          );
+        }
+
+        return Response.json(
+          { success: false, errors: [{ message: "not found" }] },
+          { status: 404 },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(
+      provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
+    ).resolves.toBeUndefined();
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
   });
 
   it("maps active Cloudflare hostname and SSL status to an active project domain", () => {

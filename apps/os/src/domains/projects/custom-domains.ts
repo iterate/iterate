@@ -21,6 +21,15 @@ type CloudflareError = {
   message?: string;
 };
 
+class CloudflareApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 type CloudflareValidationRecord = {
   name?: unknown;
   status?: unknown;
@@ -54,7 +63,7 @@ export type ProjectCustomDomainProvisioner = {
   }): Promise<ProjectCustomDomainCloudflareSnapshot>;
   refresh(input: {
     hostname: string;
-    project?: ProjectDirectoryRecord;
+    project: ProjectDirectoryRecord;
   }): Promise<ProjectCustomDomainCloudflareSnapshot>;
   remove(input: {
     cloudflareHostnameId?: string | null;
@@ -112,7 +121,7 @@ export function createCloudflareCustomDomainProvisioner(options: {
         customHostname,
         fallbackHostname: normalized,
       });
-      await primeProjectHostnameIfActive({
+      await reconcileProjectHostnameRegistration({
         directory: options.directory,
         hostname: normalized,
         project,
@@ -131,26 +140,19 @@ export function createCloudflareCustomDomainProvisioner(options: {
       if (!customHostname) {
         throw new Error(`Cloudflare custom hostname "${normalized}" was not found.`);
       }
-      if (project) {
-        assertCloudflareHostnameBelongsToProject(customHostname, project);
-        const snapshot = await snapshotCustomHostname({
-          client,
-          customHostname,
-          fallbackHostname: normalized,
-        });
-        await primeProjectHostnameIfActive({
-          directory: options.directory,
-          hostname: normalized,
-          project,
-          snapshot,
-        });
-        return snapshot;
-      }
-      return await snapshotCustomHostname({
+      assertCloudflareHostnameBelongsToProject(customHostname, project);
+      const snapshot = await snapshotCustomHostname({
         client,
         customHostname,
         fallbackHostname: normalized,
       });
+      await reconcileProjectHostnameRegistration({
+        directory: options.directory,
+        hostname: normalized,
+        project,
+        snapshot,
+      });
+      return snapshot;
     },
 
     async remove({ cloudflareHostnameId, hostname, project }) {
@@ -229,18 +231,38 @@ async function snapshotCustomHostname(input: {
   customHostname: CloudflareCustomHostname;
   fallbackHostname: string;
 }): Promise<ProjectCustomDomainCloudflareSnapshot> {
-  return toProjectCustomDomainCloudflareSnapshot(input.customHostname, input.fallbackHostname, {
+  const customHostname = await fetchCustomHostnameDetails(input.client, input.customHostname);
+  return toProjectCustomDomainCloudflareSnapshot(customHostname, input.fallbackHostname, {
     dcvDelegationUuid: await input.client.getDcvDelegationUuid(),
   });
 }
 
-async function primeProjectHostnameIfActive(input: {
+async function fetchCustomHostnameDetails(
+  client: Awaited<ReturnType<typeof cloudflareClient>>,
+  customHostname: CloudflareCustomHostname,
+): Promise<CloudflareCustomHostname> {
+  const id = stringValue(customHostname.id);
+  if (!id) return customHostname;
+  return await client.getCustomHostname(id).catch(() => customHostname);
+}
+
+async function reconcileProjectHostnameRegistration(input: {
   directory: KVNamespace;
   hostname: string;
   project: ProjectDirectoryRecord;
   snapshot: ProjectCustomDomainCloudflareSnapshot;
 }): Promise<void> {
-  if (input.snapshot.status !== "active") return;
+  if (input.snapshot.status !== "active") {
+    const registeredProject = await readProjectHostnameRegistration(
+      input.directory,
+      input.hostname,
+    );
+    if (registeredProject?.id === input.project.id) {
+      await deleteProjectHostname(input.directory, input.hostname);
+    }
+    return;
+  }
+
   await assertHostnameAvailable({
     directory: input.directory,
     hostname: input.hostname,
@@ -292,7 +314,10 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
       success?: boolean;
     };
     if (!response.ok || body.success === false) {
-      throw new Error(cloudflareErrorMessage(path, response.status, body.errors));
+      throw new CloudflareApiError(
+        cloudflareErrorMessage(path, response.status, body.errors),
+        response.status,
+      );
     }
     return body.result as T;
   };
@@ -325,9 +350,20 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
     },
 
     async deleteCustomHostname(id: string): Promise<void> {
-      await request<unknown>(`/zones/${zone.id}/custom_hostnames/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+      try {
+        await request<unknown>(`/zones/${zone.id}/custom_hostnames/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+        });
+      } catch (error) {
+        if (error instanceof CloudflareApiError && error.status === 404) return;
+        throw error;
+      }
+    },
+
+    async getCustomHostname(id: string): Promise<CloudflareCustomHostname> {
+      return await request<CloudflareCustomHostname>(
+        `/zones/${zone.id}/custom_hostnames/${encodeURIComponent(id)}`,
+      );
     },
 
     async findCustomHostname(hostname: string): Promise<CloudflareCustomHostname | null> {

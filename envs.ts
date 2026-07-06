@@ -67,10 +67,10 @@ export interface DeployedEnv {
   /** Auth app origin, e.g. https://auth.iterate.com */
   authBaseUrl: string;
   /**
-   * Base domains for deployed project hosts (`<slug>.<base>`). Routes are
-   * generated as `base/*`, `*.base/*` and `*base/*` (the last because the
-   * preview zone only reliably invoked the worker once the broad catch-all
-   * existed).
+   * Base domains for deployed project hosts (`<slug>.<base>`). Worker routes
+   * are generated for the project host patterns plus a zone-wide catch-all route,
+   * which is required for Cloudflare for SaaS custom hostnames using the worker
+   * as origin.
    */
   projectHostnameBases: string[];
   /** IDs of the Cloudflare resources this env owns (created once by ensure-resources). */
