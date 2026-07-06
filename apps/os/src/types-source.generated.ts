@@ -562,13 +562,32 @@ export interface SecretCollection extends Describable {
 export interface Secret extends Describable {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
+  /** Keyed HMAC over caller bytes (hex). Verification without revealing the
+   * key — see design §2.1. */
+  hmac(input: SecretComputeHmacInput): Promise<string>;
+  /** Constant-time equality of a caller value against a field. */
+  matches(input: { field?: string; value: string }): Promise<boolean>;
   processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
 }
 
 export type SecretUpdateInput = {
   egress?: { urls: string[] };
-  material?: string;
+  /** Any serializable value (write-only, one JSON blob). A plain string keeps
+   * the whole-material placeholder working; structured material is addressed
+   * by \`field\` in placeholders (design §2.1). */
+  material?: unknown;
+  /** The secret worker that overrides this secret's fetch() (design §2.2), or
+   * \`null\` to clear it. Omitted leaves any installed worker unchanged. */
+  worker?: DynamicWorkerRef | null;
+};
+
+/** Input to \`Secret.hmac\` — the field of material to sign under (whole material
+ * if omitted), the digest algorithm, and the caller-composed payload. */
+export type SecretComputeHmacInput = {
+  algo: "sha1" | "sha256";
+  field?: string;
+  payload: string | Uint8Array;
 };
 
 export type SecretDescription = {
@@ -580,6 +599,8 @@ export type SecretDescription = {
   };
   egress: { urls: string[] };
   hasMaterial: boolean;
+  /** Whether a secret worker overrides this secret's fetch() (design §2.2). */
+  hasWorker: boolean;
 };
 
 export type StreamListItem = {
