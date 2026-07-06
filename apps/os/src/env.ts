@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
  * The OS worker's binding contract — the binding names wrangler.jsonc
@@ -27,6 +28,12 @@ export interface Env {
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Cloudflare Email Service send binding backing `itx.email`. Bound in every
+   * wrangler env block including local dev, where miniflare simulates sends
+   * (logs + local .eml files) instead of delivering real mail.
+   */
+  EMAIL: SendEmailBinding;
   SECRET_ENCRYPTION_KEY: string;
   /** Content-addressed dynamic worker build artifact cache
    * (domains/workers/artifact-store.ts). Every entry is reproducible from its
@@ -55,6 +62,35 @@ export interface Env {
   SANDBOX: DurableObjectNamespace<
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
   >;
+  /**
+   * Workspace persistence for sandbox containers. Container disk is
+   * ephemeral — a sandbox that sleeps loses its filesystem — so the sandbox
+   * Durable Object snapshots `/workspace` to this R2 bucket on idle and
+   * restores it on the next start (the Sandbox SDK's backup/restore:
+   * https://developers.cloudflare.com/sandbox/guides/backup-restore/). One
+   * bucket per env (`${WORKER_SELF}-sandboxes`). The binding MUST be named
+   * `BACKUP_BUCKET` — the SDK reads it from the env by that exact name.
+   */
+  BACKUP_BUCKET: R2Bucket;
+  /** The {@link Env.BACKUP_BUCKET} bucket's name — the SDK presigns transfer
+   * URLs against `https://{CLOUDFLARE_R2_ACCOUNT_ID}.r2.cloudflarestorage.com/
+   * {BACKUP_BUCKET_NAME}/…`, so it needs the name, not just the binding. */
+  BACKUP_BUCKET_NAME: string;
+  /** Account owning {@link Env.BACKUP_BUCKET}, for the SDK's presigned URLs. */
+  CLOUDFLARE_R2_ACCOUNT_ID: string;
+  /**
+   * R2 S3-API credentials for presigning backup transfers (optional Doppler
+   * secret). When present, the SDK presigns `*.r2.cloudflarestorage.com` URLs
+   * and the container transfers archives directly — fast, and through project
+   * egress like all container traffic. When absent (local dev always; a
+   * deployed env until someone mints keys), the sandbox falls back to the
+   * SDK's bucket-binding transfer: archives stream through the Durable
+   * Object's {@link Env.BACKUP_BUCKET} binding — slower, but zero-config and
+   * the only mode `wrangler dev` supports.
+   */
+  R2_ACCESS_KEY_ID?: string;
+  /** See {@link Env.R2_ACCESS_KEY_ID}. */
+  R2_SECRET_ACCESS_KEY?: string;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;

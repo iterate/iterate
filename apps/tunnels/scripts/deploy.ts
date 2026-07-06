@@ -5,9 +5,7 @@
  *
  * Runs the shared pipeline (scripts/lib/deploy-app.ts). No build step:
  * wrangler bundles the TypeScript entry itself. Secrets ride
- * `wrangler deploy --secrets-file`, so code + secrets land in one version
- * (after adopting the DO migration tag on alchemy-era scripts — see
- * deploy-helpers.ts).
+ * `wrangler deploy --secrets-file`, so code + secrets land in one version.
  *
  * CAUTION: never delete tunnels-prd. Every dev environment's public tunnels
  * ride it, and force-deleting a worker script CASCADES its zone routes —

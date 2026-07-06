@@ -27,6 +27,9 @@
 //   secret-postman-echo
 //                   calls Postman Echo to prove egress secret substitution;
 //                   external service, so keep it interactive.
+//   email-send      sends real outbound mail through Cloudflare Email Service;
+//                   needs an onboarded sender domain and a real recipient
+//                   mailbox, so keep it interactive.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -54,6 +57,7 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "connect-public-mcp",
   "connect-openapi-petstore",
   "secret-postman-echo",
+  "email-send",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
@@ -146,9 +150,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // the container cold boot, the rest reuse the warm container (repeat
     // ensureProjectRepo calls are idempotent). No marker on purpose.
     // The Playwright REPL spec provisions a FRESH project (fresh container)
-    // per run; cold container boot + repo clone has a long tail (observed
-    // >70s on preview), so give the completion wait a real budget.
-    completionTimeoutMs: 120_000,
+    // per run; cold container boot + repo clone has a long tail — observed
+    // ~132s on Depot, so 120s was slightly too tight and flaked. 180s is the
+    // fail-fast budget: it covers a genuine cold boot yet still surfaces a
+    // container stuck provisioning (a Cloudflare infra transient) in ~3 min
+    // rather than stalling for many minutes — we'd rather fail and re-run than
+    // mask it (that's why this is 180s, not the absurd 480s it briefly was).
+    completionTimeoutMs: 180_000,
     vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
@@ -180,12 +188,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-edit-file": {
-    vars: ({ marker }) => ({ path: `notes/edit-example-${marker}.md` }),
-    assert: (result, { marker }, expect) => {
+    vars: ({ marker }) => ({
+      path: "notes/edit-example.md",
+      repoPath: `/examples/repo-edit-file-${marker}`,
+    }),
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({
         before: "# Edit example\n\nstatus: draft\n",
         after: "# Edit example\n\nstatus: reviewed\n",
-        changedPaths: [`notes/edit-example-${marker}.md`],
+        changedPaths: ["notes/edit-example.md"],
         occurrenceCount: 1,
       });
     },

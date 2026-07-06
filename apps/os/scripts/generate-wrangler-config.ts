@@ -57,6 +57,13 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_POSTHOG",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
+  // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
+  // transfers (exact names the SDK reads). Optional: an env without them
+  // still runs sandboxes — backups fail loudly in logs and every container
+  // start falls back to a fresh repo clone. Local dev never needs them
+  // (SANDBOX_BACKUP_MODE=local streams through the local R2 binding).
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
 ];
 
 /**
@@ -119,6 +126,12 @@ function workerBindings(input: {
       WORKER_SELF: input.workerName,
       ARTIFACTS_ACCOUNT_ID: input.accountId,
       ARTIFACTS_NAMESPACE: `${input.workerName}-repos`,
+      // Sandbox workspace backup config — names the Sandbox SDK reads from
+      // the env verbatim (BACKUP_BUCKET_NAME, CLOUDFLARE_R2_ACCOUNT_ID);
+      // the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY presigning secrets ride in
+      // from Doppler (OPTIONAL_SECRETS).
+      BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
+      CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -144,6 +157,18 @@ function workerBindings(input: {
     ai: { binding: "AI" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
+    // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
+    // sandbox DO snapshots /workspace here on idle and restores on start).
+    // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
+    // the env by that exact name. Addressed by name, so — unlike KV/D1 — no
+    // per-env id in envs.ts. In local dev miniflare provides it automatically.
+    r2_buckets: [{ binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` }],
+    // Email Service send binding for itx.email. Sender authorization is
+    // enforced in OS (a project only sends as <slug>@<hostname base>, see
+    // rpc-targets.ts EmailRpcTarget) — allowed_sender_addresses can't hold a
+    // dynamic per-project set. Local dev gets the same binding; miniflare
+    // simulates sends instead of delivering real mail.
+    send_email: [{ name: "EMAIL" }],
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
@@ -195,7 +220,21 @@ function envBlock(env: DeployedEnv) {
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 10 : 20,
+    // Sandbox containers are `lite` and bill on usage, not reservation, so a
+    // high cap is free headroom. Idle containers are destroyed (not just
+    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
+    // which releases their instance slot — but under sustained churn the
+    // platform backfills released slots into an "assigned" warm pool that
+    // rides at max_instances, and sandbox start latency grows as the pool
+    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
+    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
+    // `wrangler containers info` reached the cap;
+    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
+    // comfortably exceed a whole marathon's cumulative sandbox creations
+    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
+    // prd churns far less (real agent sandboxes, no fixture storms) and
+    // destroy-on-idle bounds its growth.
+    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
   });
   return {
     name: env.osWorkerName,

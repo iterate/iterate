@@ -4,18 +4,71 @@ Goal: run the full preview e2e lane against a real preview environment 50
 times in a row without a single flake, fixing and documenting every failure
 encountered along the way.
 
-Round 1 (PR #1644) found and fixed nine root causes (below) and merged them
-to main. Round 2 continues the consecutive-green-run count on this PR against
-the post-de-alchemization (#1636) deploy model.
+Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
+Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
+hardening, and merged main's worker-build pipeline (#1612) — whose `#writeChain`
+write serialization supersedes round 2's standalone flake-15 fix. Round 3
+(this PR) carries on toward 50 consecutive green runs, targeting the two
+pre-existing flakes still open after the round-2 merge (see "Round 3 targets").
 
-Method: deploy this PR's preview slot, then loop
-`doppler run --project _shared --config prd -- pnpm preview test --pull-request-number <N>`
-from a workstation. Every failure gets a root-cause diagnosis and the smallest
-reliable fix, recorded below. A failure resets the consecutive-green counter.
+Method: deploy this PR's preview slot, then loop `pnpm preview test
+--pull-request-number <N>`, failing fast on the first failure. Every failure
+gets a root-cause diagnosis and the smallest reliable fix, recorded below; a
+failure resets the consecutive-green counter. `scripts/preview/flake-hunt-loop.sh`
+drives the loop (preflight full-fleet deploy → optional warmup → counted runs).
+
+The trustworthy count runs **in Depot CI, not on a workstation** (a laptop
+sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
+`.depot/workflows/preview-e2e-marathon.yml` runs that same loop on Depot infra,
+launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml`.
+Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
+bar is measured on Depot.
 
 ## Run log
 
-(populated as runs complete)
+Depot marathons (the counted lane), 2026-07-05:
+
+- **marathon1**: 17 clean, run 18 failed — sandbox cold boot ~132s vs 120s
+  budget (fixed: 180s, flake 20).
+- **marathon2** `0rm2n02tk2`: 4 clean, run 5 failed — flake 21 (blank
+  route-pending panel).
+- **marathon3** `nqchbzzr63`: 11 clean, run 12 wedged at the container
+  instance cap — flake 23 (stopped containers never release their slots).
+- **marathon4** `xw5qzkt05d`: 16 clean at ~65-90s/run (no cap slowdown — the
+  flake-23 fix held; slot recycled at active:3-5 throughout), run 17 failed —
+  `stream-lifecycle` hit a Cloudflare DO-storage fault TWICE (attempt 1 timed
+  out, the retry got `Internal error in Durable Object storage caused object
+to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
+  Cloudflare "network performance in North America" incident (preview DOs are
+  ENAM). Fresh project per attempt, so two independent draws both faulted —
+  platform weather, nothing app-side to fix; bumped CI retries 1→2
+  (vitest + Playwright) so a burst needs three consecutive faults to fail a
+  run.
+- **marathon5** `wdq4c1mv2q`: **32 clean** (new record), run 33 wedged at the
+  600s watchdog — sandbox starts degraded as the instance pool saturated at
+  `assigned == 100` even with destroy-on-idle (see the marathon5 addendum
+  under flake 23). Preview cap raised 100 → 500.
+- **marathon6** `gb1g4sg7rs`: 25 clean at a steady ~60-90s/run — cap 500
+  eliminated the saturation slowdown entirely (pool rode at `assigned: 491`
+  with NO latency growth, where cap-100 marathons were at 3-5min/run by run
+  20). Run 26 failed on the lane's one retry-less gate: `onboarding-smoke.ts`
+  — the onboarding agent didn't greet within 90s ("saw 0 events") and the
+  remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
+  attempts, each with a fresh session + project, matching the vitest lane's
+  `retry: 2` policy; a broken slot still fails all three inside ~5min.
+- **marathon7** `pvtfkq146g`: 21 clean, run 22 failed in
+  `streams-example-app`'s vitest lane: `Network connection lost.` on a
+  392ms-old fresh WebSocket (edge blip) — and that suite had NO retry config
+  at all. The os lane's `reactivity.spec.ts` flaked the same run and
+  recovered via its new `retries: 2`, proving the policy works where it
+  exists. Fix: fleet-wide retry parity — `retry/retries: CI ? 2 : 0` added to
+  `apps/streams-example-app` (vitest + playwright) and `apps/semaphore`
+  (vitest), the last lanes without it.
+- **marathon8** `8vl4d0479f`: 🏁 **ALL 50 RUNS GREEN** (14:57–16:31 UTC,
+  ~1h34m, ~60-190s/run, zero failures, zero watchdog kills). The goal —
+  50 consecutive green full-fleet preview e2e runs on Depot CI — is met, on
+  the same afternoon and preview slot where the lane could not string
+  together more than a handful of runs when this hunt began.
 
 ## Flakes found and fixed
 
@@ -39,14 +92,14 @@ lease repair) before acquiring a fresh slot. Guard test in
 Failure signature (Depot cleanup jobs, and any run sharing the window):
 
 ```
-[alchemy.run] JWKS fetch attempt N failed, retrying: Error: HTTP 503   (x60)
-Error: [alchemy.run] Forge key is set but the deploy-time JWKS fetch from
+JWKS fetch attempt N failed, retrying: Error: HTTP 503   (x60)
+Error: Forge key is set but the deploy-time JWKS fetch from
 https://auth.iterate-preview-N.com/api/auth failed (HTTP 503). ... Aborting
 ```
 
 Preview cleanup destroys all apps in one parallel batch. Auth's teardown
 usually finishes first and _parks_ its routes (#1622) — parked routes serve
-503\. The OS teardown then runs `apps/os/alchemy.run.ts`, whose top-level
+503\. The OS teardown then ran the deploy-time JWKS bake, whose
 `resolveStaticAuthJwks` polls the slot's auth `/jwks` for 120 s before the
 forge check aborts the process. Deterministic whenever auth's teardown wins
 the race; audited 2026-07-03 Depot runs show it failing exactly that way
@@ -54,8 +107,8 @@ the race; audited 2026-07-03 Depot runs show it failing exactly that way
 on deploys when the slot's auth is genuinely broken — there it is a symptom,
 not the disease.
 
-Fix: `alchemy.run.ts` skips the JWKS bake entirely when invoked with
-`--destroy` — a teardown has no worker to bake a key set into.
+Fix: the teardown path skips the JWKS bake entirely — a teardown has no
+worker to bake a key set into.
 
 ### 3. Signup/create-project specs: double navigation redeems the OAuth code twice
 
@@ -108,8 +161,23 @@ and stream waits that saw events stop mid-flow — while every interactive probe
 between runs was healthy. `pmset -g log` showed the Mac cycling through
 13–17 minute Deep Idle sleeps exactly matching the hang durations: the loop
 was running on a sleeping machine. The loop script now re-execs itself under
-`caffeinate -is` on Darwin. Lesson for anyone chasing "slot degradation" from
+`caffeinate -dims` on Darwin. Lesson for anyone chasing "slot degradation" from
 a laptop: check `pmset -g log` before blaming the server.
+
+**Recurred round-3 (r3d), new symptom:** an overnight ~5.5h gap between the
+warmup and run 1 (the machine slept despite `caffeinate` — a 43-minute
+assertion had died) left the preview slot idle long enough that Cloudflare
+**de-provisioned the sandbox container image**. When the marathon resumed, a
+later run's `sandbox-exec` hit `Container is currently provisioning. This can
+take several minutes on first deployment.` (SDK 503, `phase: provisioning`) —
+image provisioning exceeded the sandbox test budgets (Playwright
+`completionTimeoutMs` 120s, vitest `testTimeout` 240s), failing both attempts.
+This is distinct from flake 19's instance-cap "Container is starting": that was
+too few slots; this is a cold IMAGE that must be re-pulled after a long idle.
+The continuously-running r3c marathon (22 clean) never hit it — **keep the
+marathon continuous** (machine awake, no multi-hour gaps) so the image stays
+warm. If provisioning latency ever bites a genuinely continuous run, the fix is
+to raise the sandbox-exec budgets to tolerate a cold pull, not more warmups.
 
 ### 6. Repo reads lose the read-your-write race against the Artifacts remote
 
@@ -226,6 +294,33 @@ Mitigation: the loop now runs each attempt under a watchdog
 (`RUN_TIMEOUT_SECS`, default 30 min) that kills the run tree and counts it as
 a failure instead of silently freezing the marathon.
 
+**Recurred round-3 (r3c run 23), and exposed two gaps — both now fixed:**
+
+- The watchdog fired at 30 min but its `SIGTERM` did **not** propagate down the
+  deep `doppler → pnpm → trpc-cli → inner doppler → bash → vitest` tree, so the
+  wedged run hung ~58 min past the timeout, still holding the loop's `wait`.
+  Fix: the watchdog now walks the whole descendant tree and `SIGKILL`s it
+  leaf-first (`kill_tree` in `flake-hunt-loop.sh`).
+- More importantly, the wedge is now **self-healing at the source** instead of
+  costing a whole run: the preview test orchestration (`previewTestCommandArgs`
+  in `preview.ts`) wraps the vitest node lane in `timeout` and retries it once
+  on a timeout. A rare fork-pool wedge is a fresh restart, not a dead lane — and
+  this fixes it for Depot CI too, where the same wedge would otherwise hang the
+  job until its timeout. Root cause (why vitest's pool occasionally hangs
+  pre-`RUN`) is still unknown; this makes it a non-event either way.
+
+**Correction (first Depot marathon, run df87f12sz3): the self-heal was firing
+on EVERY run.** The retry condition also fired when the lane "never printed
+`RUN v<version>`" — but that grep is defeated by vitest's ANSI colour codes,
+which sit _between_ `RUN` and the version (`RUN␛[…m␛[…mv4.1.8`), so it matched
+nothing and re-ran the entire vitest node lane a second time on every single
+run (all 18 of them). That silently **doubled test load and sandbox-container
+churn** — very likely a hidden aggravator of flakes 19/20 (cap pressure and
+provisioning latency) throughout round 3. Fix: retry **only** on `rc=124` (the
+timeout — the actual wedge signature); `rc=0` means it ran, and a non-124
+non-zero is a real failure we must not paper over. Also cut the lane `timeout`
+to a fail-fast 360s (was briefly 600/900).
+
 ### 15. Concurrent repo writers lose the compare-and-swap race on `refs/heads/main`
 
 Round-2 run 44 (43 consecutive greens, then this): `examples-matrix ›
@@ -287,6 +382,20 @@ preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forc
 preflight both guarantees a unified fleet and repairs a split one. Set
 `SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
 
+**Preflight hardening (round 3):** the preflight originally relied on the
+marathon commit happening to touch a fleet-shared path to force a full-fleet
+deploy — an apps/os-only commit would have deployed just os and tripped the
+guard at run 1. `preview deploy --all-apps` now forces the full fleet
+explicitly and the preflight uses it.
+
+**Second sub-cause (round 3):** a commit touching only dependency manifests
+(`patches/**` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`, from the flake-22
+middlewright patch) selected **no apps at all** — "nothing to deploy" left
+every recorded head stale behind the PR head and the test lane skipped every
+app. Dependency manifests can change any app's build output, so they are now
+`cloudflareAppSharedPaths` (full-fleet deploy), mirrored in
+`cloudflare-previews.yml`'s paths filter and asserted in `preview.test.ts`.
+
 ### 17. A second browser tab has no spinner-waiter, so it dies on the 750ms actionTimeout
 
 Round-2 (r2e) run 3: `reactivity.spec.ts › delivers an appended event to another
@@ -313,16 +422,250 @@ fixture runs (Playwright's built-in `page` fixture created it via
 `context.newPage()` first), so the primary page is never double-wrapped; only
 extra tabs the spec opens later get wrapped. Any multi-tab spec now benefits.
 
+### 18. A dangling stream-wait rejection crashes the vitest runner, bypassing `retry: 1`
+
+Fleet survey (2026-07-04, across all of today's PRs) found the stream-event
+delivery flake was the dominant preview e2e failure (4 of 5 failing PRs), and
+uncovered a distinct, higher-leverage bug in _how_ it fails. On PRs #1664 and
+#1665 the `Timed out waiting for stream event … saw 0 events` error came back
+over capnweb's read loop (`serialize.ts` → `rpc.ts` `readLoop`) as an
+**unhandled promise rejection** — not inside a test's `await` — and Node's
+default crashed the whole vitest worker (`Node.js v24…`, exit 1, **zero test
+output**). Because the process died before vitest could mark the test failed,
+the CI `retry: 1` safety net never engaged. The same flake on #1666, where it
+surfaced inside an `await`, recovered on retry and went green.
+
+Why it dangles: under `sequence.concurrent` (maxConcurrency 2) several tests'
+`waitForEvent` RPCs are in flight at once. When the slot's stream delivery
+stalls under load, a sibling test's — or a background subscription's — wait
+rejects after its owning test has already moved on, so nothing is awaiting it.
+
+Fix (`apps/os/e2e/vitest/setup.ts`): a scoped `unhandledRejection` handler that
+swallows **only** the known-transient stream-wait signature
+(`Timed out waiting for stream event` / `waitUntilEvent timed out`) so the
+worker survives — the test that actually awaited the wait still fails normally
+and `retry: 1` re-runs it — and re-throws every other rejection (Node escalates
+that to an uncaughtException, preserving crash-on-real-bug). This converts a
+suite-killing crash into an ordinary, usually retry-absorbed, failure.
+
+The survey also **refuted the "unhealthy preview slot" hypothesis**: today's 5
+failures spread evenly across preview-2/-3/-4/-7/-9 with no repeated or
+chronically-bad slot and zero JWKS/503/`workers.dev`-edge-drift; the only
+environmental correlate is cold-slot / cold `WORKER_BUILD_CACHE` on the first
+run after a deploy. And it confirmed `maxConcurrency: 2` still flakes, so the
+real fixes remain the tracked delivery race
+(`tasks/streams-event-delivery-flake-under-concurrent-load.md`) and splitting
+the 39-test `itx.e2e.test.ts` monolith — **not** raising concurrency.
+
+### 19. Sandbox container instance-cap wedge (`Container is starting`)
+
+Round-3 (r3b) run 4: `sandbox-egress.e2e.test.ts › is MITM-intercepted and
+routed through project egress` failed **both attempts** (~292s) with
+`Error: Container is starting. Please retry in a moment.` — the SDK's own
+transient-startup 503, which it auto-retries, but the container never became
+ready inside the budget, twice. This is the flake-11 family resurfacing: the
+preview slots capped sandbox containers at `max_instances: 20`, and
+sandbox-heavy e2e churns several fresh containers per run (the REPL
+`sandbox-exec` spec, #1654's new `sandbox-egress` vitest test, the examples
+matrix — each a fresh project + container), so under a marathon the cap is
+reached and a new container wedges in "starting" until a slot frees.
+
+Cleanup was **not** the problem: the `@cloudflare/containers` base sets a
+durable idle alarm from `sleepAfter` (3m) and `CloudflareSandboxDurableObject`
+does not override `alarm()`, so every idle container is reaped and its slot
+freed within ~3m (verified in the SDK: `renewActivityTimeout` → `sleepAfterMs`
+→ `alarm()` stop). The containers were being cleaned; there just weren't enough
+slots for the churn rate.
+
+**Correction (flake 23):** the SDK verification above proved the container
+_stops_ — not that its instance slot is _released_. It isn't: a stopped
+instance stays ASSIGNED to its Durable Object and assignments are what count
+against `max_instances`. The cap raise bought headroom but the leak remained;
+see flake 23 for the real fix (destroy on idle).
+
+Fix (`apps/os/scripts/generate-wrangler-config.ts`): raise the cap to **100**
+for previews and **50** for prd (`lite` instances bill on usage, not
+reservation, so a high cap is free headroom). The durable idle reaper keeps
+cleanup reliable at any cap. Also added `WARMUP_RUNS` to
+`scripts/preview/flake-hunt-loop.sh`: a freshly-deployed slot boots cold (os
+worker + DO chain + sandbox containers on first use), so the marathon can run N
+uncounted priming runs before counting, keeping a cold run 1 from resetting the
+streak.
+
+### 20. Sandbox tests must budget for cold container image provisioning
+
+Distinct from flake 19's instance-cap "Container is starting": Cloudflare
+intermittently RE-PROVISIONS the sandbox container image
+(`Container is currently provisioning. This can take several minutes on first
+deployment.`, SDK 503 `phase: provisioning`). It hit r3d run 7 (after an
+overnight idle) **and** r3e run 17 — the latter on a **continuously-running**
+marathon ~40 min / 16 clean runs in, so it is NOT just a post-idle artifact: the
+image gets re-pulled to a node every ~15-20 runs regardless. When it fires it
+hits every sandbox test at once (`sandbox-exec` in both the vitest matrix and
+the Playwright REPL lane, plus `sandbox-egress`), and the SDK's automatic retry
+takes longer than the old 120-240s test budgets, so they time out mid-provision.
+
+The first instinct was to raise the budgets to ride provisioning out (480s
+tests, 900s lane). **That was wrong and has been reverted.** Sitting for 8-15
+minutes to mask a Cloudflare infra transient is worse than failing: it hides a
+real issue behind a huge wall-clock, and the point of the e2e lane is to
+**fail fast when something is actually wrong**. The provisioning latency is a
+Cloudflare-side transient (a direct `itx run` sandbox probe confirmed it clears
+on its own — a fresh sandbox exec returned in seconds once the window passed),
+not something the test should absorb.
+
+Decision: keep **fail-fast** budgets — `sandbox-exec` `completionTimeoutMs`
+180s (120s undercut a genuine ~132s cold boot observed on Depot), the vitest
+matrix/`sandbox-egress` tests 240s, and the `preview.ts` vitest-lane guard 360s
+(was briefly 600/900). A container stuck provisioning
+surfaces in ~2 min and the run fails; we re-run rather than wait. Reaching 50
+consecutive green therefore depends on a healthy provisioning window (or a
+Cloudflare-side fix), not on masking the latency — and CI’s own retry absorbs a
+lone transient. If provisioning proves _frequent_ enough to block 50-in-a-row,
+the right lever is reducing sandbox-container churn or a Cloudflare escalation,
+not a bigger timeout.
+
+### 23. Stopped sandbox containers never release their instance slots
+
+**Signature** (Depot marathon3 run 12, and retroactively flakes 19/20): runs
+slow down progressively (sandbox-exec 22.7s → 33.8s → stuck at 180s×2), the
+vitest lane trips its 360s guard, the loop watchdog SIGKILLs the run at 600s.
+The REPL page shows the run submitted but the entry never lands — the
+server-side sandbox exec is silently waiting for a container that never
+starts. No error anywhere.
+
+**Root cause:** `wrangler containers info` on preview-3 fifteen minutes after
+the marathon died: `instances: {active: 0, assigned: 99, healthy: 1}` — at the
+`max_instances: 100` cap — while idle slots hold 7-10 assignments for **days**.
+The SDK's `sleepAfter` idle alarm does run (`active: 0` — the containers
+stopped), but a stopped instance stays **assigned** to its Durable Object, and
+assignments (a) count against `max_instances` and (b) never expire on their
+own — only `destroy()` or an app rollout releases them. Every e2e fixture
+creates a fresh sandbox DO, so each preview e2e run leaks ~7-8 assignments;
+the cap wedges after ~a dozen runs; a fleet deploy resets the count (which is
+why every marathon ran clean for its first ~dozen runs and why flake 20's
+"provisioning windows every 15-20 runs" pattern fit so well — it was this
+leak, not image re-pulls, at least in the continuously-running cases).
+
+**Fix (`cloudflare-sandbox-durable-object.ts`):** override
+`onActivityExpired` to `destroy()` (SIGKILL + full teardown, releases the
+assignment) instead of the SDK's `stop()` (SIGTERM, keeps the assignment).
+For our sandboxes destroy-on-idle costs nothing: the container filesystem is
+ephemeral across sleep anyway, so waking from stop and waking from destroy are
+the same cold boot + repo re-clone. The SDK's keepAlive escape hatch is
+preserved. Verified on preview-3 with a probe sandbox (`itx.sandboxes.get` +
+one exec): its instance showed `active:1, assigned:0` while running and went
+`active:0, assigned:0` exactly 3m after the last command — the slot fully
+released, where the old behavior left it `assigned` indefinitely. (The fix's
+deploy also confirmed a rollout flushes the leaked pool: the app dropped from
+100 stuck instances to a handful once the new version finished provisioning.)
+
+**Marathon5 addendum — destroy is necessary but the cap must still exceed
+cumulative churn.** With destroy-on-idle deployed, marathon5 still wedged at
+run 33 with `active:0, assigned:100`: under sustained load the platform
+BACKFILLS released slots into an "assigned" warm pool that rides at
+`max_instances` (the probe above released to 0 only because demand was zero
+at that moment), and sandbox start latency grows as the pool saturates —
+sandbox-exec went ~20-40s (runs 1-10) → 2.1-2.8min (runs 30-32, shaving the
+180s budget) → 3.2m×2 attempts (run 33, dead). Every marathon wedge to date
+happened at exactly `assigned == max_instances` (20, then 100). Response:
+preview cap raised 100 → **500** (`generate-wrangler-config.ts`) so a whole
+50-run marathon's cumulative creations (~3-8 sandboxes/run) never saturate
+the pool; lite instances bill on usage, so the headroom is free. Destroy
+remains correct — it is what lets an idle fleet drain back to zero instead of
+holding slots forever. If sustained-churn claim latency reproduces at 500,
+this becomes a Cloudflare Containers escalation (pool-manager degradation
+under DO-binding churn), not an app-side fix.
+
+### 21. Blank route-pending panel fast-fails the first wait after `goto`
+
+**Signature** (Depot marathon2 run 5; also the round-2 merge's own preview
+e2e — the "REPL Run button fast-fail" below): `repl-examples.spec.ts`
+`repo-read-file` / `repo-edit-file` fail in ~6s with
+`TimeoutError: locator.waitFor: Timeout 1ms exceeded` waiting for the "Run"
+button right after `page.goto(/projects/<slug>/repl)`. The failure screenshot
+shows the app shell (sidebar, breadcrumb) with a **completely empty main
+panel** — no REPL, and critically no spinner.
+
+**Root cause — a product gap, not a slow test.** The project layout
+(`routes/_app/projects/$projectSlug/route.tsx`) is `ssr: false`, so a direct
+hit SSRs only the shell; TanStack renders the client-only match as
+`<ClientOnly fallback={pendingElement}>` and shows `pendingElement` again
+while `beforeLoad` (the `getProjectBySlugServerFn` HTTP roundtrip) runs after
+hydration. The router configured **no `defaultPendingComponent`**, so
+`pendingElement` was `null` → the outlet rendered literally nothing for the
+whole hydrate + project-fetch window. The failing trace shows that server-fn
+taking **1037ms** (a normal cold-read tail); with no spinner visible the
+spec-side spinner-waiter correctly refused to extend the deliberately-tight
+750ms actionTimeout and the wait died with 1ms left. All the route-level
+fallbacks further down (`ItxResourceLoading`, `ItxPending`) never got a chance
+to render — the match itself hadn't mounted.
+
+**Fix (apps/os/src/router.tsx):** wire `defaultPendingComponent` (muted
+"Loading…" with `data-spinner="true"`, same idiom as every route-level pending
+fallback) plus `defaultPendingMs: 300` / `defaultPendingMinMs: 200` (library
+defaults leave a 1s blank window on client-side loads). The spinner now sits in
+the SSR HTML itself for `ssr: false` subtrees, so from first paint to REPL
+mount the app continuously reports progress and the spinner-waiter extends
+exactly as designed — no spec-side timeout was touched. This is the correct
+fail-fast shape: the wait budget grows only while the app visibly claims to be
+working, and a genuinely wedged page still dies at the spinner-waiter's 30s
+cap.
+
+### 22. spinner-waiter dies on TWO visible spinners (strict-mode violation)
+
+**Signature** (the push-triggered preview run for the flake-21 fix):
+`dashboard.spec.ts` fails with `locator.isVisible: Error: strict mode
+violation: locator('[aria-label="Loading"],[data-spinner=…]…') resolved to 2
+elements`.
+
+**Root cause:** middlewright's spinner-waiter checks "is a spinner visible?"
+with `spinnerLocator.isVisible()` on the UNION selector — and Playwright's
+`isVisible()` throws when a locator resolves to more than one element. Two
+loading indicators visible at once is a perfectly legitimate app state (e.g.
+the REPL panel's "Connecting to itx…" next to the activity tail's "Connecting
+itx activity…"). The flake-21 fix UNMASKED this: before it, the blank pending
+panel meant those sibling fallbacks never got to render together during the
+window the spinner check runs in.
+
+**Fix:** `patches/middlewright@0.1.1.patch` — both spinner checks
+(`spinnerVisible` and the bail-early check in `waitForReadyWhileSpinning`) go
+through a multi-element-safe `anySpinnerVisible()` using
+`filter({ visible: true }).count() > 0`, which needs no strictness. "Any
+visible spinner counts as progress" is the plugin's intended semantic. Worth
+upstreaming to the middlewright package.
+
+### Round 3 targets
+
+The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two
+pre-existing flakes that round 3 fixes:
+
+- **REPL "Run" button fast-fail.** `forged-session-repl.spec.ts` and several
+  `repl-examples.spec.ts` cases fail with `Timeout 1ms exceeded` waiting for
+  `getByRole("button", { name: "Run" })` after `/repl` navigation. Root-caused
+  as **flake 21** (blank route-pending panel — no `defaultPendingComponent` on
+  an `ssr: false` subtree), fixed in `router.tsx`.
+- **Stream-event delivery timeout under concurrent load / cold build cache.**
+  `Timed out waiting for stream event after 60–90s (saw 0 events)` across
+  reactivity, repl-examples, and a vitest e2e test. Known/tracked
+  (`tasks/streams-event-delivery-flake-under-concurrent-load.md`,
+  `tasks/raise-e2e-maxconcurrency.md`); the vitest lane already runs at
+  `maxConcurrency: 2`. The round-2 merge added #1612's worker-build pipeline,
+  whose first dynamic-worker build on a **cold `WORKER_BUILD_CACHE` KV** (freshly
+  created per slot) adds latency that widens this window on the first run.
+
 ### Observed, not yet fixed
 
-- `repl-examples.spec.ts › secrets-lifecycle` fast-failed once on run 3
-  (`Timeout 1ms exceeded` waiting for the "Run" button after `/repl`
-  navigation — the spinner-waiter's no-spinner fast-fail) but **passed on
-  retry #1**, so it did not fail the run. Same class as flake 10/11 but on the
-  initial page-load "Run visible" wait, which is outside the example's
-  `completionTimeoutMs` budget. Watching whether it ever double-flakes across
-  the marathon before fixing — a retry-absorbed blip is within the CI contract.
-
+- **Push-lane deploy→test race: `Durable Object reset because its code was
+updated`.** The push-triggered cloudflare-previews lane starts tests seconds
+  after `wrangler deploy` returns; Cloudflare propagates the new code
+  asynchronously, and a DO that booted on the old version mid-test gets reset
+  when its node picks up the new one (`itx.e2e.test.ts › Project egress
+intercept…` failed BOTH vitest attempts 11s apart inside the window, commit
+  204d4ed8d). The marathon lane is immune by construction (preflight deploy →
+  uncounted warmup → counted runs). A real fix for the push lane would gate
+  the test phase on observing the new deployment version at the edge rather
+  than a sleep; vitest's `retry: 1` usually absorbs it today.
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
   Depot `Test / test` lane with `fetch failed: bad port` — the listen(0)

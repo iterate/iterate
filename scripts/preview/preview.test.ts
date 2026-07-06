@@ -23,6 +23,7 @@ const {
   parseEnvironmentConfigLeaseData,
   reconcileEnvironmentConfigLeaseResources,
   renderCloudflarePreviewPullRequestBody,
+  resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   selectPreviewAppsNeedingRetry,
@@ -74,6 +75,52 @@ describe("preview workflow scope", () => {
     // The preview lifecycle is one Depot CI workflow; a change to it triggers
     // a full-fleet preview and must be mirrored in that file's own paths list.
     expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
+    // Dependency manifests can change every app's build output; a diff that
+    // touches only them must select the full fleet, not "no apps affected"
+    // (which strands the fleet's recorded heads behind the PR head).
+    expect(cloudflarePreviewSharedPaths).toContain("pnpm-lock.yaml");
+    expect(cloudflarePreviewSharedPaths).toContain("pnpm-workspace.yaml");
+    expect(cloudflarePreviewSharedPaths).toContain("patches/**");
+  });
+});
+
+describe("auth preview root secrets", () => {
+  it("falls back through legacy dev names for the email sender domain", () => {
+    const reads: string[] = [];
+    const values = new Map([["auth:dev:RESEND_BOT_DOMAIN", "nustom.com"]]);
+
+    const value = resolveAuthPreviewRootSecret({
+      appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
+      legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
+      readSecret: (project, config, name) => {
+        reads.push(`${project}:${config}:${name}`);
+        return values.get(`${project}:${config}:${name}`) ?? null;
+      },
+    });
+
+    expect(value).toBe("nustom.com");
+    expect(reads).toEqual([
+      "auth:preview:APP_CONFIG_EMAIL_SENDER_DOMAIN",
+      "auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN",
+      "auth:dev:APP_CONFIG_RESEND_DOMAIN",
+      "auth:dev:RESEND_BOT_DOMAIN",
+    ]);
+  });
+
+  it("keeps an existing preview root value ahead of dev fallbacks", () => {
+    const values = new Map([
+      ["auth:preview:APP_CONFIG_EMAIL_SENDER_DOMAIN", "preview.example.com"],
+      ["auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN", "dev.example.com"],
+      ["auth:dev:RESEND_BOT_DOMAIN", "legacy.example.com"],
+    ]);
+
+    expect(
+      resolveAuthPreviewRootSecret({
+        appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
+        legacyDevNames: ["RESEND_BOT_DOMAIN"],
+        readSecret: (project, config, name) => values.get(`${project}:${config}:${name}`) ?? null,
+      }),
+    ).toBe("preview.example.com");
   });
 });
 

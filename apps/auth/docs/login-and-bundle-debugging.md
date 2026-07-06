@@ -82,4 +82,4 @@ import { oneTimeToken } from "better-auth/plugins/one-time-token";
 - `pnpm --dir apps/auth typecheck`
 - `pnpm --dir apps/os typecheck`
 - Playwright repro confirming immediate pre-hydration click did not request login, while a later click did.
-- Temporary local-dev-server check confirmed preserving `.alchemy/dev-server.json` would allow reuse of the same random port when still free.
+- Temporary local-dev-server check confirmed preserving the `.dev-server` state file would allow reuse of the same random port when still free.

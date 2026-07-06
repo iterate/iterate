@@ -39,10 +39,9 @@ export const LOCAL_DEV_AUTH_DB_ID = "local-dev-auth-db";
  */
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_BETTER_AUTH_SECRET",
+  "APP_CONFIG_EMAIL_SENDER_DOMAIN",
   "APP_CONFIG_GOOGLE_CLIENT_ID",
   "APP_CONFIG_GOOGLE_CLIENT_SECRET",
-  "APP_CONFIG_RESEND_API_KEY",
-  "APP_CONFIG_RESEND_DOMAIN",
   "APP_CONFIG_SERVICE_AUTH_TOKEN",
   "APP_CONFIG_SIGNUP_ALLOWLIST",
 ];
@@ -50,10 +49,19 @@ export const REQUIRED_SECRETS = [
 /**
  * Runtime bindings deploy.ts computes rather than requires: an explicit
  * Doppler value wins, otherwise a default (admin allowlist `*@nustom.com`;
- * email OTP on for dev-prefixed envs). Still shipped via --secrets-file so
+ * email OTP on in every env, prd included — setting the Doppler key to
+ * "false" is the rollback switch). Still shipped via --secrets-file so
  * they land atomically with the code.
  */
 export const DERIVED_SECRETS = ["APP_CONFIG_ADMIN_ALLOWLIST", "APP_CONFIG_EMAIL_OTP_ENABLED"];
+
+/**
+ * The Email Service send binding for the email-OTP lane. Sends are restricted
+ * to the env's own `noreply+auth@` sender at runtime (the address is built
+ * from APP_CONFIG_EMAIL_SENDER_DOMAIN in src/server/email.ts); local dev gets
+ * the same binding, where miniflare simulates sends instead of delivering.
+ */
+const sendEmailBindings = [{ name: "EMAIL" }];
 
 /**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
@@ -97,6 +105,7 @@ function envBlock(env: AuthDeployedEnv) {
       workerName: env.authWorkerName,
       databaseId: env.resources.authDbId,
     }),
+    send_email: sendEmailBindings,
     vars: envShapedVars(env),
     secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS] },
     observability: OBSERVABILITY,
@@ -112,8 +121,7 @@ const config = {
   main: "./src/server/worker.ts",
   compatibility_date: "2026-06-17",
   // nodejs_compat(+populate_process_env): hono's contextStorage needs
-  // node:async_hooks (alchemy's TanStackStart applied its "node" preset
-  // implicitly — these flags match the previously deployed worker).
+  // node:async_hooks (the worker runs under the "node" preset).
   // global_fetch_strictly_public: same-zone subrequests (e.g. SSR calling our
   // own /api/auth/get-session via the public hostname) must traverse Worker
   // routes instead of hanging against the originless zone for ~20s.
@@ -131,6 +139,7 @@ const config = {
   },
   // Local dev has no real database; miniflare only needs a stable id.
   d1_databases: d1Bindings({ workerName: "auth-dev", databaseId: LOCAL_DEV_AUTH_DB_ID }),
+  send_email: sendEmailBindings,
   // Local dev loads the env-shaping keys from process.env like any other
   // secret (deployed envs get them as generated vars instead).
   secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS, ...ENV_SHAPED_KEYS] },

@@ -9,10 +9,7 @@
  *      validate the exact runtime config with the worker's own zod schema —
  *      a config that would throw on every request fails HERE, not after
  *      shipping.
- *   2. Apply D1 migrations remotely (wrangler's d1_migrations table, which
- *      the alchemy deploys also used), then adopt the worker's Durable
- *      Object migration tag when the script predates wrangler-managed
- *      migrations (see deploy-helpers.ts adoptDoMigrationTag).
+ *   2. Apply D1 migrations remotely (wrangler's d1_migrations table).
  *   3. `vite build` with CLOUDFLARE_ENV=<env>, so the build output's
  *      wrangler.json is flattened for that env (name, route, bindings).
  *   4. `wrangler deploy --config <built config> --secrets-file <doppler>` —

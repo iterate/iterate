@@ -31,7 +31,6 @@ pnpm-workspace.yaml
 
 # Other generated or temporary files
 **/.repomix-*
-**/.alchemy
 **/.iterate/
 
 # shadcn/ui and AI Elements components (auto-generated)

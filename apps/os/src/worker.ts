@@ -21,7 +21,7 @@ import { withEvlog } from "@iterate-com/shared/evlog";
 import { trustedInternalAuthContext } from "./auth.ts";
 import { e2eFixtureResponse } from "./e2e-fixtures.ts";
 import type { Env } from "./env.ts";
-import { apiWorkerRequest, decideIngressRoute, type IngressResolvers } from "./ingress.ts";
+import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "./project-directory.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import {
@@ -96,11 +96,15 @@ export default {
     const mcpRequest = rewriteMcpHostRequest({ config, request });
     if (mcpRequest) return await appFetch(mcpRequest, ctx, config);
 
-    const apiRequest = apiWorkerRequest({ config, request });
-    if (apiRequest) return await apiFetch(apiRequest, env, ctx, config);
+    const route = await decideIngressRoute({
+      config,
+      headers: request.headers,
+      method: request.method,
+      resolvers: directoryResolvers(config, env),
+      url: request.url,
+    });
+    if (route.lane !== "os") return await apiFetch(request, ctx, config, route);
 
-    // Everything else is the OS host (project + custom hostnames all took the
-    // api lane above, which owns the 404 for hosts that resolve to nothing).
     return await appFetch(request, ctx, config);
   },
 };
@@ -139,19 +143,16 @@ async function appFetch(request: Request, ctx: ExecutionContext, config: AppConf
  * and project ingress — every lane `decideIngressRoute` (src/ingress.ts) can
  * resolve.
  */
-async function apiFetch(request: Request, env: Env, ctx: ExecutionContext, config: AppConfig) {
+async function apiFetch(
+  request: Request,
+  ctx: ExecutionContext,
+  config: AppConfig,
+  route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
+) {
   const url = new URL(request.url);
 
   const fixtureResponse = await e2eFixtureResponse(request);
   if (fixtureResponse !== null) return fixtureResponse;
-
-  const route = await decideIngressRoute({
-    config,
-    headers: request.headers,
-    method: request.method,
-    resolvers: directoryResolvers(config, env),
-    url: request.url,
-  });
 
   if (route.lane === "project") {
     const project = await new ProjectCollectionRpcTarget({
@@ -223,12 +224,10 @@ function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
 
 function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
-  headers.delete("x-iterate-resolved-ingress");
   headers.delete("x-iterate-app");
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
-  headers.delete("x-iterate-ingress-hostname");
   return new Request(request, { headers });
 }

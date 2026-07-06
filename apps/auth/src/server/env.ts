@@ -1,5 +1,6 @@
 import { env as _env } from "cloudflare:workers";
 import { parseConfig } from "../config.ts";
+import type { CloudflareEmailBinding } from "./email.ts";
 
 /**
  * The auth worker's runtime bindings, spelled out explicitly now that no IaC
@@ -8,12 +9,18 @@ import { parseConfig } from "../config.ts";
  * (delivered via `wrangler deploy --secrets-file`, or loaded from process.env
  * by the vite plugin in local dev), plus the env-shaped origin vars generated
  * from the root envs.ts entry. Server code reads the parsed `config` below
- * instead of raw `env.*`; the raw interface exists so the D1 binding and the
- * config carrier keys are typed.
+ * instead of raw `env.*`; the raw interface exists so the D1/EMAIL bindings
+ * and the config carrier keys are typed.
  */
 export interface CloudflareEnv {
   /** The auth D1 database (identities, orgs, projects, OAuth clients). */
   DB: D1Database;
+  /**
+   * Cloudflare Email Service send binding for the email-OTP lane. Bound in
+   * every wrangler env block including local dev, where miniflare simulates
+   * sends (logs + local .eml files) instead of delivering real mail.
+   */
+  EMAIL: CloudflareEmailBinding;
   /** Public origin the worker is served from (better-auth baseURL, issuer). */
   APP_CONFIG_AUTH_APP_ORIGIN: string;
   /** Additional trusted public origin; equals APP_CONFIG_AUTH_APP_ORIGIN when deployed. */
@@ -22,9 +29,11 @@ export interface CloudflareEnv {
   APP_CONFIG_BETTER_AUTH_SECRET: string;
   /** Shared secret trusted by the internal.* oRPC procedures. */
   APP_CONFIG_SERVICE_AUTH_TOKEN: string;
-  /** Resend sender domain / API key for the email-OTP lane. */
-  APP_CONFIG_RESEND_DOMAIN: string;
-  APP_CONFIG_RESEND_API_KEY: string;
+  /**
+   * Sender domain for the email-OTP lane (must be onboarded for Email
+   * Sending in the env's Cloudflare account or real sends fail).
+   */
+  APP_CONFIG_EMAIL_SENDER_DOMAIN: string;
   /** Glob allowlist gating who may sign up. */
   APP_CONFIG_SIGNUP_ALLOWLIST: string;
   APP_CONFIG_GOOGLE_CLIENT_ID: string;

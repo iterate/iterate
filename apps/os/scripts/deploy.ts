@@ -14,11 +14,9 @@
  *      vite.config.ts regenerates wrangler.jsonc from envs.ts before the
  *      cloudflare plugin reads it — the build always sees a fresh config.
  *   3. `wrangler deploy --config <built config> --secrets-file <doppler>` —
- *      secrets land atomically in the same version as the code (after
- *      adopting the DO migration tag on alchemy-era scripts — os ships the
- *      same tagged migrations as the other DO apps and would hit CF 10074
- *      without it — and a plain deploy first when the worker has no DO
- *      classes yet — see deploy-helpers.ts).
+ *      secrets land atomically in the same version as the code (with a plain
+ *      deploy first when the worker has no DO classes yet, i.e. a brand-new
+ *      env's first upload — see deploy-helpers.ts).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
  *

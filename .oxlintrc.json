@@ -20,7 +20,6 @@
     "**/.turbo/",
     "**/.claude/",
     "**/.cursor/",
-    "**/.alchemy/",
     "**/.husky/",
     "**/components/ui/",
     "**/components/ai-elements/",
