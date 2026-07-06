@@ -1,8 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { resolveDeployedEnv } from "./e2e/auth.ts";
+import { STORAGE_STATE_PATH } from "./e2e/playwright-global-setup.ts";
 
 const workerUrl = process.env.WORKER_URL;
 const localUrl = "http://127.0.0.1:5173";
+// The global setup writes the saved session only for a DEPLOYED (admin-only)
+// target; a loopback WORKER_URL is the auth-less playground. Gate storageState
+// on the SAME predicate so the config never points at a file setup skipped.
+const usesSavedSession = resolveDeployedEnv(workerUrl) !== null;
 
 export default defineConfig({
   testDir: "e2e/playwright",
@@ -26,7 +32,7 @@ export default defineConfig({
       : undefined,
   use: {
     baseURL: workerUrl ?? localUrl,
-    storageState: workerUrl === undefined ? undefined : "test-results/.auth/storage-state.json",
+    storageState: usesSavedSession ? STORAGE_STATE_PATH : undefined,
     trace: "retain-on-failure",
   },
   projects: [

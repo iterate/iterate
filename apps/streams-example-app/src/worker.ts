@@ -134,6 +134,18 @@ export default createServerEntry({
     // made @sqlite.org/sqlite-wasm auto-install its async-proxy OPFS VFS and deadlock in
     // production builds.) Leaving it off also keeps OPFS working the same way
     // across Chrome, Edge, Safari and mobile Safari.
-    return handler.fetch(request, { context: {} });
+    const response = await handler.fetch(request, { context: {} });
+
+    // authenticate() may have refreshed an expiring session; hand the rotated
+    // cookie back to the browser or it keeps the stale token and refresh-token
+    // reuse eventually revokes the whole family. (Auth-less local dev has no
+    // admin object and nothing to merge.)
+    const setCookie = admin?.responseHeaders.get("set-cookie");
+    if (setCookie) {
+      const merged = new Response(response.body, response);
+      merged.headers.append("set-cookie", setCookie);
+      return merged;
+    }
+    return response;
   },
 });

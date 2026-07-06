@@ -47,11 +47,22 @@ export function createStreamsIterateAuth(
   return auth;
 }
 
-/** The authenticated caller: session cookie wins (browser + WS upgrade), else bearer. */
+/**
+ * The authenticated caller: session cookie wins (browser + WS upgrade), else
+ * bearer. `responseHeaders` carries any rotated-session `Set-Cookie` that
+ * `authenticate()` produced when it refreshed an expiring token — the caller
+ * MUST merge it onto the response, or the browser keeps the stale token and
+ * refresh-token reuse eventually nukes the session.
+ */
 export async function resolveRequestAdmin(input: {
   auth: StreamsIterateAuth;
   headers: Headers;
-}): Promise<{ authenticated: boolean; isAdmin: boolean; email?: string }> {
+}): Promise<{
+  authenticated: boolean;
+  isAdmin: boolean;
+  email?: string;
+  responseHeaders: Headers;
+}> {
   const result = await input.auth.authenticate({
     headers: input.headers,
     includeUserInfo: false,
@@ -61,6 +72,7 @@ export async function resolveRequestAdmin(input: {
       authenticated: true,
       isAdmin: result.session.user.isAdmin === true || result.session.user.role === "admin",
       email: result.session.user.email,
+      responseHeaders: result.responseHeaders,
     };
   }
 
@@ -72,8 +84,9 @@ export async function resolveRequestAdmin(input: {
       isAdmin:
         accessToken[ITERATE_IS_ADMIN_CLAIM] === true || accessToken[ITERATE_ROLE_CLAIM] === "admin",
       email: typeof email === "string" ? email : undefined,
+      responseHeaders: result.responseHeaders,
     };
   }
 
-  return { authenticated: false, isAdmin: false };
+  return { authenticated: false, isAdmin: false, responseHeaders: result.responseHeaders };
 }
