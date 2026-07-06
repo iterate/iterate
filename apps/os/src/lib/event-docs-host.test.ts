@@ -20,7 +20,7 @@ describe("event docs host", () => {
     expect(
       isEventDocsHostname({
         appBaseUrl: "https://os.iterate-preview-3.com",
-        requestUrl: "https://events.iterate-preview-3.com/stream",
+        requestHostname: "events.iterate-preview-3.com",
       }),
     ).toBe(true);
   });

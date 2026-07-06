@@ -26,10 +26,7 @@ export function EventDocsIndexPage(input: {
               <Link
                 key={event.type}
                 to="/$eventDocsProcessorSlug/$"
-                params={{
-                  eventDocsProcessorSlug: event.eventPath.split("/")[0] ?? event.eventPath,
-                  _splat: event.eventPath.split("/").slice(1).join("/"),
-                }}
+                params={event.routeParams}
                 className="block px-4 py-3 hover:bg-muted/60"
               >
                 <span className="block break-all font-mono text-sm text-foreground">
@@ -49,13 +46,13 @@ export function EventDocsIndexPage(input: {
           <div className="divide-y rounded-md border">
             {input.processorDocs.map((processor) => (
               <Link
-                key={processor.contract.slug}
+                key={processor.contractSlug}
                 to="/$eventDocsProcessorSlug"
-                params={{ eventDocsProcessorSlug: processor.docsPath }}
+                params={processor.routeParams}
                 className="block px-4 py-3 hover:bg-muted/60"
               >
                 <span className="block font-mono text-sm text-foreground">
-                  {processor.contract.slug}
+                  {processor.contractSlug}
                 </span>
                 <span className="mt-1 block text-xs text-muted-foreground">
                   {processor.events.length} owned event{processor.events.length === 1 ? "" : "s"}
@@ -74,8 +71,8 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
     <EventDocsShell>
       <EventDocsHeader
         eyebrow="Stream processor"
-        title={processor.contract.slug}
-        description={processor.contract.description}
+        title={processor.contractSlug}
+        description={processor.description}
       />
       <main className="grid gap-8 px-6 py-8 md:grid-cols-[minmax(0,1fr)_18rem] md:px-10">
         <section className="space-y-4">
@@ -88,10 +85,7 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
                   <Link
                     key={event.type}
                     to="/$eventDocsProcessorSlug/$"
-                    params={{
-                      eventDocsProcessorSlug: event.eventPath.split("/")[0] ?? event.eventPath,
-                      _splat: event.eventPath.split("/").slice(1).join("/"),
-                    }}
+                    params={event.routeParams}
                     className="block px-4 py-3 hover:bg-muted/60"
                   >
                     <span className="block break-all font-mono text-sm">{event.type}</span>
@@ -110,22 +104,22 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
         <aside className="space-y-4">
           <InfoList
             items={[
-              ["Version", processor.contract.version ?? "unversioned"],
+              ["Version", processor.version ?? "unversioned"],
               ["Public path", processor.href],
               ["Owned events", String(processor.events.length)],
             ]}
           />
-          {processor.processorDeps.length === 0 ? null : (
+          {processor.dependencies.length === 0 ? null : (
             <DocSection title="Dependencies">
               <div className="space-y-2">
-                {processor.processorDeps.map((dep) => (
+                {processor.dependencies.map((dep) => (
                   <Link
-                    key={dep.contract.slug}
+                    key={dep.contractSlug}
                     to="/$eventDocsProcessorSlug"
-                    params={{ eventDocsProcessorSlug: dep.docsPath }}
+                    params={dep.routeParams}
                     className="block rounded-md border px-3 py-2 font-mono text-sm hover:bg-muted/60"
                   >
-                    {dep.contract.slug}
+                    {dep.contractSlug}
                   </Link>
                 ))}
               </div>
@@ -167,17 +161,17 @@ export function EventDocPage({ event }: { event: EventDoc }) {
           <InfoList
             items={[
               ["URL path", event.href],
-              ["Processor", event.processor.contract.slug],
+              ["Processor", event.processor.contractSlug],
               ["Event path", event.eventPath],
             ]}
           />
           <DocSection title="Processor">
             <Link
               to="/$eventDocsProcessorSlug"
-              params={{ eventDocsProcessorSlug: event.processor.docsPath }}
+              params={event.processor.routeParams}
               className="block rounded-md border px-3 py-2 font-mono text-sm hover:bg-muted/60"
             >
-              {event.processor.contract.slug}
+              {event.processor.contractSlug}
             </Link>
           </DocSection>
         </aside>
@@ -219,7 +213,7 @@ function DocSection({ children, title }: { children: React.ReactNode; title: str
 }
 
 function EventReferenceList(input: {
-  events: readonly { href?: string; type: string }[];
+  events: readonly { href?: string; routeParams?: EventDoc["routeParams"]; type: string }[];
   title: string;
 }) {
   return (
@@ -229,14 +223,11 @@ function EventReferenceList(input: {
       ) : (
         <div className="divide-y rounded-md border">
           {input.events.map((event) =>
-            event.href ? (
+            event.href && event.routeParams ? (
               <Link
                 key={event.type}
                 to="/$eventDocsProcessorSlug/$"
-                params={{
-                  eventDocsProcessorSlug: event.href.replace(/^\/+/u, "").split("/")[0] ?? "",
-                  _splat: event.href.replace(/^\/+/u, "").split("/").slice(1).join("/"),
-                }}
+                params={event.routeParams}
                 className="block break-all px-4 py-3 font-mono text-sm hover:bg-muted/60"
               >
                 {event.type}

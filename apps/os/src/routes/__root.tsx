@@ -5,6 +5,7 @@ import {
   Outlet,
   Scripts,
   createRootRouteWithContext,
+  notFound,
   useHydrated,
 } from "@tanstack/react-router";
 import { extractPublicConfigSchema } from "@iterate-com/shared/config";
@@ -35,8 +36,12 @@ const rootAuthSnapshotQueryOptions = {
 };
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  beforeLoad: async ({ context }) => {
-    return await context.queryClient.ensureQueryData(rootAuthSnapshotQueryOptions);
+  beforeLoad: async ({ context, location }) => {
+    const snapshot = await context.queryClient.ensureQueryData(rootAuthSnapshotQueryOptions);
+    if (snapshot.isEventDocsHost && !isPotentialEventDocsPagePath(location.pathname)) {
+      throw notFound();
+    }
+    return snapshot;
   },
   loader: async ({ context }) => {
     const config = PublicConfigSchema.parse(JSON.parse(await getPublicConfigServerFn()));
@@ -65,6 +70,20 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   // https://github.com/TanStack/router/blob/main/examples/react/start-basic/src/routes/__root.tsx
   notFoundComponent: () => <DefaultNotFoundComponent />,
 });
+
+const EVENT_DOCS_RESERVED_ROOT_SEGMENTS = new Set([
+  "admin",
+  "api",
+  "posthog-proxy",
+  "projects",
+  "sign-in",
+  "sign-up",
+]);
+
+function isPotentialEventDocsPagePath(pathname: string) {
+  const [head] = pathname.split("/").filter(Boolean);
+  return head == null || !EVENT_DOCS_RESERVED_ROOT_SEGMENTS.has(head);
+}
 
 function RootDocument({ children }: { children: ReactNode }) {
   const isHydrated = useHydrated();

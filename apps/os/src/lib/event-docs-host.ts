@@ -17,11 +17,11 @@ export function eventDocsHostnameForAppBaseUrl(baseUrl: string | undefined) {
 
 export function isEventDocsHostname(input: {
   appBaseUrl: string | undefined;
-  requestUrl: string | undefined;
+  requestHostname: string | undefined;
 }) {
-  if (!input.requestUrl) return false;
+  if (!input.requestHostname) return false;
 
-  const requestHostname = normalizeRequestHostname(new URL(input.requestUrl).hostname);
+  const requestHostname = normalizeRequestHostname(input.requestHostname);
   return (
     requestHostname === PRODUCTION_EVENT_DOCS_HOSTNAME ||
     requestHostname === eventDocsHostnameForAppBaseUrl(input.appBaseUrl)

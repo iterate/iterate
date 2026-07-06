@@ -81,6 +81,7 @@ export default async function ensureResources(
   // records here (create-only; deploys never touch DNS).
   const hostRecords = [
     new URL(env.baseUrl).hostname,
+    new URL(env.eventDocsBaseUrl).hostname,
     new URL(env.mcpBaseUrl).hostname,
     ...env.projectHostnameBases.flatMap((base) => [base, `*.${base}`]),
   ];

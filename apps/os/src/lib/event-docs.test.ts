@@ -12,7 +12,7 @@ describe("event docs catalog", () => {
     const processor = getProcessorDocByPath("stream");
 
     expect(processor?.slug).toBe("stream");
-    expect(processor?.contract.slug).toBe("core");
+    expect(processor?.contractSlug).toBe("core");
     expect(processor?.href).toBe("/stream");
   });
 
@@ -21,6 +21,10 @@ describe("event docs catalog", () => {
 
     expect(event?.type).toBe("events.iterate.com/stream/created");
     expect(event?.href).toBe("/stream/created");
+    expect(event?.routeParams).toEqual({
+      eventDocsProcessorSlug: "stream",
+      _splat: "created",
+    });
     expect(getEventDocByType("events.iterate.com/stream/created")).toBe(event);
   });
 

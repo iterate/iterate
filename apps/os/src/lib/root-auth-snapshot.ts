@@ -6,7 +6,6 @@ import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
-import { isEventDocsHostname } from "~/lib/event-docs-host.ts";
 
 type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
@@ -50,10 +49,7 @@ export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServ
       baseUrl: context.config.baseUrl,
       requestUrl: context.rawRequest?.url,
     }),
-    isEventDocsHost: isEventDocsHostname({
-      appBaseUrl: context.config.baseUrl,
-      requestUrl: context.rawRequest?.url,
-    }),
+    isEventDocsHost: context.isEventDocsHost,
   };
 });
 

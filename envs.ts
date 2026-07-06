@@ -62,6 +62,8 @@ export interface DeployedEnv {
   baseUrl: string;
   /** MCP host origin, e.g. https://mcp.iterate.com */
   mcpBaseUrl: string;
+  /** Public event type docs origin, e.g. https://events.iterate.com */
+  eventDocsBaseUrl: string;
   /** Auth app origin, e.g. https://auth.iterate.com */
   authBaseUrl: string;
   /**
@@ -96,6 +98,7 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     authWorkerName: `auth-preview-${n}`,
     baseUrl: `https://os.iterate-preview-${n}.com`,
     mcpBaseUrl: `https://mcp.iterate-preview-${n}.com`,
+    eventDocsBaseUrl: `https://events.iterate-preview-${n}.com`,
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
     resources,
@@ -110,6 +113,7 @@ export const envs = {
     authWorkerName: "auth-prd",
     baseUrl: "https://os.iterate.com",
     mcpBaseUrl: "https://mcp.iterate.com",
+    eventDocsBaseUrl: "https://events.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
     resources: {
