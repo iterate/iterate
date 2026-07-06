@@ -5,7 +5,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 
 /** Props identifying which secret a secret worker's `env.SECRET` is bound to.
  * Minted by the hosting Secret DO, never chosen by worker code. */
-export type SecretWorkerBindingProps = { path: string; projectId: string };
+type SecretWorkerBindingProps = { path: string; projectId: string };
 
 /**
  * The `env.SECRET` binding — and the jail's `globalOutbound` — handed to a

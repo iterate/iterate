@@ -135,7 +135,7 @@ export async function petshopExchangeCode(input: {
  * first-party lane — same file, only `appSecretPath` differs). Loader-ready
  * inline JS (bundle:false): no build step.
  */
-export function petshopWorkerSource(input: { appSecretPath: string; tokenUrl: string }): string {
+function petshopWorkerSource(input: { appSecretPath: string; tokenUrl: string }): string {
   return `
     import { WorkerEntrypoint } from "cloudflare:workers";
 
