@@ -214,11 +214,11 @@ function resolveConfig(
 }
 
 class StoredOsSessionError extends Error {
-  constructor(
-    readonly reason: "missing" | "expired",
-    message: string,
-  ) {
+  readonly reason: "missing" | "expired";
+
+  constructor(reason: "missing" | "expired", message: string) {
     super(message);
+    this.reason = reason;
     this.name = "StoredOsSessionError";
   }
 }
