@@ -1,13 +1,38 @@
 import type { OutboundHandler } from "@cloudflare/containers";
-import { Sandbox } from "@cloudflare/sandbox";
+import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
+import {
+  SandboxProcessorContract,
+  type SandboxLifecycleEventInput,
+} from "../sandbox-processor-contract.ts";
 import { normalizeSandboxPath } from "../utils.ts";
 
-/** Where the project repo is cloned inside every sandbox container. */
-const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
+/**
+ * The workspace root inside every sandbox container: what the backup/restore
+ * cycle persists (see {@link CloudflareSandboxDurableObject}). Everything under
+ * it survives idle sleep via the R2 backup; nothing outside it does — container
+ * disk is ephemeral.
+ */
+const SANDBOX_WORKSPACE_DIR = "/workspace";
+
+/** Where the project repo is checked out, inside the persisted workspace. */
+const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repo`;
+
+/**
+ * How long a sandbox's workspace backup survives without the sandbox waking
+ * again (the SDK GCs backups after their ttl). 90 days: long enough that any
+ * plausibly-still-wanted workspace comes back intact, short enough that the
+ * churn of short-lived sandboxes (e2e runs a fresh project per test) does not
+ * accumulate in R2 forever. Durable work belongs in the repo (committed and
+ * pushed); the workspace backup is for everything in flight around it.
+ */
+const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+/** Durable pointer to the newest good workspace backup (a DirectoryBackup). */
+const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup";
 
 // The container-outbound handler runs in the ContainerProxy WorkerEntrypoint,
 // not on a sandbox instance, so it only gets the container's opaque Durable
@@ -41,21 +66,60 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  * IS the SDK's — `itx.sandboxes.get(path)` returns this object's bare RPC stub
  * (exec, files, processes, ports, gitCheckout, …) with nothing wrapped on top.
  *
- * Lifecycle is the SDK's, unchanged: getting the stub is cheap (no container),
- * the first command boots the container, and the SDK's durable `sleepAfter`
- * idle alarm (default 10m) stops it again. Identity and Durable Object storage
- * survive sleep; the container FILESYSTEM does not — restorability comes from
- * `onStart` re-provisioning (the repo clone below).
+ * Lifecycle is the SDK's: getting the stub is cheap (no container), the first
+ * command boots the container, and the SDK's durable `sleepAfter` idle alarm
+ * (3m, see below) stops it again. Identity and Durable Object storage survive
+ * sleep. The container's own disk does NOT — but `/workspace` comes back,
+ * because going to sleep snapshots it to R2 and the next start restores it
+ * (see behavior 1). Lifecycle transitions are also appended as events to the
+ * stream at this sandbox's own path — for an agent's sandbox that is the
+ * agent's own journal (see `#emitLifecycleEvent`).
  *
- * Two behaviors are added over the stock SDK class:
+ * Three behaviors are added over the stock SDK class:
  *
- * 1. Every container start kicks off a clone of the project repo to
- *    {@link SANDBOX_PROJECT_REPO_DIR}, so code in the sandbox finds the
- *    project's source checked out. Container filesystems are ephemeral — a
- *    restart is a fresh disk — which is why the clone re-runs per start rather
- *    than once at creation; `ensureProjectRepo()` is the awaitable guarantee.
+ * 1. `/workspace` PERSISTS ACROSS SLEEP. Container disk is ephemeral —
+ *    Cloudflare offers no persistent volume
+ *    (https://developers.cloudflare.com/containers/faq/) — so this class uses
+ *    the Sandbox SDK's backup/restore
+ *    (https://developers.cloudflare.com/sandbox/guides/backup-restore/):
+ *    `onActivityExpired` (the idle-timer hook, the one moment the container is
+ *    still running but about to stop) snapshots `/workspace` to the env's
+ *    {@link Env.BACKUP_BUCKET} R2 bucket, and the next `onStart` restores the
+ *    newest snapshot before falling back to a fresh repo clone. Snapshots are
+ *    gitignore-aware (no node_modules etc.), so they stay small and restore
+ *    fast (~seconds, vs a cold clone).
  *
- * 2. ALL container egress is routed through the project's egress decision
+ *    Known window: this is snapshot-granular. A container that CRASHES (rather
+ *    than idling out) loses whatever changed since the last snapshot — durable
+ *    work belongs in the repo, committed and pushed.
+ *
+ *    Alternatives Cloudflare documents, and why not:
+ *    - `mountBucket` (https://developers.cloudflare.com/sandbox/api/storage/)
+ *      mounts R2 as a live FUSE filesystem — continuous persistence, tried
+ *      first. Its R2-binding mode routes s3fs traffic to the magic host
+ *      `r2.internal`, serviced by the SDK's own per-host container-egress
+ *      interceptor — which our catch-all `outbound` handler (behavior 3)
+ *      necessarily swallows, and the two cannot compose without exempting
+ *      storage traffic from project egress policy. Verified broken on a real
+ *      preview (every filesystem op → I/O error). Backup/restore has no such
+ *      conflict: its transfers are plain HTTPS to the real
+ *      `*.r2.cloudflarestorage.com` host via presigned URLs, which flow
+ *      THROUGH project egress like any other request.
+ *    - A raw R2 FUSE mount hand-rolled in the Dockerfile
+ *      (https://developers.cloudflare.com/containers/examples/r2-fuse-mount/)
+ *      is the same mechanism as `mountBucket`, minus the management — same
+ *      conflict.
+ *    - Durable Object storage (`ctx.storage`) is key/value, not a filesystem —
+ *      right for identity and the backup handle (as used here), not a repo
+ *      checkout.
+ *
+ * 2. The project repo is ALWAYS checked out at {@link SANDBOX_PROJECT_REPO_DIR}.
+ *    Every container start provisions the workspace — restore the last
+ *    snapshot if one exists, then clone the repo if the checkout is still
+ *    missing — and `ensureProjectRepo()` is the awaitable guarantee for
+ *    repo-dependent work.
+ *
+ * 3. ALL container egress is routed through the project's egress decision
  *    point, exactly like a dynamic worker's `globalOutbound` — see the
  *    `outbound` handler below. `interceptHttps` extends that to HTTPS by
  *    man-in-the-middling TLS with the Cloudflare-provided container CA (the
@@ -115,26 +179,48 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   override sleepAfter = "3m";
 
   /**
-   * Idle expiry DESTROYS the container instead of the SDK's stop (SIGTERM).
-   * A stopped container keeps its instance ASSIGNED to this Durable Object,
-   * and assignments count against the app's max_instances and never expire on
-   * their own (`wrangler containers info` on a slot mid-marathon: active 0,
-   * assigned 99 — including day-old idle slots still holding their last run's
+   * Idle expiry: SNAPSHOT `/workspace`, then DESTROY the container.
+   *
+   * This is the one moment a pre-sleep snapshot is possible — the idle timer
+   * fired but the container is STILL RUNNING (`onStop` is too late: the
+   * container is already gone, and that hook can even fire on a later wake).
+   * A backup failure must never wedge the container alive — it holds an
+   * instance slot against the namespace cap — so failures are logged and
+   * emitted as events, and the teardown proceeds regardless; the durable
+   * handle still points at the last good backup.
+   *
+   * DESTROY, not the SDK's stop (SIGTERM): a stopped container keeps its
+   * instance ASSIGNED to this Durable Object, and assignments count against
+   * the app's max_instances and never expire on their own
+   * (`wrangler containers info` on a slot mid-marathon: active 0, assigned 99
+   * — including day-old idle slots still holding their last run's
    * assignments; only destroy or an app rollout releases them). Every e2e
-   * fixture creates a fresh sandbox DO, so stop-on-idle leaks ~7-8 assignments
-   * per preview e2e run and the cap wedges every new sandbox start after
-   * ~a dozen runs — the real mechanism behind the recurring "Container is
-   * starting/provisioning" windows (docs/preview-e2e-flake-hunt.md flake 23,
-   * superseding the flake 19/20 theories). Destroy costs us nothing extra: a
-   * sandbox filesystem is ephemeral across sleep anyway (see class docs), so
-   * stop-then-wake and destroy-then-wake are the same cold boot + re-clone.
-   * The SDK's keepAlive guard is preserved (its own override skips shutdown
-   * when a caller enabled keepAlive; the field is private, hence the cast).
+   * fixture creates a fresh sandbox DO, so stop-on-idle leaks ~7-8
+   * assignments per preview e2e run and the cap wedges every new sandbox
+   * start after ~a dozen runs — the real mechanism behind the recurring
+   * "Container is starting/provisioning" windows
+   * (docs/preview-e2e-flake-hunt.md flake 23, superseding the flake 19/20
+   * theories). Destroy costs nothing BECAUSE of the snapshot above: the next
+   * wake restores `/workspace` from it, so destroy-then-wake and
+   * stop-then-wake land in the same place (destroy leaves Durable Object
+   * storage — the identity and backup handle — intact; the SDK's doDestroy
+   * deletes only its own port/tunnel/runtime keys). The SDK's keepAlive guard
+   * is preserved (its own override skips shutdown when a caller enabled
+   * keepAlive; the field is private, hence the cast).
    */
   override async onActivityExpired(): Promise<void> {
     const keepAlive = (this as unknown as { keepAliveEnabled?: boolean }).keepAliveEnabled === true;
     if (keepAlive) {
       return super.onActivityExpired();
+    }
+    try {
+      await this.#backupWorkspace();
+    } catch (error) {
+      console.error("sandbox workspace backup failed", error);
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/backup-failed",
+        payload: { error: String(error) },
+      });
     }
     await this.destroy();
   }
@@ -195,51 +281,200 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     return stored;
   }
 
-  #repoClone: Promise<void> | undefined;
+  #workspaceReady: Promise<void> | undefined;
+  // Whether the CURRENT container's workspace was fully provisioned (restored
+  // or cloned). Gates the idle-time backup: snapshotting a half-provisioned
+  // workspace would overwrite the pointer to the last GOOD backup.
+  #workspaceProvisioned = false;
 
   override async onStart(): Promise<void> {
     await super.onStart();
-    // `onStart` runs inside the container framework's blockConcurrencyWhile:
-    // a hard ~30s budget whose cancellation resets the Durable Object AND
-    // tears the fresh container down — and timer events are input-gated, so
-    // the work cannot even bound itself with a deadline in here. The clone
-    // therefore only STARTS here and completes in the background; a caller
-    // that needs the repo deterministically awaits `ensureProjectRepo()`.
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/container-started",
+      payload: {},
+    });
+    // Provision the workspace — restore the last backup, clone the repo if the
+    // checkout is still missing — in the BACKGROUND. It cannot run inside
+    // `onStart` itself: `onStart` executes in the container framework's
+    // blockConcurrencyWhile, which has a hard ~30s budget and resets the
+    // Durable Object on overrun (verified live), and a cold clone or a large
+    // restore can exceed it — and timer events are input-gated in here, so the
+    // work cannot even bound itself with a deadline. Callers that need the
+    // workspace await `ensureProjectRepo()`.
     //
-    // Each start is a fresh container filesystem, so a clone promise from a
-    // previous container must not satisfy this one.
-    this.#repoClone = undefined;
+    // Each start is a fresh container process (empty disk), so a readiness
+    // promise from a previous container must not satisfy this one.
+    this.#workspaceReady = undefined;
+    this.#workspaceProvisioned = false;
     this.ctx.waitUntil(
-      this.#ensureRepoClone().catch((error: unknown) =>
-        console.error("sandbox project repo clone failed", error),
-      ),
+      this.#ensureWorkspace().catch((error: unknown) => {
+        console.error("sandbox workspace setup failed", error);
+        this.#emitLifecycleEvent({
+          type: "events.iterate.com/sandbox/workspace-setup-failed",
+          payload: { error: String(error) },
+        });
+      }),
+    );
+  }
+
+  override async onStop(): Promise<void> {
+    await super.onStop();
+    // May fire late: if the Durable Object was hibernated when the container
+    // exited, the SDK delivers this on the next wake.
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/container-stopped",
+      payload: {},
+    });
+  }
+
+  /**
+   * Snapshot `/workspace` to R2 and move the durable handle to the new backup.
+   * Gitignore-aware and node_modules-free, so archives stay small and restores
+   * fast; reinstalling dependencies is the restored workspace's job. The
+   * handle is only overwritten AFTER `createBackup` succeeds, so a failed
+   * backup can never orphan the previous good snapshot.
+   *
+   * Transfer mode is chosen by what the env provides: with R2 S3 credentials
+   * the SDK presigns `*.r2.cloudflarestorage.com` URLs and the container
+   * transfers directly (fast, and through project egress like all container
+   * traffic); without them — local dev always, a deployed env until keys are
+   * minted — archives stream through the Durable Object's BACKUP_BUCKET
+   * binding (the SDK's `localBucket` mode: slower, but zero-config and the
+   * only mode `wrangler dev` supports).
+   */
+  async #backupWorkspace(): Promise<void> {
+    if (!this.#workspaceProvisioned) return;
+    const { projectId, path } = this.#identity();
+    const backup = await this.createBackup({
+      dir: SANDBOX_WORKSPACE_DIR,
+      name: `${projectId}${path}`,
+      ttl: SANDBOX_BACKUP_TTL_SECONDS,
+      gitignore: true,
+      excludes: ["node_modules"],
+      ...(this.#canPresignBackupTransfers() ? {} : { localBucket: true }),
+    });
+    this.ctx.storage.kv.put(BACKUP_HANDLE_STORAGE_KEY, backup);
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/backup-created",
+      payload: { backupId: backup.id },
+    });
+  }
+
+  #canPresignBackupTransfers(): boolean {
+    return Boolean(
+      this.env.R2_ACCESS_KEY_ID &&
+      this.env.R2_SECRET_ACCESS_KEY &&
+      this.env.CLOUDFLARE_R2_ACCOUNT_ID,
     );
   }
 
   /**
-   * The project repo clone, awaitable: resolves once `/workspace/repo` holds
-   * a completed clone for the CURRENT container. Idempotent and safe to call
-   * any time — the clone starts automatically on every container start, so
-   * this usually returns fast; await it before work that depends on the repo.
+   * Restore the newest workspace backup into the fresh container, if one
+   * exists. Returns whether `/workspace` now holds a restored snapshot; any
+   * failure (expired ttl, deleted object, transfer error) degrades to `false`
+   * so provisioning falls back to a clean clone rather than failing the start.
    */
-  async ensureProjectRepo(): Promise<void> {
-    // A container restart mid-await resets `#repoClone` (fresh filesystem),
-    // so a clone that completed against the PREVIOUS container must not
-    // satisfy this call — loop until the run we awaited is still current.
-    while (true) {
-      const run = this.#ensureRepoClone();
-      await run;
-      if (this.#repoClone === run) return;
+  async #restoreWorkspace(): Promise<boolean> {
+    const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
+    if (backup === undefined) return false;
+    try {
+      const result = await this.restoreBackup(backup);
+      if (!result.success) return false;
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/workspace-restored",
+        payload: { backupId: backup.id },
+      });
+      return true;
+    } catch (error) {
+      console.warn("sandbox workspace restore failed, falling back to clone", error);
+      return false;
     }
   }
 
-  #ensureRepoClone(): Promise<void> {
-    this.#repoClone ??= this.#cloneProjectRepo().catch((error: unknown) => {
-      // Let the next ensure retry instead of caching the failure forever.
-      this.#repoClone = undefined;
+  /**
+   * The workspace guarantee, awaitable: resolves once `/workspace` is
+   * provisioned for the CURRENT container — the last backup restored (fast)
+   * and `/workspace/repo` holding a completed checkout (cloned fresh when the
+   * backup lacked one or there was no backup). Idempotent and safe to call any
+   * time — provisioning starts automatically on every container start, so this
+   * usually returns quickly; await it before work that depends on the repo.
+   *
+   * Named `ensureProjectRepo` for its callers — the repo is the thing they
+   * wait on — but it guarantees the whole workspace.
+   */
+  async ensureProjectRepo(): Promise<void> {
+    // A container restart mid-await resets `#workspaceReady` (fresh disk), so
+    // a promise that completed against the PREVIOUS container must not satisfy
+    // this call — loop until the run we awaited is still current.
+    while (true) {
+      const run = this.#ensureWorkspace();
+      await run;
+      if (this.#workspaceReady === run) return;
+    }
+  }
+
+  #ensureWorkspace(): Promise<void> {
+    if (this.#workspaceReady !== undefined) return this.#workspaceReady;
+    // `run` is only read inside the closures below, which execute strictly
+    // after the assignment at the bottom (the first read sits behind two
+    // awaits) — initialized to undefined so TS's definite-assignment analysis
+    // doesn't have to prove that ordering.
+    let run: Promise<void> | undefined = undefined;
+    run = (async () => {
+      const restored = await this.#restoreWorkspace();
+      // Clone when the restore didn't produce a checkout (no backup yet, the
+      // backup expired, or it somehow predates the repo). #cloneProjectRepo
+      // probes the marker itself, so a restored checkout makes this a no-op.
+      await this.#cloneProjectRepo();
+      // A container restart mid-run reset the state for a NEW, empty disk —
+      // everything this run did landed on the old one. Only the still-current
+      // run may mark the workspace provisioned: a stale run setting the flag
+      // would let the idle backup snapshot a half-provisioned /workspace over
+      // the last good backup.
+      if (this.#workspaceReady !== run) return;
+      if (!restored) {
+        this.#emitLifecycleEvent({
+          type: "events.iterate.com/sandbox/workspace-cloned",
+          payload: {},
+        });
+      }
+      this.#workspaceProvisioned = true;
+    })().catch((error: unknown) => {
+      // Let the next ensure retry instead of caching the failure forever —
+      // but only clear OUR OWN registration; a stale failing run must not
+      // clobber the promise of the newer run that replaced it.
+      if (this.#workspaceReady === run) this.#workspaceReady = undefined;
       throw error;
     });
-    return this.#repoClone;
+    this.#workspaceReady = run;
+    return run;
+  }
+
+  /**
+   * Append a lifecycle event to the stream at this sandbox's own path — for an
+   * agent's sandbox that is the agent's own journal, so the agent (and anyone
+   * tailing the stream) sees container starts/stops, snapshots, and restores
+   * as ordinary history. The event catalog is the sandbox processor contract
+   * (sandbox-processor-contract.ts); building through it keeps emission and
+   * declaration from drifting. Best-effort by design: lifecycle telemetry must
+   * never block or fail container start/stop, so errors are logged and
+   * dropped.
+   */
+  #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
+    try {
+      const event = SandboxProcessorContract.buildEvent(input);
+      const { projectId, path } = this.#identity();
+      const stream = this.env.STREAM.getByName(
+        DurableObjectNameCodec.stringify({ projectId, path }),
+      );
+      this.ctx.waitUntil(
+        Promise.resolve(stream.append(event)).catch((error: unknown) =>
+          console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
+        ),
+      );
+    } catch (error) {
+      console.warn(`sandbox lifecycle event skipped (${input.type})`, error);
+    }
   }
 
   async #cloneProjectRepo(): Promise<void> {

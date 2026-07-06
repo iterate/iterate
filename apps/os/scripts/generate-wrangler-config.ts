@@ -57,6 +57,13 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_POSTHOG",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
+  // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
+  // transfers (exact names the SDK reads). Optional: an env without them
+  // still runs sandboxes — backups fail loudly in logs and every container
+  // start falls back to a fresh repo clone. Local dev never needs them
+  // (SANDBOX_BACKUP_MODE=local streams through the local R2 binding).
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
 ];
 
 /**
@@ -119,6 +126,12 @@ function workerBindings(input: {
       WORKER_SELF: input.workerName,
       ARTIFACTS_ACCOUNT_ID: input.accountId,
       ARTIFACTS_NAMESPACE: `${input.workerName}-repos`,
+      // Sandbox workspace backup config — names the Sandbox SDK reads from
+      // the env verbatim (BACKUP_BUCKET_NAME, CLOUDFLARE_R2_ACCOUNT_ID);
+      // the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY presigning secrets ride in
+      // from Doppler (OPTIONAL_SECRETS).
+      BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
+      CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -144,6 +157,12 @@ function workerBindings(input: {
     ai: { binding: "AI" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
+    // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
+    // sandbox DO snapshots /workspace here on idle and restores on start).
+    // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
+    // the env by that exact name. Addressed by name, so — unlike KV/D1 — no
+    // per-env id in envs.ts. In local dev miniflare provides it automatically.
+    r2_buckets: [{ binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` }],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see
     // rpc-targets.ts EmailRpcTarget) — allowed_sender_addresses can't hold a
