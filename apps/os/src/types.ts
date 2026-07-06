@@ -149,6 +149,7 @@ export type ProjectListEntry = {
   slug: string;
   organizationId: string | null;
   organizationName: string | null;
+  organizationSlug: string | null;
   deploymentStatus: ProjectDeploymentStatus;
 };
 

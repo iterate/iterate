@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev-all": "sh -c 'export APP_CONFIG_AUTH_APP_ORIGIN=http://localhost:7101; export APP_CONFIG_PUBLIC_URL=http://localhost:7101; export APP_CONFIG_ITERATE_AUTH__ISSUER=http://localhost:7101/api/auth; (cd apps/auth && doppler run --preserve-env=APP_CONFIG_AUTH_APP_ORIGIN,APP_CONFIG_PUBLIC_URL -- pnpm dev:local) & (cd apps/os && doppler run --preserve-env=APP_CONFIG_ITERATE_AUTH__ISSUER -- pnpm dev); wait'",
+    "dev-all": "sh -c 'export APP_CONFIG_AUTH_APP_ORIGIN=http://localhost:7101; export APP_CONFIG_PUBLIC_URL=http://localhost:7101; export APP_CONFIG_ITERATE_AUTH__ISSUER=http://localhost:7101/api/auth; export APP_CONFIG_ITERATE_AUTH__RESOURCE=http://localhost; (cd apps/auth && doppler run --preserve-env=APP_CONFIG_AUTH_APP_ORIGIN,APP_CONFIG_PUBLIC_URL -- pnpm dev:local) & (cd apps/os && doppler run --preserve-env=APP_CONFIG_ITERATE_AUTH__ISSUER,APP_CONFIG_ITERATE_AUTH__RESOURCE -- pnpm dev start --skip-doppler true); wait'",
     "dev": "pnpm os dev",
     "build": "pnpm -r --parallel --filter '!iterate' build",
     "typecheck": "pnpm -r --parallel --filter '!iterate' typecheck",

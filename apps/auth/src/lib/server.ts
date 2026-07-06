@@ -23,6 +23,7 @@ import {
   type IterateAuthOrganizationClaim as IterateAuthOrganizationClaimType,
   type IterateAuthProjectClaim as IterateAuthProjectClaimType,
 } from "@iterate-com/shared/auth-claims";
+import { expandOAuthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
 export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
@@ -243,7 +244,9 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
   function audiences() {
     const resources = Array.isArray(config.resource) ? config.resource : [config.resource];
     const configuredResources = resources.filter((resource): resource is string => !!resource);
-    return configuredResources.length > 0 ? configuredResources : [issuerURL.href];
+    return configuredResources.length > 0
+      ? expandOAuthResourceAudienceVariants(configuredResources)
+      : [issuerURL.href];
   }
 
   function resource() {

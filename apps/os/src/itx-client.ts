@@ -18,6 +18,8 @@ export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", d
 type ConnectItxBaseInput = {
   /** OS deployment base URL, e.g. the config's APP_CONFIG_BASE_URL. */
   baseUrl: string;
+  /** Node WebSocket handshake headers, used by CLI/server callers with cookies. */
+  headers?: Record<string, string>;
   /** Observe every decoded ws frame (e.g. the e2e suite's frame recorder). */
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
 };
@@ -62,12 +64,13 @@ function parseFrame(data: unknown): unknown {
 
 function connect<T extends CapnRpcCompatible<T>>(
   url: string,
+  headers?: Record<string, string>,
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void,
 ): CapnRpcStub<T> {
   // 15s: cold deployments answer the upgrade only after the worker chain has
   // loaded, but #1601's route-healing + the preview slot warmup mean the first
   // upgrade lands in a few seconds — 15s is headroom, not a hang budget.
-  const socket = new WebSocket(url, { handshakeTimeout: 15_000 });
+  const socket = new WebSocket(url, { handshakeTimeout: 15_000, headers });
 
   if (onWebSocketMessage) {
     const start = Date.now();
@@ -107,7 +110,11 @@ export function connectItx(
   | CapnRpcStub<ProjectRpcTarget>
   | CapnRpcStub<Session>
   | CapnRpcStub<UnauthenticatedOs> {
-  const session = connect<UnauthenticatedOs>(websocketUrl("/api", input), input.onWebSocketMessage);
+  const session = connect<UnauthenticatedOs>(
+    websocketUrl("/api", input),
+    input.headers,
+    input.onWebSocketMessage,
+  );
   if (!("auth" in input)) return session;
 
   const root = session.authenticate(input.auth) as CapnRpcStub<Session>;
