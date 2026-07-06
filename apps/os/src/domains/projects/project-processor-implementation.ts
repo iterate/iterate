@@ -390,7 +390,7 @@ function agentBirthCertificateEvents(input: {
           `THIS agent's own sandbox: the container at the agent's own path ("${input.childPath}"). ` +
           "Full Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, …). " +
           "The first command boots the container; it sleeps after idle. " +
-          "await itx.sandbox.ensureProjectRepo() guarantees the project repo at /workspace/repo.",
+          'The project repo is ALWAYS checked out at /workspace/repos/project, also the default working directory — a bare exec("ls") lists the project.',
       },
     },
     // Per-agent boot context as a model-visible input (the system prompt is
@@ -408,7 +408,7 @@ function agentBirthCertificateEvents(input: {
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
-          '- You have your own sandbox: `itx.sandbox` is a real Linux container that is yours alone (it lives at your own agent path and was mounted on your scope at birth). Call it dotted: `await itx.sandbox.exec("...")`. First command boots it (allow a minute cold), it sleeps after idle, and `await itx.sandbox.ensureProjectRepo()` guarantees the project repo at /workspace/repo.',
+          '- You have your own sandbox: `itx.sandbox` is a real Linux container that is yours alone (it lives at your own agent path and was mounted on your scope at birth). Call it dotted: `await itx.sandbox.exec("...")`. First command boots it (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project, which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project.',
           "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available at itx.integrations.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),

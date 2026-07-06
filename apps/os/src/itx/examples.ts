@@ -371,7 +371,7 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Run shell commands in a sandbox (project repo included)",
     description:
-      "A sandbox is a real Linux container addressed by path — any non-root path, nested fine. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your own agent path) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. Every start also clones the project repo to /workspace/repo with working git credentials; await ensureProjectRepo() before depending on it.",
+      'A sandbox is a real Linux container addressed by path — any non-root path, nested fine. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your own agent path) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -382,10 +382,10 @@ const sandbox = await itx.sandboxes.get(vars.sandboxPath ?? "/sandboxes/cloudfla
 // exec runs a shell command; the first one boots the container.
 const uname = await sandbox.exec("uname -s");
 
-// The project repo is cloned to /workspace/repo on every container start —
-// ensureProjectRepo() is the awaitable guarantee that it's in place.
-await sandbox.ensureProjectRepo();
-const repo = await sandbox.exec("ls /workspace/repo");
+// The project repo is ALWAYS checked out at /workspace/repos/project, which is
+// also the default working directory — so a bare "ls" lists the project. Every
+// command awaits provisioning internally; no ensureProjectRepo() call needed.
+const repo = await sandbox.exec("ls");
 
 return {
   os: uname.stdout.trim(), // "Linux"

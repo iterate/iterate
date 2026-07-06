@@ -21,7 +21,7 @@ await itx.sandbox.exec("echo mine"); // an agent's own sandbox (dotted capabilit
 const sandbox = await itx.sandboxes.get("/sandboxes/cloudflare/whatever");
 await sandbox.exec("echo hi"); // first command boots the container
 await sandbox.ensureProjectRepo(); // await the project repo clone
-await sandbox.readFile("/workspace/repo/README.md");
+await sandbox.readFile("/workspace/repos/project/README.md");
 await sandbox.startProcess("bun server.js");
 ```
 
@@ -110,13 +110,22 @@ container start/stop.
 
 ## The project repo is always checked out
 
-Every sandbox has the project repo at `/workspace/repo` (credentials are
-embedded in the git remote, so `git pull`/`push` work inside the sandbox);
-`await sandbox.ensureProjectRepo()` before work that depends on it. Because
-the workspace is snapshot-restored, the clone effectively runs **once**: later
-starts restore the checkout from the backup (a fast marker probe makes the
-clone a no-op), and only a first boot — or an expired/failed backup — pays for
-a full clone.
+Every sandbox has the project repo at `/workspace/repos/project` (credentials
+are embedded in the git remote, so `git pull`/`push` work inside the sandbox),
+and that path is the **default working directory** — a bare `exec("ls")` lists
+the project, like a developer's shell. This is UNCONDITIONAL: every public
+command and file operation (`exec`, `startProcess`, `readFile`/`writeFile`,
+`gitCheckout`, `createSession`, …) awaits provisioning internally before
+touching the container, so the first thing any caller does already sees the
+checkout — no `await sandbox.ensureProjectRepo()` first (it stays available to
+await the checkout deterministically). An explicit `cwd` always wins.
+
+Because the workspace is snapshot-restored, the clone effectively runs
+**once**: later starts restore the checkout from the backup (a fast marker
+probe makes the clone a no-op), and only a first boot — or an expired/failed
+backup — pays for a full clone. Guarding also closes an integrity window: a
+write that landed before the snapshot restore would be silently clobbered by
+it.
 
 Provisioning cannot run synchronously inside container startup: `onStart`
 executes inside the container framework's `blockConcurrencyWhile`, which has a
@@ -221,8 +230,7 @@ OrbStack/Apple Silicon 2026-07-03):
 doppler run --project os --config dev -- pnpm --dir apps/os cli itx run \
   --context prj_… \
   -e 'const sb = await itx.sandboxes.get("/sandboxes/cloudflare/smoke");
-      await sb.ensureProjectRepo();
-      const r = await sb.exec("ls /workspace/repo");
+      const r = await sb.exec("ls");
       return { exitCode: r.exitCode, stdout: r.stdout };'
 ```
 
