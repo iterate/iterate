@@ -172,15 +172,20 @@ export class SecretDurableObject extends DurableObject<Env> {
    */
   async resolveSecretReference(input: {
     fields: string[];
-    origin: string;
+    /** The full terminal request URL: its origin is pin-checked, and the whole
+     * URL (path included) is recorded on the audit trail as lastUsedUrl. */
+    url: string;
     usedBy: string;
   }): Promise<ResolvedFields> {
-    const material = await this.#readMaterial({ origin: input.origin, requireEgress: true });
+    const material = await this.#readMaterial({
+      origin: new URL(input.url).origin,
+      requireEgress: true,
+    });
     const resolved: ResolvedFields = {};
     for (const field of input.fields) {
       resolved[field] = selectSecretField(material, field === "" ? undefined : field);
     }
-    await this.#appendUsed(input.usedBy, input.origin);
+    await this.#appendUsed(input.usedBy, input.url);
     return resolved;
   }
 
@@ -302,14 +307,17 @@ export class SecretDurableObject extends DurableObject<Env> {
                 DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
               ).resolveSecretReference({
                 fields: [...fields],
-                origin,
+                url: request.url,
                 usedBy: this.#name.projectId,
               });
           for (const [field, value] of Object.entries(resolved))
             values.set(`${path} ${field}`, value);
         }
       }
-      await this.#appendUsed(this.#name.projectId, origin);
+      // The entry secret owns this outbound: record its use with the full URL
+      // (path included) — consumers of the audit trail match on the whole URL,
+      // e.g. slack.com/api/<method>, not just the origin the pin checks.
+      await this.#appendUsed(this.#name.projectId, request.url);
 
       const substituted = substituteSecretHeaders(request, (reference) => {
         const value = values.get(`${reference.path} ${reference.field ?? ""}`);
