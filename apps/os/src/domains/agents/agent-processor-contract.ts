@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { SandboxProcessorContract } from "../sandboxes/sandbox-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -264,7 +265,7 @@ export const AgentProcessorContract = defineProcessorContract({
       ]),
     },
   },
-  processorDeps: [CapabilityHostProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract, SandboxProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
@@ -279,6 +280,11 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
+    // The agent's own sandbox emits its lifecycle to THIS stream (an agent
+    // sandbox lives at the agent's path). Surface the resume/fresh-start
+    // transitions as FYI inputs — see the processor. Never trigger the LLM.
+    "events.iterate.com/sandbox/workspace-restored",
+    "events.iterate.com/sandbox/workspace-cloned",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",

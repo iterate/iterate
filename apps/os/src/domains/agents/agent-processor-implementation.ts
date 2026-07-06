@@ -122,6 +122,36 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         );
         return;
       }
+      // The agent's own sandbox came (back) up. Record a model-visible FYI —
+      // never a trigger — so that next time the agent acts it knows the state
+      // of its `itx.sandbox`, and is reminded how it works. `dont-trigger-request`
+      // means this sits in context for later, it does not start an LLM turn.
+      case "events.iterate.com/sandbox/workspace-restored":
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/sandbox-restored@${event.offset}`,
+            payload: {
+              content:
+                "FYI (no reply needed): your sandbox (`itx.sandbox`) resumed and its `/workspace` was RESTORED from a snapshot — your files and the repo at `/workspace/repos/project` (your cwd) are back. But gitignored paths were NOT snapshotted (e.g. `node_modules`, build outputs): reinstall/rebuild them before use if a task needs them. The container filesystem otherwise resets between sleeps, so treat anything outside `/workspace` as gone.",
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          }),
+        );
+        return;
+      case "events.iterate.com/sandbox/workspace-cloned":
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/sandbox-cloned@${event.offset}`,
+            payload: {
+              content:
+                "FYI (no reply needed): your sandbox (`itx.sandbox`) started fresh — no prior snapshot, so `/workspace` was newly provisioned with the project repo checked out at `/workspace/repos/project` (your cwd). Nothing else is installed yet; install what a task needs. Work you want to keep across sleeps lives under `/workspace`; commit durable changes to the repo.",
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          }),
+        );
+        return;
       default:
         return;
     }

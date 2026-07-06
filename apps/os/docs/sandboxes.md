@@ -113,6 +113,12 @@ no actions and is not yet wired to a processor host.
 Appends are best-effort by design: lifecycle telemetry never blocks or fails a
 container start/stop.
 
+For an **agent's** sandbox, the agent processor turns the resume/fresh-start
+transitions (`workspace-restored`, `workspace-cloned`) into model-visible FYI
+inputs with `dont-trigger-request` — so the agent, next time it acts, knows its
+`itx.sandbox` was restored (and that gitignored paths like `node_modules` were
+not snapshotted) or freshly cloned, without those events starting an LLM turn.
+
 ## The project repo is always checked out
 
 Every sandbox has the project repo at `/workspace/repos/project` (credentials
