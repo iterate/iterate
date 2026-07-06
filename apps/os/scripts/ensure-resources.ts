@@ -3,12 +3,14 @@
  *
  *   pnpm ensure-resources --env preview_9
  *
- * Idempotent and create-only — it NEVER deletes anything. For each resource
- * (the project-directory KV, the auth D1 database, proxied DNS records for
- * every routed hostname) it creates whatever is missing, then compares
- * reality against the env's `resources` entry in envs.ts and prints the
- * exact snippet to paste when they differ. IDs live in git, so the last
- * step of bringing up a new env is always a reviewed commit.
+ * Idempotent and create-only for data-bearing resources. For each durable
+ * resource (the project-directory KV, the auth D1 database, proxied DNS
+ * records for every routed hostname) it creates whatever is missing, then
+ * compares reality against the env's `resources` entry in envs.ts and prints
+ * the exact snippet to paste when they differ. Event-subscription wiring may
+ * be recreated to repair destination/source drift; it carries no app data. IDs
+ * live in git, so the last step of bringing up a new env is always a reviewed
+ * commit.
  *
  * CI never runs this: a deploy with a missing/mismatched ID fails loudly and
  * tells you to run it yourself.
@@ -18,6 +20,7 @@ import { envs } from "../../../envs.ts";
 import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
+import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /** Ensure apps/os's Cloudflare resources exist for an environment (create-only, idempotent). */
 export default async function ensureResources(
@@ -91,6 +94,12 @@ export default async function ensureResources(
   });
   console.log(`R2 bucket ${r2BucketName} lifecycle: backups/ expire at 90d`);
 
+  // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
+  // One general-purpose queue per OS worker. Artifacts event subscriptions are
+  // today's producer; future account-level event sources can share the same
+  // consumer and dispatch by message shape in src/domains/events.
+  await ensureWorkerEventQueueResources(ctx, env.osWorkerName);
+
   // ---- D1: auth database ------------------------------------------------------
   // apps/auth's ensure-resources also creates this database; both are
   // create-only idempotent, so whichever runs first wins harmlessly.
@@ -102,6 +111,7 @@ export default async function ensureResources(
   // records here (create-only; deploys never touch DNS).
   const hostRecords = [
     new URL(env.baseUrl).hostname,
+    new URL(env.eventDocsBaseUrl).hostname,
     new URL(env.mcpBaseUrl).hostname,
     ...env.projectHostnameBases.flatMap((base) => [base, `*.${base}`]),
   ];

@@ -1,10 +1,16 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
+import { EventDocsIndexPage } from "~/components/event-docs-pages.tsx";
+import { eventDocs, processorDocs } from "~/lib/event-docs.ts";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { getRootProjectRedirectServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/")({
   loader: async ({ context, location }) => {
+    if (context.isEventDocsHost) {
+      return { kind: "event-docs" as const };
+    }
+
     const target = requireAuthenticatedRootRedirectTargetFromSession(
       context.authSession,
       location,
@@ -44,5 +50,11 @@ export const Route = createFileRoute("/")({
       replace: true,
     });
   },
-  component: () => null,
+  component: IndexRoute,
 });
+
+function IndexRoute() {
+  const data = Route.useLoaderData();
+  if (data?.kind !== "event-docs") return null;
+  return <EventDocsIndexPage eventDocs={eventDocs} processorDocs={processorDocs} />;
+}

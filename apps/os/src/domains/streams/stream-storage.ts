@@ -88,7 +88,17 @@ export class StreamEventLog {
     return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
   }
 
-  getRange(args: { afterOffset: number; beforeOffset: number; limit: number }): StreamEvent[] {
+  getRange(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+  }): StreamEvent[] {
+    if (args.eventTypes?.length === 0) return [];
+    const eventTypes =
+      args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
+    const eventTypeClause =
+      eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.sql
@@ -100,6 +110,7 @@ export class StreamEventLog {
             from events
             where offset > ?
               and offset < ?
+              ${eventTypeClause}
             order by offset asc
             limit ?
           ) selected
@@ -108,6 +119,7 @@ export class StreamEventLog {
         `,
         args.afterOffset,
         args.beforeOffset,
+        ...(eventTypes ?? []),
         args.limit,
       )
       .toArray();

@@ -19,7 +19,43 @@ it("keeps the OS host on the app lane", async () => {
     url: "https://os.iterate-preview-2.com/projects/demo",
   });
 
-  expect(route).toMatchObject({ lane: "os" });
+  expect(route).toMatchObject({ lane: "os", hostKind: "dashboard" });
+});
+
+it("keeps the event docs host on the app lane", async () => {
+  const route = await decideIngressRoute({
+    config: PREVIEW_CONFIG,
+    method: "GET",
+    resolvers: resolversThatShouldNotBeUsed(),
+    url: "https://events.iterate-preview-2.com/stream/created",
+  });
+
+  expect(route).toMatchObject({ lane: "os", hostKind: "eventDocs" });
+});
+
+it("does not let api or project path lanes steal the event docs host", async () => {
+  for (const path of ["/api", "/api/admin-cookie", "/prj_123/increment"]) {
+    const route = await decideIngressRoute({
+      config: PREVIEW_CONFIG,
+      method: "GET",
+      resolvers: resolversThatShouldNotBeUsed(),
+      url: `https://events.iterate-preview-2.com${path}`,
+    });
+
+    expect(route).toMatchObject({ lane: "os", hostKind: "eventDocs" });
+  }
+});
+
+it("honors x-forwarded-host when classifying event docs hosts", async () => {
+  const route = await decideIngressRoute({
+    config: PREVIEW_CONFIG,
+    headers: { "x-forwarded-host": "events.iterate-preview-2.com" },
+    method: "GET",
+    resolvers: resolversThatShouldNotBeUsed(),
+    url: "https://os.iterate-preview-2.com/stream/created",
+  });
+
+  expect(route).toMatchObject({ lane: "os", hostKind: "eventDocs" });
 });
 
 it("treats the bare localhost project-host base as an OS app-host alias", async () => {

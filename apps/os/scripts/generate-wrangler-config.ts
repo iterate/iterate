@@ -23,6 +23,7 @@ import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
+import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -56,6 +57,7 @@ export const OPTIONAL_SECRETS = [
   // browser sessions from `pnpm auth:mint --browser-url` fail with
   // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
   "APP_CONFIG_ITERATE_AUTH__JWKS",
+  "APP_CONFIG_ITERATE_AUTH__RESOURCE",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
   "APP_CONFIG_POSTHOG",
@@ -200,6 +202,17 @@ function workerBindings(input: {
     ai: { binding: "AI" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
+    queues: {
+      consumers: [
+        {
+          queue: workerEventsQueueName(input.workerName),
+          max_batch_size: 10,
+          max_batch_timeout: 5,
+          max_retries: 3,
+          retry_delay: 30,
+        },
+      ],
+    },
     // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
     // sandbox DO snapshots /workspace here on idle and restores on start).
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
@@ -253,9 +266,9 @@ function workerBindings(input: {
 }
 
 /**
- * Every hostname routed to the os worker: the app base URL, the MCP host,
- * and the project-host patterns. The zone is the hostname minus its first
- * label for app/MCP hosts; project bases are themselves zones.
+ * Every hostname routed to the os worker: the app base URL, public event docs,
+ * the MCP host, and the project-host patterns. The zone is the hostname minus
+ * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
  *
  * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
  * The catch-all `*base/*` should subsume the others, but the live preview
@@ -266,9 +279,11 @@ function workerBindings(input: {
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
+  const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
+    { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
     ...env.projectHostnameBases.flatMap((base) => [
       { pattern: `${base}/*`, zone_name: base },

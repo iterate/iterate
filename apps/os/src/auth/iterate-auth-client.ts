@@ -53,10 +53,12 @@ function normalizeOAuthResource(rawResource: string) {
   url.pathname = "";
   url.search = "";
   url.hash = "";
-  if (isLoopbackHostname(url.hostname)) url.port = "";
+  if (
+    url.hostname === "localhost" ||
+    url.hostname.endsWith(".localhost") ||
+    url.hostname === "127.0.0.1"
+  ) {
+    url.port = "";
+  }
   return url.toString().replace(/\/+$/u, "");
-}
-
-function isLoopbackHostname(hostname: string) {
-  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1";
 }

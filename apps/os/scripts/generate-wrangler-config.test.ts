@@ -31,3 +31,12 @@ it("binds the os worker to its own env's builder sidecar", () => {
     expect(builderNames, envName).toContain(builder?.service);
   }
 });
+
+it("routes public event docs hosts to the os worker", () => {
+  const productionRoutes = config.env.prd.routes ?? [];
+
+  expect(productionRoutes).toContainEqual({
+    pattern: "events.iterate.com/*",
+    zone_name: "iterate.com",
+  });
+});
