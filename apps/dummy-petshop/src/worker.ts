@@ -24,14 +24,17 @@ import {
   newGatewayConnection,
   subprotocolAuth,
 } from "./gateway.ts";
+import { verifyAppJwt } from "./github-app.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
 import { hmacSha256Hex, nowSeconds, seal, unseal } from "./seal.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
+  DEFAULT_APP_ID,
   DEFAULT_CLIENT_ID,
   DEFAULT_CLIENT_SECRET,
+  DEFAULT_INSTALLATION_ID,
   PetshopStateDurableObject,
 } from "./state.ts";
 
@@ -39,6 +42,10 @@ export { PetshopStateDurableObject };
 
 /** Authorization codes only need to survive the redirect back to the callback. */
 const CODE_TTL_SECONDS = 120;
+
+/** GitHub-App installation tokens are deliberately short (design §9 P4 wants
+ * refresh exercised): 60s, so an integration that caches one hits real re-mint. */
+const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** Bindings the worker runs with (wrangler.jsonc, generated from the root envs.ts). */
 export interface Env {
@@ -66,6 +73,7 @@ export interface PetshopDeps {
     | "setTokenEndpointFailures"
     | "consumeTokenEndpointFailure"
     | "consumeAuthorizationCode"
+    | "registerApp"
   >;
   sealKey: string;
   backdoorSecret?: string;
@@ -107,6 +115,30 @@ interface RefreshPayload {
   jti: string;
 }
 
+/**
+ * Sealed GitHub-App installation token (design §9 P4): what petshop mints when a
+ * valid App JWT is exchanged at `POST /app/installations/{id}/access_tokens`. It
+ * carries `sub`/`clientId`/`epoch`/`exp` so it flows through the SAME bearer API
+ * and revocation model as an OAuth access token (see {@link Grant}), plus the
+ * `installationId`/`appId` it was minted for so `/api/me` can name which
+ * installation the caller is acting as.
+ */
+interface InstallationPayload {
+  t: "installation";
+  sub: string;
+  clientId: string;
+  installationId: string;
+  appId: string;
+  epoch: number;
+  exp: number;
+}
+
+/** A live bearer grant on the pet-shop API: an OAuth/legacy access token or a
+ * GitHub-App installation token. Both are epoch-bound and expiring, so
+ * {@link accessGrant} validates them identically; only `/api/me` distinguishes
+ * them (an installation token names its installation). */
+type Grant = AccessPayload | InstallationPayload;
+
 function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
@@ -132,8 +164,11 @@ const INDEX = dedent`
   POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
   POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
-  GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}
+  GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
   GET  /api/pets            the account's (entirely fictional) pets
+
+  POST /app/installations/<installationId>/access_tokens
+                            GitHub-App installation token — Authorization: Bearer <App JWT> (RS256 over header.payload, iss=appId, exp future) → {token, expires_at}; token works as a bearer on /api/*
 
   GET  /openapi.json        OpenAPI 3.1 doc for the typed pets API (listPets/getPet/createPet)
   POST /rpc/*               oRPC handler for the pets API (what an @orpc/client talks); bearer-protected
@@ -150,10 +185,15 @@ const INDEX = dedent`
   POST /__backdoor/rotate-signing-secret   new webhook HMAC secret
   POST /__backdoor/fail-token-endpoint     {times} → next N POST /oauth/token calls return 500
   POST /__backdoor/webhooks/fire           {url, event?, badSignature?} → POST a signed webhook there now
+  POST /__backdoor/apps                    {publicKeyPem, appId?, installationId?, webhookSecret?} → register/replace a GitHub-App installation (public key only)
+  POST /__backdoor/apps/fire-webhook       {installationId?, url?, event?, badSignature?} → deliver (or, with no url, echo) a webhook signed x-hub-signature-256 with the app's webhookSecret
 
   Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
   webhooks are signed x-petshop-signature-256: sha256=<hex hmac of the raw body> · the backdoor is open
   unless PETSHOP_BACKDOOR_SECRET is set, in which case send it as x-petshop-backdoor.
+
+  Seeded GitHub App: ${DEFAULT_APP_ID} · installation ${DEFAULT_INSTALLATION_ID} (register its RS256 public key via POST /__backdoor/apps) ·
+  installation tokens live ${INSTALLATION_TOKEN_TTL_SECONDS}s · App JWTs verify RS256 over header.payload and App webhooks sign x-hub-signature-256.
 `;
 
 function consentPage(params: { clientId: string; redirectUri: string; state: string }): string {
@@ -368,27 +408,96 @@ async function legacyLogin(request: Request, deps: PetshopDeps): Promise<Respons
   });
 }
 
-/** Resolve the request's bearer token to a live access grant, or null (absent, tampered, expired, epoch-revoked). */
-async function accessGrant(request: Request, deps: PetshopDeps): Promise<AccessPayload | null> {
+/**
+ * The GitHub-App installation-token endpoint (design §9 P4, ADR 0006):
+ * `POST /app/installations/{installationId}/access_tokens` with an App JWT in
+ * `Authorization: Bearer`. petshop holds ONLY the app's PUBLIC key, so all it
+ * can do is VERIFY: the JWT's RS256 signature (the OS side signed
+ * `header.payload` with the App private key via the secrets `sign()` compute
+ * method — the key never left its secret), `iss` = the app id, `exp` in the
+ * future. On success it mints a short-TTL sealed installation token accepted by
+ * the same bearer API as OAuth access tokens. Every failure — unknown/keyless
+ * installation, missing/malformed/mis-signed/expired JWT, wrong issuer — is a
+ * flat 401, mirroring GitHub.
+ */
+async function appInstallationAccessToken(
+  installationId: string,
+  request: Request,
+  deps: PetshopDeps,
+): Promise<Response> {
+  const state = await deps.state.getState();
+  const app = state.apps[installationId];
+  if (!app || !app.publicKeyPem) {
+    return json(
+      {
+        error: "invalid_installation",
+        error_description: `unknown or keyless installation ${JSON.stringify(installationId)} — register its public key via POST /__backdoor/apps`,
+      },
+      401,
+    );
+  }
+  const header = request.headers.get("authorization") ?? "";
+  if (!/^bearer /i.test(header)) {
+    return json(
+      { error: "invalid_jwt", error_description: "Authorization: Bearer <App JWT> required" },
+      401,
+    );
+  }
+  const verification = await verifyAppJwt({
+    jwt: header.slice(7).trim(),
+    publicKeyPem: app.publicKeyPem,
+    expectedAppId: app.appId,
+    now: nowSeconds(),
+  });
+  if (!verification.ok) {
+    return json({ error: "invalid_jwt", error_description: verification.reason }, 401);
+  }
+  const exp = nowSeconds() + INSTALLATION_TOKEN_TTL_SECONDS;
+  const payload: InstallationPayload = {
+    t: "installation",
+    sub: `installation:${installationId}`,
+    clientId: app.appId,
+    installationId,
+    appId: app.appId,
+    epoch: state.accessTokenEpoch,
+    exp,
+  };
+  // GitHub answers 201 Created with { token, expires_at } (ISO 8601 UTC).
+  return json(
+    { token: await seal(payload, deps.sealKey), expires_at: new Date(exp * 1000).toISOString() },
+    201,
+  );
+}
+
+/** Resolve the request's bearer token to a live grant — an OAuth/legacy access
+ * token or a GitHub-App installation token — or null (absent, tampered,
+ * expired, epoch-revoked). Both grant types are validated identically. */
+async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant | null> {
   const header = request.headers.get("authorization") ?? "";
   if (!/^bearer /i.test(header)) return null;
-  const grant = await unseal<AccessPayload>(header.slice(7).trim(), deps.sealKey);
-  if (!grant || grant.t !== "access" || grant.exp < nowSeconds()) return null;
+  const grant = await unseal<Grant>(header.slice(7).trim(), deps.sealKey);
+  if (!grant || (grant.t !== "access" && grant.t !== "installation")) return null;
+  if (grant.exp < nowSeconds()) return null;
   if (grant.epoch !== (await deps.state.getState()).accessTokenEpoch) return null;
   return grant;
 }
 
-/** POST a JSON payload signed GitHub-style: `x-petshop-signature-256: sha256=<hex hmac>`. Delivery failure is reported, not thrown. */
+/** POST a JSON payload signed GitHub-style: `<header>: sha256=<hex hmac>`.
+ * `signatureHeader` defaults to petshop's OAuth-webhook header; the GitHub-App
+ * webhook lane passes `x-hub-signature-256`. Delivery failure is reported, not
+ * thrown. */
 async function deliverWebhook(input: {
   url: string;
   secret: string;
   payload: unknown;
+  signatureHeader?: string;
 }): Promise<{ url: string; status: number; signature: string; payload: string }> {
   const body = JSON.stringify(input.payload);
   const signature = `sha256=${await hmacSha256Hex(input.secret, body)}`;
+  const signatureHeader = input.signatureHeader ?? "x-petshop-signature-256";
   const response = await fetch(input.url, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-petshop-signature-256": signature },
+    headers: { "content-type": "application/json", [signatureHeader]: signature },
     body,
     signal: AbortSignal.timeout(10_000),
   }).catch(() => null);
@@ -465,6 +574,81 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
         payload: body.event ?? { event: "petshop.test", firedAt: new Date().toISOString() },
       }),
     );
+  }
+  if (key === "POST /__backdoor/apps") {
+    // Register/replace a GitHub App installation's PUBLIC key — how the OS e2e
+    // installs the key matching the private key it signs App JWTs with. The
+    // private key never comes near petshop.
+    const body = await readJson(request);
+    if (typeof body.publicKeyPem !== "string" || body.publicKeyPem.length === 0) {
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "publicKeyPem (RS256 SPKI PEM) is required",
+        },
+        400,
+      );
+    }
+    return json(
+      await deps.state.registerApp({
+        appId: typeof body.appId === "string" ? body.appId : undefined,
+        installationId: typeof body.installationId === "string" ? body.installationId : undefined,
+        publicKeyPem: body.publicKeyPem,
+        webhookSecret: typeof body.webhookSecret === "string" ? body.webhookSecret : undefined,
+      }),
+      201,
+    );
+  }
+  if (key === "POST /__backdoor/apps/fire-webhook") {
+    // The App-webhook analogue of /__backdoor/webhooks/fire, scoped to an
+    // installation + its webhookSecret and signed GitHub-style
+    // (x-hub-signature-256). With a `url` it delivers; without one it just
+    // returns the signed body ("echo"), so signature specs need no receiver.
+    const body = await readJson(request);
+    const installationId =
+      typeof body.installationId === "string" ? body.installationId : DEFAULT_INSTALLATION_ID;
+    const app = (await deps.state.getState()).apps[installationId];
+    if (!app) {
+      return json(
+        {
+          error: "invalid_request",
+          error_description: `unknown installationId ${JSON.stringify(installationId)} — register one via POST /__backdoor/apps`,
+        },
+        400,
+      );
+    }
+    const secret = body.badSignature ? "definitely-not-the-webhook-secret" : app.webhookSecret;
+    const payload = body.event ?? {
+      event: "installation.ping",
+      installationId,
+      firedAt: new Date().toISOString(),
+    };
+    const url = typeof body.url === "string" ? body.url : "";
+    if (!url) {
+      const bodyText = JSON.stringify(payload);
+      return json({
+        installationId,
+        url: null,
+        status: 0,
+        signature: `sha256=${await hmacSha256Hex(secret, bodyText)}`,
+        payload: bodyText,
+      });
+    }
+    if (!URL.canParse(url)) {
+      return json(
+        { error: "invalid_request", error_description: "url must be an absolute URL" },
+        400,
+      );
+    }
+    return json({
+      installationId,
+      ...(await deliverWebhook({
+        url,
+        secret,
+        payload,
+        signatureHeader: "x-hub-signature-256",
+      })),
+    });
   }
   return json({ error: "not_found" }, 404);
 }
@@ -627,6 +811,14 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     return rejection ?? (await mintCodeRedirect(params, deps));
   }
   if (key === "POST /oauth/token") return tokenEndpoint(request, deps);
+  // GitHub-App installation-token minting: the installationId is a path segment,
+  // so this is matched by shape rather than the exact-key table (§9 P4).
+  if (request.method === "POST") {
+    const match = url.pathname.match(/^\/app\/installations\/([^/]+)\/access_tokens$/);
+    if (match) {
+      return appInstallationAccessToken(decodeURIComponent(match[1]), request, deps);
+    }
+  }
   if (key === "POST /api/legacy-login") return legacyLogin(request, deps);
   if (key === "GET /api/me" || key === "GET /api/pets") {
     const grant = await accessGrant(request, deps);
@@ -636,6 +828,11 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
         sub: grant.sub,
         clientId: grant.clientId,
         tokenExpiresInSeconds: grant.exp - nowSeconds(),
+        // An installation token names which GitHub-App installation it acts as,
+        // so the OS side can assert it minted the token it expected (§9 P4).
+        ...(grant.t === "installation"
+          ? { installationId: grant.installationId, appId: grant.appId }
+          : {}),
       });
     }
     return json({ owner: grant.sub, pets: deps.pets });
