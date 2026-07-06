@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import type { StreamEventInput } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -16,10 +16,14 @@ type RecordedAppend = {
   name: string;
 };
 
-function createEnv() {
+function createEnv(options: { cloudflareApiToken?: string } = {}) {
   const appends: RecordedAppend[] = [];
   const env = {
+    ARTIFACTS_ACCOUNT_ID: "account-1",
     ARTIFACTS_NAMESPACE: "os-prd-repos",
+    ...(options.cloudflareApiToken === undefined
+      ? {}
+      : { APP_CONFIG_CLOUDFLARE__API_TOKEN: options.cloudflareApiToken }),
     STREAM: {
       getByName: vi.fn((name: string) => ({
         append: vi.fn(async (...events: StreamEventInput[]) => {
@@ -29,7 +33,10 @@ function createEnv() {
       })),
     },
     WORKER_SELF: "os-prd",
-  } as unknown as Pick<Env, "ARTIFACTS_NAMESPACE" | "STREAM" | "WORKER_SELF">;
+  } as unknown as Pick<
+    Env,
+    "ARTIFACTS_ACCOUNT_ID" | "ARTIFACTS_NAMESPACE" | "STREAM" | "WORKER_SELF"
+  > & { APP_CONFIG_CLOUDFLARE__API_TOKEN?: string };
 
   return { appends, env };
 }
@@ -49,6 +56,11 @@ function eventsFor(appends: RecordedAppend[], name: string): StreamEventInput[] 
 describe("event queue handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   test("recognizes the worker event queue", () => {
@@ -127,6 +139,118 @@ describe("event queue handler", () => {
       }),
     ]);
     expect(message.ack).toHaveBeenCalledOnce();
+  });
+
+  test("subscribes addressable created repos to repo-level Artifact events", async () => {
+    const { appends, env } = createEnv({ cloudflareApiToken: "cf-token" });
+    const artifactName = RepoArtifactNameCodec.stringify({
+      path: "/",
+      projectId: "prj_123",
+    });
+    const cfEvent = {
+      type: "cf.artifacts.repo.created",
+      source: { type: "artifacts", namespace: "os-prd-repos", repoName: artifactName },
+      payload: { repoId: "repo-1" },
+    };
+    const calls: Array<{ body?: unknown; method: string; path: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname + new URL(String(url)).search;
+        calls.push({
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          method: init?.method ?? "GET",
+          path,
+        });
+        if (path === "/client/v4/accounts/account-1/queues?page=1&per_page=100") {
+          return Response.json({
+            success: true,
+            result: [{ queue_id: "queue-1", queue_name: "os-prd-events" }],
+          });
+        }
+        if (
+          path ===
+          "/client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100"
+        ) {
+          return Response.json({ success: true, result: [] });
+        }
+        if (
+          path === "/client/v4/accounts/account-1/event_subscriptions/subscriptions" &&
+          init?.method === "POST"
+        ) {
+          return Response.json({ success: true, result: { id: "subscription-1" } });
+        }
+        return Response.json({ success: false, errors: [{ message: path }] }, { status: 404 });
+      }),
+    );
+    const message = createMessage(cfEvent, "msg-created");
+
+    await handleEventQueueBatch(createBatch([message]), env);
+
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      "GET /client/v4/accounts/account-1/queues?page=1&per_page=100",
+      "GET /client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100",
+      "POST /client/v4/accounts/account-1/event_subscriptions/subscriptions",
+    ]);
+    expect(calls[2]?.body).toMatchObject({
+      destination: { queue_id: "queue-1", type: "queues.queue" },
+      events: ["pushed", "cloned", "fetched"],
+      name: expect.stringMatching(/^os-prd-artifact-repo-prj_123--Lw-[0-9a-f]{12}$/),
+      source: {
+        namespace: "os-prd-repos",
+        repo_name: artifactName,
+        type: "artifacts.repo",
+      },
+    });
+
+    const repoName = DurableObjectNameCodec.stringify({ path: "/", projectId: "prj_123" });
+    expect(eventsFor(appends, repoName)).toEqual([
+      expect.objectContaining({
+        idempotencyKey: "cf-artifact-event:msg-created",
+        type: REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE,
+      }),
+    ]);
+    expect(message.ack).toHaveBeenCalledOnce();
+  });
+
+  test("still routes created repo events when repo subscription setup fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { appends, env } = createEnv({ cloudflareApiToken: "cf-token" });
+    const artifactName = RepoArtifactNameCodec.stringify({
+      path: "/",
+      projectId: "prj_123",
+    });
+    const cfEvent = {
+      type: "cf.artifacts.repo.created",
+      source: { type: "artifacts", namespace: "os-prd-repos", repoName: artifactName },
+      payload: { repoId: "repo-1" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { success: false, errors: [{ message: "temporary outage" }] },
+          { status: 503 },
+        ),
+      ),
+    );
+    const message = createMessage(cfEvent, "msg-created");
+
+    await handleEventQueueBatch(createBatch([message]), env);
+
+    const repoName = DurableObjectNameCodec.stringify({ path: "/", projectId: "prj_123" });
+    expect(eventsFor(appends, repoName)).toEqual([
+      expect.objectContaining({
+        idempotencyKey: "cf-artifact-event:msg-created",
+        type: REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE,
+      }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      "[event-queue] failed to ensure artifact repo subscription",
+      expect.objectContaining({ repoName: artifactName }),
+    );
+    expect(message.ack).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 
   test("does not route incomplete forked events to the source repo", async () => {
