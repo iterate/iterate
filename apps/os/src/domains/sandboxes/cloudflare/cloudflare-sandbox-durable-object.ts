@@ -310,6 +310,18 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     if (keepAlive) {
       return super.onActivityExpired();
     }
+    // The SDK's default hook stops the container the instant the idle alarm
+    // fires; ours runs a backup FIRST, which takes seconds to tens of seconds
+    // — plenty of time for a new call to land. Destroying then would tear the
+    // RPC transport down under that call (observed live as OPERATION_INTERRUPTED
+    // / transport_disposed on utils.createSession). The SDK counts in-flight
+    // session work on `inflightRequests` (undeclared in the d.ts, hence the
+    // cast); if anything is in flight before or after the backup, the sandbox
+    // is not idle — skip the teardown and let the renewed activity re-arm the
+    // idle alarm (the next expiry snapshots again, so nothing is lost).
+    const busy = () =>
+      ((this as unknown as { inflightRequests?: number }).inflightRequests ?? 0) > 0;
+    if (busy()) return;
     try {
       await this.#backupWorkspace();
     } catch (error) {
@@ -319,6 +331,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
         payload: { error: String(error) },
       });
     }
+    if (busy()) return;
     await this.destroy();
   }
 
@@ -638,43 +651,86 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // - New SDK methods start unguarded — add workspace-touching ones here.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Re-dial ONCE when the SDK's per-command session SETUP was interrupted.
+   *
+   * Every command runner first dials `utils.createSession` on the container;
+   * a container-client replacement mid-dial — boot churn on a cold container,
+   * or a container transition racing the call — surfaces as
+   * OPERATION_INTERRUPTED / transport_disposed on that setup call (observed
+   * repeatedly in preview e2e and CI). The SDK marks it `retryable: false`
+   * because it can't know whether the COMMAND ran — but when the interrupted
+   * operation is the session setup itself, the command was never admitted, so
+   * one re-dial is provably safe. Scoped to exactly that case: a
+   * `commands.execute` interruption still throws (the command may have run).
+   * Done here at dispatch so every caller — agents, the REPL, e2e — inherits
+   * the resilience instead of each inventing its own retry.
+   */
+  async #redialOnInterruptedSessionSetup<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      const shape = error as {
+        code?: string;
+        context?: { operation?: string; reason?: string };
+      };
+      const interruptedSetup =
+        shape?.code === "OPERATION_INTERRUPTED" &&
+        shape.context?.operation === "utils.createSession" &&
+        (shape.context.reason === "transport_disposed" ||
+          shape.context.reason === "runtime_replaced");
+      if (!interruptedSetup) throw error;
+      console.warn("sandbox session dial interrupted mid-setup; re-dialing once", error);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      return call();
+    }
+  }
+
   override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
     await this.ensureProjectRepo();
     const [command, options] = args;
-    return super.exec(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.exec(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }),
+    );
   }
 
   override async execStream(...args: Parameters<Sandbox<Env>["execStream"]>) {
     await this.ensureProjectRepo();
     const [command, options] = args;
-    return super.execStream(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.execStream(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }),
+    );
   }
 
   override async startProcess(...args: Parameters<Sandbox<Env>["startProcess"]>) {
     await this.ensureProjectRepo();
     const [command, options, sessionId] = args;
-    return super.startProcess(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }, sessionId);
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.startProcess(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }, sessionId),
+    );
   }
 
   override async createSession(...args: Parameters<Sandbox<Env>["createSession"]>) {
     await this.ensureProjectRepo();
     const [options] = args;
-    return super.createSession({ cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.createSession({ cwd: SANDBOX_PROJECT_REPO_DIR, ...options }),
+    );
   }
 
   override async runCode(...args: Parameters<Sandbox<Env>["runCode"]>) {
     await this.ensureProjectRepo();
-    return super.runCode(...args);
+    return this.#redialOnInterruptedSessionSetup(() => super.runCode(...args));
   }
 
   override async runCodeStream(...args: Parameters<Sandbox<Env>["runCodeStream"]>) {
     await this.ensureProjectRepo();
-    return super.runCodeStream(...args);
+    return this.#redialOnInterruptedSessionSetup(() => super.runCodeStream(...args));
   }
 
   override async gitCheckout(...args: Parameters<Sandbox<Env>["gitCheckout"]>) {
     await this.ensureProjectRepo();
-    return super.gitCheckout(...args);
+    return this.#redialOnInterruptedSessionSetup(() => super.gitCheckout(...args));
   }
 
   override async mkdir(...args: Parameters<Sandbox<Env>["mkdir"]>) {

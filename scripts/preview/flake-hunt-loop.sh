@@ -120,8 +120,16 @@ for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   # A push touching one app leaves the others' recorded states at an older
   # head, silently shrinking the lane (observed: three 13-second "green" runs
   # that tested only semaphore). The marathon must exercise the full fleet.
-  if ! grep -q "testable apps: os, semaphore, auth, streams-example-app" "$log"; then
-    echo "run $i: PARTIAL — not all apps testable ($started-$finished UTC) $log"
+  # Checked per app, NOT as one literal line: the preview tool's print order
+  # is not part of its contract (an order change once failed a genuinely
+  # full-fleet green run as PARTIAL).
+  testable_line=$(grep -m1 "testable apps:" "$log" || true)
+  missing=""
+  for app in os semaphore auth streams-example-app; do
+    case "$testable_line" in *"$app"*) ;; *) missing="$missing $app" ;; esac
+  done
+  if [ -z "$testable_line" ] || [ -n "$missing" ]; then
+    echo "run $i: PARTIAL — not all apps testable (missing:${missing:- unknown}) ($started-$finished UTC) $log"
     exit 3
   fi
   if [ "$exit_code" -eq 0 ]; then

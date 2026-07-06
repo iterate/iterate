@@ -116,6 +116,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### Development
 
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities/admin sessions, browsers for agents, preview-from-local
+- [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures
 - [Coding style](docs/coding-style.md)
 - [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
