@@ -9,6 +9,9 @@ import type { SendEmailBinding } from "./domains/email/utils.ts";
  */
 export interface Env {
   AI: Ai;
+  BROWSER: BrowserRun;
+  IMAGES: ImagesBinding;
+  MEDIA: MediaBinding;
   /**
    * This worker's own deployed name (e.g. "os-prd"). Part of worker-loader
    * cache keys so dynamic-worker isolates are attributed to the worker that

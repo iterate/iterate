@@ -15,6 +15,23 @@
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
 //                   material, not matrix material.
+//   cf-ai-to-markdown
+//                   depends on Cloudflare Workers AI Markdown Conversion;
+//                   interactive reading material, same rationale as ai-models.
+//   ai-generate-image
+//   ai-generate-audio
+//   ai-transcribe-audio
+//   ai-generate-video
+//                   depend on remote Workers AI/Gateway model availability,
+//                   latency, and billing; interactive reading material.
+//   cf-browser-markdown
+//                   depends on Browser Run and a public docs page; external
+//                   service, so keep it interactive.
+//   cf-images-transform
+//                   depends on the Images binding and a public image fetch;
+//                   external service, so keep it interactive.
+//   cf-videos-frame depends on the Media Transformations binding and a public
+//                   video fetch; external service, so keep it interactive.
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
@@ -53,6 +70,14 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "whoami",
   "list-projects",
   "ai-models",
+  "cf-ai-to-markdown",
+  "ai-generate-image",
+  "ai-generate-audio",
+  "ai-transcribe-audio",
+  "ai-generate-video",
+  "cf-browser-markdown",
+  "cf-images-transform",
+  "cf-videos-frame",
   "exa-web-search",
   "connect-public-mcp",
   "connect-openapi-petstore",
