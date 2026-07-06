@@ -1,5 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import { oauthResourceForOsBaseUrl, resolveChatProject, verifyOsSession } from "./cli.ts";
+import {
+  oauthResourceForOsBaseUrl,
+  refreshOAuthSession,
+  resolveChatProject,
+  verifyOsSession,
+} from "./cli.ts";
 
 const createFakeSession = (input: {
   listError?: unknown;
@@ -65,6 +70,48 @@ describe("oauthResourceForOsBaseUrl", () => {
 
   test("preserves deployed OS origins", () => {
     expect(oauthResourceForOsBaseUrl("https://os.iterate.com/")).toBe("https://os.iterate.com");
+  });
+});
+
+describe("refreshOAuthSession", () => {
+  test("uses the same normalized loopback resource as login", async () => {
+    let body: URLSearchParams | undefined;
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      body =
+        init?.body instanceof URLSearchParams ? init.body : new URLSearchParams(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          access_token: "new-token",
+          expires_in: 3600,
+          refresh_token: "refresh-token",
+          token_type: "Bearer",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    try {
+      await refreshOAuthSession({
+        config: {
+          authBaseUrl: "https://auth.iterate.com",
+          osBaseUrl: "http://localhost:54896",
+        },
+        session: {
+          clientId: "client-id",
+          refreshToken: "refresh-token",
+          token: "old-token",
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://auth.iterate.com/api/auth/oauth2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(body?.get("resource")).toBe("http://localhost");
   });
 });
 

@@ -677,7 +677,7 @@ const oauthTokenToSession = (
   };
 };
 
-const refreshOAuthSession = async (input: {
+export const refreshOAuthSession = async (input: {
   config: Config;
   configName?: string;
   session: StoredSession;
@@ -691,7 +691,7 @@ const refreshOAuthSession = async (input: {
     grant_type: "refresh_token",
     client_id: input.session.clientId,
     refresh_token: input.session.refreshToken,
-    resource: input.config.osBaseUrl,
+    resource: oauthResourceForOsBaseUrl(input.config.osBaseUrl),
   });
   if (input.session.scope) body.set("scope", input.session.scope);
 
