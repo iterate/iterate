@@ -1,4 +1,4 @@
-# First-Party GitHub App Tokens Are Minted In A Jailed Worker Via `sign()`
+# GitHub App Installation Tokens Are Minted In A Jailed Worker Via `sign()`
 
 The first-party GitHub integration connects via **App installation** (external
 id = `installation_id`; webhooks signed with the App's webhook secret). Acting
