@@ -14,6 +14,12 @@
  * the real state class over an in-memory storage fake.
  */
 import dedent from "dedent";
+import {
+  handleGatewayMessage,
+  helloFrame,
+  newGatewayConnection,
+  type GatewayConnectionState,
+} from "./gateway.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
@@ -126,6 +132,7 @@ const INDEX = dedent`
   POST /rpc/*               oRPC handler for the pets API (what an @orpc/client talks); bearer-protected
   GET|POST /api/v2/*        the same pets procedures served REST-shaped (per the OpenAPI doc)
   GET|POST /mcp             MCP server (streamable HTTP): tools list_pets, get_pet, create_pet; bearer-protected
+  GET  /gateway  (websocket) — send {op:identify, token} as the first frame
 
   GET  /__backdoor/state                   the whole mutable state, for spec assertions
   POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
@@ -448,6 +455,46 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
   return json({ error: "not_found" }, 404);
 }
 
+/**
+ * The Discord-style gateway (integrations-and-secrets-design.md §R2, §3
+ * "Discord"): accept a WebSocket, greet with a hello frame, and run the whole
+ * protocol through `handleGatewayMessage` — the credential rides *inside* the
+ * IDENTIFY frame, not an Authorization header. Stateless and per-connection,
+ * so no Durable Object; the current access-token epoch is read once at
+ * upgrade, which is all the token validation needs.
+ */
+async function gatewayUpgrade(request: Request, deps: PetshopDeps): Promise<Response> {
+  if (request.headers.get("Upgrade") !== "websocket") {
+    return json(
+      { error: "upgrade_required", error_description: "GET /gateway is a websocket" },
+      426,
+    );
+  }
+  const { accessTokenEpoch } = await deps.state.getState();
+  const pair = new WebSocketPair();
+  const client = pair[0];
+  const server = pair[1];
+  server.accept();
+
+  const connection: GatewayConnectionState = newGatewayConnection();
+  server.send(helloFrame());
+
+  server.addEventListener("message", (event) => {
+    // Node/tests may hand us a string; a real client can also send binary.
+    const raw = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
+    // Run the protocol, then apply its reaction to the socket. Any failure to
+    // process a frame closes with the auth-failed code rather than throwing.
+    void handleGatewayMessage(connection, raw, { sealKey: deps.sealKey, accessTokenEpoch })
+      .then((reaction) => {
+        for (const frame of reaction.send) server.send(frame);
+        if (reaction.close) server.close(reaction.close.code, reaction.close.reason);
+      })
+      .catch(() => server.close(4001, "authentication failed"));
+  });
+
+  return new Response(null, { status: 101, webSocket: client });
+}
+
 export async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promise<Response> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
@@ -519,6 +566,10 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     if (!grant) return json({ error: "invalid_token" }, 401);
     return handleMcpRequest(request, { owner: grant.sub, pets: deps.pets });
   }
+  // The Discord-style WebSocket gateway: the sealed access token arrives in an
+  // IDENTIFY frame, not a header — so authentication lives inside the socket,
+  // not here at the route boundary.
+  if (key === "GET /gateway") return gatewayUpgrade(request, deps);
   if (url.pathname.startsWith("/__backdoor/")) return backdoor(key, request, deps);
   return json({ error: "not_found" }, 404);
 }

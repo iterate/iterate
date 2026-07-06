@@ -508,6 +508,20 @@ describe("webhooks", () => {
   });
 });
 
+describe("gateway route", () => {
+  test("GET / documents the websocket gateway", async () => {
+    const shop = makeShop();
+    expect(await (await shop("/")).text()).toContain("/gateway");
+  });
+
+  test("GET /gateway without an Upgrade header is 426, not a socket", async () => {
+    const shop = makeShop();
+    const response = await shop("/gateway");
+    expect(response.status).toBe(426);
+    expect(await response.json()).toMatchObject({ error: "upgrade_required" });
+  });
+});
+
 describe("backdoor lock", () => {
   test("requires x-petshop-backdoor when PETSHOP_BACKDOOR_SECRET is set", async () => {
     const shop = makeShop("hunter2");
