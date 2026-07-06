@@ -682,25 +682,83 @@ Built and proven (PR #1508):
   oRPC/OpenAPI, and WS gateway are self-tested by petshop's own suites and
   stand ready as targets for the deferred OS-side work below.
 
-Deferred to follow-ups (not required to prove the model; the abstraction is
-exercised directly through `itx.egress`/`itx.secrets`):
+S1, S2, S3a (platform resolver), and S5 (the petshop round trip) are done and
+proven live. The remaining work — §9 — lands on this same PR, all at once.
 
-- **The v6 `Integration` interface (§2.3) is not wired.** A _pre-v6_
-  integrations tree already exists in the repo
-  (`src/domains/integrations/`: the capability-host Slack/Google/GitHub
-  builtins, `connect-flows.ts`, `oauth-state.ts`, `integration-streams.ts`'s
-  claim/unclaim directory) — it predates this design and is untouched by this
-  branch. S3 is _reconciling_ that tree with §2.3 (first-class
-  `integrations.<slug>` RpcTargets with `connect`/`completeConnect`/
-  `handleWebhook`, `IntegrationInfo` describe extras, the generic OAuth
-  callback door, the external-id fan-in directory + claim-conflict error, a
-  connect UI), not building a tree from nothing. The proof mounts secrets +
-  workers directly; the tree is ergonomic sugar over that.
-- The **OS-side** Discord gateway worker and OpenAI relay worker (S4). The
-  jail's outbound WebSocket path (frame substitution vs. `read()`-then-frame)
-  wants the ~30-min workerd spike the mechanics review called for before it is
-  load-bearing; petshop `/gateway` is ready to be the target.
-- Porting the live **Slack** path onto the tree and deleting the old one (S6).
-- The Gmail conversion (deleting `google-tokens.ts`), the takeover
-  interstitial, alarm-driven proactive refresh, and the exit tripwire — see
-  §6 "Future work".
+---
+
+## 9. The all-at-once plan (this PR)
+
+Decisions locked in the 2026-07-06 grill (all subject to "no back-compat,
+prd is destroyed on rollout"):
+
+- **D1** Collapse the _credential_ layers of the builtins (connect, token,
+  webhook ingress) onto v6. The Slack **agent/router machinery** that consumes
+  the connection stream (`slack-agent-processor-*`, the router that triggers
+  agents and posts replies) is OUT of scope and untouched.
+- **D2** No generic `Integration` interface/registry. Integrations stay
+  rhyming imperative per-slug code over the shared primitives (secret,
+  `getSecret`, compute methods). §2.3's interface is documentation of that
+  convention, not machinery.
+- **D3** An integration _brokers a service through secrets_; connections are
+  the feature per-account services add. Connectionful (slack/google/github/
+  petshop) vend `<connection>` handles + secrets at
+  `/secrets/integrations/<slug>/<connection>`; connectionless (parallel/exa)
+  are one platform-key call, not in `list()`.
+- **D4** ONE generic webhook door `/api/integrations/<slug>/webhook` + ONE
+  provider-agnostic fan-in directory keyed `(slug, externalId) →
+{projectId, connection}` (generalize the Slack team-directory stream to
+  `integration/connection-claimed`, fold-on-read, synchronous claim at
+  connect, `external_id_already_claimed` on conflict). Per-slug code does only
+  the two provider-specific things: verify signature + extract external id.
+- **D5** First-party GitHub connects via **App installation** (external id =
+  `installation_id`), replacing the OAuth-user flow. Its installation token is
+  minted **in a jailed worker** that signs the App JWT via a new **`sign()`**
+  compute method — the App private key never enters the jail (ADR 0006).
+- **D6** petshop gains **three** WS credential shapes and the OS side proves
+  each: `/gateway` (token in IDENTIFY frame — worker `read()`s + sends bytes),
+  `/gateway-header` (token in the `Authorization` upgrade header — placeholder
+  substituted at the jailed outbound), `/gateway-subprotocol` (token in
+  `Sec-WebSocket-Protocol`). One `#egressFetch` WS branch (substitute upgrade
+  headers → dial upstream → relay frames verbatim) covers all three.
+- **D7** Minimal `__describe`-driven connect UI: a Connect button per
+  connectionful integration, connectionless shown as available; deep-linkable
+  `/projects/:slug/integrations?connect=<slug>`.
+- **D8** Rollout = prd destroy; no migration, no compat shims, delete freely.
+- **D9** If petshop proves all three WS shapes end-to-end, **Discord the
+  integration is out of scope** (its frame shape is petshop-proven); the WS
+  jail branch and the OpenAI-shaped relay stay in.
+
+**Stages (each independently green; e2e in new spec files):**
+
+- **P1 — `sign()` + compute-only `env.APP`.** Add `sign({ field?, algo, payload })`
+  (WebCrypto RS256; ES256 later) to the Secret capability + the platform
+  resolver. New env binding `APP` = compute-only stub (sign/hmac/matches, no
+  read/update/fetch) — safe for platform tier, retires "APP is
+  userspace-only". Unit-tested.
+- **P2 — Generic webhook door + directory.** `(slug, externalId)` directory
+  stream + fold; generic `/api/integrations/<slug>/webhook` dispatching to
+  per-slug verify+extract; `external_id_already_claimed` on conflict.
+- **P3 — WS jail branch + petshop 3 WS shapes.** `#egressFetch` WS branch;
+  petshop `/gateway-header` + `/gateway-subprotocol` (+ keep `/gateway`); an
+  OS-side generic "relay/gateway" secret worker proving all three against
+  petshop. **This subsumes Discord + the OpenAI relay shape (D9).**
+- **P4 — GitHub onto v6.** App-installation connect + callback claiming
+  `installation_id`; jailed sign-worker mints/refreshes the installation
+  token; `github.api.request` through the connection secret; generic webhook
+  door verifies the App webhook secret. Replaces the OAuth-user path. e2e:
+  a petshop-backed GitHub-App stand-in (petshop grows an `/app/.../access_tokens`
+  - JWT-verify shape) so the sign→mint→call→webhook loop runs hermetically.
+- **P5 — Gmail onto v6.** Jailed refresh worker (the §3 Google archetype),
+  delete `google-tokens.ts`; `itx.integrations.google[...].gmail.request`
+  unchanged on the surface. Gmail e2e is the gate.
+- **P6 — Slack onto v6.** Connect + bot-token secret + webhook ingress via the
+  generic door/directory; agent machinery untouched. Slack e2e
+  (webhook→agent→reply) is the gate. Delete the Slack-specific directory fold
+  and old connect branches.
+- **P7 — Connect UI + deep-link** (D7).
+- **P8 — Tidies + deletions.** Narrow the stored worker type to
+  `StatelessDynamicWorkerRef` (drop the double stateless guard); drop
+  petshop's `?? []` back-compat default; retire dead pre-v6 connect-flow
+  branches as each provider lands. Keep net non-test OS additions lean.
+- **Rollout:** prd destroy + redeploy; reconnect integrations by hand.
