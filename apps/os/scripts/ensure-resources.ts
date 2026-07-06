@@ -55,12 +55,12 @@ export default async function ensureResources(
   const kv = await ensureKv(`${env.osWorkerName}-project-directory`);
   const buildCacheKv = await ensureKv(`${env.osWorkerName}-worker-build-cache`);
 
-  // ---- R2: sandbox persistent storage -----------------------------------------
-  // Every sandbox mounts a prefix of this bucket at /workspace so its
-  // filesystem survives the container sleeping (container disk is ephemeral).
-  // Addressed by name (`${osWorkerName}-sandboxes`), so — unlike KV/D1 — there
-  // is no id to reconcile into envs.ts; create-if-missing is the whole story.
-  // Wiping a sandbox's data is erase-data's job, never this create-only script.
+  // ---- R2: sandbox workspace backups --------------------------------------
+  // Sandboxes snapshot /workspace into this bucket when they idle out and
+  // restore it on the next start (container disk is ephemeral). Addressed by
+  // name (`${osWorkerName}-sandboxes`), so — unlike KV/D1 — there is no id to
+  // reconcile into envs.ts; create-if-missing is the whole story. Wiping a
+  // sandbox's data is erase-data's job, never this create-only script's.
   const r2BucketName = `${env.osWorkerName}-sandboxes`;
   const r2 = await cf<{ buckets: { name: string }[] }>(`/r2/buckets?per_page=1000`);
   if (r2.buckets.some((bucket) => bucket.name === r2BucketName)) {

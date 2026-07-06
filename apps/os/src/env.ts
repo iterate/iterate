@@ -56,22 +56,36 @@ export interface Env {
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
   >;
   /**
-   * Persistent storage for sandbox containers. Container disk is ephemeral —
-   * a sandbox that sleeps loses its filesystem — so every sandbox mounts a
-   * prefix of this R2 bucket at `/workspace` (see
-   * CloudflareSandboxDurableObject), making that path durable across
-   * sleep/restart. One bucket per env (`${WORKER_SELF}-sandboxes`); each
-   * sandbox is isolated to its own `/{projectId}{path}` prefix.
+   * Workspace persistence for sandbox containers. Container disk is
+   * ephemeral — a sandbox that sleeps loses its filesystem — so the sandbox
+   * Durable Object snapshots `/workspace` to this R2 bucket on idle and
+   * restores it on the next start (the Sandbox SDK's backup/restore:
+   * https://developers.cloudflare.com/sandbox/guides/backup-restore/). One
+   * bucket per env (`${WORKER_SELF}-sandboxes`). The binding MUST be named
+   * `BACKUP_BUCKET` — the SDK reads it from the env by that exact name.
    */
-  SANDBOX_STORAGE: R2Bucket;
+  BACKUP_BUCKET: R2Bucket;
+  /** The {@link Env.BACKUP_BUCKET} bucket's name — the SDK presigns transfer
+   * URLs against `https://{CLOUDFLARE_R2_ACCOUNT_ID}.r2.cloudflarestorage.com/
+   * {BACKUP_BUCKET_NAME}/…`, so it needs the name, not just the binding. */
+  BACKUP_BUCKET_NAME: string;
+  /** Account owning {@link Env.BACKUP_BUCKET}, for the SDK's presigned URLs. */
+  CLOUDFLARE_R2_ACCOUNT_ID: string;
   /**
-   * How sandboxes reach {@link SANDBOX_STORAGE}. Deployed envs use
-   * `"r2-egress"` (a credential-less R2 mount over the container egress
-   * interception we already run); local dev uses `"local"` (miniflare's local
-   * R2 binding, since FUSE/presigned URLs are unavailable under `wrangler
-   * dev`). Set per env by generate-wrangler-config.ts.
+   * How sandbox workspace backups move to R2. Deployed envs use `"presigned"`
+   * (the SDK presigns `*.r2.cloudflarestorage.com` URLs and the container
+   * transfers directly — through project egress like all container traffic;
+   * requires the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY secrets). Local dev
+   * uses `"local"` (archives stream through the Durable Object's local R2
+   * binding — presigned URLs don't exist under `wrangler dev`). Set per env
+   * by generate-wrangler-config.ts.
    */
-  SANDBOX_STORAGE_MODE: "r2-egress" | "local";
+  SANDBOX_BACKUP_MODE: "presigned" | "local";
+  /** R2 S3-API credentials for presigning backup transfers (Doppler secret;
+   * absent in local dev, where SANDBOX_BACKUP_MODE is "local"). */
+  R2_ACCESS_KEY_ID?: string;
+  /** See {@link Env.R2_ACCESS_KEY_ID}. */
+  R2_SECRET_ACCESS_KEY?: string;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;

@@ -57,6 +57,13 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_POSTHOG",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
+  // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
+  // transfers (exact names the SDK reads). Optional: an env without them
+  // still runs sandboxes — backups fail loudly in logs and every container
+  // start falls back to a fresh repo clone. Local dev never needs them
+  // (SANDBOX_BACKUP_MODE=local streams through the local R2 binding).
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
 ];
 
 /**
@@ -113,10 +120,10 @@ function workerBindings(input: {
    * churn spins sandboxes faster than they idle out, and a saturated cap
    * 503s every sandbox exec (observed live at 10/10 on preview-3). */
   maxContainerInstances?: number;
-  /** Local dev (the top-level config): sandboxes mount their persistent R2
-   * store through miniflare's local R2 binding rather than the credential-less
-   * egress mount, which needs FUSE/presigned URLs unavailable under
-   * `wrangler dev`. */
+  /** Local dev (the top-level config): sandbox workspace backups stream
+   * through miniflare's local R2 binding instead of presigned
+   * `*.r2.cloudflarestorage.com` URLs, which don't exist under `wrangler
+   * dev`. */
   localDev?: boolean;
 }) {
   return {
@@ -124,7 +131,13 @@ function workerBindings(input: {
       WORKER_SELF: input.workerName,
       ARTIFACTS_ACCOUNT_ID: input.accountId,
       ARTIFACTS_NAMESPACE: `${input.workerName}-repos`,
-      SANDBOX_STORAGE_MODE: input.localDev ? "local" : "r2-egress",
+      // Sandbox workspace backup config — names the Sandbox SDK reads from
+      // the env verbatim (BACKUP_BUCKET_NAME, CLOUDFLARE_R2_ACCOUNT_ID);
+      // the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY presigning secrets ride in
+      // from Doppler (OPTIONAL_SECRETS).
+      BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
+      CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
+      SANDBOX_BACKUP_MODE: input.localDev ? "local" : "presigned",
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -150,11 +163,12 @@ function workerBindings(input: {
     ai: { binding: "AI" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
-    // Persistent storage for sandbox workspaces (ensure-resources.ts creates
-    // it; the sandbox DO mounts a per-sandbox prefix at /workspace). Addressed
-    // by name, so — unlike KV/D1 — no per-env id in envs.ts. In local dev
-    // miniflare provides this bucket automatically.
-    r2_buckets: [{ binding: "SANDBOX_STORAGE", bucket_name: `${input.workerName}-sandboxes` }],
+    // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
+    // sandbox DO snapshots /workspace here on idle and restores on start).
+    // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
+    // the env by that exact name. Addressed by name, so — unlike KV/D1 — no
+    // per-env id in envs.ts. In local dev miniflare provides it automatically.
+    r2_buckets: [{ binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` }],
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
