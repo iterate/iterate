@@ -84,8 +84,10 @@ function SandboxOperationsPanel({ routeConfig }: { routeConfig: PublicRouteConfi
   const dashboardUrl = buildCloudflareContainersDashboardUrl({
     accountId: routeConfig.cloudflareAccountId,
   });
+  // Resolve the fallback ONCE so the displayed worker name and the copied
+  // commands can't disagree (a missing name shows `os` and infers `dev`).
   const workerName = routeConfig.cloudflareWorkerName ?? "os";
-  const dopplerConfig = inferOsDopplerConfigForWorkerName(routeConfig.cloudflareWorkerName);
+  const dopplerConfig = inferOsDopplerConfigForWorkerName(workerName);
   const listInstancesCommand = [
     "cd apps/os",
     `doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler containers list`,

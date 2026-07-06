@@ -146,7 +146,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             idempotencyKey: `agent/sandbox-cloned@${event.offset}`,
             payload: {
               content:
-                "FYI (no reply needed): your sandbox (`itx.sandbox`) started fresh — no prior snapshot, so `/workspace` was newly provisioned with the project repo checked out at `/workspace/repos/project` (your cwd). Nothing else is installed yet; install what a task needs. Work you want to keep across sleeps lives under `/workspace`; commit durable changes to the repo.",
+                "FYI (no reply needed): the project repo was freshly cloned in your sandbox (`itx.sandbox`) at `/workspace/repos/project` (your cwd) — no usable snapshot of the checkout existed, so uncommitted repo work from a previous container, if any, is gone. Baked tools (e.g. `codex`) are preinstalled; anything else a task needs must be installed. Work you want to keep across sleeps lives under `/workspace`; commit durable changes to the repo.",
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
           }),

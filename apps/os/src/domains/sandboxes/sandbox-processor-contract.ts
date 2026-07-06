@@ -19,12 +19,13 @@ const SANDBOX_EVENTS = {
     payloadSchema: z.object({}),
   },
   "events.iterate.com/sandbox/workspace-restored": {
-    description: "/workspace was restored from the named R2 snapshot into the fresh container.",
+    description:
+      "/workspace was restored from the named R2 snapshot into the fresh container. Emitted once provisioning completes; can coexist with workspace-cloned when the snapshot lacked a repo checkout.",
     payloadSchema: z.object({ backupId: z.string() }),
   },
   "events.iterate.com/sandbox/workspace-cloned": {
     description:
-      "/workspace was provisioned by a fresh project-repo clone (no snapshot existed, it expired, or its restore failed).",
+      "The project repo was freshly cloned into /workspace (no snapshot existed, it expired, its restore failed, or the restored snapshot lacked a checkout — in that last case workspace-restored fires too). Emitted once provisioning completes.",
     payloadSchema: z.object({}),
   },
   "events.iterate.com/sandbox/workspace-setup-failed": {
@@ -68,10 +69,11 @@ const SANDBOX_EVENTS = {
  * drift; the processor itself only folds the events into a small status
  * projection and takes no actions (`emits: []`).
  *
- * Event order tells the persistence story: container-started →
- * workspace-restored | workspace-cloned → warmed-up (concurrent with the
- * clone, so it may precede workspace-cloned) → … → backup-created →
- * container-stopped, then the next start restores the named backup.
+ * Event order tells the persistence story: container-started → warmed-up
+ * (backgrounded, so it can land first) → workspace-restored and/or
+ * workspace-cloned (emitted together once provisioning completes) → … →
+ * backup-created → container-stopped, then the next start restores the
+ * named backup.
  */
 export const SandboxProcessorContract = defineProcessorContract({
   slug: "sandbox",

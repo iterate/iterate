@@ -468,24 +468,23 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
   /**
    * Restore the newest workspace backup into the fresh container, if one
-   * exists. Returns whether `/workspace` now holds a restored snapshot; any
-   * failure (expired ttl, deleted object, transfer error) degrades to `false`
-   * so provisioning falls back to a clean clone rather than failing the start.
+   * exists. Returns the restored backup's id, or null when nothing was
+   * restored; any failure (expired ttl, deleted object, transfer error)
+   * degrades to null so provisioning falls back to a clean clone rather than
+   * failing the start. Emits nothing — `#ensureWorkspace` reports what
+   * happened once provisioning completes, behind its run-identity guard, so a
+   * superseded run can't journal a restore for a container it no longer owns
+   * and the events describe the finished workspace, not a step in flight.
    */
-  async #restoreWorkspace(): Promise<boolean> {
+  async #restoreWorkspace(): Promise<string | null> {
     const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
-    if (backup === undefined) return false;
+    if (backup === undefined) return null;
     try {
       const result = await this.restoreBackup(backup);
-      if (!result.success) return false;
-      this.#emitLifecycleEvent({
-        type: "events.iterate.com/sandbox/workspace-restored",
-        payload: { backupId: backup.id },
-      });
-      return true;
+      return result.success ? backup.id : null;
     } catch (error) {
       console.warn("sandbox workspace restore failed, falling back to clone", error);
-      return false;
+      return null;
     }
   }
 
@@ -763,7 +762,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // disk, so every destructive step below re-checks this before acting.
     const isCurrent = () => this.#workspaceReady === run;
     run = (async () => {
-      const restored = await this.#restoreWorkspace();
+      const restoredBackupId = await this.#restoreWorkspace();
       // Re-apply the durable env map onto THIS container (the SDK does not
       // document env persistence across restart), so every guarded command
       // below runs with the configured vars. Done BEFORE the clone so the
@@ -775,10 +774,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       // (slower) clone and is ready by the time the workspace is; it emits
       // sandbox/warmed-up and its failures are self-contained (see the method).
       this.ctx.waitUntil(this.#runWarmup());
-      // Clone when the restore didn't produce a checkout (no backup yet, the
-      // backup expired, or it somehow predates the repo). #cloneProjectRepo
-      // probes the marker itself, so a restored checkout makes this a no-op.
-      await this.#cloneProjectRepo(isCurrent);
+      // Clone when the workspace has no completed checkout — no backup yet,
+      // the backup expired, its restore failed, OR the restored snapshot
+      // simply predates the repo. #cloneProjectRepo probes the marker itself
+      // and reports whether it actually cloned.
+      const cloned = await this.#cloneProjectRepo(isCurrent);
       if (!isCurrent()) return;
       await this.#ensureBakedIterateRepoLink();
       // A container restart mid-run reset the state for a NEW, empty disk —
@@ -787,7 +787,18 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       // would let the idle backup snapshot a half-provisioned /workspace over
       // the last good backup.
       if (!isCurrent()) return;
-      if (!restored) {
+      // Report what ACTUALLY happened, only now that the workspace is whole
+      // and this run still owns the container: a restore and a clone can
+      // coexist (snapshot restored but it lacked a checkout), and an event
+      // emitted mid-provisioning would tell agents the repo is back while the
+      // clone is still running.
+      if (restoredBackupId !== null) {
+        this.#emitLifecycleEvent({
+          type: "events.iterate.com/sandbox/workspace-restored",
+          payload: { backupId: restoredBackupId },
+        });
+      }
+      if (cloned) {
         this.#emitLifecycleEvent({
           type: "events.iterate.com/sandbox/workspace-cloned",
           payload: {},
@@ -850,12 +861,14 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // methods on THIS class are guarded by ensureProjectRepo() (see the
   // overrides above), and provisioning runs inside that guard — `this.*`
   // would deadlock on its own promise.
-  async #cloneProjectRepo(isCurrent: () => boolean): Promise<void> {
+  // Returns whether it actually cloned — false when the workspace already
+  // held a completed checkout (the usual case after a good restore).
+  async #cloneProjectRepo(isCurrent: () => boolean): Promise<boolean> {
     // Probe a marker only a completed clone has — a bare directory check
     // would treat the debris of an interrupted checkout as done and leave
     // the sandbox without the repo until the container is replaced.
     const existing = await super.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
-    if (existing.exists) return;
+    if (existing.exists) return false;
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
@@ -890,7 +903,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
           branch: access.defaultBranch,
           targetDir: SANDBOX_PROJECT_REPO_DIR,
         });
-        if (result.success) return;
+        if (result.success) return true;
         lastError = new Error(
           `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
         );
