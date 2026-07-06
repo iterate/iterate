@@ -9,9 +9,9 @@ import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { StreamEvent } from "../../types.ts";
 import {
-  SLACK_TEAM_CLAIMED_EVENT_TYPE,
-  SLACK_TEAM_DIRECTORY_STREAM_PATH,
-  SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
+  CONNECTION_CLAIMED_EVENT_TYPE,
+  CONNECTION_UNCLAIMED_EVENT_TYPE,
+  INTEGRATION_DIRECTORY_STREAM_PATH,
 } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
@@ -62,45 +62,87 @@ export async function* streamEventsNewestFirst(
   }
 }
 
+/** One project+connection that owns a provider-side external id. */
+type ConnectionClaim = { connection: string; projectId: string };
+
+/** Directory key: `(slug, externalId)` flattened. The external id is only
+ * unique WITHIN a provider (a Slack team id and a GitHub installation id could
+ * collide as bare strings), so the slug is part of the key. */
+function directoryKey(slug: string, externalId: string): string {
+  return `${slug} ${externalId}`;
+}
+
 /**
- * Folds the deployment-wide Slack team directory: latest claim wins per team,
- * an unclaim clears it only when BOTH the project and the connection match the
- * live claim — one project can hold several workspaces, and a stale
- * connection's disconnect must not tear down the claim a newer connection of
- * the same team now owns. Claim events without a string `connection` are
- * ignored (clean break — pre-connections claims do not fold).
+ * Folds the deployment-wide integration directory: for each `(slug,
+ * externalId)`, latest claim wins; an unclaim clears it only when BOTH the
+ * project and the connection match the live claim — one project can hold
+ * several external accounts, and a stale connection's disconnect must not tear
+ * down the claim a newer connection now owns. This is the provider-agnostic
+ * generalization of the old Slack team directory (D4): the same fold serves
+ * Slack team ids, GitHub installation ids, and any future provider.
  */
-export function foldSlackTeamDirectory(
+export function foldConnectionDirectory(
   events: readonly StreamEvent[],
-): Map<string, { connection: string; projectId: string }> {
-  const claims = new Map<string, { connection: string; projectId: string }>();
+): Map<string, ConnectionClaim> {
+  const claims = new Map<string, ConnectionClaim>();
   for (const event of events) {
     const payload = event.payload as {
       connection?: unknown;
+      externalId?: unknown;
       projectId?: unknown;
-      teamId?: unknown;
+      slug?: unknown;
     };
-    if (typeof payload?.teamId !== "string" || typeof payload?.projectId !== "string") continue;
-    if (event.type === SLACK_TEAM_CLAIMED_EVENT_TYPE) {
-      if (typeof payload.connection !== "string") continue;
-      claims.set(payload.teamId, {
-        connection: payload.connection,
-        projectId: payload.projectId,
-      });
-    } else if (
-      event.type === SLACK_TEAM_UNCLAIMED_EVENT_TYPE &&
-      claims.get(payload.teamId)?.projectId === payload.projectId &&
-      claims.get(payload.teamId)?.connection === payload.connection
+    if (
+      typeof payload?.slug !== "string" ||
+      typeof payload?.externalId !== "string" ||
+      typeof payload?.projectId !== "string"
     ) {
-      claims.delete(payload.teamId);
+      continue;
+    }
+    const key = directoryKey(payload.slug, payload.externalId);
+    if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
+      if (typeof payload.connection !== "string") continue;
+      claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+    } else if (
+      event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
+      claims.get(key)?.projectId === payload.projectId &&
+      claims.get(key)?.connection === payload.connection
+    ) {
+      claims.delete(key);
     }
   }
   return claims;
 }
 
-export async function lookupSlackTeamClaim(
-  teamId: string,
-): Promise<{ connection: string; projectId: string } | null> {
-  const events = await readAllStreamEvents(null, SLACK_TEAM_DIRECTORY_STREAM_PATH);
-  return foldSlackTeamDirectory(events).get(teamId) ?? null;
+/** Resolve which project+connection a validly-signed webhook belongs to, by
+ * the provider slug and the external id extracted from its payload. */
+export async function lookupConnectionClaim(
+  slug: string,
+  externalId: string,
+): Promise<ConnectionClaim | null> {
+  const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
+  return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
+}
+
+/**
+ * Append a claim (or unclaim) to the directory. Called synchronously by
+ * connect/disconnect (D4): the caller must first reject a conflicting claim
+ * with `external_id_already_claimed` (see connect-flows).
+ */
+export async function appendConnectionDirectoryEvent(input: {
+  claimed: boolean;
+  connection: string;
+  externalId: string;
+  projectId: string;
+  slug: string;
+}): Promise<void> {
+  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append({
+    type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
+    payload: {
+      connection: input.connection,
+      externalId: input.externalId,
+      projectId: input.projectId,
+      slug: input.slug,
+    },
+  });
 }

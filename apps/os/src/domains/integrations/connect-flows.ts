@@ -36,8 +36,9 @@ import {
   verifyOAuthState,
 } from "./oauth-state.ts";
 import {
+  appendConnectionDirectoryEvent,
   integrationStreamStub,
-  lookupSlackTeamClaim,
+  lookupConnectionClaim,
   streamEventsNewestFirst,
 } from "./integration-streams.ts";
 import { readGoogleTokenState } from "./google-tokens.ts";
@@ -50,9 +51,6 @@ import {
   GOOGLE_DISCONNECTED_EVENT_TYPE,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
-  SLACK_TEAM_CLAIMED_EVENT_TYPE,
-  SLACK_TEAM_DIRECTORY_STREAM_PATH,
-  SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
   SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
   integrationCoordinatesFromStreamPath,
   readRecord,
@@ -223,12 +221,10 @@ async function recordConnection(input: {
    * route inbound events). Connect time is THE arming point — connection
    * streams are born here, not at project create. */
   processorSubscription?: { idempotencyKey: string; processorSlug: string };
-  /** Claim this connection's routing key in a deployment-wide directory
-   * stream (providers with first-party webhook ingress). */
-  directoryClaim?: {
-    event: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
-    streamPath: string;
-  };
+  /** Claim this connection's external id in the deployment-wide directory
+   * (providers with first-party webhook ingress). The generic door folds it to
+   * route inbound events (D4). */
+  directoryClaim?: { externalId: string };
 }): Promise<void> {
   const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
   for (const secret of input.secrets) {
@@ -256,9 +252,13 @@ async function recordConnection(input: {
     input.connectedEvent,
   );
   if (input.directoryClaim) {
-    await integrationStreamStub(null, input.directoryClaim.streamPath).append(
-      input.directoryClaim.event,
-    );
+    await appendConnectionDirectoryEvent({
+      claimed: true,
+      connection: input.connection,
+      externalId: input.directoryClaim.externalId,
+      projectId: input.projectId,
+      slug: input.slug,
+    });
   }
 }
 
@@ -309,7 +309,7 @@ async function completeSlackConnect(input: {
   }
 
   const teamId = tokenData.team.id;
-  const existingClaim = await lookupSlackTeamClaim(teamId);
+  const existingClaim = await lookupConnectionClaim("slack", teamId);
   if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
     return { callbackUrl, error: "slack_team_already_claimed", ok: false };
   }
@@ -376,18 +376,7 @@ async function recordSlackConnection(input: {
       idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
       processorSlug: SlackProcessorContract.slug,
     },
-    directoryClaim: {
-      streamPath: SLACK_TEAM_DIRECTORY_STREAM_PATH,
-      event: {
-        type: SLACK_TEAM_CLAIMED_EVENT_TYPE,
-        payload: {
-          connection: input.connection,
-          projectId: input.projectId,
-          teamId: input.teamId,
-          teamName: input.teamName,
-        },
-      },
-    },
+    directoryClaim: { externalId: input.teamId },
   });
 }
 
@@ -705,9 +694,12 @@ export async function disconnectProvider(input: {
       // The unclaim names the connection: the fold only clears a claim when
       // BOTH match, so disconnecting a stale connection of a team that has
       // since been re-claimed under a new name cannot tear down the live one.
-      await integrationStreamStub(null, SLACK_TEAM_DIRECTORY_STREAM_PATH).append({
-        type: SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
-        payload: { connection: input.connection, projectId: input.projectId, teamId },
+      await appendConnectionDirectoryEvent({
+        claimed: false,
+        connection: input.connection,
+        externalId: teamId,
+        projectId: input.projectId,
+        slug: "slack",
       });
     }
     return { success: true };
@@ -804,7 +796,7 @@ export async function routeSlackWebhook(input: {
   payload: Record<string, unknown>;
   teamId: string;
 }): Promise<RouteSlackWebhookResult> {
-  const claim = await lookupSlackTeamClaim(input.teamId);
+  const claim = await lookupConnectionClaim("slack", input.teamId);
   if (claim === null) return { ignored: "team-not-claimed", ok: true };
 
   await integrationStreamStub(

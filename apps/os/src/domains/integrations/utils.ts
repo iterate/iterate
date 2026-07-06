@@ -3,12 +3,19 @@
 // its projections (thread paths, secret paths, connection-from-path).
 
 /**
- * Deployment-wide (projectId: null) stream mapping Slack team ids to the
- * project + named connection that claimed them. The webhook route folds this
- * to decide where a validly-signed event should land; the OAuth callback
- * appends claims here.
+ * Deployment-wide (projectId: null) stream mapping `(slug, externalId)` — a
+ * provider-side account id like a Slack team id or a GitHub installation id —
+ * to the project + named connection that claimed it. The generic webhook door
+ * folds this to route a validly-signed event; connect/disconnect append the
+ * claim/unclaim (D4). Provider-agnostic: one directory for every integration.
  */
-export const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-directory";
+export const INTEGRATION_DIRECTORY_STREAM_PATH = "/integrations/_directory";
+
+/** Directory claim/unclaim facts, payload `{ slug, externalId, projectId,
+ * connection }` — see `foldConnectionDirectory`. */
+export const CONNECTION_CLAIMED_EVENT_TYPE = "events.iterate.com/integration/connection-claimed";
+export const CONNECTION_UNCLAIMED_EVENT_TYPE =
+  "events.iterate.com/integration/connection-unclaimed";
 
 /**
  * The integration slugs whose call surfaces ship with the OS deployment. ONE
@@ -25,8 +32,6 @@ export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set([
 export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
 export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
 export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webhook-received";
-export const SLACK_TEAM_CLAIMED_EVENT_TYPE = "events.iterate.com/slack/team-claimed";
-export const SLACK_TEAM_UNCLAIMED_EVENT_TYPE = "events.iterate.com/slack/team-unclaimed";
 
 export const GOOGLE_CONNECTED_EVENT_TYPE = "events.iterate.com/google/connected";
 export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconnected";
