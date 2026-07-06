@@ -36,8 +36,12 @@ describe("preview app dependency expansion", () => {
     expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
   });
 
+  it("expands semaphore to include its auth dependency", () => {
+    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore", "auth"]);
+  });
+
   it("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore"]);
+    expect(expandPreviewDependencies(["streams-example-app"])).toEqual(["streams-example-app"]);
   });
 
   it("deduplicates dependencies", () => {
@@ -81,13 +85,12 @@ describe("preview workflow scope", () => {
 });
 
 describe("auth preview root secrets", () => {
-  it("falls back through legacy dev names for the email sender domain", () => {
+  it("seeds from auth/dev when the preview root has no value", () => {
     const reads: string[] = [];
-    const values = new Map([["auth:dev:RESEND_BOT_DOMAIN", "nustom.com"]]);
+    const values = new Map([["auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN", "nustom.com"]]);
 
     const value = resolveAuthPreviewRootSecret({
       appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
-      legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
       readSecret: (project, config, name) => {
         reads.push(`${project}:${config}:${name}`);
         return values.get(`${project}:${config}:${name}`) ?? null;
@@ -98,22 +101,18 @@ describe("auth preview root secrets", () => {
     expect(reads).toEqual([
       "auth:preview:APP_CONFIG_EMAIL_SENDER_DOMAIN",
       "auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN",
-      "auth:dev:APP_CONFIG_RESEND_DOMAIN",
-      "auth:dev:RESEND_BOT_DOMAIN",
     ]);
   });
 
-  it("keeps an existing preview root value ahead of dev fallbacks", () => {
+  it("keeps an existing preview root value ahead of the dev fallback", () => {
     const values = new Map([
       ["auth:preview:APP_CONFIG_EMAIL_SENDER_DOMAIN", "preview.example.com"],
       ["auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN", "dev.example.com"],
-      ["auth:dev:RESEND_BOT_DOMAIN", "legacy.example.com"],
     ]);
 
     expect(
       resolveAuthPreviewRootSecret({
         appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
-        legacyDevNames: ["RESEND_BOT_DOMAIN"],
         readSecret: (project, config, name) => values.get(`${project}:${config}:${name}`) ?? null,
       }),
     ).toBe("preview.example.com");
@@ -236,7 +235,8 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["semaphore"]);
+      // Semaphore's retry pulls in its auth dependency (relying-party JWKS).
+    ).toEqual(["semaphore", "auth"]);
   });
 
   it("retries failed apps from older commits so a diff-miss push cannot leave the slot wedged", () => {
@@ -323,16 +323,16 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("## Summary");
     expect(body).toContain("## Environment Config Lease");
     expect(body).toContain(
-      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | deploy duration | test duration | cleanup duration | workflow run | updated | summary |",
+      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain(
-      "| app | status | commit | preview | deploy duration | test duration | cleanup duration | workflow run | updated | summary |",
+      "| app | status | commit | preview | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain(
-      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 12.3s | 678ms |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
+      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 12.3s | 678ms |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
     );
   });
 
@@ -369,7 +369,7 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("Footer");
     expect(body).toContain("<summary>No active environment config lease.</summary>");
     expect(body).toContain(
-      "| OS | tests failed | `1234567` |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
+      "| OS | tests failed | `1234567` |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
     );
     expect(body).toContain("<details>");
     expect(body).toContain("<summary>OS failure details</summary>");

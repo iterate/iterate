@@ -1,4 +1,4 @@
-import { getOsResourceBases } from "./oauth-resources.ts";
+import { getOsResourceBases, getSemaphoreResourceBases } from "./oauth-resources.ts";
 
 const LOCAL_DEVELOPMENT_REDIRECT_ORIGINS = [
   "http://localhost:5173",
@@ -28,6 +28,7 @@ export function resolveAuthLogoutReturnTo(input: {
     input.authOrigin,
     ...(input.publicOrigin ? [input.publicOrigin] : []),
     ...getOsResourceBases(),
+    ...getSemaphoreResourceBases(),
     ...EXAMPLE_APP_REDIRECT_ORIGINS,
     ...LOCAL_DEVELOPMENT_REDIRECT_ORIGINS,
   ]);

@@ -121,6 +121,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
+- [Testing](docs/testing.md) — test lanes, how to run them against any environment, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 

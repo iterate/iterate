@@ -26,9 +26,9 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
+import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
-import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseConfig } from "../src/config.ts";
 import {
   envShapedVars,
@@ -36,79 +36,6 @@ import {
   REQUIRED_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
-
-/**
- * A static JWKS lets the worker verify auth JWTs without a runtime fetch,
- * and is the only trustworthy carrier for the forge public key (identity
- * minting — scripts/auth/mint-session.ts). An explicit
- * APP_CONFIG_ITERATE_AUTH__JWKS in Doppler wins over the live fetch — the
- * break-glass path for deploying os while the auth worker is down. Forge
- * keys in production-serving configs require the explicit
- * AUTH_FORGE_ALLOW_PRODUCTION opt-in.
- */
-async function bakeStaticAuthJwks(ctx: EnvContext<(typeof envs)[keyof typeof envs]>) {
-  const issuer = `${ctx.env.authBaseUrl}/api/auth`;
-
-  const pinned = ctx.secrets.APP_CONFIG_ITERATE_AUTH__JWKS?.trim();
-  if (pinned) {
-    console.warn(
-      `Using the JWKS pinned in Doppler (APP_CONFIG_ITERATE_AUTH__JWKS) instead of fetching ${issuer}/jwks.`,
-    );
-  }
-  const jwks = pinned
-    ? (JSON.parse(pinned) as { keys: Record<string, unknown>[] })
-    : await fetchJwksWithRetry(`${issuer}/jwks`, ctx.name);
-
-  const forgePrivateJwk = ctx.secrets.AUTH_FORGE_PRIVATE_JWK?.trim();
-  if (forgePrivateJwk) {
-    const isProdServing = ctx.name === "prd" || issuer.includes("auth.iterate.com");
-    const allowProduction = /^(1|true|yes)$/i.test(ctx.secrets.AUTH_FORGE_ALLOW_PRODUCTION ?? "");
-    if (isProdServing && !allowProduction) {
-      throw new Error(
-        `AUTH_FORGE_PRIVATE_JWK is present in ${ctx.env.dopplerConfig} (production-serving) without ` +
-          "AUTH_FORGE_ALLOW_PRODUCTION=true. Set the flag to deliberately enable production minting, " +
-          "or remove the forge key.",
-      );
-    }
-    const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
-      string,
-      unknown
-    > & { d?: string };
-    if (!publicJwk.kid || !publicJwk.kty)
-      throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
-    if (!jwks.keys.some((key) => key.kid === publicJwk.kid)) jwks.keys.push(publicJwk);
-  }
-  return JSON.stringify(jwks);
-}
-
-/**
- * Poll the issuer's JWKS for up to ~4 minutes: the preview CI lane deploys
- * auth and os IN PARALLEL, so this env's auth worker may legitimately still
- * be mid-deploy (migrations + build take minutes) when os gets here.
- */
-async function fetchJwksWithRetry(url: string, envName: string) {
-  const deadline = Date.now() + 4 * 60_000;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = (await response.json()) as { keys?: Record<string, unknown>[] };
-      if (!Array.isArray(body.keys) || body.keys.length === 0) throw new Error("JWKS has no keys");
-      return body as { keys: Record<string, unknown>[] };
-    } catch (error) {
-      if (Date.now() > deadline) {
-        throw new Error(
-          `Deploy-time JWKS fetch from ${url} kept failing for 4 minutes (last: ${error}). ` +
-            `Deploy the auth worker for ${envName} first, or pin APP_CONFIG_ITERATE_AUTH__JWKS in Doppler.`,
-        );
-      }
-      console.warn(
-        `JWKS fetch attempt ${attempt} failed (${error}); auth may still be deploying — retrying…`,
-      );
-      await new Promise((res) => setTimeout(res, Math.min(2000 * attempt, 10_000)));
-    }
-  }
-}
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
 export default async function deploy(
@@ -130,7 +57,12 @@ export default async function deploy(
     optionalSecrets: OPTIONAL_SECRETS,
     prepare: async (ctx, secretValues, credentials) => {
       // Baked at deploy time, so it's the one secret not in secrets.required.
-      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
+        authBaseUrl: ctx.env.authBaseUrl,
+        envName: ctx.name,
+        dopplerConfig: ctx.env.dopplerConfig,
+        secrets: ctx.secrets,
+      });
 
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
