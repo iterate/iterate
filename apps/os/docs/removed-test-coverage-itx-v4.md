@@ -28,9 +28,9 @@ after the migration landed; both are recoverable from git history at PR #1585.
   `CLOUDFLARE_API_TOKEN`. Included a journal negative-control: the full event
   journal never contains the substituted token, only the placeholder.
 - **Now:** MCP auth-substitution mechanics are e2e-tested against in-repo
-  fixtures only (`e2e/vitest/itx.e2e.test.ts` + `src/e2e-fixtures.ts`). Protocol
-  interop with a real third-party server and the journal-scan negative
-  control are untested.
+  fixture helpers only (`e2e/vitest/itx.e2e.test.ts` +
+  `e2e/vitest/itx-capability-fixtures.ts`). Protocol interop with a real
+  third-party server and the journal-scan negative control are untested.
 - **Why removed:** the suite was written against the legacy `itx.mcp`
   surface; porting the fixture-based parts was done, the live-server parts
   were not.

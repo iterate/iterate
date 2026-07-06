@@ -23,7 +23,6 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 | `env.ts`                   | The single worker's binding contract ([worker topology](../docs/worker-topology.md))                                                            |
 | `worker.ts` / `builder.ts` | The worker entry and the builder sidecar entry                                                                                                  |
 | `domains/`                 | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
-| `e2e-fixtures.ts`          | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                                      |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
