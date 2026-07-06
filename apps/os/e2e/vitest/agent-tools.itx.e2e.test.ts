@@ -13,7 +13,9 @@ const PROOF_TYPE = "events.iterate.test/agent-tools-proof";
 
 test(
   "agent runs an itx script that appends a proof event, then replies",
-  { timeout: 300_000 },
+  // Full LLM codemode loop — heavy-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS);
+  // a healthy run is well under a minute.
+  { timeout: 240_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-tools" });
     using agent = handle.agent("/agents/e2e-tools");
@@ -53,7 +55,8 @@ test(
 
 test(
   "provider toggle: cloudflare-ai answers after llm-provider-selected",
-  { timeout: 300_000 },
+  // See above — heavy-test ceiling.
+  { timeout: 240_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "provider-toggle" });
     using agent = handle.agent("/agents/e2e-provider");

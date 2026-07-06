@@ -1,5 +1,10 @@
 # Preview e2e flake hunt
 
+> This document is the evidence log — every flake, root cause, and marathon
+> run. The **policy** distilled from it (one retry layer, watchdog sizing,
+> retry telemetry) lives in [testing.md → Retries and
+> timeouts](testing.md#retries-and-timeouts).
+
 Goal: run the full preview e2e lane against a real preview environment 50
 times in a row without a single flake, fixing and documenting every failure
 encountered along the way.

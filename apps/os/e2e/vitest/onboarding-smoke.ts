@@ -6,13 +6,15 @@
  *
  *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
  *
- * Three attempts, a fresh project each: the lane's vitest tests get
- * `retry: 2` in CI for platform-fault bursts (Cloudflare DO-storage
- * transients, slow agent turns), and this script is the ONE gate in the lane
- * that used to run without any — a single 90s greeting tail took down the
- * whole run, as an uncaught remote rejection crashing the process no less
+ * Two attempts, a fresh project each — an attempt IS this gate's "test", so
+ * per the fleet retry policy (docs/testing.md#retries-and-timeouts) it gets
+ * exactly one retry, same as every vitest/playwright test. It used to run
+ * with none at all: a single 90s greeting tail took down the whole run, as
+ * an uncaught remote rejection crashing the process no less
  * (docs/preview-e2e-flake-hunt.md run log, marathon6 run 26). A genuinely
- * broken slot still fails all three attempts inside ~5 minutes.
+ * broken slot still fails both attempts inside ~3.5 minutes, and a slow
+ * greeting that needs attempt 2 is logged as retry telemetry rather than
+ * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
 import { connectItx } from "../../src/itx-client.ts";
@@ -51,11 +53,17 @@ async function attemptOnboardingSmoke(): Promise<void> {
   );
 }
 
-const ATTEMPTS = 3;
+const ATTEMPTS = 2;
 let lastError: unknown;
 for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   try {
     await attemptOnboardingSmoke();
+    if (attempt > 1) {
+      console.log(
+        `[retry-telemetry] onboarding smoke passed on attempt ${attempt}/${ATTEMPTS} — ` +
+          `attempt 1's failure above is a real (absorbed) failure`,
+      );
+    }
     process.exit(0);
   } catch (error) {
     lastError = error;

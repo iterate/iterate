@@ -1,4 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
+import {
+  E2E_CI_RETRIES,
+  SPEC_ACTION_TIMEOUT_MS,
+  SPEC_EXPECT_TIMEOUT_MS,
+  SPEC_TEST_TIMEOUT_MS,
+} from "@iterate-com/shared/test-support/e2e-policy";
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
@@ -16,11 +22,10 @@ export default defineConfig({
   // dev server isn't hammered.
   fullyParallel: !!process.env.CI,
   forbidOnly: !!process.env.CI,
-  // Two retries, not one: platform faults arrive in bursts and a single retry
-  // often re-rolls inside the same bad window (see apps/os/e2e/vitest.config.ts
-  // for the observed double-fault). A real regression still fails all three
-  // attempts within the per-test timeout.
-  retries: process.env.CI ? 2 : 0,
+  // One retry in CI — the only retry layer, per the fleet-wide policy
+  // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
+  // the run on purpose: platform weather should be visible, not absorbed.
+  retries: process.env.CI ? E2E_CI_RETRIES : 0,
   workers: process.env.CI ? 6 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
@@ -28,10 +33,12 @@ export default defineConfig({
     ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
     ["json", { outputFile: "test-results/playwright-results.json" }],
   ],
-  timeout: videoMode ? 300_000 : 90_000,
-  expect: { timeout: 15_000 },
+  timeout: videoMode ? 300_000 : SPEC_TEST_TIMEOUT_MS,
+  expect: { timeout: SPEC_EXPECT_TIMEOUT_MS },
   use: {
-    actionTimeout: videoMode ? 10_000 : 750,
+    // Tight on purpose; the middlewright spinner-waiter extends it only while
+    // the app visibly reports progress (see e2e-policy/budgets.ts).
+    actionTimeout: videoMode ? 10_000 : SPEC_ACTION_TIMEOUT_MS,
     baseURL: osBaseUrl,
     screenshot: "only-on-failure",
     trace: process.env.CI ? "on-first-retry" : "retain-on-failure",

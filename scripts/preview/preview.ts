@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
+import { readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -11,6 +12,7 @@ import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
+import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -348,6 +350,20 @@ export async function test(options: PullRequestCommandOptions = {}) {
       warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
     }
 
+    // Collected pass or fail: on a red run the telemetry explains which tests
+    // burned their retry before the failure. Never fails the lane.
+    const retrySummary = app.collectRetryTelemetry
+      ? await app
+          .collectRetryTelemetry({ repositoryRoot: runtime.repositoryRoot })
+          .catch((error): PreviewRetrySummary | null => {
+            console.error(`[preview] retry telemetry collection failed for ${app.slug}:`, error);
+            return null;
+          })
+      : null;
+    if (retrySummary) {
+      announceRetryTelemetry(app.slug, retrySummary);
+    }
+
     return CloudflarePreviewAppEntry.parse({
       ...existingEntry,
       appDisplayName: app.displayName,
@@ -359,6 +375,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
       runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
       status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
       testDurationMs,
+      testRetries: retrySummary ? renderPreviewRetrySummary(retrySummary) : null,
       updatedAt: new Date().toISOString(),
     } satisfies CloudflarePreviewAppEntry);
   });
@@ -824,7 +841,156 @@ export type CloudflarePreviewApp = {
    */
   previewDeployBudgetMs?: number;
   previewTestBudgetMs?: number;
+  /**
+   * Collect per-test retry telemetry after the app's preview test command
+   * finishes (pass or fail) — policy rule 5, retries are measured, never
+   * silent (docs/testing.md#retries-and-timeouts). Returns null when the
+   * lane produced no telemetry; must never throw a run-failing error (the
+   * caller logs and continues). The result lands in the run log, a
+   * `::notice::`/`::warning::` annotation, and the PR-body table.
+   */
+  collectRetryTelemetry?: (params: { repositoryRoot: string }) => Promise<PreviewRetrySummary>;
 };
+
+/**
+ * Aggregated retry telemetry for one app's preview e2e lane: every test that
+ * needed a re-roll, whichever sub-lane (vitest, playwright specs) it ran in.
+ * Why this exists: with one CI retry, a rare real race turns a run red about
+ * once in 400 runs, but shows up here about once in 20 — the count, not the
+ * run status, is the detector for probabilistic bugs.
+ */
+export type PreviewRetrySummary = {
+  retried: {
+    /** Which sub-lane observed the retry (e.g. "vitest", "specs"). */
+    lane: string;
+    name: string;
+    retryCount: number;
+    passedAfterRetry: boolean;
+  }[];
+};
+
+/**
+ * Where the os lane tells the vitest RetryTelemetryReporter (see
+ * packages/shared test-support/e2e-policy) to write its JSON. The lane
+ * removes the file before running so a previous run on the same machine
+ * (marathon loops) can't leak stale telemetry.
+ */
+const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+
+/** Reads the JSON written by RetryTelemetryReporter (vitest sub-lane). */
+async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetrySummary["retried"]> {
+  const TelemetryFile = z.object({
+    retried: z.array(
+      z.object({
+        fullName: z.string(),
+        retryCount: z.number().int().positive(),
+        passedAfterRetry: z.boolean(),
+      }),
+    ),
+  });
+  const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
+  return parsed.retried.map((record) => ({
+    lane: "vitest",
+    name: record.fullName,
+    retryCount: record.retryCount,
+    passedAfterRetry: record.passedAfterRetry,
+  }));
+}
+
+/**
+ * Reads Playwright's JSON report (already written by the root
+ * playwright.config.ts json reporter). A retried spec has more than one
+ * result attempt; Playwright reports "flaky" for passed-after-retry.
+ */
+async function readPlaywrightRetryTelemetry(
+  filePath: string,
+): Promise<PreviewRetrySummary["retried"]> {
+  /** The subset of Playwright's JSON-reporter suite tree we walk. */
+  type PlaywrightJsonSuite = {
+    suites?: PlaywrightJsonSuite[];
+    specs?: {
+      title?: string;
+      tests?: { status?: string; results?: { retry?: number }[] }[];
+    }[];
+  };
+  const report = JSON.parse(await readFile(filePath, "utf8")) as {
+    suites?: PlaywrightJsonSuite[];
+  };
+  const retried: PreviewRetrySummary["retried"] = [];
+  const visit = (suite: PlaywrightJsonSuite) => {
+    for (const spec of suite.specs ?? []) {
+      for (const test of spec.tests ?? []) {
+        const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
+        if (retryCount > 0) {
+          retried.push({
+            lane: "specs",
+            name: spec.title ?? "(unknown spec)",
+            retryCount,
+            passedAfterRetry: test.status === "flaky",
+          });
+        }
+      }
+    }
+    for (const child of suite.suites ?? []) {
+      visit(child);
+    }
+  };
+  for (const suite of report.suites ?? []) {
+    visit(suite);
+  }
+  return retried;
+}
+
+/**
+ * Reads one sub-lane's telemetry, treating a missing file as "no retries"
+ * (the sub-lane may have died before writing) and logging anything else —
+ * telemetry must never fail the lane.
+ */
+async function readRetryTelemetryLane(
+  label: string,
+  read: () => Promise<PreviewRetrySummary["retried"]>,
+): Promise<PreviewRetrySummary["retried"]> {
+  try {
+    return await read();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[preview] retry telemetry unreadable for ${label}:`, error);
+    }
+    return [];
+  }
+}
+
+/** One compact human line for the run log and the PR-body table. */
+function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null {
+  if (summary.retried.length === 0) {
+    return null;
+  }
+  const details = summary.retried
+    .map(
+      (record) =>
+        `${record.name} (${record.lane} x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})`,
+    )
+    .join(" · ");
+  return `${summary.retried.length} retried: ${details}`;
+}
+
+/**
+ * Surfaces retry telemetry as a workflow annotation, mirroring
+ * warnIfOverBudget: one or two retried tests per run is the observed
+ * platform-flake floor (~0.5% of test executions) and gets a notice; a
+ * pile-up smells like a slot-wide problem and escalates to a warning.
+ */
+function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
+  const rendered = renderPreviewRetrySummary(summary);
+  if (!rendered) {
+    return;
+  }
+  const level = summary.retried.length >= 4 ? "warning" : "notice";
+  console.log(
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. A retried test is a real failure a ` +
+      `re-roll absorbed — see docs/testing.md#retries-and-timeouts.`,
+  );
+}
 
 // Deployed apps compile in @iterate-com/shared via many subpath exports (streams,
 // durable-object-utils, callable, codemode, config, evlog, ...), so trigger on the
@@ -925,24 +1091,22 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // lane in the background, the specs in the foreground. The vitest log
         // is replayed once the specs finish.
         //
-        // Bound the vitest lane and retry it once if it fails to START: vitest
-        // occasionally prints its banner then hangs before "RUN v<version>"
-        // (idle fork pool, no workers — no test has run, so vitest's own
-        // testTimeout can't fire), which would hang `wait "$E2E_PID"` until the
-        // CI job / marathon watchdog kills everything. A `timeout` + a single
-        // fresh retry turns that rare startup wedge into a self-healing restart.
-        // 360s is the fail-fast backstop: it sits just above a healthy lane
-        // (which runs the itx monolith plus the sandbox tests' own 240s
-        // per-test cap, concurrently) so a real wedge is caught in minutes, not
-        // left to stall — we'd rather fail fast and re-run than sit for ages.
-        // Retry ONLY on a timeout (rc=124) — the wedge signature. An earlier
-        // secondary check (`! grep "RUN v"`) was defeated by vitest's ANSI
-        // colour codes between "RUN" and the version, so it matched NOTHING and
-        // silently re-ran the whole lane every single time — doubling test load
-        // and sandbox-container churn. rc=0 means it ran; a non-124 non-zero is
-        // a real failure we must NOT paper over with a retry.
-        'run_vitest_node() { local rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ]; then echo "[preview] vitest node lane timed out (startup wedge) — retrying once"; rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
-        "run_vitest_node & E2E_PID=$!",
+        // The `timeout` on the vitest lane is a WATCHDOG, not a retry
+        // (docs/testing.md#retries-and-timeouts): it sits just above a
+        // healthy lane (the itx monolith plus the heavy tests' own 240s
+        // per-test caps, concurrently) and covers the one hang vitest's own
+        // testTimeout can't — a startup wedge before any test runs. Retries
+        // live in exactly one layer (the individual test), so a lane killed
+        // here fails the run visibly and is re-run from the outer edge. An
+        // rc=124 auto-retry used to live here; it fired zero times in ~200
+        // Depot runs and was the one place retry layers could stack.
+        //
+        // Retry telemetry: stale files are removed first (they survive from
+        // a previous run on the same machine — marathon loops), then the
+        // vitest lane writes its retry JSON for preview.ts to fold into the
+        // PR body alongside Playwright's playwright-results.json.
+        `rm -f ${osVitestRetryTelemetryFile} ../../test-results/playwright-results.json`,
+        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not
@@ -953,6 +1117,19 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
+    collectRetryTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, specs] = await Promise.all([
+        readRetryTelemetryLane("os vitest lane", () =>
+          readVitestRetryTelemetry(osVitestRetryTelemetryFile),
+        ),
+        readRetryTelemetryLane("os playwright specs", () =>
+          readPlaywrightRetryTelemetry(
+            resolve(repositoryRoot, "test-results/playwright-results.json"),
+          ),
+        ),
+      ]);
+      return { retried: [...vitest, ...specs] };
+    },
   },
   semaphore: {
     slug: "semaphore",
@@ -1035,7 +1212,13 @@ const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
-const defaultPreviewTestMaxAttempts = 1;
+/**
+ * Whole-lane attempts for an app's preview test command. Pinned to 1 by the
+ * retry policy (docs/testing.md#retries-and-timeouts): retries live in the
+ * individual test; everything above only watches and fails. Exported so
+ * e2e-policy.test.ts can guard the pin.
+ */
+export const defaultPreviewTestMaxAttempts = 1;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
@@ -1085,6 +1268,8 @@ export const CloudflarePreviewAppEntry = z.object({
   cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
   deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
+  testRetries: z.string().trim().min(1).nullable().optional(),
 });
 export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 
@@ -1464,6 +1649,7 @@ function renderPreviewAppTable(entries: z.infer<typeof CloudflarePreviewAppEntry
     "preview",
     "deploy duration",
     "test duration",
+    "retries",
     "cleanup duration",
     "workflow run",
     "updated",
@@ -1486,6 +1672,7 @@ function renderPreviewAppTableRow(entry: z.infer<typeof CloudflarePreviewAppEntr
     entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
     entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
     entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
+    entry.testRetries ?? "",
     entry.cleanupDurationMs != null ? formatDurationMs(entry.cleanupDurationMs) : "",
     entry.runUrl ? `[Workflow run](${entry.runUrl})` : "",
     entry.updatedAt,
@@ -3558,8 +3745,11 @@ export const previewInternals = {
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  readPlaywrightRetryTelemetry,
+  readVitestRetryTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   renderCloudflarePreviewPullRequestBody,
+  renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,

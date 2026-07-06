@@ -31,11 +31,15 @@ fi
 export CI=true
 
 mkdir -p "$LOG_DIR"
-# Fail-fast backstop for the whole run. A healthy full-fleet run is a few
-# minutes; the preview orchestration already bounds its vitest lane (360s) and
-# every test carries its own timeout, so this only catches a wedge that slips
-# both. 10 minutes kills such a wedge quickly instead of letting it sit (an
-# earlier bug let a startup wedge hang 9+ hours).
+# Watchdog for one whole run — it fails, it never retries, per the policy
+# (docs/testing.md#retries-and-timeouts). Sized to ~2x a healthy full-fleet
+# run (a few minutes), deliberately NOT to the worst-case retry stack: it MAY
+# kill a run legitimately burning per-test retries against a wedged platform,
+# and that is correct — both historical watchdog kills were genuine infra
+# wedges where retrying was hopeless (an earlier bug let a startup wedge hang
+# 9+ hours). The default must equal PREVIEW_RUN_WATCHDOG_SECS in
+# packages/shared/src/test-support/e2e-policy/budgets.ts; shell can't import
+# the constant, so scripts/preview/e2e-policy.test.ts guards the match.
 RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 
 # Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
