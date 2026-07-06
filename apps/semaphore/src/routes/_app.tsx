@@ -40,7 +40,7 @@ function AppLayout() {
   return (
     <div className="min-h-svh bg-background text-foreground">
       <header className="border-b">
-        <div className="mx-auto flex max-w-md items-center justify-between gap-4 p-4">
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-4 p-4">
           <Link to="/resources/" className="font-medium tracking-tight">
             semaphore
           </Link>
@@ -58,18 +58,12 @@ function AppLayout() {
             </a>
           </nav>
         </div>
-        {!auth.isAdmin ? (
-          <div className="mx-auto max-w-md px-4 pb-3 text-sm text-destructive">
-            You are signed in{auth.email ? ` as ${auth.email}` : ""} but not an iterate admin —
-            operator actions and the API will refuse you.
-          </div>
-        ) : null}
-        <div className="mx-auto max-w-md px-4 pb-3 text-sm text-muted-foreground">
+        <div className="mx-auto max-w-2xl px-4 pb-3 text-sm text-muted-foreground">
           <Breadcrumbs />
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-md flex-col p-4 pt-6">
+      <main className="mx-auto flex max-w-2xl flex-col p-4 pt-6">
         <Outlet />
       </main>
     </div>

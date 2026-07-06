@@ -1,8 +1,19 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import type { SemaphoreResourceRecord } from "~/contract.ts";
 import { requireAdminPrincipal } from "~/lib/require-admin.ts";
 import { listResourcesFromDb } from "~/lib/resource-store.ts";
+
+/**
+ * The resource type holding the PR preview slots (see the repo-root
+ * scripts/preview tooling, which owns this inventory). Slugs follow the
+ * `preview-N` convention, from which each slot's deployed app hostnames
+ * derive — same convention as the root envs.ts.
+ */
+const ENVIRONMENT_CONFIG_LEASE_TYPE = "environment-config-lease";
+
+const DASHBOARD_REFRESH_MS = 30_000;
 
 type SerializableJsonValue =
   | boolean
@@ -62,9 +73,44 @@ export const Route = createFileRoute("/_app/resources/")({
   },
 });
 
+function previewSlotNumber(slug: string): number | null {
+  const match = /^preview-(\d+)$/.exec(slug);
+  return match ? Number(match[1]) : null;
+}
+
+/** Holders written by the PR preview flow are `pr-<number>`; link them to the PR. */
+function holderPullRequestUrl(holder: string | null | undefined): string | null {
+  const match = /^pr-(\d+)$/.exec(holder ?? "");
+  return match ? `https://github.com/iterate/iterate/pull/${match[1]}` : null;
+}
+
+function formatRelativeMs(deltaMs: number): string {
+  const abs = Math.abs(deltaMs);
+  const hours = Math.floor(abs / 3_600_000);
+  const minutes = Math.floor((abs % 3_600_000) / 60_000);
+  const span = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  return deltaMs >= 0 ? `in ${span}` : `${span} ago`;
+}
+
 function ResourcesIndexPage() {
+  const router = useRouter();
   const data = Route.useLoaderData();
-  const groupedResources = data.reduce((groups, resource) => {
+
+  // A state dashboard should not need a manual reload to be believed.
+  useEffect(() => {
+    const interval = setInterval(() => void router.invalidate(), DASHBOARD_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [router]);
+
+  const previewSlots = data
+    .filter((resource) => resource.type === ENVIRONMENT_CONFIG_LEASE_TYPE)
+    .sort(
+      (left, right) =>
+        (previewSlotNumber(left.slug) ?? Number.MAX_SAFE_INTEGER) -
+        (previewSlotNumber(right.slug) ?? Number.MAX_SAFE_INTEGER),
+    );
+  const otherResources = data.filter((resource) => resource.type !== ENVIRONMENT_CONFIG_LEASE_TYPE);
+  const groupedResources = otherResources.reduce((groups, resource) => {
     const group = groups.get(resource.type) ?? [];
     group.push(resource);
     groups.set(resource.type, group);
@@ -72,11 +118,8 @@ function ResourcesIndexPage() {
   }, new Map<string, SerializableSemaphoreResource[]>());
 
   return (
-    <section className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Operator dashboard backed by server-side reads. The UI and the `/api/resources*` endpoints
-        both require an iterate admin identity.
-      </p>
+    <section className="space-y-8">
+      {previewSlots.length > 0 ? <PreviewEnvironmentsSection slots={previewSlots} /> : null}
 
       <div className="space-y-6">
         {Array.from(groupedResources.entries()).map(([type, resources]) => {
@@ -106,14 +149,8 @@ function ResourcesIndexPage() {
                           <p className="truncate font-medium">{resource.slug}</p>
                           <p className="truncate text-sm text-muted-foreground">{resource.type}</p>
                         </div>
-                        <div className="shrink-0 text-xs text-muted-foreground">
-                          {resource.leaseState}
-                        </div>
+                        <LeaseStateBadge leaseState={resource.leaseState} />
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        {Object.keys(resource.data).length} data field
-                        {Object.keys(resource.data).length === 1 ? "" : "s"}
-                      </p>
                       <p className="text-xs text-muted-foreground">
                         {resource.leasedUntil
                           ? `leased${resource.holder ? ` by ${resource.holder}` : ""} until ${new Date(resource.leasedUntil).toISOString()}`
@@ -134,5 +171,110 @@ function ResourcesIndexPage() {
         </p>
       ) : null}
     </section>
+  );
+}
+
+function PreviewEnvironmentsSection({ slots }: { slots: SerializableSemaphoreResource[] }) {
+  const leasedCount = slots.filter((slot) => slot.leaseState === "leased").length;
+
+  return (
+    <section className="space-y-3">
+      <div className="space-y-1">
+        <p className="font-medium">Preview environments</p>
+        <p className="text-xs text-muted-foreground">
+          {leasedCount} leased · {slots.length - leasedCount} available · refreshes every{" "}
+          {DASHBOARD_REFRESH_MS / 1000}s
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {slots.map((slot) => (
+          <PreviewSlotCard key={slot.slug} slot={slot} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
+  const slotNumber = previewSlotNumber(slot.slug);
+  const pullRequestUrl = holderPullRequestUrl(slot.holder);
+  const leased = slot.leaseState === "leased";
+
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="space-y-2">
+        <div className="flex items-start justify-between gap-4">
+          <a
+            href={`/resources/${ENVIRONMENT_CONFIG_LEASE_TYPE}/${encodeURIComponent(slot.slug)}/`}
+            className="min-w-0 font-medium hover:underline"
+          >
+            {slot.slug}
+          </a>
+          <LeaseStateBadge leaseState={slot.leaseState} />
+        </div>
+
+        {leased ? (
+          <p className="text-xs text-muted-foreground">
+            held by{" "}
+            {pullRequestUrl ? (
+              <a
+                href={pullRequestUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-foreground underline underline-offset-2"
+              >
+                {slot.holder}
+              </a>
+            ) : (
+              <span className="text-foreground">{slot.holder ?? "unknown holder"}</span>
+            )}
+            {slot.leasedUntil ? (
+              <>
+                {" "}
+                · expires {formatRelativeMs(slot.leasedUntil - Date.now())} (
+                {new Date(slot.leasedUntil).toISOString()})
+              </>
+            ) : null}
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            available now
+            {slot.lastReleasedAt
+              ? ` · released ${formatRelativeMs(slot.lastReleasedAt - Date.now())}`
+              : ""}
+          </p>
+        )}
+
+        {slotNumber !== null ? (
+          <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            {(["os", "auth", "semaphore"] as const).map((app) => (
+              <a
+                key={app}
+                href={`https://${app}.iterate-preview-${slotNumber}.com`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {app}.iterate-preview-{slotNumber}.com
+              </a>
+            ))}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LeaseStateBadge({ leaseState }: { leaseState: string }) {
+  const leased = leaseState === "leased";
+  return (
+    <span
+      className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${
+        leased ? "border-amber-500/40 text-amber-600" : "border-emerald-500/40 text-emerald-600"
+      }`}
+    >
+      {leaseState}
+    </span>
   );
 }
