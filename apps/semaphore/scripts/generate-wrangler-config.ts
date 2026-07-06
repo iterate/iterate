@@ -95,7 +95,16 @@ const config = {
   name: "semaphore",
   main: "./src/worker.ts",
   compatibility_date: "2026-06-17",
-  compatibility_flags: ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  // global_fetch_strictly_public: the iterate-auth login handler fetches the
+  // same-zone auth worker (OIDC discovery + token endpoint on
+  // auth.<zone>); without the flag Cloudflare sends same-zone subrequests
+  // to the zone origin instead of through Worker routes — a ~20s hang then
+  // 500 (same incident class as os/auth, 2026-06-12).
+  compatibility_flags: [
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env",
+    "global_fetch_strictly_public",
+  ],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   migrations: [{ tag: "v1", new_sqlite_classes: ["ResourceCoordinator"] }],
