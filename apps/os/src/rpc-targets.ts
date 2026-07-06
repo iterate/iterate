@@ -2619,7 +2619,7 @@ async function fetchSpec(
 ): Promise<Record<string, unknown>> {
   const specHost = new URL(props.specUrl).host;
   const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
-  // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
+  // Headers can contain getSecret("/secrets/...") placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(

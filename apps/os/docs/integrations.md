@@ -80,7 +80,7 @@ resolve a fresh access token from the connection's journal (refresh events
 land back on the same journal).
 
 Slack Web API calls never hold material: the request carries a
-`getSecret({ path })` placeholder for the connection's token and traverses
+`getSecret(path)` placeholder for the connection's token and traverses
 project egress, which substitutes it inside the Secret Durable Object and
 records `secret/used` audit events. There is **no fallback token** — a typo'd
 or disconnected connection name errors loudly instead of silently posting with

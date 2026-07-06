@@ -2,7 +2,7 @@
 //
 // Each named Slack connection's bot token lives in an itx secret Durable
 // Object (`/secrets/integrations/slack/{connection}/bot-token`). Calls go
-// through the project egress door with a `getSecret({ path: ... })`
+// through the project egress door with a `getSecret(path)`
 // placeholder in the authorization header, so token material never leaves the
 // secret DO's substitution pipeline and every outbound attempt lands on the
 // secret's audit trail. There is NO fallback token: a missing secret (typo'd
@@ -27,7 +27,7 @@ export async function callProjectSlackWebApi(input: {
   method: string;
   projectId: string;
 }): Promise<SlackWebApiResult> {
-  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
+  const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   const request = new Request(`https://slack.com/api/${input.method}`, {
     body: JSON.stringify(input.body),
     headers: {

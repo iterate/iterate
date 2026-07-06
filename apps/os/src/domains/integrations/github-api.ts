@@ -15,7 +15,7 @@ export async function callGithubApi(input: {
 }) {
   const method = (input.request.method ?? "GET").trim().toUpperCase();
   const url = githubUrl(input.request);
-  const placeholder = `getSecret({ path: "${githubTokenSecretPath(input.connection)}" })`;
+  const placeholder = `getSecret("${githubTokenSecretPath(input.connection)}")`;
   const request = new Request(url, {
     method,
     headers: {

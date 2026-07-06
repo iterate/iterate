@@ -231,7 +231,7 @@ _Avoid_: D1-backed secrets, Secret ID, Secret Key, separate secrets service
 The single serializable value one Secret holds — write-only, encrypted at rest
 as one blob. Writes replace the whole value through the one update verb; there
 are no field-level writes and no per-field metadata. Placeholder references may
-select into structured material (`getSecret({ ..., field })`), which is read
+select into structured material (`getSecret(path, "field")`), which is read
 addressing, not a storage concept.
 _Avoid_: material fields, store(), partial secret writes, per-field expiry
 
@@ -622,8 +622,8 @@ _Avoid_: Project MCP route, inbound MCP
   not raw Secret material.
 - A **Project Secret** is addressed by a normalized path under `/secrets/`.
 - **Secret References** resolve by path, such as
-  `getSecret({ path: "/secrets/openai-api-key" })`, optionally selecting a
-  field of structured material with `field`.
+  `getSecret("/secrets/openai-api-key")`, optionally selecting a field of
+  structured material: `getSecret("/secrets/foo", "tokens.access")`.
 - Secret substitution is header-only, everywhere; request bodies and
   WebSocket frames are never scanned or substituted (ADR 0005).
 - A request's headers may reference several Secrets; substitution chains

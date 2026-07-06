@@ -503,14 +503,14 @@ return {
     id: "secrets-lifecycle",
     title: "Store a secret; describe() never shows the material",
     description:
-      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret({ path }) placeholders; substitution happens server-side.",
+      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret(path) placeholders; substitution happens server-side.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const secret = itx.secrets.get(vars.secretPath ?? "/secrets/example");
 
 // Store the material once, with the URLs it may be substituted into. From
-// here on, egress headers reference it as: getSecret({ path: "..." }).
+// here on, egress headers reference it as: getSecret("...").
 await secret.update({
   egress: { urls: ["https://postman-echo.com/"] },
   material: "demo-" + (vars.note ?? "material"),
@@ -532,7 +532,7 @@ return described;
     id: "secret-postman-echo",
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret({ path }) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -557,7 +557,7 @@ for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
 const response = await itx.egress.fetch(
   new Request("https://postman-echo.com/get?source=itx-secret-example", {
     headers: {
-      "x-itx-secret": \`Bearer getSecret({ path: "\${secretPath}" })\`,
+      "x-itx-secret": \`Bearer getSecret("\${secretPath}")\`,
     },
   }),
 );
@@ -793,7 +793,7 @@ await itx.provideCapability({
       "connect",
       {
         url: "https://api.githubcopilot.com/mcp/",
-        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
+        headers: { authorization: \`Bearer getSecret("\${tokenPath}")\` },
       },
     ],
   ],

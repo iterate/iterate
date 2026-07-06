@@ -124,7 +124,7 @@ export type SecretUpdateInput = {
 ```
 
 **Placeholder grammar** — today's incantation plus field addressing into
-structured material: `getSecret({ path: "/secrets/…", field: "accessToken" })`
+structured material: `getSecret("/secrets/…", "accessToken")`
 (dotted paths for nesting). **Substitution is header-only, everywhere,
 forever** — no body scanning, no frame scanning, no content-type awareness.
 This is not a limitation that will grow later; it is the design line: header
@@ -258,7 +258,7 @@ substitution:
 await itx.egress.fetch("https://petshop.example/oauth/token", {
   method: "POST",
   headers: {
-    authorization: `Basic getSecret({ path: "/secrets/integrations/petshop-home", field: "basicAuth" })`,
+    authorization: `Basic getSecret("/secrets/integrations/petshop-home", "basicAuth")`,
     "content-type": "application/x-www-form-urlencoded",
   },
   body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri }).toString(),
@@ -364,7 +364,7 @@ export default class GoogleWorker extends WorkerEntrypoint<SecretWorkerEnv> {
       headers: {
         // App-tier creds ride a header placeholder, substituted en route under
         // the app secret's own pin. The worker never holds them.
-        authorization: `Basic getSecret({ path: "${this.env.APP_SECRET_PATH}", field: "basicAuth" })`,
+        authorization: `Basic getSecret("${this.env.APP_SECRET_PATH}", "basicAuth")`,
         "content-type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
