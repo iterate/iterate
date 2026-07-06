@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 
 const workerUrl = process.env.WORKER_URL;
 const localUrl = "http://127.0.0.1:5173";
@@ -8,10 +9,10 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
-  // Fleet-wide CI retry policy (see the root playwright.config.ts):
-  // platform-fault bursts need re-rolls; real regressions still fail all
-  // three attempts fast.
-  retries: process.env.CI ? 2 : 0,
+  // Fleet-wide CI retry policy (docs/testing.md#retries-and-timeouts): one
+  // retry re-rolls an isolated platform blip; a real regression still fails
+  // both attempts fast.
+  retries: process.env.CI ? E2E_CI_RETRIES : 0,
   webServer:
     workerUrl === undefined
       ? {
