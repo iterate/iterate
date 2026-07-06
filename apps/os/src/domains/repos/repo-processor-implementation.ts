@@ -1,5 +1,12 @@
+import type { ProcessorEvent } from "../streams/processor-contracts.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
+
+/** The one event this processor acts on, narrowed from the contract by its type string. */
+type RepoCreateRequested = ProcessorEvent<
+  RepoProcessorContract,
+  "events.iterate.com/repo/create-requested"
+>;
 
 type RepoProcessorDeps = {
   createRepoArtifact(input: { path: string; projectId: string | null }): Promise<{
@@ -41,11 +48,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     append,
   }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/repo/create-requested") return;
-    if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
-      throw new Error(
-        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.deps.projectId}:${this.deps.path}"`,
-      );
-    }
+    this.#assertOwnCreateRequest(event);
     if (state.created) return;
 
     blockProcessorWhile(async () => {
@@ -60,5 +63,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         },
       });
     });
+  }
+
+  /** Reject a create-requested addressed to a different repo than this processor serves. */
+  #assertOwnCreateRequest(event: RepoCreateRequested): void {
+    if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
+      throw new Error(
+        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.deps.projectId}:${this.deps.path}"`,
+      );
+    }
   }
 }

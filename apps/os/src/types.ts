@@ -10,12 +10,7 @@
  * Do not add docs here that belong on an RpcTarget — they will not reach the
  * generated file, the REPL, or agents.
  */
-import type {
-  StreamEvent,
-  StreamEventInput,
-  StreamEventSource,
-  StreamListItem,
-} from "./domains/streams/schemas.ts";
+import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
@@ -761,7 +756,7 @@ export interface CapabilityProvision extends Describable, Disposable {
 // domains/streams/schemas.ts (imported at the top of this file); these
 // re-exports keep this module's historical import surface working while the
 // rest of it migrates.
-export type { StreamEvent, StreamEventInput, StreamEventSource };
+export type { StreamEvent, StreamEventInput };
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;

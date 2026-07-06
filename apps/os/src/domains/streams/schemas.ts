@@ -2,9 +2,10 @@ import { z } from "zod";
 
 /**
  * Provenance a producer may stamp on an appended event: which processor
- * emitted it, or which cross-post rule copied it from another stream.
+ * emitted it, or which cross-post rule copied it from another stream. Internal
+ * to this module — it only exists as the `source` field of `StreamEventInput`.
  */
-export const StreamEventSource = z
+const StreamEventSource = z
   .object({
     processor: z.object({ slug: z.string(), version: z.string() }).strict().optional(),
     crossPost: z
@@ -55,7 +56,6 @@ export const StreamListItem = z.object({
 
 // The schemas above are the single definition of these shapes; the types are
 // inferred, not hand-maintained (types.ts re-exports them for older importers).
-export type StreamEventSource = z.infer<typeof StreamEventSource>;
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 export type StreamEvent = z.infer<typeof StreamEvent>;
 export type StreamListItem = z.infer<typeof StreamListItem>;
