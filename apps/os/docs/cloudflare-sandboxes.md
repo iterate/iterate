@@ -308,15 +308,15 @@ container FAQ <https://developers.cloudflare.com/containers/faq/>.
 
 ## Instance types, scaling, placement
 
-- **Custom `instance_type`** (`{ vcpu: 0.25, memory_mib: 1024, disk_mb: 8000 }`)
-  — not a named tier, because the disk must hold the UNPACKED image: the
-  baked-monorepo image is ~3 GB unpacked, over `lite`'s 2 GB. An image bigger
-  than the instance disk fails at instance provisioning
-  (`ImagePullRequestedDiskSizeToSmall`), NOT at deploy — the push succeeds, the
-  rollout wedges the app "degraded", and every sandbox op surfaces
-  `transport_disposed` (observed live). If the image grows, grow `disk_mb` with
-  it. Billing is while-running (active-CPU since 2025-11-21), so idle-destroyed
-  sandboxes keep a large pool cheap.
+- **`instance_type: standard-1`** (1/2 vCPU, 4 GiB, 8 GB disk) — the instance
+  disk must hold the UNPACKED image, and the baked-monorepo image is ~3 GB
+  unpacked, over `lite`'s 2 GB. An image bigger than the instance disk fails at
+  instance provisioning (`ImagePullRequestedDiskSizeToSmall`), NOT at deploy —
+  the push succeeds, the rollout wedges the app "degraded", and every sandbox
+  op surfaces `transport_disposed` (observed live). If the image grows past
+  ~6-7 GB, move up a tier; custom types are no escape hatch (≥1 vCPU, disk ≤
+  2× memory, enterprise-only). Billing is while-running (active-CPU since
+  2025-11-21), so idle-destroyed sandboxes keep a large pool cheap.
   [platform-details/limits](https://developers.cloudflare.com/containers/platform-details/limits/).
 - **`max_instances`** caps concurrent instances; exceeding it returns HTTP 503.
   Ours is deliberately high (see the comment in `generate-wrangler-config.ts`):

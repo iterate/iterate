@@ -215,15 +215,18 @@ function workerBindings(input: {
         // The sandbox image bakes this repo into /opt/iterate/iterate, so the
         // Docker build context must be the monorepo root, not apps/os/sandbox.
         image_build_context: "../..",
-        // Custom instance type, NOT a named tier: the baked-monorepo image
-        // unpacks to ~3 GB, which exceeds lite's 2 GB disk — instances then
-        // fail with ImagePullRequestedDiskSizeToSmall, the rollout wedges the
-        // app "degraded", and every sandbox op storms transport_disposed
-        // (observed live on preview-1, 2026-07-06). 8 GB leaves room for the
-        // image + /workspace + the backup staging area in /var/backups; 1 GiB
-        // memory gives codex/pnpm headroom lite's 256 MiB doesn't. Billing is
-        // while-running only, so idle-destroyed sandboxes cost nothing extra.
-        instance_type: { vcpu: 0.25, memory_mib: 1024, disk_mb: 8000 },
+        // standard-1 (1/2 vCPU, 4 GiB, 8 GB disk), NOT lite: the baked-monorepo
+        // image unpacks to ~3 GB, over lite's 2 GB disk — instances then fail
+        // with ImagePullRequestedDiskSizeToSmall, the rollout wedges the app
+        // "degraded", and every sandbox op storms transport_disposed (observed
+        // live on preview-1, 2026-07-06). The push itself SUCCEEDS — the limit
+        // bites at instance provisioning, so a too-big image degrades envs
+        // instead of failing the deploy. 8 GB fits the image + /workspace +
+        // the backup staging in /var/backups; if the image grows, move up a
+        // tier. Custom types can't help (platform: ≥1 vCPU, disk ≤ 2× memory,
+        // enterprise-only). Billing is while-running only, so the
+        // idle-destroyed fleet stays cheap.
+        instance_type: "standard-1",
         // Sized for e2e churn: the preview lanes provision a fresh project
         // (and sandbox container) per test, and idle containers hold an
         // instance slot until sleepAfter (3m, see
