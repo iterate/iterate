@@ -272,8 +272,8 @@ export const config = {
   compatibility_date: COMPATIBILITY_DATE,
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
-  // subrequests (auth worker, worker-hosted e2e fixtures through project
-  // egress) must traverse Worker routes instead of going to origin.
+  // subrequests (auth worker and project egress) must traverse Worker routes
+  // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
