@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
+import { RoutePending } from "./components/route-pending.tsx";
 import { routeTree } from "./routeTree.gen.ts";
 
 const makeQueryClient = () =>
@@ -36,6 +37,20 @@ export function getRouter() {
     context: { queryClient },
     defaultPreload: "intent",
     defaultNotFoundComponent: () => <DefaultNotFoundComponent />,
+    // Without a default pending component, an `ssr: false` route subtree (the
+    // whole project layout) renders a BLANK outlet in the SSR shell and again
+    // while `beforeLoad`/`loader` run on the client — for a direct hit on
+    // /projects/<slug>/repl that's a visibly empty main panel for the entire
+    // hydrate + project-fetch window (~1s on a slow read). Blank is bad UX and
+    // breaks the "the app always reports progress" contract the e2e specs
+    // enforce (their spinner-waiter only extends waits while a spinner is
+    // visible; docs/preview-e2e-flake-hunt.md flake 21).
+    defaultPendingComponent: () => <RoutePending />,
+    // Show that feedback quickly on client-side loads too: the library
+    // defaults (1000ms before pending shows, 500ms minimum once shown) leave a
+    // full second of blank panel before any signal appears.
+    defaultPendingMs: 300,
+    defaultPendingMinMs: 200,
     // Restore scroll position on back/forward like a regular MPA would:
     // https://tanstack.com/router/latest/docs/framework/react/guide/scroll-restoration
     scrollRestoration: true,

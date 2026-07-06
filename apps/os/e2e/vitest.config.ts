@@ -82,13 +82,21 @@ export default defineConfig({
           // without letting a wedged saga eat the whole job.
           hookTimeout: 120_000,
           testTimeout: 120_000,
-          // One retry in CI: tests are self-contained (fresh project per
+          // Retries in CI: tests are self-contained (fresh project per
           // test), so a rare load-induced or Cloudflare-retryable blip re-runs
-          // in seconds instead of failing the suite. Lives HERE and not at the
-          // root: vitest does not inherit `retry` into project configs — the
-          // root-level retry silently never applied (verified: a CI-profile
-          // run showed a failed test with zero retry attempts).
-          retry: ci ? 1 : 0,
+          // in seconds instead of failing the suite. Two retries, not one:
+          // platform faults arrive in bursts (observed: a DO-storage
+          // "Internal error ... caused object to be reset" hit attempt 1 AND
+          // attempt 2 of the same test ~10s apart during an active Cloudflare
+          // ENAM incident — docs/preview-e2e-flake-hunt.md run log 2026-07-05),
+          // so a single retry often re-rolls inside the same bad window. A
+          // genuinely broken test still fails all three attempts within its
+          // own per-test timeout — bounded, visible in the log, fail-fast.
+          // Lives HERE and not at the root: vitest does not inherit `retry`
+          // into project configs — the root-level retry silently never
+          // applied (verified: a CI-profile run showed a failed test with
+          // zero retry attempts).
+          retry: ci ? 2 : 0,
         },
       },
       {
@@ -105,8 +113,9 @@ export default defineConfig({
           provide: sharedProvide,
           testTimeout: 45_000,
           hookTimeout: 45_000,
-          // See the node project: `retry` must live on each project config.
-          retry: ci ? 1 : 0,
+          // See the node project: `retry` must live on each project config,
+          // and platform-fault bursts need two re-rolls.
+          retry: ci ? 2 : 0,
           browser: {
             commands: {
               // Browser WebSockets cannot set Authorization headers, so the

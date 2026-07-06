@@ -19,6 +19,21 @@ CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
 container-backed CloudflareSandbox (Dockerfile.sandbox, built by
 `wrangler deploy`).
 
+## The builder sidecar (the "+1")
+
+One deliberate exception to "one worker": dynamic worker BUILDS run in a
+separate `os-<env>-builder` worker ([`src/builder.ts`](../src/builder.ts),
+generated config `wrangler.builder.jsonc`) — the only script carrying the
+bundler toolchain (esbuild-wasm, ~14MB), so the product script stays small.
+It is the minimum possible worker: a pure build function (files in, artifact
+out) whose only binding is the `WORKER_BUILD_CACHE` KV — no DOs, no routes,
+no secrets. The os worker calls it via the `BUILDER` service binding on
+artifact-cache misses; deploy.ts deploys it first (a name binding to a
+missing script fails the deploy). Local dev runs it as a vite
+`auxiliaryWorkers` entry in the same workerd. Slated for deletion when
+builds move into the sandbox container
+([tasks/os-sandbox-worker-builds.md](../../../tasks/os-sandbox-worker-builds.md)).
+
 ## Why one worker
 
 The 2026-06 per-DO split (PR #1500) existed to shrink an ~89MB script whose
@@ -64,9 +79,10 @@ run rarely, if ever, since orphaned storage costs pennies.
 
 ## Notes
 
-- **streams-example-app** (`apps/streams-example-app`) binds the Stream DO
-  cross-script; its `script_name` is `os-prd` in the single-worker world
-  (update it when that app is next deployed).
+- **streams-example-app** (`apps/streams-example-app`) re-exports OS's
+  `StreamDurableObject` class from its own worker entry and binds it
+  same-script (`class_name` only, no `script_name`). It shares stream code with
+  OS, not OS's Durable Object namespace.
 - The `ARTIFACTS` binding type exists only on deployed workers; local dev
   has no Cloudflare Artifacts emulation and repo code feature-checks
   `env.ARTIFACTS`.

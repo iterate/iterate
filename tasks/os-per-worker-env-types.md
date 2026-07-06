@@ -1,9 +1,11 @@
 ---
-state: todo
+state: done
 priority: low
 size: medium
 tags: [os, workers, typescript]
 ---
+
+> Obsolete — with one worker (PR #1636) a single Env is the correct end state; src/lib/worker-env.d.ts documents it.
 
 # Per-worker Env precision (post worker split)
 

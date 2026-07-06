@@ -37,7 +37,12 @@ on:
       - packages/shared/**
       - packages/ui/**
       - packages/mock-http-proxy/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - patches/**
       - scripts/preview/**
+      - envs.ts
+      - scripts/lib/**
       - apps/iterate-com/**
       - apps/auth-example/**
       - apps/os/**

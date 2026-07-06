@@ -8,6 +8,10 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
+  // Fleet-wide CI retry policy (see the root playwright.config.ts):
+  // platform-fault bursts need re-rolls; real regressions still fail all
+  // three attempts fast.
+  retries: process.env.CI ? 2 : 0,
   webServer:
     workerUrl === undefined
       ? {

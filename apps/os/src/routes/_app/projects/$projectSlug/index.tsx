@@ -6,17 +6,16 @@ import { z } from "zod";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
 
-const ONBOARDING_AGENT_PATH = "/agents/onboarding";
-
 const HomeSearch = StreamViewSearch.extend({
   /** Set by the create form: play the creation checklist, then hand over to
-   * the onboarding agent the moment the bootstrap saga lands. */
+   * the onboarding agent if this route is reached before the direct agent URL. */
   welcome: z.boolean().optional().catch(undefined),
 });
 
@@ -50,16 +49,20 @@ function ProjectHomePage() {
     [],
   );
   const created = lifecycle.state?.created ?? false;
-  // Onboarding phase: the project is created and the onboarding agent is
-  // still the only agent — the user hasn't started working beyond it yet.
+  // Onboarding phase: the onboarding agent exists and it has not appended its
+  // completion event yet. This can happen before `project/created` now that the
+  // agent is born during project/create-requested.
   const agents = lifecycle.state?.agents ?? [];
-  const inOnboarding = created && agents.length === 1 && agents[0]?.path === ONBOARDING_AGENT_PATH;
+  const inOnboarding =
+    lifecycle.state === undefined
+      ? false
+      : hasActiveOnboardingAgent({ agents, onboardingActive: lifecycle.state.onboardingActive });
+  const handOffToOnboarding = welcome === true && inOnboarding;
 
-  // The welcome handoff: arrived here from the create form, so once the saga
-  // commits `project/created` (a push flips `created` live — possibly before
-  // first paint on a fast deployment), continue into the onboarding agent.
+  // The welcome handoff: arrived here from an older create/root redirect, so as
+  // soon as the onboarding agent exists, continue into that agent.
   useEffect(() => {
-    if (welcome !== true || !created) return;
+    if (!handOffToOnboarding) return;
     void navigate({
       to: "/projects/$projectSlug/agents/streams/$",
       params: { projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH },
@@ -68,7 +71,7 @@ function ProjectHomePage() {
       search: {},
       replace: true,
     });
-  }, [welcome, created, navigate, params.projectSlug]);
+  }, [handOffToOnboarding, navigate, params.projectSlug]);
 
   const panel =
     lifecycle.state === undefined && welcome !== true ? (
@@ -77,7 +80,7 @@ function ProjectHomePage() {
       <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
         Loading project…
       </div>
-    ) : created && welcome !== true ? (
+    ) : created && !handOffToOnboarding ? (
       <>
         {inOnboarding ? (
           <Link

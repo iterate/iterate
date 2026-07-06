@@ -51,9 +51,6 @@ import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
 import {
   describeNode,
-  itxEntrypointProps,
-  itxEntrypointBinding,
-  itxEntrypointScopeCacheKey,
   rejectBuiltinCollision,
   withInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
@@ -62,8 +59,12 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
-import { normalizeCloudflareSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
+import {
+  PROJECT_REPO_PATH,
+  PROJECT_WORKER_ENTRY_POINT,
+  PROJECT_WORKER_SOURCE_EXCLUDE,
+} from "./domains/repos/utils.ts";
+import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -81,7 +82,6 @@ import {
 } from "./domains/streams/utils.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput } from "./domains/streams/schemas.ts";
-import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -163,11 +163,21 @@ import type {
   UnauthenticatedOs,
   DynamicWorkerCapability,
   DynamicWorkerCollection,
+  DynamicWorkerDispatchOptions,
   DynamicWorkerRef,
+  EmailCapability,
   GmailCapability,
   ProjectIntegrations,
   SlackCapability,
 } from "./types.ts";
+import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
+import {
+  buildProjectEmailMessage,
+  emailAddressForProject,
+  EMAIL_INTEGRATION_STREAM_PATH,
+  EMAIL_SENT_EVENT_TYPE,
+} from "./domains/email/utils.ts";
 
 /**
  * Durable event stream capability.
@@ -569,14 +579,17 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated `/sandboxes/cloudflare/...`
- * path, after the same project-access assert every collection performs.
+ * from this project's id plus the validated path, after the same
+ * project-access assert every collection performs. A sandbox can live at any
+ * non-root path — a scope's own path names that scope's sandbox (`itx.sandbox`
+ * on an agent is `sandboxes.get(<the agent's path>)`); standalone sandboxes
+ * conventionally live under `/sandboxes/cloudflare/...`.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Path-addressed Cloudflare sandboxes: get("/sandboxes/cloudflare/<name>") returns a container-backed sandbox stub (exec, git, files).',
+        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Any non-root path works — an agent's own path is that agent's sandbox (itx.sandbox); pick /sandboxes/cloudflare/<name> for standalone ones.",
       children: { get: "The sandbox at a path (boots the container on first use)." },
       parent: "a project itx (itx.sandboxes)",
     });
@@ -589,7 +602,7 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
 
   /** The sandbox at a path. Cheap — the container boots on the first command, not here. */
   async get(path: string): Promise<CloudflareSandbox> {
-    const normalized = normalizeCloudflareSandboxPath(path);
+    const normalized = normalizeSandboxPath(path);
     const stub = env.SANDBOX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
@@ -802,11 +815,90 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
 }
 
 /**
+ * The `itx.email` built-in: first-party outbound email through the Cloudflare
+ * Email Service `EMAIL` binding. Sender authorization is enforced here, not in
+ * the binding: mail only leaves from the project's own address
+ * (`<slug>@<first project hostname base>`). Every send appends an
+ * `email/sent` audit event to the project's /integrations/email stream.
+ */
+class EmailRpcTarget extends RpcTarget implements EmailCapability {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "First-party outbound email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. Returns { from, messageId }.",
+      children: {
+        send: "Send one email from the project's address; returns { from, messageId }.",
+      },
+      parent: "the project itx root",
+    });
+  }
+
+  /**
+   * Send one email from the project's own address (`<slug>@<hostname base>`)
+   * through Cloudflare Email Service. An explicit `from` must equal that
+   * address — a project can never send as anyone else.
+   */
+  async send(input: {
+    to: string | string[];
+    subject: string;
+    /** Plain-text body; at least one of text/html is required. */
+    text?: string;
+    html?: string;
+    /** Optional explicit sender; must equal the project's own address. */
+    from?: string;
+  }): Promise<{ from: string; messageId: string | null }> {
+    if (!env.EMAIL) {
+      throw new Error("email.send requires the EMAIL send_email binding (see wrangler config).");
+    }
+    const senderDomain = parseConfig(env).projectHostnameBases[0];
+    if (!senderDomain) {
+      throw new Error(
+        "email.send requires APP_CONFIG_PROJECT_HOSTNAME_BASES to derive the sender domain.",
+      );
+    }
+    const record = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
+    if (!record) {
+      throw new Error(`Project ${this.props.projectId} not found in the project directory.`);
+    }
+    const projectAddress = emailAddressForProject({ slug: record.slug, domain: senderDomain });
+    const message = buildProjectEmailMessage({
+      projectAddress,
+      projectName: record.name || record.slug,
+      request: input,
+    });
+
+    const result = (await env.EMAIL.send(message)) as { messageId?: string } | null | undefined;
+    const messageId = result?.messageId ?? null;
+
+    const from = typeof message.from === "string" ? message.from : message.from.email;
+    await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+      type: EMAIL_SENT_EVENT_TYPE,
+      idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
+      // Recipients + subject for audit; bodies stay out of the stream.
+      payload: {
+        from,
+        messageId,
+        projectId: this.props.projectId,
+        subject: input.subject,
+        to: input.to,
+      },
+    });
+
+    return { from, messageId };
+  }
+}
+
+/**
  * The `itx.integrations` built-in: connection status, OAuth start/complete,
  * and disconnect for slack/google, PLUS the connection-scoped API proxies
  * (`integrations.gmail`, `integrations.slack`) — they live here because they
  * only work through the project's connected accounts. The complete* methods
- * are called by the app worker's OAuth callback routes
+ * are called by the dashboard's OAuth callback routes
  * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
  * OAuth state minted by startOAuthFlow, verified itx-side.
  */
@@ -1100,7 +1192,6 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
     readonly props: {
       auth: ItxAuth;
       ctx: CfExecutionContext;
-      loader: Env["LOADER"];
       projectId: string;
     },
   ) {
@@ -1111,11 +1202,13 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
   /** The live dispatch target for a declarative worker ref (validated by schema). */
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
+    options?: DynamicWorkerDispatchOptions,
   ): DynamicWorkerCapability<T> {
     const parsed = WorkerRefSchema.parse(ref);
     return new DynamicWorkerRpcTarget({
+      buildBudgetMs: options?.buildBudgetMs,
       ctx: this.props.ctx,
-      loader: this.props.loader,
+      flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
     }) as unknown as DynamicWorkerCapability<T>;
@@ -1131,34 +1224,39 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
  * the flattened capability dispatcher.
  */
 class DynamicWorkerRpcTarget extends RpcTarget {
-  readonly #runner: DynamicWorkerRunner;
+  readonly #buildBudgetMs: number | undefined;
+  readonly #flattenNestedPaths: boolean;
+  readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
+  #lazyRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: {
+    buildBudgetMs?: number;
     ctx: CfExecutionContext;
-    loader: Env["LOADER"];
+    flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
   }) {
     super();
+    this.#buildBudgetMs = props.buildBudgetMs;
+    this.#flattenNestedPaths = props.flattenNestedPaths === true;
+    this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    const itxScope = itxEntrypointProps({
-      path: normalizePath(props.ref.path),
-      projectId: props.projectId,
-    });
-    this.#runner = new DynamicWorkerRunner({
-      bindings: {
-        // The dynamic worker's ITX binding is supplied by the host context, not
-        // by the worker ref. Props remain worker-supplied, but auth/scope stay
-        // under the project/agent/ITX object that is doing the hosting.
-        ITX: itxEntrypointBinding(props.ctx.exports, itxScope),
-      },
-      globalOutbound: projectEgressFetcher(props.ctx.exports, props.projectId),
-      loader: props.loader,
-      projectId: props.projectId,
-      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
-    });
     return withInvokeCapabilityFallback(this);
+  }
+
+  // Lazy: __describe answers from the ref alone and must not mint loopback
+  // stubs; only an actual invocation needs a runner. A worker reached through
+  // the public collection runs in the itx scope of its own path — the ITX
+  // binding and egress fetcher come from the HOSTING context, not the ref.
+  get #runner(): DynamicWorkerRunner {
+    this.#lazyRunner ??= new DynamicWorkerRunner({
+      exports: this.#props.ctx.exports,
+      projectId: this.#props.projectId,
+      scopePath: this.#ref.path,
+      waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+    });
+    return this.#lazyRunner;
   }
 
   // Answered from the REF alone — describing a worker must not boot it (no
@@ -1168,16 +1266,18 @@ class DynamicWorkerRpcTarget extends RpcTarget {
   // `__describe` the user code may export.
   async __describe() {
     const source =
-      this.#ref.source.type === "inline"
+      this.#ref.source.files.type === "inline"
         ? {
-            type: "inline" as const,
-            mainModule: this.#ref.source.mainModule,
-            modules: Object.fromEntries(
-              Object.entries(this.#ref.source.modules).map(([name, text]) => [
-                name,
-                `${text.length} bytes`,
-              ]),
-            ),
+            ...this.#ref.source,
+            files: {
+              type: "inline" as const,
+              files: Object.fromEntries(
+                Object.entries(this.#ref.source.files.files).map(([name, text]) => [
+                  name,
+                  `${text.length} bytes`,
+                ]),
+              ),
+            },
           }
         : this.#ref.source;
     return describeNode({
@@ -1203,21 +1303,24 @@ class DynamicWorkerRpcTarget extends RpcTarget {
 
   async invokeCapability({
     args = [],
-    flattenNestedPath = false,
+    flattenNestedPath = this.#flattenNestedPaths,
     path,
   }: {
     args?: unknown[];
     flattenNestedPath?: boolean;
     path: string[];
   }) {
-    // Keep every dynamic worker invocation behind DynamicWorkerRunner. Stateless
-    // entrypoints, stateful DO facets, provided worker capabilities, and
-    // project.worker all then share the same loader/egress/ITX binding rules.
-    // Return values pass through untouched on purpose: an RpcTarget returned by
-    // the dynamic worker must remain a live object-capability so Cap'n Web can
-    // serialize it as a chained/pipelined stub for the outer caller.
+    // Every dynamic worker invocation goes through DynamicWorkerRunner:
+    // stateless entrypoints, stateful DO facets, provided worker
+    // capabilities, and project.worker all share its loader/egress/ITX
+    // binding rules. Args and return values pass through untouched on
+    // purpose: both directions may carry live RPC stubs, and an RpcTarget
+    // returned by the dynamic worker must remain a live object-capability so
+    // Cap'n Web can serialize it as a chained/pipelined stub for the outer
+    // caller.
     return await this.#runner.invokeCapability({
       args,
+      buildBudgetMs: this.#buildBudgetMs,
       flattenNestedPath,
       path,
       ref: this.#ref,
@@ -1332,7 +1435,11 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
         {
           type: "events.iterate.com/project/create-requested",
           idempotencyKey: `project-create-requested:${registered.projectId}`,
-          payload: { projectId: registered.projectId, slug: registered.slug },
+          payload: {
+            onboardingActive: true,
+            projectId: registered.projectId,
+            slug: registered.slug,
+          },
         },
       );
     const [, , createRequested] = await timedStep(
@@ -1676,6 +1783,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
   debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
   egress: "Project-attributed outbound fetch (+ intercept).",
+  email:
+    "First-party outbound email: send({ to, subject, text, html }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it.",
   examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
   integrations:
     "Slack/Google connections plus connection-scoped API proxies: itx.integrations.gmail.request({ path, query }) and itx.integrations.slack.chat.postMessage({ channel, text }). Check itx.integrations.getConnection({ provider }) first.",
@@ -1903,6 +2012,14 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new ProjectEgressRpcTarget({ projectId: this.#props.projectId });
   }
 
+  /** Project email: send(...) and the connection-scoped inbound address. */
+  get email(): EmailCapability {
+    return new EmailRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
+  }
+
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   get examples(): ItxExampleCatalog {
     return new ItxExampleCatalogRpcTarget();
@@ -1968,14 +2085,20 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      loader: env.LOADER,
       projectId: this.#props.projectId,
     });
   }
 
-  /** The default repo-backed project worker — a convenience alias; the general API is `workers.get(ref)`. */
+  /**
+   * The default repo-backed project worker — a convenience alias; the general
+   * API is `workers.get(ref)`. Flattened: the seeded worker implements
+   * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
+   * is one RPC end to end.
+   */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
-    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
+    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+      flattenNestedPaths: true,
+    });
   }
 }
 
@@ -2013,13 +2136,16 @@ export function itxForScope(props: {
   });
 }
 
-function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
+export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
     source: {
-      repoPath: PROJECT_REPO_PATH,
-      sourcePath: PROJECT_WORKER_SOURCE_PATH,
-      type: "repo",
+      files: {
+        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
+        repoPath: PROJECT_REPO_PATH,
+        type: "repo",
+      },
+      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
     },
     type: "stateless",
   };

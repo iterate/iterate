@@ -5,7 +5,7 @@
 # $LOG_DIR/run-<n>.log so a failure can be diagnosed after the fact.
 set -uo pipefail
 
-PR_NUMBER="${PR_NUMBER:-1644}"
+PR_NUMBER="${PR_NUMBER:-1664}"
 RUNS="${RUNS:-5}"
 LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
 START_AT="${START_AT:-1}"
@@ -16,7 +16,11 @@ START_AT="${START_AT:-1}"
 # machine stays awake for the duration of the loop.
 if [ "$(uname)" = "Darwin" ] && [ -z "${FLAKE_HUNT_CAFFEINATED:-}" ]; then
   export FLAKE_HUNT_CAFFEINATED=1
-  exec caffeinate -is "$0" "$@"
+  # -d display, -i idle system, -m disk, -s system-on-AC. A bare `-is` still let
+  # the machine sleep overnight once (r3d: a 5.5h gap de-provisioned the sandbox
+  # container image). caffeinate can't beat a battery+lid-closed sleep, so also
+  # keep the marathon continuous; this is best-effort on AC power.
+  exec caffeinate -dims "$0" "$@"
 fi
 
 # Match the Depot CI contract exactly: the vitest e2e lane sets its retry
@@ -27,18 +31,94 @@ fi
 export CI=true
 
 mkdir -p "$LOG_DIR"
+# Fail-fast backstop for the whole run. A healthy full-fleet run is a few
+# minutes; the preview orchestration already bounds its vitest lane (360s) and
+# every test carries its own timeout, so this only catches a wedge that slips
+# both. 10 minutes kills such a wedge quickly instead of letting it sit (an
+# earlier bug let a startup wedge hang 9+ hours).
+RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
+
+# Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
+# against the LAST DEPLOYED head (not the PR base), so a mid-branch commit that
+# touches only one app (e.g. an apps/os-only fix) redeploys just that app and
+# leaves the others at an older head. The test lane only tests apps whose
+# recorded head == the PR head, so the marathon then silently shrinks to the
+# changed apps and every run trips the full-fleet guard (exit 3) — or worse,
+# would count a partial lane as green if that guard were absent. `--all-apps`
+# forces the full fleet regardless of the diff, which reunifies the head.
+# So before a fresh marathon (START_AT=1) we run one deploy and assert all four
+# apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
+# bypass (e.g. resuming a marathon whose fleet is already unified).
+if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
+  preflight="$LOG_DIR/preflight-deploy.log"
+  echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
+  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps \
+    --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
+  deploy_exit=$?
+  if [ "$deploy_exit" -ne 0 ]; then
+    echo "preflight: deploy FAILED (exit $deploy_exit) — see $preflight"
+    exit 4
+  fi
+  if grep -qE "deploy-failed|claim-failed" "$preflight"; then
+    echo "preflight: an app failed to deploy — see $preflight"
+    exit 4
+  fi
+  echo "preflight: deploy OK"
+fi
+
+# Optional slot warmup: a freshly-deployed slot is cold (os worker + DO chain +
+# sandbox containers all boot on first use), and a cold run 1 can flake on
+# timing that a warm slot never would — which would reset the streak at run 1.
+# WARMUP_RUNS uncounted `preview test` invocations warm the slot first; their
+# pass/fail is ignored on purpose (they exist only to prime caches/containers).
+WARMUP_RUNS="${WARMUP_RUNS:-0}"
+for w in $(seq 1 "$WARMUP_RUNS"); do
+  [ "$WARMUP_RUNS" -eq 0 ] && break
+  wlog="$LOG_DIR/warmup-$(printf '%02d' "$w").log"
+  echo "warmup $w/$WARMUP_RUNS: priming the slot (result ignored) -> $wlog"
+  doppler run --project _shared --config prd -- pnpm preview test \
+    --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
+done
+
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
   started=$(date -u +%H:%M:%S)
   doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER" >"$log" 2>&1
+    --pull-request-number "$PR_NUMBER" >"$log" 2>&1 &
+  run_pid=$!
+  (
+    sleep "$RUN_TIMEOUT_SECS"
+    echo "run $i: WATCHDOG — killing after ${RUN_TIMEOUT_SECS}s" >>"$log"
+    # The run tree is deep (doppler -> pnpm -> trpc-cli -> inner doppler -> bash
+    # -> vitest/playwright) and SIGTERM to the top does NOT propagate down — a
+    # vitest-startup wedge survived a TERM and hung 58 min past this timeout
+    # once. Walk the whole descendant tree and SIGKILL it leaf-first so nothing
+    # is left holding the loop's `wait`.
+    kill_tree() {
+      local p=$1 c
+      for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
+      kill -KILL "$p" 2>/dev/null
+    }
+    kill_tree "$run_pid"
+  ) &
+  watchdog_pid=$!
+  wait "$run_pid"
   exit_code=$?
+  kill "$watchdog_pid" 2>/dev/null
+  wait "$watchdog_pid" 2>/dev/null
   finished=$(date -u +%H:%M:%S)
   # `preview test` exits 0 but skips (stale head, no lease) without running
   # anything — a skip must not count as a green run.
   if grep -q "skipped: true" "$log"; then
     echo "run $i: SKIPPED — not a real run ($started-$finished UTC) $log"
     exit 2
+  fi
+  # A push touching one app leaves the others' recorded states at an older
+  # head, silently shrinking the lane (observed: three 13-second "green" runs
+  # that tested only semaphore). The marathon must exercise the full fleet.
+  if ! grep -q "testable apps: os, semaphore, auth, streams-example-app" "$log"; then
+    echo "run $i: PARTIAL — not all apps testable ($started-$finished UTC) $log"
+    exit 3
   fi
   if [ "$exit_code" -eq 0 ]; then
     echo "run $i: PASS ($started-$finished UTC) $log"

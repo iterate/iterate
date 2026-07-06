@@ -24,7 +24,20 @@ type PullRequestCommandOptions = {
 /**
  * Deploy affected preview apps for a pull request without running preview e2e.
  */
-export async function deploy(options: PullRequestCommandOptions = {}) {
+export async function deploy(
+  options: PullRequestCommandOptions & {
+    /**
+     * Deploy every preview app regardless of the diff. Diff selection only
+     * redeploys apps affected since their LAST DEPLOYED head, so unaffected
+     * apps keep an older recorded head and the test lane then skips them
+     * ("stale — deploy has not run for the current head yet"). A caller that
+     * needs the whole fleet testable at the current head — the flake-hunt
+     * marathon preflight — uses this to reunify the fleet explicitly instead
+     * of relying on the commit happening to touch a fleet-shared path.
+     */
+    allApps?: boolean;
+  } = {},
+) {
   const runtime = createPreviewRuntime();
   const context = await resolvePullRequestPreviewContext({
     commandEnvironment: runtime.commandEnvironment,
@@ -41,10 +54,13 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
       : "PR body records no lease — this PR has no slot yet",
   );
-  const selectedApps = await selectPreviewAppsForPullRequest({
-    ...context,
-    previousState: current.state,
-  });
+  const selectedApps = options.allApps
+    ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
+      Object.values(cloudflarePreviewApps))
+    : await selectPreviewAppsForPullRequest({
+        ...context,
+        previousState: current.state,
+      });
 
   if (selectedApps.length === 0) {
     logPreview(
@@ -818,6 +834,15 @@ export const cloudflareAppSharedPaths = [
   "packages/shared/**",
   "packages/ui/**",
   "packages/mock-http-proxy/**",
+  // Dependency manifests: a lockfile bump, a catalog/patchedDependencies entry
+  // (pnpm-workspace.yaml), or a pnpm patch can change every app's build
+  // output. Selecting "no apps affected" for such a diff leaves the fleet's
+  // recorded heads stale at the previous commit, so the test lane then skips
+  // every app ("no apps are testable for this head sha") — observed when a
+  // patches/-only commit no-op'd the deploy and stranded the PR head.
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "patches/**",
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
@@ -828,6 +853,11 @@ export const cloudflarePreviewSharedPaths = [
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
+  // Every app's generated wrangler config (routes, worker names, resource
+  // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a
+  // slot's deleted D1) must redeploy the fleet or the fix never ships.
+  "envs.ts",
+  "scripts/lib/**",
 ] as const;
 
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
@@ -894,7 +924,25 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // provision independent projects, so they run concurrently: the vitest
         // lane in the background, the specs in the foreground. The vitest log
         // is replayed once the specs finish.
-        "pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
+        //
+        // Bound the vitest lane and retry it once if it fails to START: vitest
+        // occasionally prints its banner then hangs before "RUN v<version>"
+        // (idle fork pool, no workers — no test has run, so vitest's own
+        // testTimeout can't fire), which would hang `wait "$E2E_PID"` until the
+        // CI job / marathon watchdog kills everything. A `timeout` + a single
+        // fresh retry turns that rare startup wedge into a self-healing restart.
+        // 360s is the fail-fast backstop: it sits just above a healthy lane
+        // (which runs the itx monolith plus the sandbox tests' own 240s
+        // per-test cap, concurrently) so a real wedge is caught in minutes, not
+        // left to stall — we'd rather fail fast and re-run than sit for ages.
+        // Retry ONLY on a timeout (rc=124) — the wedge signature. An earlier
+        // secondary check (`! grep "RUN v"`) was defeated by vitest's ANSI
+        // colour codes between "RUN" and the version, so it matched NOTHING and
+        // silently re-ran the whole lane every single time — doubling test load
+        // and sandbox-container churn. rc=0 means it ran; a non-124 non-zero is
+        // a real failure we must NOT paper over with a retry.
+        'run_vitest_node() { local rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ]; then echo "[preview] vitest node lane timed out (startup wedge) — retrying once"; rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
+        "run_vitest_node & E2E_PID=$!",
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not
@@ -993,12 +1041,17 @@ const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const sharedAuthPreviewSecretsCopiedFromDev = [
-  "APP_CONFIG_GOOGLE_CLIENT_ID",
-  "APP_CONFIG_GOOGLE_CLIENT_SECRET",
-  "APP_CONFIG_RESEND_DOMAIN",
-  "APP_CONFIG_RESEND_API_KEY",
-  "APP_CONFIG_SIGNUP_ALLOWLIST",
-] as const;
+  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_ID", legacyDevNames: ["GOOGLE_CLIENT_ID"] },
+  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_SECRET", legacyDevNames: ["GOOGLE_CLIENT_SECRET"] },
+  {
+    appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
+    legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
+  },
+  { appConfigName: "APP_CONFIG_SIGNUP_ALLOWLIST", legacyDevNames: ["SIGNUP_ALLOWLIST"] },
+] as const satisfies readonly {
+  appConfigName: string;
+  legacyDevNames: readonly string[];
+}[];
 
 export const EnvironmentConfigLease = z.object({
   dopplerConfig: z.string().trim().min(1),
@@ -1950,16 +2003,40 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
+function resolveAuthPreviewRootSecret(input: {
+  appConfigName: string;
+  legacyDevNames: readonly string[];
+  readSecret: (project: string, config: string, name: string) => string | null;
+}) {
+  const previewValue = input.readSecret("auth", "preview", input.appConfigName);
+  if (previewValue) return previewValue;
+
+  const devValue = input.readSecret("auth", "dev", input.appConfigName);
+  if (devValue) return devValue;
+
+  for (const legacyName of input.legacyDevNames) {
+    const legacyValue = input.readSecret("auth", "dev", legacyName);
+    if (legacyValue) return legacyValue;
+  }
+
+  return null;
+}
+
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
-  for (const name of sharedAuthPreviewSecretsCopiedFromDev) {
+  for (const { appConfigName, legacyDevNames } of sharedAuthPreviewSecretsCopiedFromDev) {
     // Prefer an existing preview-root value; otherwise seed it from auth/dev.
-    const value =
-      getDopplerSecret("auth", "preview", name) || getDopplerSecret("auth", "dev", name);
-    if (!value) throw new Error(`auth/dev is missing ${name}`);
-    rootValues[name] = value;
+    const value = resolveAuthPreviewRootSecret({
+      appConfigName,
+      legacyDevNames,
+      readSecret: getDopplerSecret,
+    });
+    if (!value) {
+      throw new Error(`auth/dev is missing ${[appConfigName, ...legacyDevNames].join(" or ")}`);
+    }
+    rootValues[appConfigName] = value;
   }
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
@@ -3233,10 +3310,19 @@ function selectPreviewAppsNeedingRetry(params: {
   previousState: CloudflarePreviewState;
   pullRequestHeadSha: string;
 }) {
+  // Failed state is retried regardless of which head produced it: a slot
+  // whose deploy failed at an OLD head stays wedged if the next push's diff
+  // doesn't select those apps (observed: an envs.ts-only fix push selected
+  // nothing, deploy skipped "nothing to deploy", the test lane then skipped
+  // its stale recorded apps and the whole check went GREEN on a slot with
+  // three deploy-failed apps). awaiting-tests keeps its same-head guard: at
+  // an old head it just means "an older deploy finished and its e2e never
+  // ran", which the current head's normal diff selection supersedes.
   const retrySlugs = Object.values(params.previousState.apps)
-    .filter((entry) => entry.headSha === params.pullRequestHeadSha)
-    .filter((entry) =>
-      ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status),
+    .filter(
+      (entry) =>
+        ["claim-failed", "deploy-failed", "tests-failed"].includes(entry.status) ||
+        (entry.status === "awaiting-tests" && entry.headSha === params.pullRequestHeadSha),
     )
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
@@ -3474,6 +3560,7 @@ export const previewInternals = {
   parseEnvironmentConfigLeaseData,
   reconcileEnvironmentConfigLeaseResources,
   renderCloudflarePreviewPullRequestBody,
+  resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   selectPreviewAppsNeedingRetry,

@@ -64,13 +64,20 @@ export default async function deploy(
     prepare: (ctx, secretValues, credentials) => {
       // ---- Derived runtime values ------------------------------------------
       // Derived: an explicit Doppler value wins; otherwise the platform default.
-      // Email OTP defaults on for dev-prefixed envs only (dev_global) — it is the
-      // e2e sign-in lane and must never silently enable itself in prd.
+      // Email OTP defaults on in every env, prd included; setting the Doppler
+      // key to "false" is the emergency rollback switch.
       secretValues.APP_CONFIG_ADMIN_ALLOWLIST =
         ctx.secrets.APP_CONFIG_ADMIN_ALLOWLIST ?? DEFAULT_ADMIN_ALLOWLIST;
       secretValues.APP_CONFIG_EMAIL_OTP_ENABLED =
-        ctx.secrets.APP_CONFIG_EMAIL_OTP_ENABLED?.trim() ||
-        (ctx.name.startsWith("dev") ? "true" : "false");
+        ctx.secrets.APP_CONFIG_EMAIL_OTP_ENABLED?.trim() || "true";
+      // Fail at deploy time rather than at the first OTP send: an enabled
+      // email-OTP lane with no sender domain can never deliver mail.
+      if (
+        secretValues.APP_CONFIG_EMAIL_OTP_ENABLED === "true" &&
+        !ctx.secrets.APP_CONFIG_EMAIL_SENDER_DOMAIN?.trim()
+      ) {
+        throw new Error("APP_CONFIG_EMAIL_SENDER_DOMAIN is required while email OTP is enabled");
+      }
       // Base domain project homepages live under. An explicit Doppler value wins;
       // otherwise src/config.ts's default applies at runtime.
       const projectHostnameBase = ctx.secrets.APP_CONFIG_PROJECT_HOSTNAME_BASE?.trim();

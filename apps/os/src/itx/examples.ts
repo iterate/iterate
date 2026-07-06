@@ -8,7 +8,7 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
-//   project-worker  the body baked into the project repo's worker.js,
+//   project-worker  the body baked into the project repo's worker.ts,
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
@@ -293,23 +293,27 @@ const greeter = await itx.workers.get({
   entrypoint: "Greeter",
   path: "/",
   source: {
-    type: "inline",
-    mainModule: "greeter.js",
-    modules: {
-      "greeter.js": \`
-        import { WorkerEntrypoint } from "cloudflare:workers";
+    files: {
+      type: "inline",
+      files: {
+        "greeter.js": \`
+          import { WorkerEntrypoint } from "cloudflare:workers";
 
-        export class Greeter extends WorkerEntrypoint {
-          hello({ name }) {
-            return "hello, " + name;
-          }
+          export class Greeter extends WorkerEntrypoint {
+            hello({ name }) {
+              return "hello, " + name;
+            }
 
-          add(a, b) {
-            return a + b;
+            add(a, b) {
+              return a + b;
+            }
           }
-        }
-      \`,
+        \`,
+      },
     },
+    // Plain JavaScript with bundling off loads directly; TypeScript or
+    // multi-file sources drop bundle: false and go through the build pipeline.
+    options: { bundle: false, entryPoint: "greeter.js" },
   },
 });
 
@@ -334,25 +338,27 @@ const counter = await itx.workers.get({
   durableWorkerKey: vars.counterKey ?? "repl-counter",
   path: "/",
   source: {
-    type: "inline",
-    mainModule: "counter.js",
-    modules: {
-      "counter.js": \`
-        import { DurableObject } from "cloudflare:workers";
+    files: {
+      type: "inline",
+      files: {
+        "counter.js": \`
+          import { DurableObject } from "cloudflare:workers";
 
-        export class CounterDurableObject extends DurableObject {
-          async increment() {
-            const n = (this.ctx.storage.kv.get("n") ?? 0) + 1;
-            this.ctx.storage.kv.put("n", n);
-            return n;
-          }
+          export class CounterDurableObject extends DurableObject {
+            async increment() {
+              const n = (this.ctx.storage.kv.get("n") ?? 0) + 1;
+              this.ctx.storage.kv.put("n", n);
+              return n;
+            }
 
-          async current() {
-            return this.ctx.storage.kv.get("n") ?? 0;
+            async current() {
+              return this.ctx.storage.kv.get("n") ?? 0;
+            }
           }
-        }
-      \`,
+        \`,
+      },
     },
+    options: { bundle: false, entryPoint: "counter.js" },
   },
 });
 
@@ -365,7 +371,7 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Run shell commands in a sandbox (project repo included)",
     description:
-      "A sandbox is a real Linux container addressed by path — always the full path, starting /sandboxes/ (today: /sandboxes/cloudflare/<anything>, nested paths fine). get() returns the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold). Every start also clones the project repo to /workspace/repo with working git credentials; await ensureProjectRepo() before depending on it.",
+      "A sandbox is a real Linux container addressed by path — any non-root path, nested fine. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your own agent path) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. Every start also clones the project repo to /workspace/repo with working git credentials; await ensureProjectRepo() before depending on it.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -392,7 +398,7 @@ return {
     id: "repo-commit-files",
     title: "Commit files into the project repo",
     description:
-      "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.js gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
+      "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -450,6 +456,9 @@ const path = vars.path ?? "notes/edit-example.md";
 const repo = itx.repos.get(vars.repoPath ?? "/");
 const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
+
+// Path-scoped repos need first-use creation; the default project repo already exists.
+if (vars.repoPath) await repo.create();
 
 // Seed a known starting point. Agents can skip this when editing an existing file.
 await repo.commitFiles({
@@ -733,6 +742,22 @@ return {
   count: list.length,
   sample: list.slice(0, 5).map((model) => model?.name ?? model),
 };
+`.trim(),
+  },
+  {
+    id: "email-send",
+    title: "Send an email from the project's address",
+    description:
+      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — run it interactively with an address you own.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const receipt = await itx.email.send({
+  to: "you@example.com", // a mailbox you own — this sends real mail
+  subject: "Hello from itx",
+  text: "Sent by an agent through Cloudflare Email Service.",
+});
+return receipt; // { from: "<slug>@<hostname base>", messageId }
 `.trim(),
   },
 ];

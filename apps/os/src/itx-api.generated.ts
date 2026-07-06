@@ -265,6 +265,8 @@ export interface Project {
   agents: AgentCollection;
   /** Project-attributed outbound fetch (+ intercept). */
   egress: ProjectEgress;
+  /** Project email: send(...) and the connection-scoped inbound address. */
+  email: EmailCapability;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   examples: ItxExampleCatalog;
   /** Slack/Google connections + the connection-scoped API proxies (`integrations.gmail`, `integrations.slack`). */
@@ -283,7 +285,12 @@ export interface Project {
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
-  /** The default repo-backed project worker — a convenience alias; the general API is `workers.get(ref)`. */
+  /**
+   * The default repo-backed project worker — a convenience alias; the general
+   * API is `workers.get(ref)`. Flattened: the seeded worker implements
+   * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
+   * is one RPC end to end.
+   */
   worker: DynamicWorkerCapability<ProjectWorker>;
 }
 
@@ -478,6 +485,25 @@ export interface ProjectEgress {
 }
 
 /**
+ * First-party outbound email through Cloudflare Email Service. Mail is sent
+ * from the project's own address — `<slug>@<project hostname base>`, e.g.
+ * `acme@iterate.app` — and an explicit `from` must match it: a project can
+ * never send as another project or an arbitrary address. Requires the
+ * deployment's sender domain to be onboarded for Email Sending in Cloudflare.
+ */
+export interface EmailCapability extends Describable {
+  send(input: {
+    to: string | string[];
+    subject: string;
+    /** Plain-text body; at least one of text/html is required. */
+    text?: string;
+    html?: string;
+    /** Optional explicit sender; must equal the project's own address. */
+    from?: string;
+  }): Promise<{ from: string; messageId: string | null }>;
+}
+
+/**
  * Read-only catalogue of known-good itx script snippets — the project-context
  * entries of the REPL "Examples" panel. `list()` returns every entry without
  * its code; `get({ id })` returns one entry with the full script body. Agents
@@ -499,7 +525,7 @@ export interface ItxExampleCatalog {
  * and disconnect for slack/google, PLUS the connection-scoped API proxies
  * (`integrations.gmail`, `integrations.slack`) — they live here because they
  * only work through the project's connected accounts. The complete* methods
- * are called by the app worker's OAuth callback routes
+ * are called by the dashboard's OAuth callback routes
  * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
  * OAuth state minted by startOAuthFlow, verified itx-side.
  */
@@ -565,8 +591,11 @@ export interface ProjectRepoCollection extends RepoCollection {
  * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated `/sandboxes/cloudflare/...`
- * path, after the same project-access assert every collection performs.
+ * from this project's id plus the validated path, after the same
+ * project-access assert every collection performs. A sandbox can live at any
+ * non-root path — a scope's own path names that scope's sandbox (`itx.sandbox`
+ * on an agent is `sandboxes.get(<the agent's path>)`); standalone sandboxes
+ * conventionally live under `/sandboxes/cloudflare/...`.
  */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
@@ -594,19 +623,24 @@ export interface DynamicWorkerCollection {
   /** The live dispatch target for a declarative worker ref (validated by schema). */
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
+    options?: DynamicWorkerDispatchOptions,
   ): DynamicWorkerCapability<T>;
 }
 
 /**
  * Default seeded project worker contract.
  *
- * This documents the reference repo's `worker.js` only. Arbitrary dynamic
- * workers should be typed by callers through `workers.get<T>(ref)`.
+ * This documents the reference repo's `worker.ts` only. Arbitrary dynamic
+ * workers should be typed by callers through `workers.get<T>(ref)`. The
+ * platform dispatches to it with flattened paths, so the worker implements
+ * `invokeCapability` in userspace and every dotted call — including any
+ * nested `slack.*` Web API family — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   processEvent(input: { event: StreamEvent }): Promise<void>;
-  testFetch(input: { headerValue: string; url: string }): Promise<unknown>;
+  slack: ProjectWorkerSlack;
 }
 
 /**
@@ -633,6 +667,16 @@ export interface ProjectEgressIntercept {
   /** Release this interceptor if it is still the current one. */
   release(): Promise<void>;
   [Symbol.dispose](): void;
+}
+
+/**
+ * Every node in the capability tree answers `__describe()` — see
+ * {@link Description}. Interfaces below extend this instead of redeclaring;
+ * nodes with structured extras (Session, Agent, CapabilityHost, the project
+ * itx) declare their own narrowed signature.
+ */
+export interface Describable {
+  __describe(): Promise<Description>;
 }
 
 /** The `itx.integrations.gmail` built-in: Gmail REST proxy for the project's Google account. */
@@ -676,6 +720,22 @@ export interface Secret {
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: StreamProcessorRpc<SecretDescription>;
+}
+
+/**
+ * Slack Web API surface exposed by the seeded project worker
+ * (`itx.worker.slack.chat.postMessage({...})`).
+ *
+ * The seeded repo implements this in userland with the real `@slack/web-api`
+ * package (installed by the worker build pipeline from its `package.json`), so
+ * any nested Web API method family resolves — the index signature reflects
+ * that this tree is as wide as the SDK's.
+ */
+export interface ProjectWorkerSlack {
+  chat: {
+    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  } & Record<string, unknown>;
+  [family: string]: unknown;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -863,6 +923,8 @@ export type ProjectDescription = Description & {
 export type ProjectProcessorState = {
   createRequest: { projectId: string; slug: string } | null;
   created: boolean;
+  onboardingActive: boolean;
+  onboardingCompletedAt: string | null;
   agents: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
@@ -1051,6 +1113,25 @@ export type CloudflareSandbox = object;
 /** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
+/**
+ * Per-stub dispatch options for `DynamicWorkerCollection.get`.
+ *
+ * `flattenNestedPaths` mirrors `provideCapability`: dotted calls on the stub
+ * become ONE `invokeCapability({ path, args })` call that the worker's own
+ * `invokeCapability` method dispatches in userspace (one RPC per call),
+ * instead of the default member-by-member replay on the entrypoint.
+ * `buildBudgetMs` bounds how long a call waits on a cold source build; past
+ * it the call fails with an error whose `name` is
+ * `"WorkerBuildInProgressError"` — the NAME is the contract (it survives
+ * Workers RPC; class identity does not), so userspace matches
+ * `error.name === "WorkerBuildInProgressError"` to render its own building
+ * page (the seeded template's router does exactly this).
+ */
+export type DynamicWorkerDispatchOptions = {
+  buildBudgetMs?: number;
+  flattenNestedPaths?: boolean;
+};
+
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
@@ -1112,6 +1193,17 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   type: "stateful";
   className: string;
   durableWorkerKey: string;
+  /**
+   * What a call does when the worker's source changed since the running
+   * version. `"block"` (default) waits for the rebuild — commit-then-call
+   * sees the new code. `"stale-while-rebuild"` keeps answering with the
+   * running version and swaps to the new build in the background: better
+   * availability, but the next few calls after a commit may see old code.
+   * The policy rides the REF, not the durable identity — callers sharing one
+   * `durableWorkerKey` should agree on it (and on `source`), or each call
+   * flips the facet to its own version.
+   */
+  updatePolicy?: "block" | "stale-while-rebuild";
 };
 
 type DynamicWorkerRefBase = {
@@ -1135,21 +1227,89 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 /**
- * Declarative source for a dynamic worker.
+ * Declarative source for a dynamic worker: an orthogonal file source plus
+ * Cloudflare-compatible build options.
  *
- * `inline` is the simplest execution primitive: the caller already has module
- * text and asks the Worker Loader to run it. `repo` keeps source identity
- * separate from runtime identity; the repo resolves the current worker source
- * and contributes its own cache key, so future repo commits affect the next use.
+ * Materialization resolves `files` to a file map and builds it through
+ * Cloudflare's worker bundler; the loader-ready output is cached by a
+ * deterministic build key, so the same source+options never builds twice.
  */
-export type DynamicWorkerSource =
+export type DynamicWorkerSource = {
+  files: WorkerFileSource;
+  options?: WorkerBuildOptions;
+};
+
+/**
+ * Where a dynamic worker's source files come from.
+ *
+ * `inline` supplies the file map directly — the primitive behind run-script and
+ * worker-backed provided capabilities where the caller hands over a small
+ * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names
+ * a project repo snapshot: a branch (late-bound, so future commits affect the
+ * next use) or a pinned commit, narrowed by include/exclude glob masks so a
+ * large repo does not become build input by default.
+ */
+export type WorkerFileSource =
   | {
       type: "inline";
-      mainModule: string;
-      modules: Record<string, string>;
+      files: Record<string, string>;
     }
   | {
       type: "repo";
       repoPath: string;
-      sourcePath: string;
+      /**
+       * Defaults to the repo's default branch when omitted. A pinned commit
+       * may name the branch it lives on — clones are single-branch, so an
+       * off-default-branch commit is unreachable without it.
+       */
+      ref?: { branch: string } | { commitOid: string; branch?: string };
+      include?: string[];
+      exclude?: string[];
     };
+
+/**
+ * Build options for a dynamic worker.
+ *
+ * This mirrors Cloudflare's `CreateWorkerOptions` from
+ * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
+ * selected {@link WorkerFileSource}) — deliberately not a parallel option
+ * language (drift fails typecheck via the assignability pin in
+ * domains/workers/schemas.ts; this file stays import-free because it is
+ * published verbatim as the itx types surface). `bundle: false` is allowed; the invariant is one OS
+ * materialization pipeline, not one bundled output file. When the file map has
+ * a `package.json` with dependencies, the bundler installs them from the npm
+ * registry at build time.
+ */
+export type WorkerBuildOptions = {
+  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  entryPoint?: string;
+  /** Bundle all dependencies into a single output file. Default: true. */
+  bundle?: boolean;
+  /** Modules kept external ("cloudflare:*" always is). */
+  externals?: string[];
+  /** Target environment. Default: "es2022". */
+  target?: string;
+  minify?: boolean;
+  sourcemap?: boolean;
+  /** npm registry URL for dependency installs. */
+  registry?: string;
+  jsx?: "transform" | "preserve" | "automatic";
+  jsxImportSource?: string;
+  define?: Record<string, string>;
+  loader?: Record<string, WorkerBundlerLoader>;
+  conditions?: string[];
+  virtualModules?: Record<string, string>;
+};
+
+/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
+export type WorkerBundlerLoader =
+  | "js"
+  | "jsx"
+  | "ts"
+  | "tsx"
+  | "json"
+  | "css"
+  | "text"
+  | "binary"
+  | "base64"
+  | "dataurl";

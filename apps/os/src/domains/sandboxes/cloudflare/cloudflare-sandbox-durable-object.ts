@@ -1,15 +1,34 @@
+import type { OutboundHandler } from "@cloudflare/containers";
 import { Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
+import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
-import { normalizeCloudflareSandboxPath } from "./utils.ts";
+import { normalizeSandboxPath } from "../utils.ts";
 
 /** Where the project repo is cloned inside every sandbox container. */
 const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
 
+// The container-outbound handler runs in the ContainerProxy WorkerEntrypoint,
+// not on a sandbox instance, so it only gets the container's opaque Durable
+// Object id — not the project it belongs to. This isolate-local cache turns
+// that id into a projectId with at most one lookup per sandbox per isolate;
+// the lookup itself dials the sandbox for its durable identity.
+const projectIdByContainerId = new Map<string, string>();
+
+async function resolveEgressProjectId(env: Env, containerId: string): Promise<string> {
+  const cached = projectIdByContainerId.get(containerId);
+  if (cached !== undefined) return cached;
+  const stub = env.SANDBOX.get(env.SANDBOX.idFromString(containerId));
+  const projectId = await stub.egressProjectId();
+  projectIdByContainerId.set(containerId, projectId);
+  return projectId;
+}
+
 /**
  * The sandbox's own address, as carried by its Durable Object name:
- * which project it belongs to and its `/sandboxes/cloudflare/...` path.
+ * which project it belongs to and its path (an agent's own path for agent
+ * sandboxes, `/sandboxes/cloudflare/...` for standalone ones).
  */
 type SandboxIdentity = { path: string; projectId: string };
 
@@ -18,18 +37,72 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
 /**
  * A project-scoped Cloudflare Sandbox: the `@cloudflare/sandbox` container
  * Durable Object, addressed like every other domain object
- * (`{projectId}.iterate/sandboxes/cloudflare/...`). The public surface IS
- * the SDK's — `itx.sandboxes.get(path)` returns this object's bare RPC stub
+ * (`{projectId}.iterate{path}` in the SANDBOX namespace). The public surface
+ * IS the SDK's — `itx.sandboxes.get(path)` returns this object's bare RPC stub
  * (exec, files, processes, ports, gitCheckout, …) with nothing wrapped on top.
  *
- * The one behavior added over the stock SDK class: every container start
- * kicks off a clone of the project repo to {@link SANDBOX_PROJECT_REPO_DIR},
- * so code in the sandbox finds the project's source checked out. Container
- * filesystems are ephemeral — a restart is a fresh disk — which is why the
- * clone re-runs per start rather than once at creation; `ensureProjectRepo()`
- * is the awaitable guarantee.
+ * Lifecycle is the SDK's, unchanged: getting the stub is cheap (no container),
+ * the first command boots the container, and the SDK's durable `sleepAfter`
+ * idle alarm (default 10m) stops it again. Identity and Durable Object storage
+ * survive sleep; the container FILESYSTEM does not — restorability comes from
+ * `onStart` re-provisioning (the repo clone below).
+ *
+ * Two behaviors are added over the stock SDK class:
+ *
+ * 1. Every container start kicks off a clone of the project repo to
+ *    {@link SANDBOX_PROJECT_REPO_DIR}, so code in the sandbox finds the
+ *    project's source checked out. Container filesystems are ephemeral — a
+ *    restart is a fresh disk — which is why the clone re-runs per start rather
+ *    than once at creation; `ensureProjectRepo()` is the awaitable guarantee.
+ *
+ * 2. ALL container egress is routed through the project's egress decision
+ *    point, exactly like a dynamic worker's `globalOutbound` — see the
+ *    `outbound` handler below. `interceptHttps` extends that to HTTPS by
+ *    man-in-the-middling TLS with the Cloudflare-provided container CA (the
+ *    stock `@cloudflare/sandbox` image installs it at start when
+ *    `SANDBOX_INTERCEPT_HTTPS` is set, which the SDK sets from this flag), so a
+ *    sandbox cannot reach the internet except through project policy.
  */
 export class CloudflareSandboxDurableObject extends Sandbox<Env> {
+  // Intercept HTTPS as well as HTTP: without this, only plaintext egress would
+  // reach the `outbound` handler and TLS traffic would bypass project policy.
+  override interceptHttps = true;
+
+  /**
+   * The catch-all container-egress handler: EVERY outbound request a sandbox
+   * container makes (HTTP and, via `interceptHttps`, HTTPS) arrives here and is
+   * forwarded to the owning project's Durable Object — the same decision point
+   * `ProjectEgressEntrypoint` gives dynamic workers. There is no direct
+   * internet path: a sandbox reaches the outside world only through project
+   * egress policy. Runs in the ContainerProxy WorkerEntrypoint (no sandbox
+   * `this`), so the project is recovered from the container id.
+   *
+   * Registered in a static BLOCK, not as `static outbound = …`. `outbound` is
+   * a static accessor on the base `Container` class whose setter registers the
+   * handler in the container-proxy's outbound registry. Under
+   * `useDefineForClassFields` (our ES2024 target) a `static` field would
+   * DEFINE an own data property that shadows that accessor — the setter never
+   * runs, nothing registers, and every request silently falls through to a
+   * direct `fetch` (TLS still MITM'd, but egress bypasses project policy). An
+   * assignment invokes the inherited setter, so the registry is populated.
+   */
+  static {
+    const outbound: OutboundHandler<Env> = async (request, env, ctx) => {
+      const projectId = await resolveEgressProjectId(env, ctx.containerId);
+      return projectStub(env.PROJECT, projectId).fetch(request);
+    };
+    this.outbound = outbound;
+  }
+
+  /**
+   * This sandbox's project, for the egress handler above. A plain read of the
+   * durable identity — the handler cannot see the Durable Object name, only the
+   * id, so it asks the instance who it belongs to.
+   */
+  async egressProjectId(): Promise<string> {
+    return this.#identity().projectId;
+  }
+
   /**
    * Idle containers hold an instance slot until this expires, and the app's
    * container namespace caps concurrent instances (maxInstances in
@@ -40,6 +113,31 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * restart after idle costs one container cold boot + repo clone.
    */
   override sleepAfter = "3m";
+
+  /**
+   * Idle expiry DESTROYS the container instead of the SDK's stop (SIGTERM).
+   * A stopped container keeps its instance ASSIGNED to this Durable Object,
+   * and assignments count against the app's max_instances and never expire on
+   * their own (`wrangler containers info` on a slot mid-marathon: active 0,
+   * assigned 99 — including day-old idle slots still holding their last run's
+   * assignments; only destroy or an app rollout releases them). Every e2e
+   * fixture creates a fresh sandbox DO, so stop-on-idle leaks ~7-8 assignments
+   * per preview e2e run and the cap wedges every new sandbox start after
+   * ~a dozen runs — the real mechanism behind the recurring "Container is
+   * starting/provisioning" windows (docs/preview-e2e-flake-hunt.md flake 23,
+   * superseding the flake 19/20 theories). Destroy costs us nothing extra: a
+   * sandbox filesystem is ephemeral across sleep anyway (see class docs), so
+   * stop-then-wake and destroy-then-wake are the same cold boot + re-clone.
+   * The SDK's keepAlive guard is preserved (its own override skips shutdown
+   * when a caller enabled keepAlive; the field is private, hence the cast).
+   */
+  override async onActivityExpired(): Promise<void> {
+    const keepAlive = (this as unknown as { keepAliveEnabled?: boolean }).keepAliveEnabled === true;
+    if (keepAlive) {
+      return super.onActivityExpired();
+    }
+    await this.destroy();
+  }
 
   /**
    * Record who this sandbox is before any other traffic reaches it.
@@ -60,7 +158,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * must match `ctx.id.name` whenever the runtime provides it).
    */
   async ensureIdentity(identity: SandboxIdentity): Promise<void> {
-    const path = normalizeCloudflareSandboxPath(identity.path);
+    const path = normalizeSandboxPath(identity.path);
     const expectedName = DurableObjectNameCodec.stringify({
       projectId: identity.projectId,
       path,
@@ -86,7 +184,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     const name = this.ctx.id.name;
     if (name !== undefined) {
       const parsed = DurableObjectNameCodec.parse(name);
-      return { path: normalizeCloudflareSandboxPath(parsed.path), projectId: parsed.projectId };
+      return { path: normalizeSandboxPath(parsed.path), projectId: parsed.projectId };
     }
     const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
     if (!stored) {

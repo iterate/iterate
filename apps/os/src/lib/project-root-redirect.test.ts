@@ -19,11 +19,11 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "beta" },
-      welcome: false,
+      onboarding: false,
     });
   });
 
-  test("redirects to the only ready project without welcome mode", () => {
+  test("sends the only ready project to onboarding", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -32,11 +32,11 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      welcome: false,
+      onboarding: true,
     });
   });
 
-  test("sends a single auth-created missing project through welcome mode", () => {
+  test("sends a single auth-created missing project to onboarding", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -45,7 +45,7 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      welcome: true,
+      onboarding: true,
     });
   });
 

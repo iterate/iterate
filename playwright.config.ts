@@ -16,7 +16,11 @@ export default defineConfig({
   // dev server isn't hammered.
   fullyParallel: !!process.env.CI,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  // Two retries, not one: platform faults arrive in bursts and a single retry
+  // often re-rolls inside the same bad window (see apps/os/e2e/vitest.config.ts
+  // for the observed double-fault). A real regression still fails all three
+  // attempts within the per-test timeout.
+  retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 6 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [

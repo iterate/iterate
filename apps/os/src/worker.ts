@@ -21,14 +21,44 @@ import { withEvlog } from "@iterate-com/shared/evlog";
 import { trustedInternalAuthContext } from "./auth.ts";
 import { e2eFixtureResponse } from "./e2e-fixtures.ts";
 import type { Env } from "./env.ts";
-import { apiWorkerRequest, decideIngressRoute, type IngressResolvers } from "./ingress.ts";
+import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "./project-directory.ts";
-import { ProjectCollectionRpcTarget, UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
+import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
+import {
+  defaultProjectWorkerRef,
+  ProjectCollectionRpcTarget,
+  UnauthenticatedOsRpcTarget,
+} from "./rpc-targets.ts";
+import type { ProjectWorker } from "./types.ts";
 import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
 import type { RequestContext } from "./request-context.ts";
+
+/** Long enough for warm-cache loads and quick bundles; past it, show the page. */
+const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
+
+function workerBuildingResponse(): Response {
+  return new Response(
+    `<!doctype html>
+      <html>
+        <head>
+          <meta http-equiv="refresh" content="3" />
+          <title>Building…</title>
+        </head>
+        <body>
+          <main>
+            <p>Your worker is building — this page retries automatically.</p>
+          </main>
+        </body>
+      </html>`,
+    {
+      status: 503,
+      headers: { "content-type": "text/html; charset=utf-8", "retry-after": "3" },
+    },
+  );
+}
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
@@ -42,6 +72,14 @@ export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-d
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
+// The container-outbound gateway. The container runtime dials it through
+// `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every
+// sandbox container's outbound HTTP(S) reaches it before anything leaves the
+// account (see CloudflareSandboxDurableObject's `outbound` handler). Re-export
+// the `@cloudflare/sandbox` build of it (a subclass of the containers one) so
+// the DO's Container base and this gateway share one outbound-handler registry
+// and its SDK-internal mount routing stays intact.
+export { ContainerProxy } from "@cloudflare/sandbox";
 
 export default {
   async fetch(inbound: Request, env: Env, ctx: ExecutionContext) {
@@ -58,11 +96,15 @@ export default {
     const mcpRequest = rewriteMcpHostRequest({ config, request });
     if (mcpRequest) return await appFetch(mcpRequest, ctx, config);
 
-    const apiRequest = apiWorkerRequest({ config, request });
-    if (apiRequest) return await apiFetch(apiRequest, env, ctx, config);
+    const route = await decideIngressRoute({
+      config,
+      headers: request.headers,
+      method: request.method,
+      resolvers: directoryResolvers(config, env),
+      url: request.url,
+    });
+    if (route.lane !== "os") return await apiFetch(request, ctx, config, route);
 
-    // Everything else is the OS host (project + custom hostnames all took the
-    // api lane above, which owns the 404 for hosts that resolve to nothing).
     return await appFetch(request, ctx, config);
   },
 };
@@ -101,19 +143,16 @@ async function appFetch(request: Request, ctx: ExecutionContext, config: AppConf
  * and project ingress — every lane `decideIngressRoute` (src/ingress.ts) can
  * resolve.
  */
-async function apiFetch(request: Request, env: Env, ctx: ExecutionContext, config: AppConfig) {
+async function apiFetch(
+  request: Request,
+  ctx: ExecutionContext,
+  config: AppConfig,
+  route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
+) {
   const url = new URL(request.url);
 
   const fixtureResponse = await e2eFixtureResponse(request);
   if (fixtureResponse !== null) return fixtureResponse;
-
-  const route = await decideIngressRoute({
-    config,
-    headers: request.headers,
-    method: request.method,
-    resolvers: directoryResolvers(config, env),
-    url: request.url,
-  });
 
   if (route.lane === "project") {
     const project = await new ProjectCollectionRpcTarget({
@@ -129,7 +168,20 @@ async function apiFetch(request: Request, env: Env, ctx: ExecutionContext, confi
     if (request.body !== null) {
       (init as RequestInit & { duplex: "half" }).duplex = "half";
     }
-    return await project.worker.fetch(new Request(route.fetch.url, init));
+    // Browser-facing lane: a cold build (first use after a commit) should
+    // show a refreshing "building" page rather than hang the request. The
+    // budgeted worker stub throws a named error past the budget while the
+    // build finishes into the artifact cache; refreshes then hit it.
+    const worker = project.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+      buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
+      flattenNestedPaths: true,
+    });
+    try {
+      return await worker.fetch(new Request(route.fetch.url, init));
+    } catch (error) {
+      if (!isWorkerBuildInProgressError(error)) throw error;
+      return workerBuildingResponse();
+    }
   }
 
   if (route.lane === "notFound") {
@@ -172,12 +224,10 @@ function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
 
 function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
-  headers.delete("x-iterate-resolved-ingress");
   headers.delete("x-iterate-app");
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
-  headers.delete("x-iterate-ingress-hostname");
   return new Request(request, { headers });
 }
