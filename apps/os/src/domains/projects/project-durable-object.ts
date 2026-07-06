@@ -125,10 +125,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return secretErrorResponse("secret_reference_required", 400);
     }
     if (secretPaths.length === 0) return fetch(request);
-    if (secretPaths.length > 1) {
-      return secretErrorResponse("multiple_secret_paths_not_supported", 400);
-    }
 
+    // A request may reference several secrets (app-tier + connection-tier).
+    // Hand it to any one of them — the Secret DO chains the rest, each hop
+    // enforcing its own host pin (see SecretDurableObject.#defaultFetch).
     return this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,

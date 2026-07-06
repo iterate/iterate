@@ -552,6 +552,14 @@ class SecretRpcTarget extends RpcTarget implements Secret {
     return this.durableObjectStub.fetch(request);
   }
 
+  hmac(input: Parameters<Secret["hmac"]>[0]) {
+    return this.durableObjectStub.hmac(input);
+  }
+
+  matches(input: Parameters<Secret["matches"]>[0]) {
+    return this.durableObjectStub.matches(input);
+  }
+
   update(input: Parameters<Secret["update"]>[0]) {
     return this.durableObjectStub.update(input);
   }
