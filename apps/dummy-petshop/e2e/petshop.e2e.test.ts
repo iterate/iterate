@@ -156,14 +156,16 @@ describe("deployed dummy-petshop", () => {
   });
 
   test("webhook firing signs with the current secret; badSignature does not", async () => {
-    // Fired at the shop's own 404 — the echoed payload+signature is what we
-    // verify, so no receiver is needed; status proves the POST happened.
-    const target = `${baseUrl}/webhook-target-that-404s`;
+    // The echoed payload+signature is what we verify — no receiver needed
+    // (real delivery against a live HTTP sink is covered by the unit suite).
+    // The target is the shop's own hostname purely so the URL is real; a
+    // worker cannot fetch its own zone route, so the delivery status is
+    // whatever the edge says (522) and deliberately not asserted.
+    const target = `${baseUrl}/webhook-target`;
     const state = await (await shop("/__backdoor/state")).json<{ webhookSigningSecret: string }>();
     const good = await (
       await shop("/__backdoor/webhooks/fire", postJson({ url: target }))
     ).json<FiredWebhook>();
-    expect(good.status).toBe(404);
     const expected = `sha256=${createHmac("sha256", state.webhookSigningSecret).update(good.payload).digest("hex")}`;
     expect(good.signature).toBe(expected);
 

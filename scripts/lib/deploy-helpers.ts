@@ -1,6 +1,6 @@
 /**
  * Shared primitives for the per-app deploy/ensure-resources/erase-data
- * scripts (apps/{os,auth,semaphore,tunnels,streams-example-app}/scripts).
+ * scripts (apps/{os,auth,semaphore,tunnels,streams-example-app,dummy-petshop}/scripts).
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke probes, the
@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import JSON5 from "json5";
 import type { DeployableEnv, EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
@@ -173,8 +174,18 @@ export async function deployWithSecrets(input: {
       // The bootstrap deploy carries no --secrets-file, and a classless
       // worker has no existing secrets either — wrangler's secrets.required
       // enforcement would fail it. Deploy from a config copy without the
-      // `secrets` block; the real deploy below re-enforces it.
-      const { secrets: _secrets, ...config } = JSON.parse(readFileSync(input.builtConfig, "utf8"));
+      // `secrets` blocks (top-level for vite's env-flattened dist output,
+      // per-env for `--env`-selected configs); the real deploy below
+      // re-enforces them. JSON5 because the config may be commented JSONC
+      // (generated or checked-in), not just the vite build's plain JSON.
+      const { secrets: _secrets, ...config } = JSON5.parse(readFileSync(input.builtConfig, "utf8"));
+      if (config.env) {
+        config.env = Object.fromEntries(
+          Object.entries(config.env as Record<string, Record<string, unknown>>).map(
+            ([envName, { secrets: _envSecrets, ...envBlock }]) => [envName, envBlock],
+          ),
+        );
+      }
       // Wrangler resolves relative paths (assets, containers) against the
       // config's directory, so the copy must live next to the original.
       const bootstrapConfig = join(dirname(input.builtConfig), "wrangler.bootstrap.json");
