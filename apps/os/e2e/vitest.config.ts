@@ -10,6 +10,7 @@ import {
 } from "@iterate-com/shared/test-support/vitest-e2e";
 import {
   E2E_CI_RETRIES,
+  E2E_CI_RETRY_DELAY_MS,
   E2E_TEST_TIMEOUT_MS,
   RetryTelemetryReporter,
 } from "@iterate-com/shared/test-support/e2e-policy";
@@ -103,7 +104,7 @@ export default defineConfig({
           // into project configs — the root-level retry silently never
           // applied (verified: a CI-profile run showed a failed test with
           // zero retry attempts).
-          retry: ci ? E2E_CI_RETRIES : 0,
+          retry: ci ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
         },
       },
       {
@@ -122,7 +123,7 @@ export default defineConfig({
           hookTimeout: 45_000,
           // See the node project: `retry` must live on each project config,
           // and one retry is the policy.
-          retry: ci ? E2E_CI_RETRIES : 0,
+          retry: ci ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
           browser: {
             commands: {
               // Browser WebSockets cannot set Authorization headers, so the
