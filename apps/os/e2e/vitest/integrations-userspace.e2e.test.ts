@@ -4,7 +4,7 @@
 // data, not deployment. It is then addressed exactly like a built-in, at fully
 // qualified connection paths: itx.integrations.waitrose.family.searchProducts(...)
 // and itx.integrations.waitrose.mum.basket.add(...). Per-connection session
-// secrets ride as getSecret({ path }) placeholders in the worker's fetch
+// secrets ride as getSecret(path) placeholders in the worker's fetch
 // headers and substitute at project egress: the echo fixture (standing in for
 // the Waitrose API) is the only party that ever sees material.
 
@@ -27,7 +27,7 @@ function waitroseWorkerSource(echoUrl: string): string {
     // cannot see its tokens.
     function waitroseSdk(connection) {
       const authorization =
-        'getSecret({ path: "/secrets/integrations/waitrose/' + connection + '/session" })';
+        'getSecret("/secrets/integrations/waitrose/' + connection + '/session")';
       const call = async (operation, payload) => {
         const response = await fetch(WAITROSE_API_URL, {
           method: "POST",
@@ -168,7 +168,7 @@ describe("provided integrations", () => {
       expect(search).toEqual({
         operation: "search-products",
         payload: { term: "milk" },
-        sentAuthorization: 'getSecret({ path: "/secrets/integrations/waitrose/family/session" })',
+        sentAuthorization: 'getSecret("/secrets/integrations/waitrose/family/session")',
         receivedAuthorization: secrets.family,
       });
 
@@ -176,7 +176,7 @@ describe("provided integrations", () => {
       expect(basket).toEqual({
         operation: "basket-add",
         payload: { itemId: "item-123" },
-        sentAuthorization: 'getSecret({ path: "/secrets/integrations/waitrose/mum/session" })',
+        sentAuthorization: 'getSecret("/secrets/integrations/waitrose/mum/session")',
         receivedAuthorization: secrets.mum,
       });
 

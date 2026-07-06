@@ -120,7 +120,7 @@ _Avoid_: app config, runtime config
   created with `stream.at(path)`.
 - In the current OS secrets slice, every **Secret** belongs to exactly one **ProjectId**.
 - A **Secret** may have **Secret Metadata** in addition to **Secret Material**.
-- `getSecret({ path })` is an egress placeholder string. It is not a public
+- `getSecret(path)` is an egress placeholder string. It is not a public
   secret-read API and does not return raw **Secret Material**.
 - **OAuth Client Configuration** belongs in **App Config** because workers and local/Docker runtimes need it when handling OAuth callbacks and webhooks.
 - A **Connection** may yield a project-wide **Secret** that runtime capabilities can read.
@@ -170,7 +170,7 @@ _Avoid_: app config, runtime config
 - Processor subscriptions were described as WebSocket callbacks or domain Durable Object `afterAppend` callbacks — resolved: use **Processor Subscriptions** delivered to hosted stream processors.
 - "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for deploy-script-only inputs.
 - "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **StreamCollection** for the catalog and **Stream** for one path-addressed handle.
-- "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets slice: `getSecret({ path })` is a placeholder consumed by egress; public secret APIs never return material.
+- "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets slice: `getSecret(path)` is a placeholder consumed by egress; public secret APIs never return material.
 - "Slack OAuth client" could mean the OAuth app config, a workspace connection, or a token — resolved: provider OAuth app settings are **OAuth Client Configuration** in **App Config**.
 - "Slack connection" could mean the OAuth app, workspace claim, or token — resolved: the Slack workspace grant is a **Slack Team Claim**, an instance of **Provider Claim**, and its token is a project-wide **Secret**.
 - "Google connection" was initially considered user-scoped because OS1 works that way — resolved for the current OS secrets slice: Google Connections are project-level, and user-level Secrets are out of scope.

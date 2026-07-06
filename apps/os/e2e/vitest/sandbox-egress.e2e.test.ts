@@ -12,7 +12,7 @@
 //      owning project's Durable Object (the same decision point dynamic
 //      workers' `globalOutbound` uses), because...
 //   3. Secret substitution — the echo sees the real secret MATERIAL in place of
-//      the `getSecret({ path })` placeholder the container sent. Substitution
+//      the `getSecret(path)` placeholder the container sent. Substitution
 //      only happens server-side in the Project DO's egress path; the container
 //      never holds the material.
 //
@@ -36,7 +36,7 @@ function deployedBaseUrl(): string | null {
 }
 
 // Wrap a string as a single POSIX-shell double-quoted argument. The header
-// value carries `"` (inside `getSecret({ path: "..." })`), so `"` and the
+// value carries `"` (inside `getSecret("...")`), so `"` and the
 // other shell-active characters must be escaped for `exec`'s shell.
 function shellDoubleQuote(value: string): string {
   return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
@@ -72,7 +72,7 @@ describe("sandbox egress", () => {
       // agent's `itx.sandbox` resolves to. Getting it needs no container; the
       // curl below boots one.
       const sandboxPath = `/agents/egress-proof/${crypto.randomUUID()}`;
-      const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
+      const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret("${secretPath}")`;
       const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
       // The issuer of the cert the container is presented for the echo host:
       // the interception CA when HTTPS is MITM'd, the origin's real CA if not.
