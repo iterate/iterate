@@ -368,20 +368,35 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   }
 
   #ensureWorkspace(): Promise<void> {
-    this.#workspaceReady ??= (async () => {
+    if (this.#workspaceReady !== undefined) return this.#workspaceReady;
+    // `run` is only read inside the closures below, which execute strictly
+    // after the assignment at the bottom (the first read sits behind two
+    // awaits) — initialized to undefined so TS's definite-assignment analysis
+    // doesn't have to prove that ordering.
+    let run: Promise<void> | undefined = undefined;
+    run = (async () => {
       const restored = await this.#restoreWorkspace();
       // Clone when the restore didn't produce a checkout (no backup yet, the
       // backup expired, or it somehow predates the repo). #cloneProjectRepo
       // probes the marker itself, so a restored checkout makes this a no-op.
       await this.#cloneProjectRepo();
+      // A container restart mid-run reset the state for a NEW, empty disk —
+      // everything this run did landed on the old one. Only the still-current
+      // run may mark the workspace provisioned: a stale run setting the flag
+      // would let the idle backup snapshot a half-provisioned /workspace over
+      // the last good backup.
+      if (this.#workspaceReady !== run) return;
       if (!restored) this.#emitLifecycleEvent("workspace-cloned");
       this.#workspaceProvisioned = true;
     })().catch((error: unknown) => {
-      // Let the next ensure retry instead of caching the failure forever.
-      this.#workspaceReady = undefined;
+      // Let the next ensure retry instead of caching the failure forever —
+      // but only clear OUR OWN registration; a stale failing run must not
+      // clobber the promise of the newer run that replaced it.
+      if (this.#workspaceReady === run) this.#workspaceReady = undefined;
       throw error;
     });
-    return this.#workspaceReady;
+    this.#workspaceReady = run;
+    return run;
   }
 
   /**
