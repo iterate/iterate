@@ -24,6 +24,7 @@
     "test": "pnpm test:unit",
     "test:unit": "vitest run",
     "e2e": "vitest --config e2e/vitest.config.ts",
+    "playwright": "playwright test",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
