@@ -134,9 +134,15 @@ Cloudflare image variant. We ship the **Codex CLI** (`codex`, on PATH), which
 uses `OPENAI_API_KEY`:
 
 ```ts
-// repo is already checked out at the cwd; the key resolves at egress
+// Codex needs a one-time login that reads the key from the env (it doesn't
+// auto-use OPENAI_API_KEY for its Responses endpoint). Both the login and the
+// model call egress through project policy, which substitutes the real key for
+// the getSecret placeholder — verified live: `codex exec` returned a
+// completion and the secret's usedCount incremented.
+await itx.sandbox.exec("printenv OPENAI_API_KEY | codex login --with-api-key");
 const r = await itx.sandbox.exec(
-  'codex exec --skip-git-repo-check -m gpt-4o-mini "summarize README.md in one line"',
+  "codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox" +
+    ' -m gpt-4o-mini "summarize README.md in one line"',
 );
 ```
 
