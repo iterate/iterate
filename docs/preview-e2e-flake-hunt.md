@@ -92,14 +92,14 @@ lease repair) before acquiring a fresh slot. Guard test in
 Failure signature (Depot cleanup jobs, and any run sharing the window):
 
 ```
-[alchemy.run] JWKS fetch attempt N failed, retrying: Error: HTTP 503   (x60)
-Error: [alchemy.run] Forge key is set but the deploy-time JWKS fetch from
+JWKS fetch attempt N failed, retrying: Error: HTTP 503   (x60)
+Error: Forge key is set but the deploy-time JWKS fetch from
 https://auth.iterate-preview-N.com/api/auth failed (HTTP 503). ... Aborting
 ```
 
 Preview cleanup destroys all apps in one parallel batch. Auth's teardown
 usually finishes first and _parks_ its routes (#1622) — parked routes serve
-503\. The OS teardown then runs `apps/os/alchemy.run.ts`, whose top-level
+503\. The OS teardown then ran the deploy-time JWKS bake, whose
 `resolveStaticAuthJwks` polls the slot's auth `/jwks` for 120 s before the
 forge check aborts the process. Deterministic whenever auth's teardown wins
 the race; audited 2026-07-03 Depot runs show it failing exactly that way
@@ -107,8 +107,8 @@ the race; audited 2026-07-03 Depot runs show it failing exactly that way
 on deploys when the slot's auth is genuinely broken — there it is a symptom,
 not the disease.
 
-Fix: `alchemy.run.ts` skips the JWKS bake entirely when invoked with
-`--destroy` — a teardown has no worker to bake a key set into.
+Fix: the teardown path skips the JWKS bake entirely — a teardown has no
+worker to bake a key set into.
 
 ### 3. Signup/create-project specs: double navigation redeems the OAuth code twice
 

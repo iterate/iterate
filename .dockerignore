@@ -20,7 +20,6 @@ dist
 .mf
 .wrangler
 .dev.vars*
-.alchemy
 
 !.dev.vars.example
 .env*

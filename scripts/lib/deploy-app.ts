@@ -1,7 +1,6 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import {
-  adoptDoMigrationTag,
   collectSecrets,
   deployWithSecrets,
   findBuiltWranglerConfig,
@@ -60,9 +59,9 @@ export async function deployApp<E extends DeployableEnv>(input: {
   requiredSecrets?: readonly string[];
   optionalSecrets?: readonly string[];
   /**
-   * Whether the worker hosts Durable Object classes — drives the alchemy-era
-   * migration-tag adoption and the classless bootstrap deploy (see
-   * deploy-helpers.ts). Default true; auth is the current false.
+   * Whether the worker hosts Durable Object classes — drives the classless
+   * bootstrap deploy for a brand-new env's first upload (see deploy-helpers.ts).
+   * Default true; auth is the current false.
    */
   hasDurableObjects?: boolean;
   /**
@@ -109,7 +108,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
   await input.prepare?.(ctx, secretValues, credentials);
 
   const hasDurableObjects = input.hasDurableObjects ?? true;
-  if (hasDurableObjects) await adoptDoMigrationTag(ctx, workerName);
 
   let builtConfig: string;
   let extraDeployArgs: string[] | undefined;

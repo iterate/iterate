@@ -253,8 +253,8 @@ fixes, documented here in case they resurface:
 3. **Same-script containers only.** The single-worker topology declares the
    container in wrangler.jsonc's `containers` alongside a same-script DO
    binding — there is no cross-script `script_name` to get wrong anymore
-   (the historical alchemy-era failure mode where a self-referential
-   cross-script binding dropped `ctx.id.name`).
+   (the historical failure mode where a self-referential cross-script
+   binding dropped `ctx.id.name`).
 
 Two more facts worth knowing:
 

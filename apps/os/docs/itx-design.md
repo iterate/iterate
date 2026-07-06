@@ -1119,7 +1119,7 @@ origin })`, set by the first delegating hop, preserved upward; the
   registry falls through to on lookup miss. Own rows shadow; describe()
   merges with the code context's name as owner; child contexts inherit
   through the existing parent delegation.
-- ~~Does alchemy handle DO class deletion?~~ → Yes (#1464,
+- ~~Does the deploy tooling handle DO class deletion?~~ → Yes (#1464,
   OutboundMcpFromOurClientCapability): removing the namespace emits the
   deleted_classes migration. Tombstone only needed when durable stream
   subscribers dial the namespace (CodemodeSession).
