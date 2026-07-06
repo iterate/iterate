@@ -13,10 +13,16 @@
     "typecheck": "pnpm gen:wrangler && tsc --noEmit"
   },
   "dependencies": {
-    "dedent": "^1.7.0"
+    "@modelcontextprotocol/server": "2.0.0-beta.1",
+    "@orpc/openapi": "1.13.14",
+    "@orpc/server": "1.13.14",
+    "@orpc/zod": "1.13.14",
+    "dedent": "^1.7.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
+    "@orpc/client": "1.13.14",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",

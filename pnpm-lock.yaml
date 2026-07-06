@@ -318,13 +318,31 @@ importers:
 
   apps/dummy-petshop:
     dependencies:
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0-beta.1
+        version: 2.0.0-beta.1
+      '@orpc/openapi':
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/server':
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/zod':
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.14(@opentelemetry/api@1.9.0))(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.4.3)
       dedent:
         specifier: ^1.7.0
         version: 1.7.2
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      '@orpc/client':
+        specifier: 1.13.14
+        version: 1.13.14(@opentelemetry/api@1.9.0)
       trpc-cli:
         specifier: 0.15.1
         version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
@@ -3365,6 +3383,10 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@modelcontextprotocol/server@2.0.0-beta.1':
+    resolution: {integrity: sha512-83scKauajX9fWbSIC4NBYdnvXajH+cqvX8QqsrPH0XNgqtMmym1kWucMO7YyNkrBD9C7/R+FRCmkjC9kgEKXlQ==}
+    engines: {node: '>=20'}
 
   '@mrleebo/prisma-ast@0.13.1':
     resolution: {integrity: sha512-XyroGQXcHrZdvmrGJvsA9KNeOOgGMg1Vg9OlheUsBOSKznLMDl+YChxbkboRHvtFYJEMRYmlV3uoo/njCw05iw==}
@@ -13055,7 +13077,7 @@ snapshots:
       jose: 6.2.2
       kysely: 0.28.16
       nanostores: 1.1.1
-      zod: 4.3.6
+      zod: 4.4.3
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
       '@opentelemetry/api': 1.9.0
@@ -14894,6 +14916,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@modelcontextprotocol/server@2.0.0-beta.1':
+    dependencies:
+      zod: 4.4.3
+
   '@mrleebo/prisma-ast@0.13.1':
     dependencies:
       chevrotain: 10.5.0
@@ -15396,6 +15422,22 @@ snapshots:
       escape-string-regexp: 5.0.0
       wildcard-match: 5.1.4
       zod: 4.3.6
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - crossws
+      - fastify
+      - ws
+
+  '@orpc/zod@1.13.14(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.14(@opentelemetry/api@1.9.0))(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.4.3)':
+    dependencies:
+      '@orpc/contract': 1.13.14(@opentelemetry/api@1.9.0)
+      '@orpc/json-schema': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/openapi': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@orpc/shared': 1.13.14(@opentelemetry/api@1.9.0)
+      escape-string-regexp: 5.0.0
+      wildcard-match: 5.1.4
+      zod: 4.4.3
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - crossws

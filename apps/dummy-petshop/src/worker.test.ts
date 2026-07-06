@@ -8,6 +8,7 @@ import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { seedPets } from "./pets.ts";
 import { randomSealKey } from "./seal.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
@@ -36,6 +37,7 @@ function makeShop(backdoorSecret?: string): Shop {
     state: new PetshopStateDurableObject({ storage } as unknown as DurableObjectState, {}),
     sealKey: randomSealKey(),
     backdoorSecret,
+    pets: seedPets(),
   };
   return (path, init) =>
     handlePetshopRequest(new Request(`https://petshop.example${path}`, init), deps);

@@ -14,6 +14,9 @@
  * the real state class over an in-memory storage fake.
  */
 import dedent from "dedent";
+import { handleMcpRequest } from "./mcp.ts";
+import { type Pet, seedPets } from "./pets.ts";
+import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
 import { hmacSha256Hex, nowSeconds, seal, unseal } from "./seal.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
@@ -55,6 +58,14 @@ export interface PetshopDeps {
   >;
   sealKey: string;
   backdoorSecret?: string;
+  /**
+   * The account's (fictional) pet catalogue — a per-instance in-memory array
+   * (pets.ts), shared by GET /api/pets, the oRPC/OpenAPI procedures, and the
+   * MCP tools. In-memory rather than durable because pets are demo data; a
+   * fresh array per worker isolate / per test keeps createPet mutations
+   * isolated. The default `fetch` seeds one with seedPets().
+   */
+  pets: Pet[];
 }
 
 /** Sealed authorization code; redirectUri is re-checked at exchange (RFC 6749 §4.1.3). */
@@ -110,6 +121,11 @@ const INDEX = dedent`
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}
   GET  /api/pets            the account's (entirely fictional) pets
+
+  GET  /openapi.json        OpenAPI 3.1 doc for the typed pets API (listPets/getPet/createPet)
+  POST /rpc/*               oRPC handler for the pets API (what an @orpc/client talks); bearer-protected
+  GET|POST /api/v2/*        the same pets procedures served REST-shaped (per the OpenAPI doc)
+  GET|POST /mcp             MCP server (streamable HTTP): tools list_pets, get_pet, create_pet; bearer-protected
 
   GET  /__backdoor/state                   the whole mutable state, for spec assertions
   POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
@@ -479,13 +495,29 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
         tokenExpiresInSeconds: grant.exp - nowSeconds(),
       });
     }
-    return json({
-      owner: grant.sub,
-      pets: [
-        { id: "pet-1", name: "Biscuit", species: "beagle" },
-        { id: "pet-2", name: "Goldie", species: "goldfish" },
-      ],
-    });
+    return json({ owner: grant.sub, pets: deps.pets });
+  }
+  // The typed surfaces — oRPC (/rpc), the REST-shaped OpenAPI handler
+  // (/api/v2), and MCP (/mcp) — all share the shop's OAuth bearer check and
+  // the same in-memory pet catalogue.
+  if (key === "GET /openapi.json") {
+    if (!(await accessGrant(request, deps))) return json({ error: "invalid_token" }, 401);
+    return json(await petshopOpenApiDocument(url.origin));
+  }
+  if (url.pathname.startsWith("/rpc") || url.pathname.startsWith("/api/v2")) {
+    const grant = await accessGrant(request, deps);
+    if (!grant) return json({ error: "invalid_token" }, 401);
+    const response = await handlePetsRpcRequest(
+      request,
+      { owner: grant.sub, pets: deps.pets },
+      url.pathname.startsWith("/rpc") ? "rpc" : "openapi",
+    );
+    return response ?? json({ error: "not_found" }, 404);
+  }
+  if (url.pathname === "/mcp") {
+    const grant = await accessGrant(request, deps);
+    if (!grant) return json({ error: "invalid_token" }, 401);
+    return handleMcpRequest(request, { owner: grant.sub, pets: deps.pets });
   }
   if (url.pathname.startsWith("/__backdoor/")) return backdoor(key, request, deps);
   return json({ error: "not_found" }, 404);
@@ -497,6 +529,7 @@ export default {
       state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
       sealKey: env.PETSHOP_SEAL_KEY,
       backdoorSecret: env.PETSHOP_BACKDOOR_SECRET,
+      pets: seedPets(),
     });
   },
 };
