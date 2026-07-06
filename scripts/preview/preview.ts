@@ -1228,18 +1228,15 @@ const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+// auth/preview root inherits these from auth/dev when it doesn't already carry
+// its own value. All are canonical APP_CONFIG_* names (the AppConfig port,
+// #1594); the pre-port legacy flat names are gone from every auth config.
 const sharedAuthPreviewSecretsCopiedFromDev = [
-  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_ID", legacyDevNames: ["GOOGLE_CLIENT_ID"] },
-  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_SECRET", legacyDevNames: ["GOOGLE_CLIENT_SECRET"] },
-  {
-    appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
-    legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
-  },
-  { appConfigName: "APP_CONFIG_SIGNUP_ALLOWLIST", legacyDevNames: ["SIGNUP_ALLOWLIST"] },
-] as const satisfies readonly {
-  appConfigName: string;
-  legacyDevNames: readonly string[];
-}[];
+  "APP_CONFIG_GOOGLE_CLIENT_ID",
+  "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  "APP_CONFIG_EMAIL_SENDER_DOMAIN",
+  "APP_CONFIG_SIGNUP_ALLOWLIST",
+] as const;
 
 export const EnvironmentConfigLease = z.object({
   dopplerConfig: z.string().trim().min(1),
@@ -2195,38 +2192,25 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
+// Prefer an existing preview-root value; otherwise seed it from auth/dev.
 function resolveAuthPreviewRootSecret(input: {
   appConfigName: string;
-  legacyDevNames: readonly string[];
   readSecret: (project: string, config: string, name: string) => string | null;
 }) {
-  const previewValue = input.readSecret("auth", "preview", input.appConfigName);
-  if (previewValue) return previewValue;
-
-  const devValue = input.readSecret("auth", "dev", input.appConfigName);
-  if (devValue) return devValue;
-
-  for (const legacyName of input.legacyDevNames) {
-    const legacyValue = input.readSecret("auth", "dev", legacyName);
-    if (legacyValue) return legacyValue;
-  }
-
-  return null;
+  return (
+    input.readSecret("auth", "preview", input.appConfigName) ||
+    input.readSecret("auth", "dev", input.appConfigName)
+  );
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
-  for (const { appConfigName, legacyDevNames } of sharedAuthPreviewSecretsCopiedFromDev) {
-    // Prefer an existing preview-root value; otherwise seed it from auth/dev.
-    const value = resolveAuthPreviewRootSecret({
-      appConfigName,
-      legacyDevNames,
-      readSecret: getDopplerSecret,
-    });
+  for (const appConfigName of sharedAuthPreviewSecretsCopiedFromDev) {
+    const value = resolveAuthPreviewRootSecret({ appConfigName, readSecret: getDopplerSecret });
     if (!value) {
-      throw new Error(`auth/dev is missing ${[appConfigName, ...legacyDevNames].join(" or ")}`);
+      throw new Error(`auth/dev is missing ${appConfigName}`);
     }
     rootValues[appConfigName] = value;
   }
