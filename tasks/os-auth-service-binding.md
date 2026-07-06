@@ -49,9 +49,10 @@ WorkerEntrypoint implements AuthWorkerRpc`, where `fetch` runs the existing
    into a plain-function module (`project-directory.ts`) that both the RPC
    methods and — if still needed — the HTTP handlers call, so there is ONE
    implementation.
-3. **OS binding** (`apps/os/alchemy.run.ts` + `src/env.ts`): bind `auth-<stage>`
-   as a **required** `AUTH` binding on every OS worker (`authWorker = () =>
-env.AUTH`). Required-with-no-fallback is correct: OS already can't boot
+3. **OS binding** (`apps/os/scripts/generate-wrangler-config.ts` + `src/env.ts`):
+   bind `auth-<stage>` as a **required** `AUTH` binding on every OS worker
+   (`authWorker = () => env.AUTH`). Required-with-no-fallback is correct: OS
+   already can't boot
    without a live auth worker (deploy-time JWKS bake + all logins). New
    environments must deploy **auth before OS** (Cloudflare rejects the OS deploy
    otherwise — the intended loud failure).
@@ -66,9 +67,9 @@ env.AUTH`). Required-with-no-fallback is correct: OS already can't boot
    [remote binding](https://developers.cloudflare.com/workers/local-development/#remote-bindings)
    so `env.AUTH.method()` (fetch _and_ RPC) proxies to the deployed auth worker
    for the stage — unless `apps/auth` is running locally (loopback issuer), which
-   resolves through the local dev registry. This needed a small extension to
-   `patches/alchemy@0.83.3.patch` so generated wrangler configs emit
-   `remote: true` for a service binding carrying `dev.remote`.
+   resolves through the local dev registry. This needs the generated wrangler
+   config (scripts/generate-wrangler-config.ts) to emit `remote: true` for a
+   service binding carrying `dev.remote`.
 
 ## Gotchas hit during the prototype
 

@@ -38,11 +38,7 @@ prd:
 APP_CONFIG={}
 ```
 
-Everything else should already be inherited from `_shared`, including:
-
-```dotenv
-ALCHEMY_STAGE=${DOPPLER_CONFIG}
-```
+Everything else should already be inherited from `_shared`.
 
 ## Do This
 
@@ -139,8 +135,7 @@ doppler setup --project <project-slug> --config dev_jonas
 ```bash
 doppler secrets --only-names
 doppler secrets get APP_CONFIG --plain
-doppler run -- env | rg '^(DOPPLER_CONFIG|ALCHEMY_STAGE|ALCHEMY_LOCAL)='
-doppler secrets get ALCHEMY_PASSWORD --plain
+doppler run -- env | rg '^DOPPLER_CONFIG='
 doppler secrets -c dev_jonas
 ```
 
@@ -150,10 +145,8 @@ doppler secrets -c dev_jonas
 - Always create exactly `dev_jonas`, `dev_misha`, and `dev_rahul`.
 - For preview-enabled new-style apps, create only `dev`, `dev_jonas`, `dev_misha`, `dev_rahul`, `preview`, `preview_2` through `preview_9`, and `prd` unless the user explicitly asks for more.
 - `DOPPLER_CONFIG` is the canonical per-config selector, but it is injected by Doppler itself. Never create it as a secret.
-- `ALCHEMY_STAGE` should be set to `${DOPPLER_CONFIG}` in `_shared` so `dev_jonas` resolves to `dev_jonas`, `prd` resolves to `prd`, etc.
 - For a new project, the app-local template is just `APP_CONFIG={}` in `dev` and `prd`, plus `APP_CONFIG_BASE_URL` in each leased preview config when the app has a public route.
 - Always set `APP_CONFIG` to `{}` in `dev` and `prd`.
-- Do not set app-local `ALCHEMY_PASSWORD`, `ALCHEMY_STAGE`, or `ALCHEMY_STATE_TOKEN`. These come from `_shared`.
 - Do not add extra app-local secrets unless the app actually needs them.
 - If staging comes back later, give `stg` its own distinct password. Do not reuse `dev` or `prd`.
 - Personal Configs on the `dev` environment should always be off (dashboard **Development** → **⋮** → **Settings**, or `PUT` to `/v3/environments/environment` with `{"personal_configs":false}` as in step 4).

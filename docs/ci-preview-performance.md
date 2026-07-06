@@ -56,10 +56,11 @@ seconds and run alongside OS.
   flakes across the concurrent suites — and fails loudly if the slot is
   broken. The curl-round HTTP warmups that used to accompany it existed to
   absorb post-deploy edge 499/522s; those were zombie worker routes (routes
-  visible in the API but dead at the edge), which deploys now verify and heal
-  directly (`ensureWorkerRoutesAndDns` in
-  `packages/shared/src/alchemy/iterate-app.ts`) and slot teardowns keep parked
-  (`parkWorkerRoutes`), so the curls are gone.
+  visible in the API but dead at the edge). Routes now ride the generated
+  wrangler config as ensure-only (the worker script is never deleted, so a
+  deploy can't strand them) with proxied DNS ensured by `ensureProxiedDnsRecord`
+  (`scripts/lib/deploy-helpers.ts`), and slot teardowns leave routes parked, so
+  the curls are gone.
 - **The chromium install overlaps the smoke.** `playwright install chromium`
   hits no slot, so it runs in the background while the smoke runs and the
   vitest lanes start, instead of blocking the specs.

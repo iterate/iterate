@@ -22,14 +22,14 @@ Every environment uses **exactly one** base:
 | `dev` / `dev_<user>` | `["localhost"]` in fully-local dev; use captun or preview for public callbacks |
 
 Nothing passes multiple bases in production. Call sites already treat it as
-singular: `projectHostnameBases[0]` (DNS, MCP URLs, settings UI, oRPC), and
-`flatMap` in `alchemy.run.ts` only matters when Alchemy registers `base` +
-`*.base` for that one entry.
+singular: `projectHostnameBases[0]` (DNS, MCP URLs, settings UI, oRPC), and the
+`flatMap` in the wrangler-config generator only matters when it registers
+`base` + `*.base` routes for that one entry.
 
 The array shape is leftover from an earlier “maybe multiple bases per deploy”
 idea. It adds noise (`[0]`, JSON array in Doppler, plural naming) without
 behavior we use. Custom apex hosts (`iterate.com`) are **`custom_hostname` on a
-project**, not an extra entry in this list — see `docs/devops-cloudflare-doppler-alchemy-setup.md`.
+project**, not an extra entry in this list — see `docs/devops-cloudflare-doppler.md`.
 
 ## Goal
 
@@ -45,7 +45,7 @@ array).
 ## Scope
 
 - `apps/os/src/config.ts` — schema + rename
-- `apps/os/alchemy.run.ts` — `projectRouteHostnamesForBase(projectHostnameBase)`
+- `apps/os/scripts/generate-wrangler-config.ts` — project route hostnames for the base
 - Ingress / routing: `project-host-routing.ts`, worker entrypoints,
   `project-platform-host-routing.ts`, `project-durable-object.ts`
 - oRPC context, `auth.ts`, UI (`settings`, `app-sidebar`, project list)
@@ -54,7 +54,7 @@ array).
 - Tests: replace array fixtures with a single string
 - Doppler: migrate all `os` configs from JSON array to string (prd, preview*N,
   dev*\*)
-- Docs: `docs/devops-cloudflare-doppler-alchemy-setup.md`,
+- Docs: `docs/devops-cloudflare-doppler.md`,
   `apps/os/docs/architecture-and-operations.md`, task files that mention the old
   name
 
