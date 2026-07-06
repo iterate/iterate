@@ -133,7 +133,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             idempotencyKey: `agent/sandbox-restored@${event.offset}`,
             payload: {
               content:
-                "FYI (no reply needed): your sandbox (`itx.sandbox`) resumed and its `/workspace` was RESTORED from a snapshot — your files and the repo at `/workspace/repos/project` (your cwd) are back. But gitignored paths were NOT snapshotted (e.g. `node_modules`, build outputs): reinstall/rebuild them before use if a task needs them. The container filesystem otherwise resets between sleeps, so treat anything outside `/workspace` as gone.",
+                "FYI (no reply needed): your sandbox (`itx.sandbox`) resumed and `/workspace` was RESTORED from a snapshot — files you kept there are back. But gitignored paths were NOT snapshotted (e.g. `node_modules`, build outputs): reinstall/rebuild them before use if a task needs them. The container filesystem otherwise resets between sleeps, so treat anything outside `/workspace` as gone. (The repo at `/workspace/repos/project` is always checked out; if the snapshot lacked it, a separate FYI notes it was freshly cloned.)",
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
           }),

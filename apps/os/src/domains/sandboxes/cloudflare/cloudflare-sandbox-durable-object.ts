@@ -125,6 +125,30 @@ type ReadFileReturns = Sandbox<Env>["readFile"] extends {
 // the lookup itself dials the sandbox for its durable identity.
 const projectIdByContainerId = new Map<string, string>();
 
+/**
+ * Whether an error is the SDK's "session SETUP was interrupted" case — the
+ * per-command `utils.createSession` dial died to a transport disposal or a
+ * runtime replacement, so the command itself was never admitted and a retry
+ * is provably safe. Reads the fields off the error instance (the SDK's
+ * SandboxError exposes `code`/`context` as getters) AND off the raw
+ * `errorResponse` it wraps, so a plain-object or re-serialized form of the
+ * same error (getters don't survive serialization) still matches.
+ */
+function isInterruptedSessionSetup(error: unknown): boolean {
+  const shape = error as {
+    code?: string;
+    context?: { operation?: string; reason?: string };
+    errorResponse?: { code?: string; context?: { operation?: string; reason?: string } };
+  };
+  const code = shape?.code ?? shape?.errorResponse?.code;
+  const context = shape?.context ?? shape?.errorResponse?.context;
+  return (
+    code === "OPERATION_INTERRUPTED" &&
+    context?.operation === "utils.createSession" &&
+    (context.reason === "transport_disposed" || context.reason === "runtime_replaced")
+  );
+}
+
 async function resolveEgressProjectId(env: Env, containerId: string): Promise<string> {
   const cached = projectIdByContainerId.get(containerId);
   if (cached !== undefined) return cached;
@@ -573,7 +597,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // conventional provider secrets gets a code-ready sandbox with no setup,
     // while configureEnvVars still wins for anything it sets.
     const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
-    await super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored });
+    // Redial-once like every command: setEnvVars is idempotent, and during a
+    // cold boot its session dial is as exposed to client churn as any exec.
+    await this.#redialOnInterruptedSessionSetup(() =>
+      super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored }),
+    );
   }
 
   /**
@@ -602,7 +630,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     if (this.#warmup !== undefined) return this.#warmup;
     let run: Promise<void> | undefined = undefined;
     run = (async () => {
-      const result = await super.exec(`bash ${SANDBOX_WARMUP_SCRIPT_PATH}`);
+      const result = await this.#redialOnInterruptedSessionSetup(() =>
+        super.exec(`bash ${SANDBOX_WARMUP_SCRIPT_PATH}`),
+      );
       if (result.exitCode !== 0) {
         throw new Error(
           `sandbox warm-up failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`,
@@ -670,16 +700,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     try {
       return await call();
     } catch (error) {
-      const shape = error as {
-        code?: string;
-        context?: { operation?: string; reason?: string };
-      };
-      const interruptedSetup =
-        shape?.code === "OPERATION_INTERRUPTED" &&
-        shape.context?.operation === "utils.createSession" &&
-        (shape.context.reason === "transport_disposed" ||
-          shape.context.reason === "runtime_replaced");
-      if (!interruptedSetup) throw error;
+      if (!isInterruptedSessionSetup(error)) throw error;
       console.warn("sandbox session dial interrupted mid-setup; re-dialing once", error);
       await new Promise((resolve) => setTimeout(resolve, 1_500));
       return call();
@@ -923,7 +944,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // Probe a marker only a completed clone has — a bare directory check
     // would treat the debris of an interrupted checkout as done and leave
     // the sandbox without the repo until the container is replaced.
-    const existing = await super.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
+    const existing = await this.#redialOnInterruptedSessionSetup(() =>
+      super.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`),
+    );
     if (existing.exists) return false;
 
     const repo = this.env.REPO.getByName(
@@ -988,7 +1011,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * `rm -rf` here would silently destroy it on the next provision.
    */
   async #ensureBakedIterateRepoLink(): Promise<void> {
-    const bakedRepo = await super.exists(`${BAKED_ITERATE_REPO_SOURCE_DIR}/pnpm-lock.yaml`);
+    const bakedRepo = await this.#redialOnInterruptedSessionSetup(() =>
+      super.exists(`${BAKED_ITERATE_REPO_SOURCE_DIR}/pnpm-lock.yaml`),
+    );
     if (!bakedRepo.exists) {
       console.warn(
         `sandbox image has no baked repo at ${BAKED_ITERATE_REPO_SOURCE_DIR} — skipping workspace link`,
