@@ -86,15 +86,22 @@ pushed.
 The sandbox subclass turns its container lifecycle into ordinary stream
 events, appended to the stream at the sandbox's **own path** — for an agent's
 sandbox that is the agent's own journal, so the agent (and anything tailing
-the stream) sees its sandbox's history:
+the stream) sees its sandbox's history. The event catalog is the **sandbox
+processor contract** (`sandbox-processor-contract.ts`); the Durable Object
+builds every event through it (`SandboxProcessorContract.buildEvent`), so
+emission and declaration cannot drift. `SandboxProcessor`
+(`sandbox-processor-implementation.ts`) holds the contract and folds the
+events into a small status projection (`running`, `lastBackupId`) — it takes
+no actions and is not yet wired to a processor host.
 
-| Hook / moment              | Event (`events.iterate.com/sandbox/…`)                                                                                                    |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `onStart`                  | `container-started`                                                                                                                       |
-| workspace restored         | `workspace-restored` (with `backupId`)                                                                                                    |
-| workspace freshly cloned   | `workspace-cloned`                                                                                                                        |
-| `onActivityExpired` backup | `backup-created` / `backup-failed`                                                                                                        |
-| `onStop`                   | `container-stopped` (may arrive on wake — the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake) |
+| Hook / moment                | Event (`events.iterate.com/sandbox/…`)                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `onStart`                    | `container-started`                                                                                                                       |
+| workspace restored           | `workspace-restored` (with `backupId`)                                                                                                    |
+| workspace freshly cloned     | `workspace-cloned`                                                                                                                        |
+| background provisioning died | `workspace-setup-failed` (with `error`; the next `ensureProjectRepo()` retries from scratch)                                              |
+| `onActivityExpired` backup   | `backup-created` (with `backupId`) / `backup-failed` (with `error`)                                                                       |
+| `onStop`                     | `container-stopped` (may arrive on wake — the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake) |
 
 Appends are best-effort by design: lifecycle telemetry never blocks or fails a
 container start/stop.

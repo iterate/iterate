@@ -4,6 +4,10 @@ import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
+import {
+  SandboxProcessorContract,
+  type SandboxLifecycleEventInput,
+} from "../sandbox-processor-contract.ts";
 import { normalizeSandboxPath } from "../utils.ts";
 
 /**
@@ -238,7 +242,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
   override async onStart(): Promise<void> {
     await super.onStart();
-    this.#emitLifecycleEvent("container-started");
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/container-started",
+      payload: {},
+    });
     // Provision the workspace — restore the last backup, clone the repo if the
     // checkout is still missing — in the BACKGROUND. It cannot run inside
     // `onStart` itself: `onStart` executes in the container framework's
@@ -253,9 +260,13 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
     this.ctx.waitUntil(
-      this.#ensureWorkspace().catch((error: unknown) =>
-        console.error("sandbox workspace setup failed", error),
-      ),
+      this.#ensureWorkspace().catch((error: unknown) => {
+        console.error("sandbox workspace setup failed", error);
+        this.#emitLifecycleEvent({
+          type: "events.iterate.com/sandbox/workspace-setup-failed",
+          payload: { error: String(error) },
+        });
+      }),
     );
   }
 
@@ -275,7 +286,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       await this.#backupWorkspace();
     } catch (error) {
       console.error("sandbox workspace backup failed", error);
-      this.#emitLifecycleEvent("backup-failed", { error: String(error) });
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/backup-failed",
+        payload: { error: String(error) },
+      });
     }
     await super.onActivityExpired();
   }
@@ -284,7 +298,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     await super.onStop();
     // May fire late: if the Durable Object was hibernated when the container
     // exited, the SDK delivers this on the next wake.
-    this.#emitLifecycleEvent("container-stopped");
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/container-stopped",
+      payload: {},
+    });
   }
 
   /**
@@ -314,7 +331,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       ...(this.#canPresignBackupTransfers() ? {} : { localBucket: true }),
     });
     this.ctx.storage.kv.put(BACKUP_HANDLE_STORAGE_KEY, backup);
-    this.#emitLifecycleEvent("backup-created", { backupId: backup.id });
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/backup-created",
+      payload: { backupId: backup.id },
+    });
   }
 
   #canPresignBackupTransfers(): boolean {
@@ -337,7 +357,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     try {
       const result = await this.restoreBackup(backup);
       if (!result.success) return false;
-      this.#emitLifecycleEvent("workspace-restored", { backupId: backup.id });
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/workspace-restored",
+        payload: { backupId: backup.id },
+      });
       return true;
     } catch (error) {
       console.warn("sandbox workspace restore failed, falling back to clone", error);
@@ -386,7 +409,12 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       // would let the idle backup snapshot a half-provisioned /workspace over
       // the last good backup.
       if (this.#workspaceReady !== run) return;
-      if (!restored) this.#emitLifecycleEvent("workspace-cloned");
+      if (!restored) {
+        this.#emitLifecycleEvent({
+          type: "events.iterate.com/sandbox/workspace-cloned",
+          payload: {},
+        });
+      }
       this.#workspaceProvisioned = true;
     })().catch((error: unknown) => {
       // Let the next ensure retry instead of caching the failure forever —
@@ -403,27 +431,26 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * Append a lifecycle event to the stream at this sandbox's own path — for an
    * agent's sandbox that is the agent's own journal, so the agent (and anyone
    * tailing the stream) sees container starts/stops, snapshots, and restores
-   * as ordinary history. Best-effort by design: lifecycle telemetry must never
-   * block or fail container start/stop, so errors are logged and dropped.
+   * as ordinary history. The event catalog is the sandbox processor contract
+   * (sandbox-processor-contract.ts); building through it keeps emission and
+   * declaration from drifting. Best-effort by design: lifecycle telemetry must
+   * never block or fail container start/stop, so errors are logged and
+   * dropped.
    */
-  #emitLifecycleEvent(kind: string, payload: Record<string, unknown> = {}): void {
+  #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
+      const event = SandboxProcessorContract.buildEvent(input);
       const { projectId, path } = this.#identity();
       const stream = this.env.STREAM.getByName(
         DurableObjectNameCodec.stringify({ projectId, path }),
       );
       this.ctx.waitUntil(
-        Promise.resolve(
-          stream.append({
-            type: `events.iterate.com/sandbox/${kind}`,
-            payload,
-          }),
-        ).catch((error: unknown) =>
-          console.warn(`sandbox lifecycle event append failed (${kind})`, error),
+        Promise.resolve(stream.append(event)).catch((error: unknown) =>
+          console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
         ),
       );
     } catch (error) {
-      console.warn(`sandbox lifecycle event skipped (${kind})`, error);
+      console.warn(`sandbox lifecycle event skipped (${input.type})`, error);
     }
   }
 
