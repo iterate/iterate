@@ -211,6 +211,8 @@ function workerBindings(input: {
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
+        // Wrangler builds local Dockerfiles from their containing directory by
+        // default, so sandbox/root/ is available to COPY into /root/.
         image: "./sandbox/Dockerfile",
         instance_type: "lite",
         // Sized for e2e churn: the preview lanes provision a fresh project

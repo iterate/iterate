@@ -352,6 +352,8 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // or cloned). Gates the idle-time backup: snapshotting a half-provisioned
   // workspace would overwrite the pointer to the last GOOD backup.
   #workspaceProvisioned = false;
+  // Per-container memo for the lazy Codex login (auth lives on ephemeral disk).
+  #codexLogin: Promise<void> | undefined;
 
   override async onStart(): Promise<void> {
     await super.onStart();
@@ -375,6 +377,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     //   guard's in-flight one (two clones racing `rm -rf` in one directory).
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
+    // Codex auth (~/.codex/auth.json) lives on the ephemeral container disk, so
+    // a fresh container is logged out — clear the per-container login memo.
+    this.#codexLogin = undefined;
   }
 
   override async onStop(): Promise<void> {
@@ -526,6 +531,30 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     await super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored });
   }
 
+  /**
+   * Log Codex in so `codex exec` works out of the box (Codex 0.142 won't use
+   * the `OPENAI_API_KEY` env directly — it needs a one-time `codex login
+   * --with-api-key`). Kicked off in the BACKGROUND during provisioning
+   * (overlapping the clone), memoized per container (auth.json is on the
+   * ephemeral disk). Reads the key from the env, where it is a getSecret
+   * placeholder substituted at egress, so no material is handled here.
+   * Best-effort: a failure (e.g. no provider secret seeded) is logged and the
+   * memo cleared so a later provision retries; a `codex exec` that happens to
+   * beat it just surfaces its own auth error, and the next call is logged in.
+   */
+  #ensureCodexLogin(): Promise<void> {
+    this.#codexLogin ??= (async () => {
+      const result = await super.exec('printf %s "$OPENAI_API_KEY" | codex login --with-api-key');
+      if (result.exitCode !== 0) {
+        throw new Error(`codex login failed (exit ${result.exitCode}): ${result.stderr}`);
+      }
+    })().catch((error: unknown) => {
+      console.warn("sandbox background codex login failed", error);
+      this.#codexLogin = undefined; // let a later provision retry
+    });
+    return this.#codexLogin;
+  }
+
   // ---------------------------------------------------------------------------
   // The workspace guarantee, enforced: every public command and file operation
   // below awaits `ensureProjectRepo()` before touching the container, so no
@@ -671,15 +700,21 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     let run: Promise<void> | undefined = undefined;
     run = (async () => {
       const restored = await this.#restoreWorkspace();
+      // Re-apply the durable env map onto THIS container (the SDK does not
+      // document env persistence across restart), so every guarded command
+      // below runs with the configured vars. Done BEFORE the clone so the
+      // background Codex login (which reads the env) can overlap it.
+      await this.#applyStoredEnvVars();
+      // Log Codex in in the BACKGROUND — it reads the OPENAI_API_KEY env
+      // placeholder (substituted at egress) and writes auth.json, so `codex
+      // exec` just works without any per-command login line. Kicked off here so
+      // it overlaps the (slower) clone and is ready by the time the workspace
+      // is; failures are self-contained (see the method).
+      this.ctx.waitUntil(this.#ensureCodexLogin());
       // Clone when the restore didn't produce a checkout (no backup yet, the
       // backup expired, or it somehow predates the repo). #cloneProjectRepo
       // probes the marker itself, so a restored checkout makes this a no-op.
       await this.#cloneProjectRepo();
-      // Re-apply the durable env map onto THIS container (the SDK does not
-      // document env persistence across restart), so every guarded command
-      // below runs with the configured vars — done before the workspace is
-      // marked ready, i.e. before any command can run.
-      await this.#applyStoredEnvVars();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag

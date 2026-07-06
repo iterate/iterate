@@ -110,10 +110,12 @@ to every command (`exec`, `startProcess`, …), conventionally ALL_CAPS keys.
 `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` pointed at conventional project secret
 paths (`/secrets/openai-api-key`, `/secrets/anthropic-api-key`) as `getSecret`
 placeholders. Seed a provider key at one of those paths and an agent's sandbox
-can run Codex/Claude immediately (Codex still needs a one-time
-`printf %s "$OPENAI_API_KEY" | codex login --with-api-key` — its 0.142 build
-won't use the env key otherwise). Nothing seeded → the var is harmless until a
-call actually uses it (egress substitution then fails loudly).
+can run Codex immediately — the sandbox DO runs `codex login --with-api-key`
+(reading the env placeholder) **in the background during provisioning**,
+memoized per container, so it's ready by the time the sandbox is used and
+callers never write a login line (Codex 0.142 won't use the env key directly).
+Nothing seeded → the var is harmless until a call actually uses it (egress
+substitution then fails loudly).
 
 Override or add to the defaults with `configureEnvVars` (explicit config wins):
 
@@ -148,15 +150,14 @@ Cloudflare image variant. The image also copies `sandbox/root/` into `/root/`.
 We ship the **Codex CLI** (`codex`, on PATH), which uses `OPENAI_API_KEY`:
 
 ```ts
-// Codex needs a one-time login that reads the key from the env (it doesn't
-// auto-use OPENAI_API_KEY for its Responses endpoint). Both the login and the
-// model call egress through project policy, which substitutes the real key for
-// the getSecret placeholder — verified live: `codex exec` returned a
-// completion and the secret's usedCount incremented.
-await itx.sandbox.exec("printenv OPENAI_API_KEY | codex login --with-api-key");
+// No login line needed — the sandbox DO logs Codex in (reading the
+// OPENAI_API_KEY env placeholder) in the background during provisioning. Both
+// that login and the model call egress through project policy, which
+// substitutes the real key for the placeholder — verified live: `codex exec`
+// returned a completion and the secret's usedCount incremented.
 const r = await itx.sandbox.exec(
   "codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox" +
-    ' -m gpt-4o-mini "summarize README.md in one line"',
+    ' "summarize README.md in one line"', // defaults to gpt-5.5/high
 );
 ```
 
