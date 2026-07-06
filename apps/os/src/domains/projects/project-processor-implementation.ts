@@ -146,27 +146,18 @@ export class ProjectProcessor extends StreamProcessor<
               ?.createdAt ?? event.createdAt,
           updatedAt: event.createdAt,
         });
-      case "events.iterate.com/project/custom-domain-provision-failed":
-        if (!state.customDomains.some((domain) => domain.hostname === event.payload.hostname)) {
-          return state;
-        }
+      case "events.iterate.com/project/custom-domain-provision-failed": {
+        const failedDomain = state.customDomains.find(
+          (domain) => domain.hostname === event.payload.hostname,
+        );
+        if (!failedDomain) return state;
         return upsertCustomDomain(state, {
-          cloudflareHostnameId:
-            state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
-              ?.cloudflareHostnameId ?? null,
-          createdAt:
-            state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
-              ?.createdAt ?? event.createdAt,
+          ...failedDomain,
           error: event.payload.error,
-          hostname: event.payload.hostname,
-          hostnameStatus: null,
-          ownershipVerification: null,
-          sslStatus: null,
           status: "failed",
           updatedAt: event.createdAt,
-          validationRecords: [],
-          wildcard: true,
         });
+      }
       case "events.iterate.com/project/custom-domain-remove-requested":
         return markCustomDomainRemoving(state, event.payload.hostname, event.createdAt);
       case "events.iterate.com/project/custom-domain-removed":

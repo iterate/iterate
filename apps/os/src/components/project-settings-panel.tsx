@@ -85,9 +85,9 @@ function CustomDomainsEditor({
     [domains],
   );
   const addDomain = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (domainHostname: string) => {
       const result = await addProjectCustomDomainServerFn({
-        data: { hostname, projectId },
+        data: { hostname: domainHostname, projectId },
       });
       return result.hostname;
     },
@@ -122,7 +122,7 @@ function CustomDomainsEditor({
     event.preventDefault();
     const trimmed = hostname.trim().toLowerCase();
     if (!trimmed || existingHostnames.has(trimmed)) return;
-    addDomain.mutate();
+    addDomain.mutate(trimmed);
   };
 
   return (

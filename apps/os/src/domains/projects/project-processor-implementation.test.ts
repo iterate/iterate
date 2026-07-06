@@ -231,4 +231,84 @@ describe("ProjectProcessor custom domains", () => {
 
     expect(processor.state.customDomains).toEqual([]);
   });
+
+  it("preserves the last Cloudflare snapshot when refresh fails", async () => {
+    const stream = new MemoryStream();
+    const customDomains = {
+      ensure: vi.fn(),
+      readProject: vi.fn(async () => project),
+      refresh: vi.fn(async () => {
+        throw new Error("Cloudflare is unavailable");
+      }),
+      remove: vi.fn(),
+    };
+    const processor = new ProjectProcessor({
+      customDomains,
+      defaultLlmProvider: "openai-ws",
+      itx: {
+        projectId: project.id,
+        worker: { processEvent: vi.fn() },
+      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
+      stream,
+    });
+    const cursor = { offset: 0 };
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+        payload: {
+          cloudflareHostnameId: "custom-hostname-1",
+          error: null,
+          hostname: "garple.com",
+          hostnameStatus: "active",
+          ownershipVerification: {
+            name: "_cf-custom-hostname.garple.com",
+            value: "ownership-token",
+          },
+          sslStatus: "active",
+          status: "active",
+          validationRecords: [
+            {
+              name: "_acme-challenge.garple.com",
+              status: "active",
+              value: "ssl-token",
+            },
+          ],
+          wildcard: true,
+        },
+      }),
+    );
+    await deliverNewEvents({ cursor, processor, stream });
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-refresh-requested",
+        payload: { hostname: "garple.com" },
+      }),
+    );
+    await deliverNewEvents({ cursor, processor, stream });
+    await deliverNewEvents({ cursor, processor, stream });
+
+    expect(processor.state.customDomains).toMatchObject([
+      {
+        cloudflareHostnameId: "custom-hostname-1",
+        error: "Cloudflare is unavailable",
+        hostname: "garple.com",
+        hostnameStatus: "active",
+        ownershipVerification: {
+          name: "_cf-custom-hostname.garple.com",
+          value: "ownership-token",
+        },
+        sslStatus: "active",
+        status: "failed",
+        validationRecords: [
+          {
+            name: "_acme-challenge.garple.com",
+            status: "active",
+            value: "ssl-token",
+          },
+        ],
+      },
+    ]);
+  });
 });
