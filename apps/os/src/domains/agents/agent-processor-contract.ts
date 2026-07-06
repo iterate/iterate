@@ -282,9 +282,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
-    // The agent's own sandbox emits its lifecycle to THIS stream (an agent
-    // sandbox lives at the agent's path). Surface the resume/fresh-start
-    // transitions as FYI inputs — see the processor. Never trigger the LLM.
+    // The agent's own sandbox (at /sandboxes<agent path>) fans its lifecycle
+    // events out to THIS stream as well as its own — see the sandbox DO's
+    // #emitLifecycleEvent. Surface the resume/fresh-start transitions as FYI
+    // inputs — see the processor. Never trigger the LLM.
     "events.iterate.com/sandbox/workspace-restored",
     "events.iterate.com/sandbox/workspace-cloned",
     "events.iterate.com/sandbox/warmed-up",

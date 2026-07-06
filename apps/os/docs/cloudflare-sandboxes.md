@@ -27,16 +27,16 @@ a version-skew warning).
 A sandbox is a **container-backed Durable Object**. Our stack maps onto
 Cloudflare's primitives like this:
 
-| Layer                          | Ours                                                    | Notes                                                                                                                                        |
-| ------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| DO namespace binding           | `SANDBOX`                                               | `env.SANDBOX`, declared in the generated wrangler config                                                                                     |
-| DO class (the container class) | `CloudflareSandboxDurableObject`                        | extends the SDK's `Sandbox`; one `containers` entry names it                                                                                 |
-| DO name → identity             | `{projectId}.iterate{path}`                             | `DurableObjectNameCodec`; the path IS the sandbox address (an agent's own `/agents/...` path, or `/sandboxes/cloudflare/...` for standalone) |
-| Container image                | `sandbox/Dockerfile` → `cloudflare/sandbox:0.12.3`      | one image for the whole class                                                                                                                |
-| Cloudflare "application"       | `os-<env>-cloudflaresandboxdurableobject-<config>`      | the container app the class deploys as — the id you pass to `wrangler containers instances`                                                  |
-| Instances                      | one per live sandbox (per DO id)                        | ephemeral; idle-destroyed after `sleepAfter` (3m)                                                                                            |
-| Persistent storage             | R2 bucket `os-<env>-sandboxes`, binding `BACKUP_BUCKET` | one bucket per env; each sandbox is a `/{projectId}{path}` prefix (backup/restore, see [Sandboxes](./sandboxes.md))                          |
-| Workspace inside the container | `/workspace`, repo at `/workspace/repos/project`        | `/workspace/repos/project` is the default `cwd`; the baked platform repo is exposed at `/workspace/repos/github.com/iterate/iterate`         |
+| Layer                          | Ours                                                    | Notes                                                                                                                                                                              |
+| ------------------------------ | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DO namespace binding           | `SANDBOX`                                               | `env.SANDBOX`, declared in the generated wrangler config                                                                                                                           |
+| DO class (the container class) | `CloudflareSandboxDurableObject`                        | extends the SDK's `Sandbox`; one `containers` entry names it                                                                                                                       |
+| DO name → identity             | `{projectId}.iterate{path}`                             | `DurableObjectNameCodec`; the path IS the sandbox address, always under `/sandboxes/` (`/sandboxes/agents/...` for an agent's sandbox, `/sandboxes/cloudflare/...` for standalone) |
+| Container image                | `sandbox/Dockerfile` → `cloudflare/sandbox:0.12.3`      | one image for the whole class                                                                                                                                                      |
+| Cloudflare "application"       | `os-<env>-cloudflaresandboxdurableobject-<config>`      | the container app the class deploys as — the id you pass to `wrangler containers instances`                                                                                        |
+| Instances                      | one per live sandbox (per DO id)                        | ephemeral; idle-destroyed after `sleepAfter` (3m)                                                                                                                                  |
+| Persistent storage             | R2 bucket `os-<env>-sandboxes`, binding `BACKUP_BUCKET` | one bucket per env; each sandbox is a `/{projectId}{path}` prefix (backup/restore, see [Sandboxes](./sandboxes.md))                                                                |
+| Workspace inside the container | `/workspace`, repo at `/workspace/repos/project`        | `/workspace/repos/project` is the default `cwd`; the baked platform repo is exposed at `/workspace/repos/github.com/iterate/iterate`                                               |
 
 Key consequences:
 

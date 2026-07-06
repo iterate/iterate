@@ -6,18 +6,21 @@
 > is how our sandbox itself works.
 
 Project-scoped Cloudflare Sandbox containers, addressed by path like every
-other domain object. A sandbox path may be ANY non-root project path,
-arbitrarily nested: sandboxes live in their own Durable Object namespace, so
-a sandbox path never collides with the stream or agent at the same path — it
-names them. Two spellings of the same primitive:
+other domain object. Every sandbox lives under **`/sandboxes/`** — the same
+domain-prefix convention as `/secrets/...`, `/repos/...`, and `/agents/...`,
+so a project path names exactly one kind of object, and every sandbox in a
+project is discoverable as a stream under the prefix. Two spellings of the
+same primitive:
 
-- **Every agent owns the sandbox at its own path.** `itx.sandbox` in an agent
-  scope is a PROVIDED CAPABILITY, not a built-in: the birth certificate mounts
-  a durable itx-expression (`["sandboxes", ["get", <agent path>]]`) on the
-  agent's capability host, so every `itx.sandbox.<method>(...)` re-evaluates
-  `itx.sandboxes.get(<the agent's /agents/... path>)` at call time and
-  dispatches inside the capability host. The Durable Object + identity are
-  minted (no container) at birth, and the mount replays with the stream.
+- **Every agent owns the sandbox at its agent path under the prefix**
+  (`/agents/bla` → `/sandboxes/agents/bla`, the `agentSandboxPath` mapping).
+  `itx.sandbox` in an agent scope is a PROVIDED CAPABILITY, not a built-in:
+  the birth certificate mounts a durable itx-expression
+  (`["sandboxes", ["get", "/sandboxes<agent path>"]]`) on the agent's
+  capability host, so every `itx.sandbox.<method>(...)` re-evaluates
+  `itx.sandboxes.get(...)` at call time and dispatches inside the capability
+  host. The Durable Object + identity are minted (no container) at birth, and
+  the mount replays with the stream.
 - **Standalone sandboxes** conventionally live under
   `/sandboxes/cloudflare/<anything>` via `itx.sandboxes.get(path)`.
 
@@ -98,9 +101,11 @@ pushed.
 ## Lifecycle hooks → stream events
 
 The sandbox subclass turns its container lifecycle into ordinary stream
-events, appended to the stream at the sandbox's **own path** — for an agent's
-sandbox that is the agent's own journal, so the agent (and anything tailing
-the stream) sees its sandbox's history. The event catalog is the **sandbox
+events, appended to the stream at the sandbox's **own path** — and, for an
+agent's sandbox (`/sandboxes/agents/...`), fanned out to the **agent's own
+journal** too, so the agent (and anything tailing its stream) sees its
+sandbox's history inline while the `/sandboxes/` stream stays the canonical
+per-sandbox record. The event catalog is the **sandbox
 processor contract** (`sandbox-processor-contract.ts`); the Durable Object
 builds every event through it (`SandboxProcessorContract.buildEvent`), so
 emission and declaration cannot drift. `SandboxProcessor`

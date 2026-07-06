@@ -38,15 +38,11 @@ JWTClaimValidationFailed: unexpected "aud" claim value
 the OS verifier was deriving the resource from the live request origin
 (`http://localhost:<port>`) when no `APP_CONFIG_BASE_URL` was configured.
 
-Finally, setting a forged `iterate_session` cookie directly in a clean browser
-still redirected back to sign-in with:
-
-```text
-auth_error=session_verification_failed
-```
-
-So this is not just a missing environment variable; the local browser-session
-path needs one documented, covered flow that works without the auth worker.
+After restarting the dev server with a synthesized forge JWKS and minting a
+session with the required project claims, the one-shot browser URL did work and
+loaded `/projects/screenshot/sandboxes` without the auth worker. The bug is
+that this working path is not automated or documented; a clean local server
+starts without the JWKS trust material needed by `auth:mint`.
 
 ## Why this matters
 
@@ -92,9 +88,9 @@ Additional reproduction notes from the sandbox UI debugging session:
 - Once the JWKS binding was available, the verifier needed to normalize
   localhost resources the same way as `auth:mint`, without the ephemeral dev
   server port.
-- Directly writing an `iterate_session` cookie was not enough; the browser
-  still hit `session_verification_failed`, which needs more targeted logging or
-  a smoke test around the session verifier.
+- A protected project route also needs project claims in the minted session;
+  an admin-only forged session can authenticate but still falls through to the
+  project-access flow.
 
 ## Expected behavior
 
