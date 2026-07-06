@@ -81,13 +81,12 @@ describe("preview workflow scope", () => {
 });
 
 describe("auth preview root secrets", () => {
-  it("falls back through legacy dev names for the email sender domain", () => {
+  it("seeds from auth/dev when the preview root has no value", () => {
     const reads: string[] = [];
-    const values = new Map([["auth:dev:RESEND_BOT_DOMAIN", "nustom.com"]]);
+    const values = new Map([["auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN", "nustom.com"]]);
 
     const value = resolveAuthPreviewRootSecret({
       appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
-      legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
       readSecret: (project, config, name) => {
         reads.push(`${project}:${config}:${name}`);
         return values.get(`${project}:${config}:${name}`) ?? null;
@@ -98,22 +97,18 @@ describe("auth preview root secrets", () => {
     expect(reads).toEqual([
       "auth:preview:APP_CONFIG_EMAIL_SENDER_DOMAIN",
       "auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN",
-      "auth:dev:APP_CONFIG_RESEND_DOMAIN",
-      "auth:dev:RESEND_BOT_DOMAIN",
     ]);
   });
 
-  it("keeps an existing preview root value ahead of dev fallbacks", () => {
+  it("keeps an existing preview root value ahead of the dev fallback", () => {
     const values = new Map([
       ["auth:preview:APP_CONFIG_EMAIL_SENDER_DOMAIN", "preview.example.com"],
       ["auth:dev:APP_CONFIG_EMAIL_SENDER_DOMAIN", "dev.example.com"],
-      ["auth:dev:RESEND_BOT_DOMAIN", "legacy.example.com"],
     ]);
 
     expect(
       resolveAuthPreviewRootSecret({
         appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
-        legacyDevNames: ["RESEND_BOT_DOMAIN"],
         readSecret: (project, config, name) => values.get(`${project}:${config}:${name}`) ?? null,
       }),
     ).toBe("preview.example.com");
