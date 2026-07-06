@@ -215,7 +215,15 @@ function workerBindings(input: {
         // The sandbox image bakes this repo into /opt/iterate/iterate, so the
         // Docker build context must be the monorepo root, not apps/os/sandbox.
         image_build_context: "../..",
-        instance_type: "lite",
+        // Custom instance type, NOT a named tier: the baked-monorepo image
+        // unpacks to ~3 GB, which exceeds lite's 2 GB disk — instances then
+        // fail with ImagePullRequestedDiskSizeToSmall, the rollout wedges the
+        // app "degraded", and every sandbox op storms transport_disposed
+        // (observed live on preview-1, 2026-07-06). 8 GB leaves room for the
+        // image + /workspace + the backup staging area in /var/backups; 1 GiB
+        // memory gives codex/pnpm headroom lite's 256 MiB doesn't. Billing is
+        // while-running only, so idle-destroyed sandboxes cost nothing extra.
+        instance_type: { vcpu: 0.25, memory_mib: 1024, disk_mb: 8000 },
         // Sized for e2e churn: the preview lanes provision a fresh project
         // (and sandbox container) per test, and idle containers hold an
         // instance slot until sleepAfter (3m, see

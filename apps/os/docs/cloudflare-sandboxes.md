@@ -308,9 +308,15 @@ container FAQ <https://developers.cloudflare.com/containers/faq/>.
 
 ## Instance types, scaling, placement
 
-- **`instance_type: lite`** (1/16 vCPU, 256 MiB, 2 GB disk) — the smallest, and
-  right for us: billing is active-CPU (since 2025-11-21), so a large idle pool is
-  cheap. Bump only if a workload needs more memory/disk.
+- **Custom `instance_type`** (`{ vcpu: 0.25, memory_mib: 1024, disk_mb: 8000 }`)
+  — not a named tier, because the disk must hold the UNPACKED image: the
+  baked-monorepo image is ~3 GB unpacked, over `lite`'s 2 GB. An image bigger
+  than the instance disk fails at instance provisioning
+  (`ImagePullRequestedDiskSizeToSmall`), NOT at deploy — the push succeeds, the
+  rollout wedges the app "degraded", and every sandbox op surfaces
+  `transport_disposed` (observed live). If the image grows, grow `disk_mb` with
+  it. Billing is while-running (active-CPU since 2025-11-21), so idle-destroyed
+  sandboxes keep a large pool cheap.
   [platform-details/limits](https://developers.cloudflare.com/containers/platform-details/limits/).
 - **`max_instances`** caps concurrent instances; exceeding it returns HTTP 503.
   Ours is deliberately high (see the comment in `generate-wrangler-config.ts`):
