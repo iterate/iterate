@@ -15,6 +15,7 @@ import { z } from "zod";
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
+import type { UnauthenticatedOs } from "../../itx-api.generated.ts";
 import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
@@ -22,7 +23,6 @@ import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {

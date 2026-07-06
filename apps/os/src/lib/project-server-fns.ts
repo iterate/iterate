@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- server functions are one-shot request-scoped calls: a single pipelined batch (authenticate -> list) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
+import type { UnauthenticatedOs } from "../itx-api.generated.ts";
+import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
@@ -11,7 +13,6 @@ import {
   type RootProjectRedirectDecision,
 } from "~/lib/project-root-redirect.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { ProjectDeploymentStatus, UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**

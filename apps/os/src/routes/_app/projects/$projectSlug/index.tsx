@@ -3,6 +3,7 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowRightIcon } from "lucide-react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { z } from "zod";
+import type { ProjectProcessorState } from "../../../../domains/projects/project-processor-contract.ts";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -11,7 +12,6 @@ import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
-import type { ProjectProcessorState } from "~/types.ts";
 
 const HomeSearch = StreamViewSearch.extend({
   /** Set by the create form: play the creation checklist, then hand over to

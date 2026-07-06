@@ -34,7 +34,7 @@ export function emailAddressForProject(input: { slug: string; domain: string }):
   return `${input.slug}@${input.domain}`;
 }
 
-/** What `itx.email.send` accepts — see EmailCapability in types.ts for the contract docs. */
+/** What `itx.email.send` accepts — see the `email` capability on rpc-targets.ts for the contract docs. */
 type SendProjectEmailRequest = {
   to: string | string[];
   subject: string;

@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import type { Stream, StreamEvent, StreamEventInput } from "../../src/types.ts";
+import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
+import type { Stream } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 

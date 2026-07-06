@@ -1,5 +1,18 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 
+/**
+ * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
+ * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
+ * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
+ * does not re-declare that surface (same stance as `McpClientRpc`); see
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
+ * container start kicks off a clone of the project's repo to
+ * `/workspace/repo` — `await sandbox.ensureProjectRepo()` before work that
+ * depends on it.
+ */
+export type CloudflareSandbox = object;
+
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real sandbox names carry the caller's
 // projectId — it just has to be a legal projectId so stringify/parse run.

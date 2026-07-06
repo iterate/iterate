@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { CapabilityDescription } from "../../types.ts";
+import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -13,9 +13,9 @@ import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
-  type ProvideCapabilityInput,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
+import type { ProvideCapabilityInput } from "./types.ts";
 
 /**
  * One capability scope: the durable dynamic-capability table and script

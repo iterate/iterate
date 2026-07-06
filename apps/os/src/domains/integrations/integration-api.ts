@@ -9,7 +9,7 @@
 
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- integration callbacks/webhooks are one-shot request-scoped calls: a single pipelined batch (authenticate -> route/complete) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
-import type { UnauthenticatedOs } from "../../types.ts";
+import type { UnauthenticatedOs } from "../../itx-api.generated.ts";
 import { parseOAuthStateUnverified } from "./oauth-state.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";

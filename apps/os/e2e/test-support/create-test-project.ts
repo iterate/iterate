@@ -1,6 +1,6 @@
 import type { RpcStub } from "capnweb";
+import type { Agent, Project as ProjectRpcTarget } from "../../src/itx-api.generated.ts";
 import { createAdminOsItx, requireBaseUrl, uniqueSuffix } from "./os-client.ts";
-import type { Agent, ProjectRpcTarget } from "~/types.ts";
 import { connectItx } from "~/itx-client.ts";
 
 /**

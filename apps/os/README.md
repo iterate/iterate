@@ -8,8 +8,8 @@ It combines:
 - **itx** (`src/`) — the capnweb surface at `/api` plus
   every project-scoped domain: streams, repos, agents, secrets, dynamic
   workers, egress, capabilities. [`src/README.md`](./src/README.md)
-  is itx guide; [`src/types.ts`](./src/types.ts) is the
-  public contract.
+  is itx guide; [`src/itx-api.generated.ts`](./src/itx-api.generated.ts) is
+  the public contract (generated from the RpcTarget classes + zod schemas).
 - **The dashboard** — TanStack Start, TanStack Router, and TanStack Query for
   the authenticated UI (`src/routes/`, `src/components/`), talking to the
   itx through the React hooks (`src/itx/itx-react.tsx`).

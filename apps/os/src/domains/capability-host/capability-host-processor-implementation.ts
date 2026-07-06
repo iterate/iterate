@@ -3,18 +3,17 @@ import {
   type StreamProcessorConstructorArgs,
 } from "../streams/stream-processor.ts";
 import { normalizePath } from "../durable-object-names.ts";
+import type { CapabilityDescription } from "../itx/describe.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
+import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
+import type { CapabilityHost, Project as ProjectRpcTarget } from "../../itx-api.generated.ts";
+import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type {
   CapabilityProvidedPayload,
-  CapabilityDescription,
   CapabilityRecord,
-  CapabilityHost,
-  JsonValue,
-  ProjectRpcTarget,
+  ProvideCapabilityInput,
   RevokeCapabilityInput,
-  StatelessDynamicWorkerRef,
-  StreamEvent,
-} from "../../types.ts";
-import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+} from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
@@ -23,7 +22,6 @@ import {
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
-export type ProvideCapabilityInput = Parameters<CapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
 
 type CompletedPayload = {

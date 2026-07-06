@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   AgentProcessorContract,

@@ -5,7 +5,7 @@ import type {
   CapabilityRecord as CapabilityRecordType,
   ItxExpressionStep as ItxExpressionStepType,
   RevokeCapabilityInput,
-} from "../../types.ts";
+} from "./types.ts";
 
 const CapabilityMetadata = {
   instructions: z.string().optional(),

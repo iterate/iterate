@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEventInput } from "../../types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { readRecord, readString, slackThreadStreamPath } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
 

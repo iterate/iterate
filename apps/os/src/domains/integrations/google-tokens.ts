@@ -9,7 +9,7 @@
 // secret Durable Object path Slack uses.
 
 import { itxEnv } from "../../env.ts";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
 import { integrationStreamStub, readAllStreamEvents } from "./integration-streams.ts";
 import {

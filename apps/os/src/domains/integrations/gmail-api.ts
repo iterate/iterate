@@ -2,7 +2,7 @@
 // gmail-capability.ts. The access token comes from google-tokens.ts (fresh,
 // refreshed itx-side).
 
-import type { GmailRequestInput } from "../../types.ts";
+import type { GmailRequestInput } from "./types.ts";
 
 export async function callGmailApi(input: { request: GmailRequestInput; token: string }) {
   const method = (input.request.method ?? "GET").trim().toUpperCase();

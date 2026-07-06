@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 import type { ResponseInput, ResponsesClientEvent } from "openai/resources/responses/responses";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { buildAgentLlmRequestBody, reduceAgentEvents } from "./agent-processor-implementation.ts";
 import { OpenAiWsProcessorContract } from "./openai-ws-processor-contract.ts";

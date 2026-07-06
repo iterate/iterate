@@ -294,38 +294,6 @@ export interface Project {
   worker: DynamicWorkerCapability<ProjectWorker>;
 }
 
-/**
- * RPC ownership handle for a live stream connection.
- *
- * This follows Cap'n Web/Workers RPC lifecycle conventions: returned class
- * instances are object capabilities, and `using`/`[Symbol.dispose]` releases
- * the caller's ownership of the live resource.
- *
- * Docs:
- * - https://github.com/cloudflare/capnweb#memory-management
- * - https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
- *
- * `unsubscribe()` remains the explicit, awaitable domain operation. Disposal is
- * the scoped cleanup path and calls the same captured close function. Capturing
- * the close function matters: a later subscription can reuse the same key, and
- * an old handle must not look up by key and close the replacement.
- */
-export interface StreamSubscriptionHandle {
-  /** Stable identity of this subscription connection. */
-  subscriptionKey: string;
-  /** The stream's max offset at subscribe time (replay starts behind it). */
-  streamMaxOffset: number;
-  /**
-   * Liveness probe (see `StreamSubscriptionHandle.ping` in types.ts). Captures
-   * the connection's own open flag, not a lookup by key, so a replacement
-   * subscription under the same key reports `false` here.
-   */
-  ping(): boolean;
-  /** Close this connection; safe to call more than once. */
-  unsubscribe(): void;
-  [Symbol.dispose](): void;
-}
-
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   /**
@@ -485,13 +453,19 @@ export interface ProjectEgress {
 }
 
 /**
- * First-party outbound email through Cloudflare Email Service. Mail is sent
- * from the project's own address — `<slug>@<project hostname base>`, e.g.
- * `acme@iterate.app` — and an explicit `from` must match it: a project can
- * never send as another project or an arbitrary address. Requires the
- * deployment's sender domain to be onboarded for Email Sending in Cloudflare.
+ * The `itx.email` built-in: first-party outbound email through the Cloudflare
+ * Email Service `EMAIL` binding. Sender authorization is enforced here, not in
+ * the binding: mail only leaves from the project's own address
+ * (`<slug>@<first project hostname base>`). Every send appends an
+ * `email/sent` audit event to the project's /integrations/email stream.
  */
-export interface EmailCapability extends Describable {
+export interface EmailCapability {
+  __describe(): Promise<Description>;
+  /**
+   * Send one email from the project's own address (`<slug>@<hostname base>`)
+   * through Cloudflare Email Service. An explicit `from` must equal that
+   * address — a project can never send as anyone else.
+   */
   send(input: {
     to: string | string[];
     subject: string;
@@ -503,15 +477,6 @@ export interface EmailCapability extends Describable {
   }): Promise<{ from: string; messageId: string | null }>;
 }
 
-/**
- * Read-only catalogue of known-good itx script snippets — the project-context
- * entries of the REPL "Examples" panel. `list()` returns every entry without
- * its code; `get({ id })` returns one entry with the full script body. Agents
- * copy working patterns from here instead of guessing at the surface.
- * Session-level examples (whoami, projects.list) are excluded: they run
- * against the OS Session `authenticate()` returns, which an itx holder does
- * not have.
- */
 export interface ItxExampleCatalog {
   __describe(): Promise<Description>;
   /** Every example summary, without code bodies (cheap to skim). */
@@ -531,9 +496,7 @@ export interface ItxExampleCatalog {
  */
 export interface ProjectIntegrations {
   __describe(): Promise<Description>;
-  /** Gmail REST proxy for the project's connected Google account. */
   gmail: GmailCapability;
-  /** Slack Web API proxy for the connected workspace (`integrations.slack.chat.postMessage(...)`). */
   slack: SlackCapability;
   /** Connection status for a provider. */
   getConnection(input: { provider: IntegrationProvider }): Promise<IntegrationConnectionStatus>;
@@ -643,40 +606,9 @@ export interface ProjectWorker {
   slack: ProjectWorkerSlack;
 }
 
-/**
- * RPC ownership handle for one `onStateChange` subscription — the processor
- * counterpart of {@link StreamSubscriptionHandle}. `unsubscribe()` is the
- * explicit domain operation, disposal is the scoped cleanup path, and `ping()`
- * reports whether the subscription is still registered on the live processor
- * (a dead Durable Object incarnation makes the call itself reject — both
- * signals tell the client to re-subscribe).
- */
-export interface ProcessorStateSubscriptionHandle {
-  ping(): boolean;
-  unsubscribe(): void;
-  [Symbol.dispose](): void;
-}
-
-/**
- * Disposable ownership handle returned by `project.egress.intercept(...)`.
- *
- * The Project Durable Object owns the retained live callback. This handle only
- * releases that exact retained callback if it is still the current interceptor.
- */
-export interface ProjectEgressIntercept {
-  /** Release this interceptor if it is still the current one. */
+/** Disposable handle for one live project egress interception. */
+export interface ProjectEgressIntercept extends Disposable {
   release(): Promise<void>;
-  [Symbol.dispose](): void;
-}
-
-/**
- * Every node in the capability tree answers `__describe()` — see
- * {@link Description}. Interfaces below extend this instead of redeclaring;
- * nodes with structured extras (Session, Agent, CapabilityHost, the project
- * itx) declare their own narrowed signature.
- */
-export interface Describable {
-  __describe(): Promise<Description>;
 }
 
 /** The `itx.integrations.gmail` built-in: Gmail REST proxy for the project's Google account. */
@@ -789,7 +721,7 @@ export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
 
-/** One entry of {@link ProjectCollection.list}. */
+/** One entry of a session's project catalog (`session.projects.list()`). */
 export type ProjectListEntry = {
   id: string;
   slug: string;
@@ -861,6 +793,25 @@ export type ProcessorRuntimeState<State = unknown> = {
  * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/**
+ * Live subscription handle returned by `Stream.subscribe`.
+ *
+ * `ping()` mirrors {@link ProcessorStateSubscriptionHandle.ping}: `true` while
+ * the connection is still open on the live stream, `false` after it closed
+ * (replaced, delivery failure, unsubscribe); it rejects when the stream's
+ * Durable Object incarnation is gone. Either non-`true` outcome means the
+ * subscriber should re-subscribe.
+ */
+export type StreamSubscriptionHandle = Disposable & {
+  /** Stable identity of this subscription connection. */
+  subscriptionKey: SubscriptionKey;
+  /** The stream's max offset at subscribe time (replay starts behind it). */
+  streamMaxOffset: number;
+  ping(): boolean | Promise<boolean>;
+  /** Close this connection; safe to call more than once. */
+  unsubscribe(): void;
+};
 
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
@@ -991,6 +942,9 @@ export type StreamEventBatch = {
   state: unknown;
 };
 
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
+
 /**
  * One repo file mutation.
  *
@@ -1012,6 +966,22 @@ export type ProcessorSnapshot<State> = {
   state: State;
 };
 
+/**
+ * Live handle for one `onStateChange` subscription.
+ *
+ * `ping()` is the liveness probe: `true` while the subscription is still
+ * registered on the live processor, `false` once it was dropped (delivery
+ * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
+ * Object incarnation is gone. For a subscriber, `false` and a rejection mean
+ * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
+ * transport half-opens, so a periodic ping is how a client turns "silently
+ * stale" into "detectably dead".
+ */
+export type ProcessorStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
 export type CapabilityDescription = {
   instructions?: string;
   path: string[];
@@ -1030,7 +1000,7 @@ export type CapabilityDescription = {
 /**
  * The agent processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape (the old hand-written copy
- * in types.ts silently omitted `llmProviderConfigured` and
+ * in the former types.ts silently omitted `llmProviderConfigured` and
  * `requestGeneration`).
  */
 export type AgentProcessorState = {
@@ -1060,14 +1030,20 @@ export type StreamListItem = { createdAt: string; path: string };
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
 
+/** One example without its code — what `itx.examples.list()` returns. */
 export type ItxExampleSummary = {
   description: string;
   id: string;
   title: string;
 };
 
+/** One example with its full script body — what `itx.examples.get({ id })` returns. */
 export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
+/**
+ * Integration (Slack + Google) data shapes shared by the connection flows, the
+ * webhook router, and the itx `integrations` capability surface.
+ */
 export type IntegrationProvider = "google" | "slack";
 
 export type IntegrationConnectionStatus = {
@@ -1087,6 +1063,11 @@ export type McpClientConnectInput = {
   url: string;
 };
 
+/**
+ * A connected MCP client. Its tools are dotted method calls
+ * (`itx.mcp.<server>.<tool>({...})`) resolved through the dynamic path-call
+ * fallback, so this contract deliberately does not re-declare a fixed surface.
+ */
 export type McpClientRpc = object;
 
 export type OpenApiConnectInput = {
@@ -1095,6 +1076,11 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/**
+ * A connected OpenAPI service. Each operationId becomes a dotted method
+ * (`itx.openapi.<connection>.<operationId>({...})`) resolved through the
+ * dynamic path-call fallback, so this contract does not re-declare a surface.
+ */
 export type OpenApiRpc = object;
 
 /**
@@ -1102,7 +1088,7 @@ export type OpenApiRpc = object;
  * nothing wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
- * does not re-declare that surface (same stance as {@link McpClientRpc}); see
+ * does not re-declare that surface (same stance as `McpClientRpc`); see
  * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
  * container start kicks off a clone of the project's repo to
  * `/workspace/repo` — `await sandbox.ensureProjectRepo()` before work that
@@ -1161,6 +1147,13 @@ export type SecretDescription = {
   hasMaterial: boolean;
 };
 
+/**
+ * Public secret capability data shapes. A secret's public live state IS its
+ * {@link SecretDescription}: there is deliberately no separate secret processor
+ * state type — the internal fold carries the encrypted material, and the DO's
+ * processor facade projects it away (write-only material) before anything
+ * crosses the RPC boundary.
+ */
 export type SecretUpdateInput = {
   egress?: { urls: string[] };
   material?: string;
@@ -1206,7 +1199,7 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   updatePolicy?: "block" | "stale-while-rebuild";
 };
 
-type DynamicWorkerRefBase = {
+export type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker
    * Durable Object names. This is intentionally not the mounted capability path:
@@ -1273,12 +1266,11 @@ export type WorkerFileSource =
  * This mirrors Cloudflare's `CreateWorkerOptions` from
  * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
  * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin in
- * domains/workers/schemas.ts; this file stays import-free because it is
- * published verbatim as the itx types surface). `bundle: false` is allowed; the invariant is one OS
- * materialization pipeline, not one bundled output file. When the file map has
- * a `package.json` with dependencies, the bundler installs them from the npm
- * registry at build time.
+ * language (drift fails typecheck via the assignability pin
+ * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
+ * invariant is one OS materialization pipeline, not one bundled output file.
+ * When the file map has a `package.json` with dependencies, the bundler
+ * installs them from the npm registry at build time.
  */
 export type WorkerBuildOptions = {
   /** Entry point file path relative to the source root (e.g. "worker.ts"). */

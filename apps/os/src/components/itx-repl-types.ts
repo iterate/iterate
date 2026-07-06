@@ -28,7 +28,7 @@ export const itxTypesDeclaration: string = ITX_TYPES_SOURCE;
 
 /**
  * REPL prelude for the editor's virtual filesystem. Only what
- * `~/types.ts` does not cover lives here: the session globals the REPL
+ * `~/itx-api.generated.ts` does not cover lives here: the session globals the REPL
  * runtime actually injects (see `~/itx/browser-repl.ts`), ambient shims for
  * the workers-runtime globals the raw type file references (`Disposable`,
  * `ExecutionContext` — the editor's lib is es2022 + dom), and global aliases

@@ -10,9 +10,12 @@
 // How it works: build a TS program over rpc-targets.ts, start at
 // UnauthenticatedOsRpcTarget, and walk every type reachable from its public
 // members. RpcTarget classes become interfaces (class name minus "RpcTarget",
-// plus a few naming overrides); named type aliases referenced in signatures
-// are emitted once — verbatim when they are already import-free (types.ts),
-// checker-expanded when they are zod-inferred (schema files).
+// plus a few naming overrides); named type aliases and interfaces referenced in
+// signatures are discovered wherever they live (their domain modules) and
+// emitted once — checker-expanded when the alias is a bare type-reference
+// (`z.infer<…>`, `ProcessorState<…>`, i.e. a derived type that would not be
+// import-free copied literally), and copied verbatim otherwise (hand-authored
+// literal shapes, which keeps their docstrings and generics intact).
 //
 // Regenerate: pnpm generate:itx-api
 // Freshness is enforced by src/itx-api.generated.test.ts.
@@ -24,7 +27,6 @@ import ts from "typescript";
 
 const projectDir = fileURLToPath(new URL("..", import.meta.url));
 const rpcTargetsPath = path.join(projectDir, "src/rpc-targets.ts");
-const typesPath = path.join(projectDir, "src/types.ts");
 const outPath = path.join(projectDir, "src/itx-api.generated.ts");
 
 /**
@@ -36,17 +38,18 @@ const CLASS_NAME_OVERRIDES: Record<string, string> = {
   ProjectRpcTarget: "Project",
   SlackRpcTarget: "SlackCapability",
   GmailRpcTarget: "GmailCapability",
+  EmailRpcTarget: "EmailCapability",
   IntegrationsRpcTarget: "ProjectIntegrations",
-  ItxExampleCatalogRpcTarget: "ItxExampleCatalog",
-  StreamSubscriptionRpcTarget: "StreamSubscriptionHandle",
-  ProcessorStateSubscriptionRpcTarget: "ProcessorStateSubscriptionHandle",
-  ProjectEgressInterceptRpcTarget: "ProjectEgressIntercept",
 };
 
 /**
  * Classes that relay an existing named contract rather than defining a surface
  * of their own. Mentions are renamed; the contract is emitted from the
- * registry (types.ts / schemas), not from the class members.
+ * discovered named-type registry (the hand-authored type alias / interface in
+ * its domain module), not from the class members. This is how a thin
+ * runtime class (a subscription handle, a passthrough RPC relay) publishes a
+ * hand-authored shape while the class itself is checked against it at the
+ * `return new …RpcTarget()` call site in rpc-targets.ts.
  */
 const CLASS_TO_CONTRACT: Record<string, string> = {
   ProcessorRelayRpcTarget: "StreamProcessorRpc",
@@ -54,6 +57,9 @@ const CLASS_TO_CONTRACT: Record<string, string> = {
   McpClientRpcTarget: "McpClientRpc",
   OpenApiRpcTarget: "OpenApiRpc",
   DynamicWorkerRpcTarget: "DynamicWorkerCapability",
+  StreamSubscriptionRpcTarget: "StreamSubscriptionHandle",
+  ProcessorStateSubscriptionRpcTarget: "ProcessorStateSubscriptionHandle",
+  ProjectEgressInterceptRpcTarget: "ProjectEgressIntercept",
 };
 
 /** Public members that are host-side plumbing, never part of the RPC contract. */
@@ -88,9 +94,8 @@ export function generateItxApi(): string {
   });
   const checker = program.getTypeChecker();
   const rpcTargetsFile = program.getSourceFile(rpcTargetsPath);
-  const typesFile = program.getSourceFile(typesPath);
-  if (!rpcTargetsFile || !typesFile) {
-    throw new Error("could not load src/rpc-targets.ts / src/types.ts into the program");
+  if (!rpcTargetsFile) {
+    throw new Error("could not load src/rpc-targets.ts into the program");
   }
 
   // ── Registries ─────────────────────────────────────────────────────────────
@@ -118,38 +123,59 @@ export function generateItxApi(): string {
     classByPublicName.set(publicName, decl);
   }
 
-  /** Named types declared in types.ts (import-free — copyable verbatim). */
-  const typesTsDecls = new Map<string, ts.TypeAliasDeclaration | ts.InterfaceDeclaration>();
-  for (const statement of typesFile.statements) {
-    if (
-      (ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement)) &&
-      statement.name
-    ) {
-      typesTsDecls.set(statement.name.text, statement);
-    }
-  }
-
   /**
-   * Named type aliases exported from schema modules (zod-inferred, so they
-   * must be checker-expanded into structural form to stay import-free).
-   * Discovered lazily: any exported TypeAliasDeclaration outside types.ts and
-   * rpc-targets.ts that a signature mentions.
+   * Every exported named type (alias or interface) in the app, by name, keyed
+   * to all its declarations. Discovered across the program because itx data
+   * shapes live in their own domain modules now, not one central file. The
+   * walker is demand-driven — only names actually reached from the entrypoint
+   * are emitted — and a reached name with more than one declaration is a hard
+   * error (see `resolveNamedDecl`), so cross-module name clashes can never
+   * silently pick the wrong shape.
    */
-  const schemaAliasDecls = new Map<string, ts.TypeAliasDeclaration>();
+  const namedDecls = new Map<string, (ts.TypeAliasDeclaration | ts.InterfaceDeclaration)[]>();
   for (const sourceFile of program.getSourceFiles()) {
     if (sourceFile.isDeclarationFile) continue;
-    if (sourceFile.fileName === typesPath || sourceFile.fileName === rpcTargetsPath) continue;
+    if (sourceFile.fileName === rpcTargetsPath || sourceFile.fileName === outPath) continue;
     if (sourceFile.fileName.includes("node_modules")) continue;
     for (const statement of sourceFile.statements) {
       if (
-        ts.isTypeAliasDeclaration(statement) &&
-        statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) &&
-        !schemaAliasDecls.has(statement.name.text)
+        (ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement)) &&
+        statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
       ) {
-        schemaAliasDecls.set(statement.name.text, statement);
+        const list = namedDecls.get(statement.name.text) ?? [];
+        list.push(statement);
+        namedDecls.set(statement.name.text, list);
       }
     }
   }
+
+  /** Resolve a reached named type to its single declaration, or throw if ambiguous. */
+  const resolveNamedDecl = (
+    name: string,
+  ): ts.TypeAliasDeclaration | ts.InterfaceDeclaration | undefined => {
+    const list = namedDecls.get(name);
+    if (!list || list.length === 0) return undefined;
+    if (list.length > 1) {
+      const files = list.map((d) => path.relative(projectDir, d.getSourceFile().fileName));
+      throw new Error(
+        `itx api generation reached ambiguous type "${name}" — declared in ${files.length} ` +
+          `modules (${files.join(", ")}). Give the itx-facing one a unique name.`,
+      );
+    }
+    return list[0];
+  };
+
+  /**
+   * A hand-authored literal shape is copied verbatim (docstrings + generics
+   * preserved). A type alias whose right-hand side is a bare type reference
+   * (`z.infer<…>`, `ProcessorState<…>`) is a DERIVED type — copying it verbatim
+   * would drag in imports — so it is checker-expanded into structural form.
+   * Interfaces are always literal and copied verbatim.
+   */
+  const isDerivedAlias = (
+    decl: ts.TypeAliasDeclaration | ts.InterfaceDeclaration,
+  ): decl is ts.TypeAliasDeclaration =>
+    ts.isTypeAliasDeclaration(decl) && ts.isTypeReferenceNode(decl.type);
 
   // ── Emission ───────────────────────────────────────────────────────────────
 
@@ -177,7 +203,7 @@ export function generateItxApi(): string {
     for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
       const name = match[0];
       if (exclude?.has(name)) continue;
-      if (classByPublicName.has(name) || typesTsDecls.has(name) || schemaAliasDecls.has(name)) {
+      if (classByPublicName.has(name) || namedDecls.has(name)) {
         enqueue(name);
       } else if (!AMBIENT_NAMES.has(name) && !/^[A-Z][a-z]?$/.test(name)) {
         // Single letters (T, K…) are type params; everything else unknown is a
@@ -203,36 +229,6 @@ export function generateItxApi(): string {
     return blocks?.at(-1);
   };
 
-  /** Members of the interfaces a class `implements`, for docstring fallback. */
-  const interfaceMemberDocs = (cls: ts.ClassDeclaration): Map<string, string> => {
-    const docs = new Map<string, string>();
-    for (const heritage of cls.heritageClauses ?? []) {
-      if (heritage.token !== ts.SyntaxKind.ImplementsKeyword) continue;
-      for (const typeNode of heritage.types) {
-        const name = typeNode.expression.getText();
-        const iface = typesTsDecls.get(name);
-        if (!iface || !ts.isInterfaceDeclaration(iface)) continue;
-        for (const member of iface.members) {
-          const memberName = member.name?.getText();
-          const doc = memberName ? jsDocOf(member) : undefined;
-          if (memberName && doc && !docs.has(memberName)) docs.set(memberName, doc);
-        }
-      }
-    }
-    return docs;
-  };
-
-  const classDocFallback = (cls: ts.ClassDeclaration): string | undefined => {
-    for (const heritage of cls.heritageClauses ?? []) {
-      if (heritage.token !== ts.SyntaxKind.ImplementsKeyword) continue;
-      for (const typeNode of heritage.types) {
-        const iface = typesTsDecls.get(typeNode.expression.getText());
-        if (iface) return jsDocOf(iface);
-      }
-    }
-    return undefined;
-  };
-
   const paramText = (param: ts.ParameterDeclaration): string => {
     if (param.name.getText() === "this") return "";
     const rest = param.dotDotDotToken ? "..." : "";
@@ -246,9 +242,8 @@ export function generateItxApi(): string {
   };
 
   const emitClass = (publicName: string, cls: ts.ClassDeclaration) => {
-    const memberDocs = interfaceMemberDocs(cls);
     const lines: string[] = [];
-    const classDoc = jsDocOf(cls) ?? classDocFallback(cls);
+    const classDoc = jsDocOf(cls);
     if (classDoc) lines.push(classDoc);
     // A class extending another RpcTarget is an interface extension: emit only
     // the subclass's own members and inherit the rest.
@@ -280,7 +275,7 @@ export function generateItxApi(): string {
       const memberName = member.name?.getText() ?? "";
       if (SKIPPED_MEMBER_NAMES.has(memberName)) continue;
 
-      const doc = jsDocOf(member) ?? memberDocs.get(memberName);
+      const doc = jsDocOf(member);
 
       if (ts.isMethodDeclaration(member)) {
         if (memberName === "[Symbol.dispose]") {
@@ -326,26 +321,29 @@ export function generateItxApi(): string {
     interfaceChunks.push(rewriteAndCollect(lines.join("\n"), `interface ${publicName}`));
   };
 
-  const emitTypesTsDecl = (
-    name: string,
-    decl: ts.TypeAliasDeclaration | ts.InterfaceDeclaration,
-  ) => {
+  const emitNamedDecl = (name: string, decl: ts.TypeAliasDeclaration | ts.InterfaceDeclaration) => {
     const doc = jsDocOf(decl);
-    const body = decl.getText();
+    const from = path.relative(projectDir, decl.getSourceFile().fileName);
+    if (isDerivedAlias(decl)) {
+      // Derived alias (z.infer<…>, ProcessorState<…>): expand to structural form.
+      const type = checker.getTypeAtLocation(decl.name);
+      const expanded = checker.typeToString(type, decl, typeFlags | ts.TypeFormatFlags.InTypeAlias);
+      aliasChunks.push(
+        rewriteAndCollect(
+          `${doc ? `${doc}\n` : ""}export type ${name} = ${expanded};`,
+          `derived alias ${name} (${from})`,
+        ),
+      );
+      return;
+    }
+    // Hand-authored literal shape: copy verbatim, docstrings and generics intact.
     const typeParams = new Set((decl.typeParameters ?? []).map((tp) => tp.name.text));
-    const chunk = rewriteAndCollect(doc ? `${doc}\n${body}` : body, `types.ts ${name}`, typeParams);
-    (ts.isInterfaceDeclaration(decl) ? interfaceChunks : aliasChunks).push(chunk);
-  };
-
-  const emitSchemaAlias = (name: string, decl: ts.TypeAliasDeclaration) => {
-    const doc = jsDocOf(decl);
-    const type = checker.getTypeAtLocation(decl.name);
-    const expanded = checker.typeToString(type, decl, typeFlags | ts.TypeFormatFlags.InTypeAlias);
     const chunk = rewriteAndCollect(
-      `${doc ? `${doc}\n` : ""}export type ${name} = ${expanded};`,
-      `schema alias ${name}`,
+      doc ? `${doc}\n${decl.getText()}` : decl.getText(),
+      `${name} (${from})`,
+      typeParams,
     );
-    aliasChunks.push(chunk);
+    (ts.isInterfaceDeclaration(decl) ? interfaceChunks : aliasChunks).push(chunk);
   };
 
   enqueue("UnauthenticatedOs");
@@ -358,14 +356,9 @@ export function generateItxApi(): string {
       emitClass(name, cls);
       continue;
     }
-    const typesTsDecl = typesTsDecls.get(name);
-    if (typesTsDecl) {
-      emitTypesTsDecl(name, typesTsDecl);
-      continue;
-    }
-    const schemaAlias = schemaAliasDecls.get(name);
-    if (schemaAlias) {
-      emitSchemaAlias(name, schemaAlias);
+    const decl = resolveNamedDecl(name);
+    if (decl) {
+      emitNamedDecl(name, decl);
       continue;
     }
     throw new Error(`itx api generation reached unknown type "${name}"`);

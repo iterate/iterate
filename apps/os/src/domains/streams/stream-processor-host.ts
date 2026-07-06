@@ -25,7 +25,9 @@
 // processor's durable checkpoint, failed batches re-handshake, and connection
 // generations fence off batches from superseded connections.
 
-import type { Stream, StreamEvent, StreamSubscriptionHandle } from "../../types.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamSubscriptionHandle } from "./rpc-types.ts";
+import type { StreamEvent } from "./schemas.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 

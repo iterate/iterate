@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import { SLACK_AGENT_SYSTEM_PROMPT } from "../projects/project-processor-implementation.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {

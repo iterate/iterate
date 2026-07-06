@@ -300,7 +300,7 @@ export type AgentProcessorContract = typeof AgentProcessorContract;
 /**
  * The agent processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape (the old hand-written copy
- * in types.ts silently omitted `llmProviderConfigured` and
+ * in the former types.ts silently omitted `llmProviderConfigured` and
  * `requestGeneration`).
  */
 export type AgentProcessorState = ProcessorState<AgentProcessorContract>;

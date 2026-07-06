@@ -29,7 +29,7 @@ import {
   ProjectCollectionRpcTarget,
   UnauthenticatedOsRpcTarget,
 } from "./rpc-targets.ts";
-import type { ProjectWorker } from "./types.ts";
+import type { ProjectWorker } from "./domains/workers/schemas.ts";
 import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";

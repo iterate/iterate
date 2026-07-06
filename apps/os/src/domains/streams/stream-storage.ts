@@ -11,7 +11,7 @@
 // Durable Object's append commit point assigns offsets, reduces state, and
 // persists the batch in one await-free turn.
 
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "./schemas.ts";
 import { StreamEvent as StreamEventSchema } from "./schemas.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;

@@ -1,9 +1,9 @@
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
+import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "./dev-server.ts";
 import { connectItx } from "~/itx-client.ts";
-import type { ProjectRpcTarget, Session } from "~/types.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 

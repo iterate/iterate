@@ -5,13 +5,13 @@ import {
   type RpcStub as CapnRpcStub,
 } from "capnweb";
 import { withOwnedRpcSession } from "./domains/itx/utils.ts";
+import type { ItxAuthCredentials } from "./auth.ts";
 import type {
   Agent,
-  ItxAuthCredentials,
-  ProjectRpcTarget,
+  Project as ProjectRpcTarget,
   Session,
   UnauthenticatedOs,
-} from "./types.ts";
+} from "./itx-api.generated.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 

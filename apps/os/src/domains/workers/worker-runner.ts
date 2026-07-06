@@ -1,13 +1,13 @@
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
   DynamicWorkerRef,
-} from "../../types.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+} from "./schemas.ts";
 import {
   loadResolvedWorker,
   resolveCachedArtifact,

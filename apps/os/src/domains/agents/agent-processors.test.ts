@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";

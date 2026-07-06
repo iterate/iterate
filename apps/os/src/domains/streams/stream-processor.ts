@@ -1,6 +1,7 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import {
   assertObjectProcessorState,
   getConsumedEventDefinition,

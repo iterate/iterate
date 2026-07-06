@@ -16,16 +16,16 @@
 // the DO bindings). The dashboard's /api/integrations/* routes reach them
 // through the itx surface (rpc-targets.ts).
 
+import { itxEnv } from "../../env.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
 import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   IntegrationProvider,
   RouteSlackWebhookResult,
-} from "../../types.ts";
-import { itxEnv } from "../../env.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
+} from "./types.ts";
 import {
   createOAuthState,
   randomBase64Url,

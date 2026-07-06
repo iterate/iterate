@@ -132,6 +132,7 @@ announcements and checkpoints.
 | `client-libraries/`          | Browser mirror host and browser-side processors                                                                 |
 
 Public capability surface (`Stream`, `StreamEventBatch`, `ProcessEventBatch`,
-…) is defined in `src/types.ts`; the Cap'n Web / Workers RPC facades live in
+…) is defined in `src/domains/streams/rpc-types.ts` (and projected into the
+generated contract `src/itx-api.generated.ts`); the Cap'n Web / Workers RPC facades live in
 `src/rpc-targets.ts`. Design doctrine: `docs/domain-objects-and-stream-processors.md`.
 Debugging runbook: `apps/os/docs/debugging-streams.md`.
