@@ -11,6 +11,12 @@ import { z } from "zod";
  * `redacted` fields parse into `Redacted` wrappers that must be unwrapped with
  * `.exposeSecret()` and never serialize their value.
  */
+
+/** A JSON Web Key Set as jose expects it (the auth issuer's keys, baked at deploy). */
+const JSONWebKeySet = z.object({
+  keys: z.array(z.looseObject({ kty: z.string().trim().min(1) })),
+});
+
 export const AppConfig = z.object({
   // Deployed envs get APP_CONFIG_BASE_URL as a generated var from the same
   // envs.ts entry that produces the worker route (scripts/
@@ -21,7 +27,18 @@ export const AppConfig = z.object({
   posthog: z.object({
     apiKey: publicValue(z.string().trim().min(1)),
   }),
-  sharedApiSecret: redacted(z.string().trim().min(1)),
+  // Relying-party config against the env's apps/auth deployment — the same
+  // shape as apps/os. Optional so a local dev worker without the Doppler keys
+  // still boots; every authenticated surface fails closed when absent.
+  iterateAuth: z
+    .object({
+      issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
+      clientId: publicValue(z.string().trim().min(1)),
+      clientSecret: redacted(z.string().trim().min(1)),
+      jwks: JSONWebKeySet.optional(),
+      resource: publicValue(z.url()).optional(),
+    })
+    .optional(),
 });
 export type AppConfig = z.output<typeof AppConfig>;
 

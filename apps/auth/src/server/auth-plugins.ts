@@ -31,7 +31,12 @@ import {
   parseOAuthProjectSelectionReferenceId,
   resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
-import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
+import {
+  getOsMcpResourceBases,
+  getOsResourceBases,
+  getSemaphoreResourceBases,
+  getStreamsExampleResourceBases,
+} from "./oauth-resources.ts";
 import { isPlatformAdminUser } from "./platform-admin.ts";
 import {
   type CloudflareEmailBinding,
@@ -80,7 +85,12 @@ export type AuthPluginOptions = {
 
 export function getAuthPlugins(options: AuthPluginOptions) {
   const osResourceBases = getOsResourceBases();
-  const validAudiences = [...osResourceBases, ...getOsMcpResourceBases()];
+  const validAudiences = [
+    ...osResourceBases,
+    ...getSemaphoreResourceBases(),
+    ...getStreamsExampleResourceBases(),
+    ...getOsMcpResourceBases(),
+  ];
 
   return [
     jwt(),

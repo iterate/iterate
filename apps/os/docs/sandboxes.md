@@ -21,31 +21,139 @@ await itx.sandbox.exec("echo mine"); // an agent's own sandbox (dotted capabilit
 const sandbox = await itx.sandboxes.get("/sandboxes/cloudflare/whatever");
 await sandbox.exec("echo hi"); // first command boots the container
 await sandbox.ensureProjectRepo(); // await the project repo clone
-await sandbox.readFile("/workspace/repo/README.md");
+await sandbox.readFile("/workspace/repos/project/README.md");
 await sandbox.startProcess("bun server.js");
 ```
 
-Lifecycle is the SDK's best-practice default, unchanged: getting a sandbox is
-cheap (no container), the first command boots it, and the SDK's durable
-`sleepAfter` idle alarm (default 10m) stops it again. Durable Object storage
-and identity survive sleep; the container filesystem does not — every start
-re-provisions (the repo clone below), which is what makes a sandbox
-restorable rather than merely long-lived.
+Lifecycle is the SDK's best-practice default: getting a sandbox is cheap (no
+container), the first command boots it, and the SDK's durable `sleepAfter`
+idle alarm (3m) stops it again. Durable Object storage and identity survive
+sleep. The container's own disk does **not** — but `/workspace` comes back,
+because going to sleep snapshots it to R2 and the next start restores it (see
+below), which is what makes a sandbox restorable rather than merely
+long-lived.
 
 `get(path)` returns the **bare `@cloudflare/sandbox` Durable Object stub** —
 no wrapper. Everything the SDK exposes (exec, files, processes, git, ports,
 tunnels, `destroy()`, …) is callable directly; see the
-[Sandbox SDK docs](https://developers.cloudflare.com/sandbox/). Getting a
-sandbox is cheap; the first command starts the container. Every container
-start also kicks off a clone of the project repo to `/workspace/repo`
-(credentials are embedded in the git remote, so `git pull`/`push` work inside
-the sandbox); `await sandbox.ensureProjectRepo()` before work that depends on
-it. The clone cannot run synchronously inside container startup:
-`onStart` executes inside the container framework's `blockConcurrencyWhile`,
-which has a hard ~30s budget, kills the fresh container on cancellation, and
-input-gates timer events — so nothing in there can even bound itself with a
-deadline. Slow cold starts (first boot under Rosetta locally) would brick the
-sandbox instead of merely delaying the clone.
+[Sandbox SDK docs](https://developers.cloudflare.com/sandbox/).
+
+## `/workspace` persists across sleep (R2 backup/restore)
+
+Cloudflare container disk is **ephemeral** — there is no persistent volume
+([FAQ](https://developers.cloudflare.com/containers/faq/)), and a sandbox that
+sleeps loses its filesystem. `CloudflareSandboxDurableObject` closes that gap
+with the Sandbox SDK's
+[backup/restore](https://developers.cloudflare.com/sandbox/guides/backup-restore/),
+hung off the SDK's own lifecycle hooks:
+
+- **`onActivityExpired`** (the idle-timer hook — the one moment the container
+  is still running but about to go away; `onStop` is too late, the container
+  is already gone) snapshots `/workspace` with
+  [`createBackup`](https://developers.cloudflare.com/sandbox/api/backups/) —
+  gitignore-aware and `node_modules`-excluded, so archives stay small — stores
+  the returned handle in Durable Object storage, then **destroys** the
+  container (not the SDK's stop: a stopped container keeps its instance
+  assignment against `max_instances` forever — see the method's docstring; the
+  snapshot is what makes destroy loss-free). A backup failure never wedges the
+  container alive; the handle keeps pointing at the last good snapshot.
+- **`onStart`** provisions the workspace in the background: restore the newest
+  snapshot (seconds), then clone the repo if the checkout is still missing.
+  `ensureProjectRepo()` is the awaitable guarantee.
+- Backups expire after **90 days idle** (SDK `ttl`): long enough that any
+  still-wanted workspace comes back intact, short enough that e2e churn
+  doesn't accumulate in R2 forever. An expired workspace degrades to a fresh
+  clone.
+
+Plumbing: **one bucket per env**, `${osWorkerName}-sandboxes`, created by
+`ensure-resources` (create-only) and bound as `BACKUP_BUCKET` — that exact
+binding name is the SDK's contract, as are the `BACKUP_BUCKET_NAME` /
+`CLOUDFLARE_R2_ACCOUNT_ID` vars and the `R2_ACCESS_KEY_ID` /
+`R2_SECRET_ACCESS_KEY` presigning secrets. The secrets are optional and select
+the transfer mode: **with** them the SDK presigns
+`*.r2.cloudflarestorage.com` URLs and the container transfers archives
+directly — fast, and through project egress like every other container
+request; **without** them (local dev always — presigned URLs don't exist under
+`wrangler dev` — and any deployed env until R2 keys are minted into Doppler)
+archives stream through the Durable Object's `BACKUP_BUCKET` binding — slower,
+but zero-config, and persistence works either way.
+
+**Honest limit:** this is snapshot-granular, not a continuously-persistent
+disk. A container that _crashes_ (rather than idling out) loses what changed
+since the last snapshot. Durable work belongs in the repo — committed and
+pushed.
+
+## Lifecycle hooks → stream events
+
+The sandbox subclass turns its container lifecycle into ordinary stream
+events, appended to the stream at the sandbox's **own path** — for an agent's
+sandbox that is the agent's own journal, so the agent (and anything tailing
+the stream) sees its sandbox's history. The event catalog is the **sandbox
+processor contract** (`sandbox-processor-contract.ts`); the Durable Object
+builds every event through it (`SandboxProcessorContract.buildEvent`), so
+emission and declaration cannot drift. `SandboxProcessor`
+(`sandbox-processor-implementation.ts`) holds the contract and folds the
+events into a small status projection (`running`, `lastBackupId`) — it takes
+no actions and is not yet wired to a processor host.
+
+| Hook / moment                | Event (`events.iterate.com/sandbox/…`)                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `onStart`                    | `container-started`                                                                                                                       |
+| workspace restored           | `workspace-restored` (with `backupId`)                                                                                                    |
+| workspace freshly cloned     | `workspace-cloned`                                                                                                                        |
+| background provisioning died | `workspace-setup-failed` (with `error`; the next `ensureProjectRepo()` retries from scratch)                                              |
+| `onActivityExpired` backup   | `backup-created` (with `backupId`) / `backup-failed` (with `error`)                                                                       |
+| `onStop`                     | `container-stopped` (may arrive on wake — the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake) |
+
+Appends are best-effort by design: lifecycle telemetry never blocks or fails a
+container start/stop.
+
+## The project repo is always checked out
+
+Every sandbox has the project repo at `/workspace/repos/project` (credentials
+are embedded in the git remote, so `git pull`/`push` work inside the sandbox),
+and that path is the **default working directory** — a bare `exec("ls")` lists
+the project, like a developer's shell. This is UNCONDITIONAL: every public
+command and file operation (`exec`, `startProcess`, `readFile`/`writeFile`,
+`gitCheckout`, `createSession`, …) awaits provisioning internally before
+touching the container, so the first thing any caller does already sees the
+checkout — no `await sandbox.ensureProjectRepo()` first (it stays available to
+await the checkout deterministically). An explicit `cwd` always wins.
+
+Because the workspace is snapshot-restored, the clone effectively runs
+**once**: later starts restore the checkout from the backup (a fast marker
+probe makes the clone a no-op), and only a first boot — or an expired/failed
+backup — pays for a full clone. Guarding also closes an integrity window: a
+write that landed before the snapshot restore would be silently clobbered by
+it.
+
+Provisioning cannot run synchronously inside container startup: `onStart`
+executes inside the container framework's `blockConcurrencyWhile`, which has a
+hard ~30s budget, kills the fresh container on cancellation (verified live —
+an over-budget `onStart` resets the Durable Object), and input-gates timer
+events — so nothing in there can even bound itself with a deadline. So
+`onStart` only kicks provisioning off; `ensureProjectRepo()` is the awaitable
+guarantee.
+
+### Other persistence mechanisms Cloudflare documents, and why not them
+
+- **[`mountBucket`](https://developers.cloudflare.com/sandbox/api/storage/)**
+  (the SDK's "persistent storage": R2 as a live FUSE filesystem) was tried
+  first — continuous persistence beats snapshots on paper. It is incompatible
+  with our egress model in practice: its credential-less R2-binding mode sends
+  s3fs traffic to the magic host `r2.internal`, serviced by the SDK's own
+  per-host container-egress interceptor, which our catch-all
+  all-egress-through-project-policy handler necessarily swallows. Verified
+  broken on a real preview — every filesystem op on the mount returned
+  `Input/output error`. Composing the two would mean exempting storage traffic
+  from project egress policy; backup/restore needs no exemption (presigned
+  transfers are plain HTTPS to real hosts, through project egress).
+- **[Raw R2 FUSE mount](https://developers.cloudflare.com/containers/examples/r2-fuse-mount/)**
+  hand-rolled in the Dockerfile is the same mechanism minus the management —
+  same conflict, plus S3 credentials inside the container.
+- **Durable Object storage** (`ctx.storage`) is key/value, not a filesystem —
+  right for the identity record and the backup handle this class keeps, not a
+  repo checkout or build tree.
 
 ## Egress: all sandbox traffic goes through project policy
 
@@ -122,8 +230,7 @@ OrbStack/Apple Silicon 2026-07-03):
 doppler run --project os --config dev -- pnpm --dir apps/os cli itx run \
   --context prj_… \
   -e 'const sb = await itx.sandboxes.get("/sandboxes/cloudflare/smoke");
-      await sb.ensureProjectRepo();
-      const r = await sb.exec("ls /workspace/repo");
+      const r = await sb.exec("ls");
       return { exitCode: r.exitCode, stdout: r.stdout };'
 ```
 
@@ -154,8 +261,8 @@ fixes, documented here in case they resurface:
 3. **Same-script containers only.** The single-worker topology declares the
    container in wrangler.jsonc's `containers` alongside a same-script DO
    binding — there is no cross-script `script_name` to get wrong anymore
-   (the historical alchemy-era failure mode where a self-referential
-   cross-script binding dropped `ctx.id.name`).
+   (the historical failure mode where a self-referential cross-script
+   binding dropped `ctx.id.name`).
 
 Two more facts worth knowing:
 

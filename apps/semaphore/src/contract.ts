@@ -251,14 +251,22 @@ export type SemaphoreLeaseRecord = z.infer<typeof SemaphoreLeaseRecord>;
 type SemaphoreClient = ContractRouterClient<typeof semaphoreContract>;
 type SemaphoreFetch = (input: URL | string | Request, init?: RequestInit) => Promise<Response>;
 
+/**
+ * The bearer credential sent as `Authorization: Bearer <token>` — an iterate
+ * admin access token (semaphore is a relying party of apps/auth). A function
+ * lets callers mint lazily (e.g. forge-mint on first request); see
+ * scripts/auth/semaphore-token.ts.
+ */
+type SemaphoreApiKey = string | (() => Promise<string> | string);
+
 type CreateSemaphoreClientOptions =
   | {
-      apiKey: string;
+      apiKey: SemaphoreApiKey;
       baseURL: string;
       fetch?: SemaphoreFetch;
     }
   | {
-      apiKey: string;
+      apiKey: SemaphoreApiKey;
       fetch: SemaphoreFetch;
       baseURL?: string;
     };
@@ -277,8 +285,9 @@ export function createSemaphoreClient(options: CreateSemaphoreClientOptions): Se
     : "https://semaphore.invalid/api";
 
   const authFetch: SemaphoreFetch = async (input, init) => {
+    const token = typeof options.apiKey === "function" ? await options.apiKey() : options.apiKey;
     const headers = new Headers(init?.headers);
-    headers.set("Authorization", `Bearer ${options.apiKey}`);
+    headers.set("Authorization", `Bearer ${token}`);
 
     return (options.fetch ?? fetch)(input, {
       ...init,

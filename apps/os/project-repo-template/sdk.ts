@@ -379,11 +379,10 @@ export interface Stream extends Describable {
   getEvent(
     input: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
-  getEvents(input?: {
-    afterOffset?: number;
-    beforeOffset?: number | null;
-    limit?: number;
-  }): Promise<StreamEvent[]>;
+  /** Read one bounded page. Defaults to, and caps at, 500 events. */
+  getEvents(input?: StreamEventReadInput): Promise<StreamEvent[]>;
+  /** Create a disposable pager over a fixed read window. */
+  readEvents(input?: StreamEventReadInput): StreamEventPager;
   waitForEvent(input: {
     afterOffset?: number;
     eventTypes?: readonly string[];
@@ -414,6 +413,29 @@ export interface Stream extends Describable {
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle>;
+}
+
+/** Window for bounded stream reads. Offsets are exclusive: `afterOffset: 10` starts at 11. */
+export type StreamEventReadInput = {
+  /** Exclusive lower bound. Defaults to 0. */
+  afterOffset?: number;
+  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  beforeOffset?: number | null;
+  /** Event types to include. Omit or include "*" for all; [] matches none. */
+  eventTypes?: readonly string[];
+  /** Page size, 1-500. Defaults to 500. */
+  limit?: number;
+};
+
+/**
+ * Stateful page reader for one stream read window.
+ *
+ * This is not a live subscription; [] means "caught up for now". Dispose it
+ * when finished (`using pager = stream.readEvents(...)`).
+ */
+export interface StreamEventPager extends Disposable {
+  /** Returns [] when no newer matching page is currently available. */
+  next(): Promise<StreamEvent[]>;
 }
 
 /** Repo catalog for either a project or the deployment-wide global scope. */
@@ -468,10 +490,12 @@ export interface SandboxCollection extends Describable {
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
  * does not re-declare that surface (same stance as {@link McpClientRpc}); see
- * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
- * container start kicks off a clone of the project's repo to
- * `/workspace/repo` — `await sandbox.ensureProjectRepo()` before work that
- * depends on it.
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
+ * project repo is ALWAYS checked out at `/workspace/repos/project`, which is
+ * also the default working directory — a bare `exec("ls")` lists the project.
+ * Every command awaits that provisioning internally, so no explicit
+ * `ensureProjectRepo()` is needed first (it stays available to await the
+ * checkout deterministically).
  */
 export type CloudflareSandbox = object;
 

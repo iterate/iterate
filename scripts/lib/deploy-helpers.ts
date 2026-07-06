@@ -65,79 +65,18 @@ export async function smoke(url: string, ok: (status: number) => boolean, label:
 }
 
 /**
- * Adopt a Durable Object migration tag on an alchemy-era worker script.
- *
- * Alchemy-era scripts carry live Durable Object classes but a null
- * migration_tag (alchemy submitted untagged migration steps). Deploying
- * wrangler.jsonc's `migrations: [{tag:"v1", …}]` over such a script fails
- * with "Cannot apply new-sqlite-class migration to class … that is already
- * depended on" (code 10074). The fix, verified empirically 2026-07-03: a
- * settings PATCH with an empty tagged migration adopts the tag without
- * touching classes; wrangler then sees old_tag v1 and submits no steps.
- * No-op for fresh scripts (absent) and already-adopted ones.
- *
- * TRANSITION: delete once every env in envs.ts has deployed post-alchemy.
- */
-export async function adoptDoMigrationTag(ctx: CfContext, workerName: string) {
-  const scripts = await ctx.cf<{ id: string; migration_tag: string | null }[]>(
-    `/workers/scripts?per_page=1000`,
-  );
-  const script = scripts.find((candidate) => candidate.id === workerName);
-  // Loose == also catches the list endpoint omitting the field (undefined).
-  const remoteTag = script?.migration_tag == null ? null : script.migration_tag;
-  if (!script || remoteTag === "v1") return;
-  // Adoption/retag is ONLY correct when the classes are already live:
-  // tagging a CLASSLESS worker makes wrangler treat the v1 migrations as
-  // already applied and skip creating the classes — wedging every future
-  // deploy on 10061 (observed live on os-preview-3, 2026-07-04). Classless
-  // workers take deployWithSecrets' bootstrap-deploy path instead.
-  const settings = await ctx
-    .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${workerName}/settings`)
-    .catch(() => null);
-  if (!settings?.bindings?.some((binding) => binding.type === "durable_object_namespace")) {
-    console.log(`Worker ${workerName} has no live DO classes — skipping migration-tag adoption.`);
-    return;
-  }
-  // Two alchemy-era shapes, one remedy — an empty-steps migration that lands
-  // the worker on tag v1 without touching classes:
-  //   tag null          → plain adoption ({new_tag: "v1"})
-  //   tag "alchemy:vN"  → rename ({old_tag: <remote>, new_tag: "v1"}); without
-  //     it wrangler warns "migration tag not found in your wrangler.json",
-  //     re-applies ALL migrations, and dies on CF 10074 (observed live on
-  //     semaphore-prd/tunnels-prd/streams-example-app-prd, 2026-07-04 — the
-  //     old deploy workflows kept re-tagging alchemy:vN until the cutover).
-  console.log(
-    `Adopting DO migration tag v1 on ${workerName} (was ${remoteTag === null ? "untagged" : `"${remoteTag}"`}/alchemy-era)`,
-  );
-  const form = new FormData();
-  form.set(
-    "settings",
-    JSON.stringify({
-      migrations: {
-        ...(remoteTag === null ? {} : { old_tag: remoteTag }),
-        new_tag: "v1",
-        steps: [],
-      },
-    }),
-  );
-  await ctx.cf(`/workers/scripts/${workerName}/settings`, {
-    method: "PATCH",
-    body: form,
-  });
-}
-
-/**
  * `wrangler deploy --secrets-file` with the secrets in a 0600 tmpfile that is
  * always cleaned up — code + secrets land atomically in one worker version.
  *
  * When `ensureClassesFor` is given, first checks the live worker for Durable
  * Object bindings and runs a plain (secrets-less) deploy when there are none.
  * Gotcha (observed live 2026-07-03): a worker with NO Durable Object classes
- * yet (fresh, or an alchemy-era "parked" placeholder) fails
- * `wrangler deploy --secrets-file` with 10061 — initial class migrations
- * don't ride that upload path. The plain deploy establishes the classes
- * (existing secrets are preserved across versions), then the secrets deploy
- * lands code+secrets atomically as usual. Apps without DO classes skip it.
+ * yet — a brand-new env whose script has never been uploaded — fails
+ * `wrangler deploy --secrets-file` with 10061, because the initial class
+ * migrations don't ride that upload path. The plain deploy establishes the
+ * classes (existing secrets are preserved across versions), then the secrets
+ * deploy lands code+secrets atomically as usual. Apps without DO classes skip
+ * it; envs that already carry the classes fall straight through.
  */
 export async function deployWithSecrets(input: {
   /** App root the wrangler commands run in. */

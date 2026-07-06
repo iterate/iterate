@@ -105,6 +105,8 @@ import type {
   StatelessDynamicWorkerRef,
   Stream,
   StreamCollection,
+  StreamEventPager,
+  StreamEventReadInput,
   AgentProcessorState,
   ProcessorSnapshot,
   ProcessorStateSubscriptionHandle,
@@ -134,12 +136,13 @@ import {
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
         getEvent: "One event by offset or idempotencyKey.",
-        getEvents: "Read a range of events.",
+        getEvents: "Read one bounded page of events.",
+        readEvents: "Create a pager for bounded event pages.",
         subscribe: "Live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
@@ -186,6 +189,10 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
 
   getEvents(args?: Parameters<Stream["getEvents"]>[0]) {
     return this.durableObjectStub.getEvents(args);
+  }
+
+  readEvents(args?: Parameters<Stream["readEvents"]>[0]) {
+    return new StreamEventPagerRpcTarget((pageArgs) => this.getEvents(pageArgs), args);
   }
 
   waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]) {
@@ -2009,6 +2016,41 @@ export class UnauthenticatedOsRpcTarget extends RpcTarget implements Unauthentic
 // ---------------------------------------------------------------------------
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
+
+/**
+ * Tiny object-capability cursor: it holds only the caller's read window and the
+ * last offset it returned. Events still come from the Stream DO on every page,
+ * so there is no server-side snapshot or lease to maintain.
+ */
+class StreamEventPagerRpcTarget extends RpcTarget implements StreamEventPager {
+  readonly #input: Omit<StreamEventReadInput, "afterOffset">;
+  readonly #readPage: Stream["getEvents"];
+  #afterOffset: number;
+  #disposed = false;
+
+  constructor(readPage: Stream["getEvents"], input: StreamEventReadInput = {}) {
+    super();
+    const { afterOffset = 0, ...pageInput } = input;
+    this.#afterOffset = afterOffset;
+    this.#input = pageInput;
+    this.#readPage = readPage;
+  }
+
+  async next() {
+    if (this.#disposed) throw new Error("stream event pager is disposed.");
+    const page = await this.#readPage({
+      ...this.#input,
+      afterOffset: this.#afterOffset,
+    });
+    const lastOffset = page.at(-1)?.offset;
+    if (lastOffset !== undefined) this.#afterOffset = lastOffset;
+    return page;
+  }
+
+  [Symbol.dispose](): void {
+    this.#disposed = true;
+  }
+}
 
 /**
  * Ownership handle for one `provideCapability()` call.

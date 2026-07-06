@@ -8,6 +8,11 @@ import {
   E2E_PROJECT_ROOT_KEY,
   E2E_RUN_ROOT_KEY,
 } from "@iterate-com/shared/test-support/vitest-e2e";
+import {
+  E2E_CI_RETRIES,
+  E2E_TEST_TIMEOUT_MS,
+  RetryTelemetryReporter,
+} from "@iterate-com/shared/test-support/e2e-policy";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys.ts";
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
 import { resolveBaseUrl } from "./test-support/dev-server.ts";
@@ -66,6 +71,11 @@ export default defineConfig({
     sequence: { concurrent: ci },
     maxConcurrency: 2,
     passWithNoTests: true,
+    // Retry telemetry (policy rule 5 — see @iterate-com/shared
+    // test-support/e2e-policy/budgets.ts): reporters DO belong at the root
+    // test level and apply across projects — unlike `retry`, which vitest
+    // only reads from each project config (see the note on the node project).
+    reporters: ["default", new RetryTelemetryReporter()],
     projects: [
       {
         resolve: sharedResolve,
@@ -80,15 +90,20 @@ export default defineConfig({
           // #1601 fixed cold-slot creates to ~3-5s per saga under 4-way load
           // (tasks/os-cold-create-latency.md), so 120s is ample headroom
           // without letting a wedged saga eat the whole job.
-          hookTimeout: 120_000,
-          testTimeout: 120_000,
-          // One retry in CI: tests are self-contained (fresh project per
-          // test), so a rare load-induced or Cloudflare-retryable blip re-runs
-          // in seconds instead of failing the suite. Lives HERE and not at the
-          // root: vitest does not inherit `retry` into project configs — the
-          // root-level retry silently never applied (verified: a CI-profile
-          // run showed a failed test with zero retry attempts).
-          retry: ci ? 1 : 0,
+          hookTimeout: E2E_TEST_TIMEOUT_MS,
+          testTimeout: E2E_TEST_TIMEOUT_MS,
+          // One retry in CI, the only retry layer in the whole lane
+          // (docs/testing.md#retries-and-timeouts): tests are self-contained
+          // (fresh project per test), so a rare platform blip re-rolls in
+          // seconds. A burst that defeats the single retry fails the run —
+          // deliberately: platform weather should be visible, not absorbed
+          // (the 50-run marathon audit saw zero second retries; the
+          // RetryTelemetryReporter above counts the first ones).
+          // Lives HERE and not at the root: vitest does not inherit `retry`
+          // into project configs — the root-level retry silently never
+          // applied (verified: a CI-profile run showed a failed test with
+          // zero retry attempts).
+          retry: ci ? E2E_CI_RETRIES : 0,
         },
       },
       {
@@ -105,8 +120,9 @@ export default defineConfig({
           provide: sharedProvide,
           testTimeout: 45_000,
           hookTimeout: 45_000,
-          // See the node project: `retry` must live on each project config.
-          retry: ci ? 1 : 0,
+          // See the node project: `retry` must live on each project config,
+          // and one retry is the policy.
+          retry: ci ? E2E_CI_RETRIES : 0,
           browser: {
             commands: {
               // Browser WebSockets cannot set Authorization headers, so the

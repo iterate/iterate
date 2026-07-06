@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
+import { readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -8,9 +9,11 @@ import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
+import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
+import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -24,7 +27,20 @@ type PullRequestCommandOptions = {
 /**
  * Deploy affected preview apps for a pull request without running preview e2e.
  */
-export async function deploy(options: PullRequestCommandOptions = {}) {
+export async function deploy(
+  options: PullRequestCommandOptions & {
+    /**
+     * Deploy every preview app regardless of the diff. Diff selection only
+     * redeploys apps affected since their LAST DEPLOYED head, so unaffected
+     * apps keep an older recorded head and the test lane then skips them
+     * ("stale — deploy has not run for the current head yet"). A caller that
+     * needs the whole fleet testable at the current head — the flake-hunt
+     * marathon preflight — uses this to reunify the fleet explicitly instead
+     * of relying on the commit happening to touch a fleet-shared path.
+     */
+    allApps?: boolean;
+  } = {},
+) {
   const runtime = createPreviewRuntime();
   const context = await resolvePullRequestPreviewContext({
     commandEnvironment: runtime.commandEnvironment,
@@ -41,10 +57,13 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
       : "PR body records no lease — this PR has no slot yet",
   );
-  const selectedApps = await selectPreviewAppsForPullRequest({
-    ...context,
-    previousState: current.state,
-  });
+  const selectedApps = options.allApps
+    ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
+      Object.values(cloudflarePreviewApps))
+    : await selectPreviewAppsForPullRequest({
+        ...context,
+        previousState: current.state,
+      });
 
   if (selectedApps.length === 0) {
     logPreview(
@@ -332,6 +351,20 @@ export async function test(options: PullRequestCommandOptions = {}) {
       warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
     }
 
+    // Collected pass or fail: on a red run the telemetry explains which tests
+    // burned their retry before the failure. Never fails the lane.
+    const retrySummary = app.collectRetryTelemetry
+      ? await app
+          .collectRetryTelemetry({ repositoryRoot: runtime.repositoryRoot })
+          .catch((error): PreviewRetrySummary | null => {
+            console.error(`[preview] retry telemetry collection failed for ${app.slug}:`, error);
+            return null;
+          })
+      : null;
+    if (retrySummary) {
+      announceRetryTelemetry(app.slug, retrySummary);
+    }
+
     return CloudflarePreviewAppEntry.parse({
       ...existingEntry,
       appDisplayName: app.displayName,
@@ -343,6 +376,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
       runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
       status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
       testDurationMs,
+      testRetries: retrySummary ? renderPreviewRetrySummary(retrySummary) : null,
       updatedAt: new Date().toISOString(),
     } satisfies CloudflarePreviewAppEntry);
   });
@@ -808,7 +842,156 @@ export type CloudflarePreviewApp = {
    */
   previewDeployBudgetMs?: number;
   previewTestBudgetMs?: number;
+  /**
+   * Collect per-test retry telemetry after the app's preview test command
+   * finishes (pass or fail) — policy rule 5, retries are measured, never
+   * silent (docs/testing.md#retries-and-timeouts). Returns null when the
+   * lane produced no telemetry; must never throw a run-failing error (the
+   * caller logs and continues). The result lands in the run log, a
+   * `::notice::`/`::warning::` annotation, and the PR-body table.
+   */
+  collectRetryTelemetry?: (params: { repositoryRoot: string }) => Promise<PreviewRetrySummary>;
 };
+
+/**
+ * Aggregated retry telemetry for one app's preview e2e lane: every test that
+ * needed a re-roll, whichever sub-lane (vitest, playwright specs) it ran in.
+ * Why this exists: with one CI retry, a rare real race turns a run red about
+ * once in 400 runs, but shows up here about once in 20 — the count, not the
+ * run status, is the detector for probabilistic bugs.
+ */
+export type PreviewRetrySummary = {
+  retried: {
+    /** Which sub-lane observed the retry (e.g. "vitest", "specs"). */
+    lane: string;
+    name: string;
+    retryCount: number;
+    passedAfterRetry: boolean;
+  }[];
+};
+
+/**
+ * Where the os lane tells the vitest RetryTelemetryReporter (see
+ * packages/shared test-support/e2e-policy) to write its JSON. The lane
+ * removes the file before running so a previous run on the same machine
+ * (marathon loops) can't leak stale telemetry.
+ */
+const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+
+/** Reads the JSON written by RetryTelemetryReporter (vitest sub-lane). */
+async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetrySummary["retried"]> {
+  const TelemetryFile = z.object({
+    retried: z.array(
+      z.object({
+        fullName: z.string(),
+        retryCount: z.number().int().positive(),
+        passedAfterRetry: z.boolean(),
+      }),
+    ),
+  });
+  const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
+  return parsed.retried.map((record) => ({
+    lane: "vitest",
+    name: record.fullName,
+    retryCount: record.retryCount,
+    passedAfterRetry: record.passedAfterRetry,
+  }));
+}
+
+/**
+ * Reads Playwright's JSON report (already written by the root
+ * playwright.config.ts json reporter). A retried spec has more than one
+ * result attempt; Playwright reports "flaky" for passed-after-retry.
+ */
+async function readPlaywrightRetryTelemetry(
+  filePath: string,
+): Promise<PreviewRetrySummary["retried"]> {
+  /** The subset of Playwright's JSON-reporter suite tree we walk. */
+  type PlaywrightJsonSuite = {
+    suites?: PlaywrightJsonSuite[];
+    specs?: {
+      title?: string;
+      tests?: { status?: string; results?: { retry?: number }[] }[];
+    }[];
+  };
+  const report = JSON.parse(await readFile(filePath, "utf8")) as {
+    suites?: PlaywrightJsonSuite[];
+  };
+  const retried: PreviewRetrySummary["retried"] = [];
+  const visit = (suite: PlaywrightJsonSuite) => {
+    for (const spec of suite.specs ?? []) {
+      for (const test of spec.tests ?? []) {
+        const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
+        if (retryCount > 0) {
+          retried.push({
+            lane: "specs",
+            name: spec.title ?? "(unknown spec)",
+            retryCount,
+            passedAfterRetry: test.status === "flaky",
+          });
+        }
+      }
+    }
+    for (const child of suite.suites ?? []) {
+      visit(child);
+    }
+  };
+  for (const suite of report.suites ?? []) {
+    visit(suite);
+  }
+  return retried;
+}
+
+/**
+ * Reads one sub-lane's telemetry, treating a missing file as "no retries"
+ * (the sub-lane may have died before writing) and logging anything else —
+ * telemetry must never fail the lane.
+ */
+async function readRetryTelemetryLane(
+  label: string,
+  read: () => Promise<PreviewRetrySummary["retried"]>,
+): Promise<PreviewRetrySummary["retried"]> {
+  try {
+    return await read();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[preview] retry telemetry unreadable for ${label}:`, error);
+    }
+    return [];
+  }
+}
+
+/** One compact human line for the run log and the PR-body table. */
+function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null {
+  if (summary.retried.length === 0) {
+    return null;
+  }
+  const details = summary.retried
+    .map(
+      (record) =>
+        `${record.name} (${record.lane} x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})`,
+    )
+    .join(" · ");
+  return `${summary.retried.length} retried: ${details}`;
+}
+
+/**
+ * Surfaces retry telemetry as a workflow annotation, mirroring
+ * warnIfOverBudget: one or two retried tests per run is the observed
+ * platform-flake floor (~0.5% of test executions) and gets a notice; a
+ * pile-up smells like a slot-wide problem and escalates to a warning.
+ */
+function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
+  const rendered = renderPreviewRetrySummary(summary);
+  if (!rendered) {
+    return;
+  }
+  const level = summary.retried.length >= 4 ? "warning" : "notice";
+  console.log(
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. A retried test is a real failure a ` +
+      `re-roll absorbed — see docs/testing.md#retries-and-timeouts.`,
+  );
+}
 
 // Deployed apps compile in @iterate-com/shared via many subpath exports (streams,
 // durable-object-utils, callable, codemode, config, evlog, ...), so trigger on the
@@ -818,6 +1001,15 @@ export const cloudflareAppSharedPaths = [
   "packages/shared/**",
   "packages/ui/**",
   "packages/mock-http-proxy/**",
+  // Dependency manifests: a lockfile bump, a catalog/patchedDependencies entry
+  // (pnpm-workspace.yaml), or a pnpm patch can change every app's build
+  // output. Selecting "no apps affected" for such a diff leaves the fleet's
+  // recorded heads stale at the previous commit, so the test lane then skips
+  // every app ("no apps are testable for this head sha") — observed when a
+  // patches/-only commit no-op'd the deploy and stranded the PR head.
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "patches/**",
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
@@ -880,6 +1072,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
+        // Remove stale retry-telemetry files FIRST — before any step that can
+        // exit the lane early (the smoke gate below). They survive from a
+        // previous run on the same machine (marathon loops), and
+        // collectRetryTelemetry runs pass or fail, so a leftover file would
+        // report a previous run's retries against this one.
+        `rm -f ${osVitestRetryTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
@@ -899,7 +1097,22 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // provision independent projects, so they run concurrently: the vitest
         // lane in the background, the specs in the foreground. The vitest log
         // is replayed once the specs finish.
-        "pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
+        //
+        // The `timeout` on the vitest lane is a WATCHDOG, not a retry
+        // (docs/testing.md#retries-and-timeouts): it sits just above a
+        // healthy lane (the itx monolith plus the heavy tests' own 240s
+        // per-test caps, concurrently) and covers the one hang vitest's own
+        // testTimeout can't — a startup wedge before any test runs. Retries
+        // live in exactly one layer (the individual test), so a lane killed
+        // here fails the run visibly and is re-run from the outer edge. An
+        // rc=124 auto-retry used to live here; it fired zero times in ~200
+        // Depot runs and was the one place retry layers could stack.
+        //
+        // Retry telemetry: the vitest lane writes its retry JSON (stale
+        // files were removed at the top of this script) for preview.ts to
+        // fold into the PR body alongside Playwright's
+        // playwright-results.json.
+        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not
@@ -910,6 +1123,19 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
+    collectRetryTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, specs] = await Promise.all([
+        readRetryTelemetryLane("os vitest lane", () =>
+          readVitestRetryTelemetry(osVitestRetryTelemetryFile),
+        ),
+        readRetryTelemetryLane("os playwright specs", () =>
+          readPlaywrightRetryTelemetry(
+            resolve(repositoryRoot, "test-results/playwright-results.json"),
+          ),
+        ),
+      ]);
+      return { retried: [...vitest, ...specs] };
+    },
   },
   semaphore: {
     slug: "semaphore",
@@ -921,8 +1147,17 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
+    // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
+    // auth, same as OS), so the slot's auth must deploy whenever semaphore
+    // does. Deploys run in parallel: the JWKS fetch polls until auth serves.
+    previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+    // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
+    // `doppler run --project _shared --config prd` whose SEMAPHORE_API_TOKEN
+    // targets prd and leaks through into this nested env — never the right
+    // credential for a preview slot. Unsetting it makes the e2e forge-mint a
+    // slot-scoped admin token instead (scripts/auth/semaphore-token.ts).
+    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e:preview"],
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -959,6 +1194,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "bash",
       "-c",
       [
+        // Deployed playgrounds are admin-only: the node vitest lane rides a
+        // forge-minted admin bearer (e2e/auth.ts); Playwright signs itself in
+        // via its global setup.
+        'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
         "pnpm exec playwright install chromium & install_pid=$!",
         "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
         "install_status=0",
@@ -992,23 +1231,26 @@ const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
-const defaultPreviewTestMaxAttempts = 1;
+/**
+ * Whole-lane attempts for an app's preview test command. Pinned to 1 by the
+ * retry policy (docs/testing.md#retries-and-timeouts): retries live in the
+ * individual test; everything above only watches and fails. Exported so
+ * e2e-policy.test.ts can guard the pin.
+ */
+export const defaultPreviewTestMaxAttempts = 1;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+// auth/preview root inherits these from auth/dev when it doesn't already carry
+// its own value. All are canonical APP_CONFIG_* names (the AppConfig port,
+// #1594); the pre-port legacy flat names are gone from every auth config.
 const sharedAuthPreviewSecretsCopiedFromDev = [
-  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_ID", legacyDevNames: ["GOOGLE_CLIENT_ID"] },
-  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_SECRET", legacyDevNames: ["GOOGLE_CLIENT_SECRET"] },
-  {
-    appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
-    legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
-  },
-  { appConfigName: "APP_CONFIG_SIGNUP_ALLOWLIST", legacyDevNames: ["SIGNUP_ALLOWLIST"] },
-] as const satisfies readonly {
-  appConfigName: string;
-  legacyDevNames: readonly string[];
-}[];
+  "APP_CONFIG_GOOGLE_CLIENT_ID",
+  "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  "APP_CONFIG_EMAIL_SENDER_DOMAIN",
+  "APP_CONFIG_SIGNUP_ALLOWLIST",
+] as const;
 
 export const EnvironmentConfigLease = z.object({
   dopplerConfig: z.string().trim().min(1),
@@ -1042,6 +1284,8 @@ export const CloudflarePreviewAppEntry = z.object({
   cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
   deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
+  testRetries: z.string().trim().min(1).nullable().optional(),
 });
 export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 
@@ -1214,15 +1458,16 @@ function createPreviewRuntime(): PreviewRuntime {
 function createPreviewSemaphoreResourceClient(
   env: NodeJS.ProcessEnv,
 ): PreviewSemaphoreResourceClient {
-  const apiKey = env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim();
-  if (!apiKey) {
-    throw new Error(
-      "SEMAPHORE_API_TOKEN or APP_CONFIG_SHARED_API_SECRET is required. Run under `doppler run --project _shared --config prd`.",
-    );
-  }
-
+  // Semaphore is behind the same apps/auth auth as os: authenticate with a
+  // pre-minted bearer token (SEMAPHORE_API_TOKEN) when one is provided, else
+  // forge-mint an admin access token from the config's forge key
+  // (scripts/auth/semaphore-token.ts).
   const semaphore = createSemaphoreClient({
-    apiKey,
+    apiKey: createSemaphoreTokenProvider({
+      baseUrl: defaultSemaphoreBaseUrl,
+      email: "preview-cli@iterate.com",
+      env,
+    }),
     baseURL: defaultSemaphoreBaseUrl,
   });
 
@@ -1421,6 +1666,7 @@ function renderPreviewAppTable(entries: z.infer<typeof CloudflarePreviewAppEntry
     "preview",
     "deploy duration",
     "test duration",
+    "retries",
     "cleanup duration",
     "workflow run",
     "updated",
@@ -1443,6 +1689,7 @@ function renderPreviewAppTableRow(entry: z.infer<typeof CloudflarePreviewAppEntr
     entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
     entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
     entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
+    entry.testRetries ?? "",
     entry.cleanupDurationMs != null ? formatDurationMs(entry.cleanupDurationMs) : "",
     entry.runUrl ? `[Workflow run](${entry.runUrl})` : "",
     entry.updatedAt,
@@ -1960,62 +2207,74 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
+// Prefer an existing preview-root value; otherwise seed it from auth/dev.
 function resolveAuthPreviewRootSecret(input: {
   appConfigName: string;
-  legacyDevNames: readonly string[];
   readSecret: (project: string, config: string, name: string) => string | null;
 }) {
-  const previewValue = input.readSecret("auth", "preview", input.appConfigName);
-  if (previewValue) return previewValue;
-
-  const devValue = input.readSecret("auth", "dev", input.appConfigName);
-  if (devValue) return devValue;
-
-  for (const legacyName of input.legacyDevNames) {
-    const legacyValue = input.readSecret("auth", "dev", legacyName);
-    if (legacyValue) return legacyValue;
-  }
-
-  return null;
+  return (
+    input.readSecret("auth", "preview", input.appConfigName) ||
+    input.readSecret("auth", "dev", input.appConfigName)
+  );
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
-  for (const { appConfigName, legacyDevNames } of sharedAuthPreviewSecretsCopiedFromDev) {
-    // Prefer an existing preview-root value; otherwise seed it from auth/dev.
-    const value = resolveAuthPreviewRootSecret({
-      appConfigName,
-      legacyDevNames,
-      readSecret: getDopplerSecret,
-    });
+  for (const appConfigName of sharedAuthPreviewSecretsCopiedFromDev) {
+    const value = resolveAuthPreviewRootSecret({ appConfigName, readSecret: getDopplerSecret });
     if (!value) {
-      throw new Error(`auth/dev is missing ${[appConfigName, ...legacyDevNames].join(" or ")}`);
+      throw new Error(`auth/dev is missing ${appConfigName}`);
     }
     rootValues[appConfigName] = value;
   }
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
 
+  // Semaphore and the streams playground are relying parties of each slot's
+  // auth deployment: their deploys bake the forge public key into the JWKS,
+  // and their e2e mints admin bearer tokens with the private half. Seed the
+  // key once at each preview root so every preview_N branch config inherits
+  // it.
+  const forgePrivateJwk =
+    getDopplerSecret("semaphore", "preview", "AUTH_FORGE_PRIVATE_JWK") ||
+    getDopplerSecret("os", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  if (!forgePrivateJwk) throw new Error("os/preview is missing AUTH_FORGE_PRIVATE_JWK");
+  setDopplerSecrets("semaphore", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
+  console.log("semaphore/preview root config ensured");
+  setDopplerSecrets("streams-example-app", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
+  console.log("streams-example-app/preview root config ensured");
+
   const workersSubdomain = await getWorkersDevSubdomain("streams-example-app", "preview");
   for (const slot of previewEnvironmentSlotNumbers) {
     const config = `preview_${slot}`;
     const authOrigin = `https://auth.iterate-preview-${slot}.com`;
     const osOrigin = `https://os.iterate-preview-${slot}.com`;
+    const semaphoreOrigin = `https://semaphore.iterate-preview-${slot}.com`;
     const streamsExampleOrigin = `https://streams-example-app-preview-${slot}.${workersSubdomain}.workers.dev`;
     const clientId = `os-preview-${slot}`;
+    const semaphoreClientId = `semaphore-preview-${slot}`;
+    const streamsExampleClientId = `streams-example-app-preview-${slot}`;
 
     ensureDopplerConfig("auth", config);
+    ensureDopplerConfig("semaphore", config);
     ensureDopplerConfig("streams-example-app", config);
 
     const existingSeed = input.rotate
       ? null
       : getDopplerSecret("auth", config, "AUTH_SEED_OAUTH_CLIENTS");
-    const existingSecret = existingSeed
-      ? (JSON.parse(existingSeed) as { clientSecret: string }[])[0]?.clientSecret
-      : null;
-    const clientSecret = existingSecret || freshSecret();
+    const parsedSeed = existingSeed
+      ? (JSON.parse(existingSeed) as { clientId: string; clientSecret: string }[])
+      : [];
+    const clientSecret =
+      parsedSeed.find((client) => client.clientId === clientId)?.clientSecret || freshSecret();
+    const semaphoreClientSecret =
+      parsedSeed.find((client) => client.clientId === semaphoreClientId)?.clientSecret ||
+      freshSecret();
+    const streamsExampleClientSecret =
+      parsedSeed.find((client) => client.clientId === streamsExampleClientId)?.clientSecret ||
+      freshSecret();
 
     const existingServiceToken = input.rotate
       ? null
@@ -2033,6 +2292,22 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
         clientName: `OS preview ${slot} web`,
         redirectURIs: [`${osOrigin}/api/iterate-auth/callback`],
         referenceId: `os:${config}:web`,
+        skipConsent: true,
+      },
+      {
+        clientId: semaphoreClientId,
+        clientSecret: semaphoreClientSecret,
+        clientName: `Semaphore preview ${slot} web`,
+        redirectURIs: [`${semaphoreOrigin}/api/iterate-auth/callback`],
+        referenceId: `semaphore:${config}:web`,
+        skipConsent: true,
+      },
+      {
+        clientId: streamsExampleClientId,
+        clientSecret: streamsExampleClientSecret,
+        clientName: `Streams playground preview ${slot} web`,
+        redirectURIs: [`${streamsExampleOrigin}/api/iterate-auth/callback`],
+        referenceId: `streams-example-app:${config}:web`,
         skipConsent: true,
       },
     ]);
@@ -2054,8 +2329,15 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
     });
 
+    setDopplerSecrets("semaphore", config, {
+      APP_CONFIG_ITERATE_AUTH__CLIENT_ID: semaphoreClientId,
+      APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: semaphoreClientSecret,
+    });
+
     setDopplerSecrets("streams-example-app", config, {
       APP_CONFIG_BASE_URL: streamsExampleOrigin,
+      APP_CONFIG_ITERATE_AUTH__CLIENT_ID: streamsExampleClientId,
+      APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: streamsExampleClientSecret,
     });
 
     if (input.rotate) {
@@ -2063,7 +2345,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     }
 
     console.log(
-      `slot ${slot}: auth/${config} + os/${config} + streams-example-app/${config} ensured (client ${clientId})`,
+      `slot ${slot}: auth/${config} + os/${config} + semaphore/${config} + streams-example-app/${config} ensured (clients ${clientId}, ${semaphoreClientId}, ${streamsExampleClientId})`,
     );
   }
 
@@ -3515,8 +3797,11 @@ export const previewInternals = {
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  readPlaywrightRetryTelemetry,
+  readVitestRetryTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   renderCloudflarePreviewPullRequestBody,
+  renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,

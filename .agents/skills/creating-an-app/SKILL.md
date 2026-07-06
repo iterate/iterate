@@ -8,13 +8,20 @@ publish: false
 
 Use this when adding a new Cloudflare app under `apps/`.
 
-Keep the app contract small:
+Keep the app contract small. Each app owns a handful of `tsx` scripts under
+`apps/<app>/scripts/`, exposed as package scripts and built on the shared deploy
+primitives in `scripts/lib/` (see `scripts/lib/deploy-app.ts`):
 
-- `alchemy:up`
-- `alchemy:down`
+- `deploy` — `pnpm run deploy --env <name>` (build → wrangler deploy with atomic
+  secrets → smoke)
+- `ensure-resources` — create-only Cloudflare resource provisioning
+- `erase-data` — wipe an env's data without deleting the worker
+- `gen:wrangler` — expand the generated, gitignored `wrangler.jsonc` from the
+  root `envs.ts`
 - `test:e2e` if the app has live preview tests
 
-The package scripts should own only the app action. Doppler selection belongs outside the app script.
+The package scripts should own only the app action. Doppler selection belongs
+outside the app script (`doppler run --config <env> -- pnpm run deploy`).
 
 ## CI Workflows
 
@@ -55,6 +62,6 @@ Use the `new-doppler-project` skill for the project/config setup.
 The app package should work with:
 
 ```bash
-doppler run --project <app> --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
-doppler run --project <app> --config prd -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project <app> --config preview_2 -- pnpm run deploy --env preview_2
+doppler run --project <app> --config prd -- pnpm run deploy --env prd
 ```

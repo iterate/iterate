@@ -8,7 +8,7 @@ tags: [cloudflare, os, e2e, preview, iterate.com]
 
 # Preview e2e: iterate project on custom apex hostname
 
-Prod website cutover uses manual Cloudflare routes on `iterate.com` plus `custom_hostname = iterate.com` on the `iterate` OS project. See `docs/devops-cloudflare-doppler-alchemy-setup.md`.
+Prod website cutover uses manual Cloudflare routes on `iterate.com` plus `custom_hostname = iterate.com` on the `iterate` OS project. See `docs/devops-cloudflare-doppler.md`.
 
 This task adds **preview e2e** coverage for the same ingress shape on a preview slot (default example: **preview_2** → `iterate-preview-2.com`).
 
@@ -24,14 +24,14 @@ Prove end-to-end that:
 
 ### Cloudflare (per preview slot N)
 
-On zone `iterate-preview-N.com` (preview account), manual routes — **not** via `alchemy.run.ts`:
+On zone `iterate-preview-N.com` (preview account), manual routes — **not** the worker's generated routes:
 
 | Pattern                     | Worker         |
 | --------------------------- | -------------- |
 | `iterate-preview-N.com/*`   | `os-preview-N` |
 | `*.iterate-preview-N.com/*` | `os-preview-N` |
 
-Leave `os.iterate-preview-N.com/*` on `os-preview-N` (Alchemy / `APP_CONFIG_BASE_URL`).
+Leave `os.iterate-preview-N.com/*` on `os-preview-N` (generated routes / `APP_CONFIG_BASE_URL`).
 
 ### Doppler
 
@@ -80,7 +80,7 @@ Skip suite when `OS_BASE_URL` or admin secret missing (same pattern as `admin-pr
 
 - Prod `iterate.com` live test in CI (manual routes + prod project are ops-owned).
 - `mcp.{apex}` global MCP URL (defer until `APP_CONFIG_*` reserved host exists).
-- Cloudflare Custom Hostnames SSL API for owned zones (see `docs/devops-cloudflare-doppler-alchemy-setup.md` / owned-zone provisioning follow-up).
+- Cloudflare Custom Hostnames SSL API for owned zones (see `docs/devops-cloudflare-doppler.md` / owned-zone provisioning follow-up).
 
 ## Acceptance
 

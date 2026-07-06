@@ -1,7 +1,7 @@
 # Dynamic Worker Build Requirements
 
-Status: implemented (see tasks/os-dynamic-worker-build-pipeline.md and
-apps/os/src/domains/workers/), with one deliberate revision to this document:
+Status: implemented (see apps/os/src/domains/workers/), with one deliberate
+revision to this document:
 build coordination is a direct RPC to a dedicated **builder worker**, not a
 stream processor. The stream-processor design below was built first and then
 removed — build lifecycle events bought observability nobody planned to
