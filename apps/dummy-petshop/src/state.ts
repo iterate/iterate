@@ -15,10 +15,36 @@ export const DEFAULT_ACCESS_TTL_SECONDS = 120;
 export const DEFAULT_CLIENT_ID = "petshop-default";
 export const DEFAULT_CLIENT_SECRET = "petshop-default-secret";
 
+/**
+ * The seeded GitHub-App installation every environment starts with (design §9
+ * P4). Well-known ids, like the OAuth client above — but the seed carries NO
+ * verifying key: petshop holds only PUBLIC keys, and the matching private key
+ * lives on the OS side, so the App JWT verifier is dead until a public key is
+ * registered via `POST /__backdoor/apps`. That is the point being proven, not a
+ * gap.
+ */
+export const DEFAULT_APP_ID = "petshop-app";
+export const DEFAULT_INSTALLATION_ID = "petshop-installation";
+
 /** One registered OAuth client: its secret and how long its access tokens live. */
 export interface OauthClient {
   clientSecret: string;
   accessTokenTtlSeconds: number;
+}
+
+/**
+ * One registered GitHub App installation. petshop stores ONLY the app's PUBLIC
+ * key (RS256 SPKI PEM): the installation-token endpoint verifies a presented App
+ * JWT's signature against it, and the matching private key never leaves the OS
+ * side's secret (design §9 P4, ADR 0006). `webhookSecret` is the App-webhook
+ * HMAC key, the GitHub analogue of `webhookSigningSecret` for OAuth webhooks.
+ */
+export interface GithubApp {
+  appId: string;
+  /** RS256 SPKI PEM (`-----BEGIN PUBLIC KEY-----`); "" until one is registered. */
+  publicKeyPem: string;
+  installationId: string;
+  webhookSecret: string;
 }
 
 /**
@@ -41,6 +67,22 @@ export interface PetshopState {
   webhookSigningSecret: string;
   /** While > 0, POST /oauth/token returns 500 and decrements — for retry specs. */
   tokenEndpointFailuresRemaining: number;
+  /** Registered GitHub App installations, keyed by `installationId` (the path
+   * segment of `POST /app/installations/<id>/access_tokens`). Seeded with the
+   * well-known default; extended/replaced via `POST /__backdoor/apps`. */
+  apps: Record<string, GithubApp>;
+}
+
+/** The seeded default GitHub App installation — well-known ids, no verifying
+ * key yet (see {@link GithubApp}); its webhook secret is random per environment
+ * like `webhookSigningSecret`, so signature specs prove real verification. */
+function defaultGithubApp(): GithubApp {
+  return {
+    appId: DEFAULT_APP_ID,
+    publicKeyPem: "",
+    installationId: DEFAULT_INSTALLATION_ID,
+    webhookSecret: crypto.randomUUID(),
+  };
 }
 
 /**
@@ -53,7 +95,16 @@ export interface PetshopState {
 export class PetshopStateDurableObject extends DurableObject {
   async #load(): Promise<PetshopState> {
     const existing = await this.ctx.storage.get<PetshopState>("state");
-    if (existing) return existing;
+    if (existing) {
+      // Backfill the App registry for a blob written before it existed (the
+      // shop's state is one long-lived blob; a preview DO can predate this).
+      // Persisted once so the seeded webhook secret is stable across reads.
+      if (!existing.apps) {
+        existing.apps = { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() };
+        await this.ctx.storage.put("state", existing);
+      }
+      return existing;
+    }
     const initial: PetshopState = {
       accessTokenEpoch: 0,
       clients: {
@@ -69,6 +120,7 @@ export class PetshopStateDurableObject extends DurableObject {
       // across reads; readable (and rotatable) through the backdoor.
       webhookSigningSecret: crypto.randomUUID(),
       tokenEndpointFailuresRemaining: 0,
+      apps: { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() },
     };
     await this.ctx.storage.put("state", initial);
     return initial;
@@ -129,6 +181,34 @@ export class PetshopStateDurableObject extends DurableObject {
     state.webhookSigningSecret = crypto.randomUUID();
     await this.#save(state);
     return state.webhookSigningSecret;
+  }
+
+  /**
+   * Register (or replace) a GitHub App installation's verifying key — how the
+   * OS side installs the PUBLIC key matching the private key it will sign App
+   * JWTs with. Defaults the ids to the well-known seed so the common case is
+   * `{ publicKeyPem }`; a replace keeps the existing appId/webhookSecret unless
+   * overridden, so registering a key does not silently rotate the webhook
+   * secret. Returns the stored record (webhook secret included) for the caller.
+   */
+  async registerApp(input: {
+    appId?: string;
+    installationId?: string;
+    publicKeyPem: string;
+    webhookSecret?: string;
+  }): Promise<GithubApp> {
+    const state = await this.#load();
+    const installationId = input.installationId ?? DEFAULT_INSTALLATION_ID;
+    const existing = state.apps[installationId];
+    const app: GithubApp = {
+      appId: input.appId ?? existing?.appId ?? DEFAULT_APP_ID,
+      publicKeyPem: input.publicKeyPem,
+      installationId,
+      webhookSecret: input.webhookSecret ?? existing?.webhookSecret ?? crypto.randomUUID(),
+    };
+    state.apps[installationId] = app;
+    await this.#save(state);
+    return app;
   }
 
   async setTokenEndpointFailures(times: number): Promise<void> {
