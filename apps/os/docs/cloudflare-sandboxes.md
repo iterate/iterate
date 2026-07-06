@@ -163,6 +163,38 @@ is no first-party `-claude`/`-codex` Cloudflare image variant.
 
 ---
 
+## Public URLs for sandbox services (quick tunnels)
+
+To reach a server running inside a sandbox from the public internet, use a
+**quick tunnel**:
+
+```ts
+await itx.sandbox.startProcess("bun server.ts"); // something listening on :8080
+const { url } = await itx.sandbox.tunnels.get(8080); // https://<random>.trycloudflare.com
+```
+
+It runs `cloudflared` in the container and returns a random
+`*.trycloudflare.com` URL. Requires `SANDBOX_TRANSPORT=rpc` (we set it).
+Verified live: the URL is publicly reachable, and cloudflared's outbound
+connection punches through our egress interception fine. The URL is
+**ephemeral** — it changes on container restart — so fetch it fresh each
+session; `tunnels.destroy(port)` closes it. Docs:
+<https://developers.cloudflare.com/sandbox/api/tunnels/>.
+
+**We deliberately do NOT use named tunnels** (`tunnels.get(port, { name })`),
+even though they'd give a stable `<name>.<zone>` hostname. A named tunnel makes
+the SDK **write a proxied CNAME into our DNS at runtime** (`POST
+/zones/:id/dns_records` → `<tunnelId>.cfargotunnel.com`) and needs a
+`CLOUDFLARE_API_TOKEN` with **Zone:DNS:Edit** reachable from the sandbox flow —
+a far larger blast radius than our posture (sandboxes hold no credentials;
+secrets inject only at egress). If we ever want stable per-project hostnames
+like `x--y.iterate.app`, we'll provision the tunnel + DNS **ourselves**
+server-side with a scoped token that never enters a sandbox, and run
+`cloudflared` against the pre-created tunnel — our own machinery, not the SDK's
+DNS writes.
+
+---
+
 ## Observability & logging
 
 We deploy with full observability already (`OBSERVABILITY` in
