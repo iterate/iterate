@@ -221,17 +221,41 @@ The default Project Egress capability used for `itx.fetch(...)` and bare
 secret placeholders are substituted.
 _Avoid_: Raw Dynamic Worker fetch, untraced public fetch
 
-**D1-backed Secrets Capability**:
-The current project-bound capability authority for storing, listing, reading, updating, and deleting Project Secrets in D1.
-_Avoid_: Secret Durable Object, separate secrets service
+**Secrets Capability**:
+The project-bound itx capability (`itx.secrets`) over path-addressed Secret
+Durable Objects. Secrets are identified by normalized paths under `/secrets/`;
+there is no separate secret ID or key.
+_Avoid_: D1-backed secrets, Secret ID, Secret Key, separate secrets service
 
-**Secret ID**:
-The stable TypeID-prefixed identifier for one Project Secret.
-_Avoid_: Secret Key, Secret Slug
+**Secret Material**:
+The single serializable value one Secret holds — write-only, encrypted at rest
+as one blob. Writes replace the whole value through the one update verb; there
+are no field-level writes and no per-field metadata. Placeholder references may
+select into structured material (`getSecret({ ..., field })`), which is read
+addressing, not a storage concept.
+_Avoid_: material fields, store(), partial secret writes, per-field expiry
 
-**Secret Key**:
-The project-local arbitrary Key used by Secret References to resolve one Project Secret.
-_Avoid_: Secret ID, Secret Slug, hostname-safe name
+**Secret Worker**:
+The stateless dynamic Worker a Secret optionally hosts, loaded on demand by
+the Secret Durable Object, that overrides the Secret's `fetch()`. Its entire
+interface is fetch; refresh behavior is private code inside its fetch wrap.
+It may read its own Secret Material inside the Secret Jail.
+_Avoid_: secret program, DO facet, refresh convention, RPC method surface
+
+**Secret Jail**:
+The confinement for a Secret Worker: `globalOutbound` pinned to the Secret's
+hosts with header substitution, `connect()` rejected, env limited to what the
+installing Integration hands. Platform Secret material never enters a Secret
+Jail.
+_Avoid_: sandbox policy layer, program lanes, output scanning as defense
+
+**Platform Secret**:
+A read-only deployment-env-backed secret at `/secrets/platform/**`, resolved
+virtually with no Durable Object. Participates only as a header-substitution
+hop under its own host pin; never readable, never updatable, never handed
+into a jail.
+_Avoid_: revealable platform credential, env binding in a jail, per-project
+provisioned secret
 
 **OS MCP Handler**:
 The app worker's stateless `/api/mcp` handler that exposes the inbound MCP
@@ -598,7 +622,15 @@ _Avoid_: Project MCP route, inbound MCP
   not raw Secret material.
 - A **Project Secret** is addressed by a normalized path under `/secrets/`.
 - **Secret References** resolve by path, such as
-  `getSecret({ path: "/secrets/openai-api-key" })`.
+  `getSecret({ path: "/secrets/openai-api-key" })`, optionally selecting a
+  field of structured material with `field`.
+- Secret substitution is header-only, everywhere; request bodies and
+  WebSocket frames are never scanned or substituted (ADR 0005).
+- A request's headers may reference several Secrets; substitution chains
+  through each referenced Secret's resolver, and every hop enforces its own
+  host pin against the terminal destination.
+- **Platform Secret** material never enters a **Secret Jail**; jails hold
+  only project-tier material.
 - The app worker's **OS MCP Handler** owns MCP protocol paths, OAuth
   protected-resource metadata paths, and 404s for unsupported paths below
   `/api/mcp`.
