@@ -36,8 +36,20 @@ const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/project`;
  */
 const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
 
-/** Durable pointer to the newest good workspace backup (a DirectoryBackup). */
-const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup";
+/**
+ * Durable pointer to the newest good workspace backup (a DirectoryBackup).
+ *
+ * The `-v2` suffix abandons any backup taken under the previous workspace
+ * layout, where the repo lived at `/workspace/repo` instead of
+ * {@link SANDBOX_PROJECT_REPO_DIR}. Restoring such a snapshot would leave the
+ * old checkout at the old path while provisioning cloned a fresh one at the
+ * new path — a confusing dual tree whose restored (uncommitted) work the
+ * default cwd would ignore. Dropping the old handle instead makes the first
+ * start after this change do one clean clone at the new path; the orphaned R2
+ * objects GC on their ttl. Safe because a workspace backup is in-flight
+ * scratch — durable work lives in the repo, committed and pushed.
+ */
+const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
 
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
 // stream result) are not exported by the SDK, so recover them from the
