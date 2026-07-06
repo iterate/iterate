@@ -13,10 +13,10 @@ project is discoverable as a stream under the prefix. Two spellings of the
 same primitive:
 
 - **Every agent owns the sandbox at its agent path under the prefix**
-  (`/agents/bla` → `/sandboxes/agents/bla`, the `agentSandboxPath` mapping).
+  (`/agents/bla` → `/sandboxes/cloudflare/agents/bla`, the `agentSandboxPath` mapping).
   `itx.sandbox` in an agent scope is a PROVIDED CAPABILITY, not a built-in:
   the birth certificate mounts a durable itx-expression
-  (`["sandboxes", ["get", "/sandboxes<agent path>"]]`) on the agent's
+  (`["sandboxes", ["get", "/sandboxes/cloudflare<agent path>"]]`) on the agent's
   capability host, so every `itx.sandbox.<method>(...)` re-evaluates
   `itx.sandboxes.get(...)` at call time and dispatches inside the capability
   host. The Durable Object + identity are minted (no container) at birth, and
@@ -102,7 +102,7 @@ pushed.
 
 The sandbox subclass turns its container lifecycle into ordinary stream
 events, appended to the stream at the sandbox's **own path** — and, for an
-agent's sandbox (`/sandboxes/agents/...`), fanned out to the **agent's own
+agent's sandbox (`/sandboxes/cloudflare/agents/...`), fanned out to the **agent's own
 journal** too, so the agent (and anything tailing its stream) sees its
 sandbox's history inline while the `/sandboxes/` stream stays the canonical
 per-sandbox record. The event catalog is the **sandbox

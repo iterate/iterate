@@ -460,14 +460,14 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * project-access assert every collection performs. Every sandbox lives under
  * `/sandboxes/` (the same domain-prefix convention as `/secrets/...` and
  * `/repos/...`): an agent's sandbox is its agent path under the prefix
- * (`itx.sandbox` on `/agents/bla` is `sandboxes.get("/sandboxes/agents/bla")`);
+ * (`itx.sandbox` on `/agents/bla` is `sandboxes.get("/sandboxes/cloudflare/agents/bla")`);
  * standalone sandboxes conventionally live under `/sandboxes/cloudflare/...`.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
   async __describe() {
     return describeNode({
       instructions:
-        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Paths live under /sandboxes/ — an agent's sandbox is its agent path under the prefix (/sandboxes/agents/..., what itx.sandbox resolves to); pick /sandboxes/cloudflare/<name> for standalone ones.",
+        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Paths live under /sandboxes/ — an agent's sandbox is its agent path under the prefix (/sandboxes/cloudflare/agents/..., what itx.sandbox resolves to); pick /sandboxes/cloudflare/<name> for standalone ones.",
       children: { get: "The sandbox at a path (boots the container on first use)." },
       parent: "a project itx (itx.sandboxes)",
     });

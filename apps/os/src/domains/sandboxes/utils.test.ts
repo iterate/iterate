@@ -18,11 +18,11 @@ describe("normalizeSandboxPath", () => {
     // This is `itx.sandbox`: agentSandboxPath maps the agent's own path under
     // the domain prefix, and agentPathForSandbox inverts it (that inverse is
     // what fans lifecycle events out to the agent journal).
-    expect(agentSandboxPath("/agents/demo")).toBe("/sandboxes/agents/demo");
-    expect(agentPathForSandbox("/sandboxes/agents/demo")).toBe("/agents/demo");
+    expect(agentSandboxPath("/agents/demo")).toBe("/sandboxes/cloudflare/agents/demo");
+    expect(agentPathForSandbox("/sandboxes/cloudflare/agents/demo")).toBe("/agents/demo");
     // Slack thread agents nest a dotted timestamp — must stay in lockstep.
     expect(agentSandboxPath("/agents/slack/C123/ts-1738000000.123456")).toBe(
-      "/sandboxes/agents/slack/C123/ts-1738000000.123456",
+      "/sandboxes/cloudflare/agents/slack/C123/ts-1738000000.123456",
     );
     // Standalone sandboxes have no owning agent.
     expect(agentPathForSandbox("/sandboxes/cloudflare/whatever")).toBe(null);
@@ -31,7 +31,7 @@ describe("normalizeSandboxPath", () => {
   test("accepts any path the agent Durable Object can tolerate (codec-safe)", () => {
     // `@` survives URL parsing, so an agent can live here and its DO works —
     // the sandbox must not be stricter than the path it mirrors.
-    expect(agentSandboxPath("/agents/foo@bar")).toBe("/sandboxes/agents/foo@bar");
+    expect(agentSandboxPath("/agents/foo@bar")).toBe("/sandboxes/cloudflare/agents/foo@bar");
   });
 
   test("rejects paths outside /sandboxes/", () => {

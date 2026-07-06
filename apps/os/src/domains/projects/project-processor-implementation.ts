@@ -381,7 +381,7 @@ function agentBirthCertificateEvents(input: {
     // capability host — part of the birth certificate, so the mount is durable
     // and replays with the stream. A durable itx-expression, not a live mount:
     // every `itx.sandbox.<method>(...)` re-evaluates
-    // `itx.sandboxes.get(/sandboxes<agent path>)` against the agent's own itx
+    // `itx.sandboxes.get(/sandboxes/cloudflare<agent path>)` against the agent's own itx
     // at call time, so nothing here holds a connection or a container open.
     {
       type: "events.iterate.com/capability-host/capability-provided" as const,
@@ -391,7 +391,7 @@ function agentBirthCertificateEvents(input: {
         type: "itx-expression" as const,
         expression: ["sandboxes", ["get", agentSandboxPath(input.childPath)]],
         instructions:
-          `THIS agent's own sandbox: the container at "${agentSandboxPath(input.childPath)}" (your agent path under /sandboxes). ` +
+          `THIS agent's own sandbox: the container at "${agentSandboxPath(input.childPath)}" (your agent path under /sandboxes/cloudflare). ` +
           "Full Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, …). " +
           "The first command boots the container; it sleeps after idle. " +
           'The project repo is ALWAYS checked out at /workspace/repos/project, also the default working directory — a bare exec("ls") lists the project.',

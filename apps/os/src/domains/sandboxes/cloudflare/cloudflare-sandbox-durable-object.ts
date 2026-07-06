@@ -137,7 +137,7 @@ async function resolveEgressProjectId(env: Env, containerId: string): Promise<st
 /**
  * The sandbox's own address, as carried by its Durable Object name:
  * which project it belongs to and its path (always under `/sandboxes/` —
- * `/sandboxes/agents/...` for an agent's sandbox, `/sandboxes/cloudflare/...`
+ * `/sandboxes/cloudflare/agents/...` for an agent's sandbox, `/sandboxes/cloudflare/...`
  * for standalone ones).
  */
 type SandboxIdentity = { path: string; projectId: string };
@@ -158,7 +158,7 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  * because going to sleep snapshots it to R2 and the next start restores it
  * (see behavior 1). Lifecycle transitions are also appended as events to the
  * stream at this sandbox's own path — and, for an agent's sandbox
- * (`/sandboxes/agents/...`), to the agent's own journal too (see
+ * (`/sandboxes/cloudflare/agents/...`), to the agent's own journal too (see
  * `#emitLifecycleEvent`).
  *
  * Three behaviors are added over the stock SDK class:
@@ -817,7 +817,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * anyone tailing the stream sees container starts/stops, snapshots, and
    * restores as ordinary history — and every sandbox in a project is
    * discoverable as a stream under `/sandboxes/`. For an AGENT's sandbox
-   * (`/sandboxes/agents/...`) the same event is also appended to the agent's
+   * (`/sandboxes/cloudflare/agents/...`) the same event is also appended to the agent's
    * own journal (`/agents/...`): that is what the agent processor consumes to
    * give the agent its FYI inputs, and it keeps the sandbox's story readable
    * inline with the agent's. The event catalog is the sandbox processor

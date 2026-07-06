@@ -5,24 +5,25 @@ import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.t
 // projectId — it just has to be a legal projectId so stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
-/**
- * Every sandbox lives under this prefix — the domain-prefix convention every
- * other domain already follows (`/secrets/...`, `/repos/...`, `/agents/...`),
- * so a project path names exactly one kind of object. An agent's sandbox is
- * the agent's own path under the prefix ({@link agentSandboxPath}); standalone
- * sandboxes conventionally live under `/sandboxes/cloudflare/...` (the
- * platform's worker builder is `/sandboxes/cloudflare/builder`).
- */
-export const SANDBOX_PATH_PREFIX = "/sandboxes";
+// Every sandbox lives under this prefix — the domain-prefix convention every
+// other domain already follows (`/secrets/...`, `/repos/...`, `/agents/...`),
+// so a project path names exactly one kind of object. Module-local: callers
+// spell full paths; only the guard and the agent mapping need the pieces.
+const SANDBOX_PATH_PREFIX = "/sandboxes";
+
+// Cloudflare is today's only sandbox provider; the segment keeps room for
+// others (the daytona precedent) without renaming everything again.
+const CLOUDFLARE_SANDBOX_PREFIX = `${SANDBOX_PATH_PREFIX}/cloudflare`;
 
 /**
  * Where an agent's own sandbox (`itx.sandbox`) lives: the agent path under
- * {@link SANDBOX_PATH_PREFIX} — `/agents/bla` → `/sandboxes/agents/bla`.
- * One function so the birth-certificate mount, the eager mint at birth, and
- * the lifecycle-event fan-out can never disagree on the mapping.
+ * the Cloudflare sandbox prefix — `/agents/bla` →
+ * `/sandboxes/cloudflare/agents/bla`. One function so the birth-certificate
+ * mount, the eager mint at birth, and the lifecycle-event fan-out can never
+ * disagree on the mapping.
  */
 export function agentSandboxPath(agentPath: string): string {
-  return normalizeSandboxPath(`${SANDBOX_PATH_PREFIX}${normalizePath(agentPath)}`);
+  return normalizeSandboxPath(`${CLOUDFLARE_SANDBOX_PREFIX}${normalizePath(agentPath)}`);
 }
 
 /**
@@ -31,8 +32,8 @@ export function agentSandboxPath(agentPath: string): string {
  * sandbox's lifecycle events out to the agent's own journal as well.
  */
 export function agentPathForSandbox(sandboxPath: string): string | null {
-  return sandboxPath.startsWith(`${SANDBOX_PATH_PREFIX}/agents/`)
-    ? sandboxPath.slice(SANDBOX_PATH_PREFIX.length)
+  return sandboxPath.startsWith(`${CLOUDFLARE_SANDBOX_PREFIX}/agents/`)
+    ? sandboxPath.slice(CLOUDFLARE_SANDBOX_PREFIX.length)
     : null;
 }
 
