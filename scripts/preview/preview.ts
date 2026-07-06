@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
+import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
@@ -1146,8 +1147,17 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
+    // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
+    // auth, same as OS), so the slot's auth must deploy whenever semaphore
+    // does. Deploys run in parallel: the JWKS fetch polls until auth serves.
+    previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+    // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
+    // `doppler run --project _shared --config prd` whose SEMAPHORE_API_TOKEN
+    // targets prd and leaks through into this nested env — never the right
+    // credential for a preview slot. Unsetting it makes the e2e forge-mint a
+    // slot-scoped admin token instead (scripts/auth/semaphore-token.ts).
+    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e:preview"],
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1444,15 +1454,16 @@ function createPreviewRuntime(): PreviewRuntime {
 function createPreviewSemaphoreResourceClient(
   env: NodeJS.ProcessEnv,
 ): PreviewSemaphoreResourceClient {
-  const apiKey = env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim();
-  if (!apiKey) {
-    throw new Error(
-      "SEMAPHORE_API_TOKEN or APP_CONFIG_SHARED_API_SECRET is required. Run under `doppler run --project _shared --config prd`.",
-    );
-  }
-
+  // Semaphore is behind the same apps/auth auth as os: authenticate with a
+  // pre-minted bearer token (SEMAPHORE_API_TOKEN) when one is provided, else
+  // forge-mint an admin access token from the config's forge key
+  // (scripts/auth/semaphore-token.ts).
   const semaphore = createSemaphoreClient({
-    apiKey,
+    apiKey: createSemaphoreTokenProvider({
+      baseUrl: defaultSemaphoreBaseUrl,
+      email: "preview-cli@iterate.com",
+      env,
+    }),
     baseURL: defaultSemaphoreBaseUrl,
   });
 
@@ -2217,24 +2228,42 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
 
+  // Semaphore is a relying party of each slot's auth deployment: its deploys
+  // bake the forge public key into the JWKS, and its e2e mints admin bearer
+  // tokens with the private half. Seed the key once at the preview root so
+  // every preview_N branch config inherits it.
+  const forgePrivateJwk =
+    getDopplerSecret("semaphore", "preview", "AUTH_FORGE_PRIVATE_JWK") ||
+    getDopplerSecret("os", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  if (!forgePrivateJwk) throw new Error("os/preview is missing AUTH_FORGE_PRIVATE_JWK");
+  setDopplerSecrets("semaphore", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
+  console.log("semaphore/preview root config ensured");
+
   const workersSubdomain = await getWorkersDevSubdomain("streams-example-app", "preview");
   for (const slot of previewEnvironmentSlotNumbers) {
     const config = `preview_${slot}`;
     const authOrigin = `https://auth.iterate-preview-${slot}.com`;
     const osOrigin = `https://os.iterate-preview-${slot}.com`;
+    const semaphoreOrigin = `https://semaphore.iterate-preview-${slot}.com`;
     const streamsExampleOrigin = `https://streams-example-app-preview-${slot}.${workersSubdomain}.workers.dev`;
     const clientId = `os-preview-${slot}`;
+    const semaphoreClientId = `semaphore-preview-${slot}`;
 
     ensureDopplerConfig("auth", config);
+    ensureDopplerConfig("semaphore", config);
     ensureDopplerConfig("streams-example-app", config);
 
     const existingSeed = input.rotate
       ? null
       : getDopplerSecret("auth", config, "AUTH_SEED_OAUTH_CLIENTS");
-    const existingSecret = existingSeed
-      ? (JSON.parse(existingSeed) as { clientSecret: string }[])[0]?.clientSecret
-      : null;
-    const clientSecret = existingSecret || freshSecret();
+    const parsedSeed = existingSeed
+      ? (JSON.parse(existingSeed) as { clientId: string; clientSecret: string }[])
+      : [];
+    const clientSecret =
+      parsedSeed.find((client) => client.clientId === clientId)?.clientSecret || freshSecret();
+    const semaphoreClientSecret =
+      parsedSeed.find((client) => client.clientId === semaphoreClientId)?.clientSecret ||
+      freshSecret();
 
     const existingServiceToken = input.rotate
       ? null
@@ -2252,6 +2281,14 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
         clientName: `OS preview ${slot} web`,
         redirectURIs: [`${osOrigin}/api/iterate-auth/callback`],
         referenceId: `os:${config}:web`,
+        skipConsent: true,
+      },
+      {
+        clientId: semaphoreClientId,
+        clientSecret: semaphoreClientSecret,
+        clientName: `Semaphore preview ${slot} web`,
+        redirectURIs: [`${semaphoreOrigin}/api/iterate-auth/callback`],
+        referenceId: `semaphore:${config}:web`,
         skipConsent: true,
       },
     ]);
@@ -2273,6 +2310,11 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
     });
 
+    setDopplerSecrets("semaphore", config, {
+      APP_CONFIG_ITERATE_AUTH__CLIENT_ID: semaphoreClientId,
+      APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: semaphoreClientSecret,
+    });
+
     setDopplerSecrets("streams-example-app", config, {
       APP_CONFIG_BASE_URL: streamsExampleOrigin,
     });
@@ -2282,7 +2324,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     }
 
     console.log(
-      `slot ${slot}: auth/${config} + os/${config} + streams-example-app/${config} ensured (client ${clientId})`,
+      `slot ${slot}: auth/${config} + os/${config} + semaphore/${config} + streams-example-app/${config} ensured (clients ${clientId}, ${semaphoreClientId})`,
     );
   }
 

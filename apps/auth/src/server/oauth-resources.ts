@@ -15,6 +15,20 @@ export function getOsResourceBases() {
   ];
 }
 
+/**
+ * Semaphore is a relying party like OS (browser sign-in + bearer access
+ * tokens against its own origin as the RFC 8707 resource). Local dev is
+ * covered by the portless loopback origins in getOsResourceBases.
+ */
+export function getSemaphoreResourceBases() {
+  return [
+    "https://semaphore.iterate.com",
+    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
+      (previewNumber) => `https://semaphore.iterate-preview-${previewNumber}.com`,
+    ),
+  ];
+}
+
 export function getOsMcpResourceBases() {
   return expandOAuthResourceAudienceVariants([
     "https://mcp.iterate.com",

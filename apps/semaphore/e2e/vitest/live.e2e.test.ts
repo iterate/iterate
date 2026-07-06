@@ -3,8 +3,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { createSemaphoreClient } from "../../src/contract.ts";
 import {
   createSemaphoreAppFixture,
-  requireSemaphoreApiToken,
   requireSemaphoreBaseUrl,
+  semaphoreApiTokenProvider,
   sleep,
   waitForHealth,
 } from "../helpers.ts";
@@ -14,7 +14,7 @@ function uniqueType() {
 }
 
 const app = createSemaphoreAppFixture({
-  apiKey: requireSemaphoreApiToken(),
+  apiKey: semaphoreApiTokenProvider(requireSemaphoreBaseUrl()),
   baseURL: requireSemaphoreBaseUrl(),
 });
 
