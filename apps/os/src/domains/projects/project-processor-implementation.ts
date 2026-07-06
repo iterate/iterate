@@ -136,6 +136,7 @@ export class ProjectProcessor extends StreamProcessor<
           });
         }
         return upsertCustomDomain(state, {
+          certificateDelegationCname: null,
           cloudflareHostnameId: null,
           createdAt: event.createdAt,
           error: null,

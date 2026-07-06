@@ -1,7 +1,7 @@
 import type { FormEvent, ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
@@ -185,10 +185,22 @@ function CustomDomainRow({
   removePending: boolean;
 }) {
   const cnameTarget = projectHostnameBase ? `cname.${projectHostnameBase}` : null;
-  const validationRecords = [
-    ...(domain.ownershipVerification ? [domain.ownershipVerification] : []),
-    ...domain.validationRecords,
-  ];
+  const ownershipRecords = domain.ownershipVerification
+    ? [{ ...domain.ownershipVerification, type: "TXT" }]
+    : [];
+  const trafficRecords = cnameTarget
+    ? [
+        { name: domain.hostname, type: "CNAME / ALIAS", value: cnameTarget },
+        { name: `*.${domain.hostname}`, type: "CNAME", value: cnameTarget },
+      ]
+    : [];
+  const certificateRecords = domain.certificateDelegationCname
+    ? [{ ...domain.certificateDelegationCname, type: "CNAME" }]
+    : [];
+  const certificateFallbackRecords =
+    certificateRecords.length === 0
+      ? domain.validationRecords.map((record) => ({ ...record, type: "TXT" }))
+      : [];
 
   return (
     <div className="grid gap-3 p-3">
@@ -226,33 +238,83 @@ function CustomDomainRow({
 
       {domain.error ? <p className="text-xs text-destructive">{domain.error}</p> : null}
 
-      {cnameTarget ? (
-        <div className="grid gap-1 text-xs">
-          <DnsLine label={domain.hostname} value={cnameTarget} />
-          <DnsLine label={`*.${domain.hostname}`} value={cnameTarget} />
-        </div>
-      ) : null}
-
-      {validationRecords.length > 0 ? (
-        <div className="grid gap-1 text-xs">
-          {validationRecords.map((record) => (
-            <DnsLine
-              key={`${record.name}:${record.value}`}
-              label={record.name}
-              value={record.value}
-            />
-          ))}
-        </div>
-      ) : null}
+      <DomainSetupStep
+        records={ownershipRecords}
+        status={domain.hostnameStatus}
+        title="Authorize domain"
+      />
+      <DomainSetupStep
+        fallbackRecords={certificateFallbackRecords}
+        records={certificateRecords}
+        status={domain.sslStatus}
+        title="Issue certificate"
+      />
+      <DomainSetupStep records={trafficRecords} title="Connect traffic" />
     </div>
   );
 }
 
-function DnsLine({ label, value }: { label: string; value: string }) {
+function DomainSetupStep({
+  fallbackRecords = [],
+  records,
+  status,
+  title,
+}: {
+  fallbackRecords?: DnsDisplayRecord[];
+  records: DnsDisplayRecord[];
+  status?: string | null;
+  title: string;
+}) {
+  if (records.length === 0 && fallbackRecords.length === 0) return null;
   return (
-    <div className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <code className="truncate rounded bg-muted px-1.5 py-1">{label}</code>
-      <code className="truncate rounded bg-muted px-1.5 py-1">{value}</code>
+    <div className="grid gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium">{title}</p>
+        {status !== undefined ? <DnsStatusBadge status={status} /> : null}
+      </div>
+      <div className="grid gap-1 text-xs">
+        {records.map((record) => (
+          <DnsLine key={`${record.type}:${record.name}:${record.value}`} record={record} />
+        ))}
+        {fallbackRecords.map((record) => (
+          <DnsLine key={`${record.type}:${record.name}:${record.value}`} record={record} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type DnsDisplayRecord = { name: string; type: string; value: string };
+
+function DnsLine({ record }: { record: DnsDisplayRecord }) {
+  return (
+    <div className="grid min-w-0 gap-1 sm:grid-cols-[6.25rem_minmax(0,1fr)_minmax(0,1.3fr)]">
+      <code className="rounded bg-muted px-1.5 py-1 text-center">{record.type}</code>
+      <DnsCopyCell label="record name" value={record.name} />
+      <DnsCopyCell label="record value" value={record.value} />
+    </div>
+  );
+}
+
+function DnsCopyCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 items-stretch gap-1">
+      <code className="min-w-0 flex-1 rounded bg-muted px-1.5 py-1 break-all">{value}</code>
+      <Button
+        aria-label={`Copy DNS ${label}`}
+        className="h-auto min-h-7 w-7 shrink-0"
+        onClick={() => {
+          void navigator.clipboard.writeText(value).then(
+            () => toast.success("Copied"),
+            () => toast.error("Could not copy"),
+          );
+        }}
+        size="icon-xs"
+        type="button"
+        variant="outline"
+      >
+        <CopyIcon aria-hidden="true" />
+      </Button>
     </div>
   );
 }
@@ -263,6 +325,15 @@ function CustomDomainStatusBadge({ status }: { status: ProjectCustomDomain["stat
   return (
     <Badge className="capitalize" variant={variant}>
       {status.replaceAll("_", " ")}
+    </Badge>
+  );
+}
+
+function DnsStatusBadge({ status }: { status: string | null }) {
+  const variant = status === "active" ? "default" : status === "failed" ? "destructive" : "outline";
+  return (
+    <Badge className="shrink-0 capitalize" variant={variant}>
+      {status?.replaceAll("_", " ") ?? "pending"}
     </Badge>
   );
 }

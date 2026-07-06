@@ -24,7 +24,13 @@ const ProjectCustomDomainValidationRecord = z.object({
   value: z.string(),
 });
 
+const ProjectCustomDomainDnsRecord = z.object({
+  name: z.string(),
+  value: z.string(),
+});
+
 export const ProjectCustomDomainCloudflareSnapshot = z.object({
+  certificateDelegationCname: ProjectCustomDomainDnsRecord.nullable().default(null),
   cloudflareHostnameId: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
   hostname: z.string(),

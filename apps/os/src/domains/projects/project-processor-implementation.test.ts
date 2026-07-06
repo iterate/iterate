@@ -118,6 +118,10 @@ describe("ProjectProcessor custom domains", () => {
     const stream = new MemoryStream();
     const customDomains = {
       ensure: vi.fn(async () => ({
+        certificateDelegationCname: {
+          name: "_acme-challenge.garple.com",
+          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+        },
         cloudflareHostnameId: "custom-hostname-1",
         error: null,
         hostname: "garple.com",
@@ -165,6 +169,10 @@ describe("ProjectProcessor custom domains", () => {
     expect(stream.events.at(-1)).toMatchObject({
       type: "events.iterate.com/project/custom-domain-cloudflare-observed",
       payload: {
+        certificateDelegationCname: {
+          name: "_acme-challenge.garple.com",
+          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+        },
         cloudflareHostnameId: "custom-hostname-1",
         hostname: "garple.com",
         status: "pending_validation",
@@ -182,6 +190,10 @@ describe("ProjectProcessor custom domains", () => {
 
     expect(processor.state.customDomains).toMatchObject([
       {
+        certificateDelegationCname: {
+          name: "_acme-challenge.garple.com",
+          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+        },
         cloudflareHostnameId: "custom-hostname-1",
         hostname: "garple.com",
         status: "pending_validation",
@@ -257,6 +269,10 @@ describe("ProjectProcessor custom domains", () => {
       ProjectProcessorContract.buildEvent({
         type: "events.iterate.com/project/custom-domain-cloudflare-observed",
         payload: {
+          certificateDelegationCname: {
+            name: "_acme-challenge.garple.com",
+            value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+          },
           cloudflareHostnameId: "custom-hostname-1",
           error: null,
           hostname: "garple.com",
@@ -291,6 +307,10 @@ describe("ProjectProcessor custom domains", () => {
 
     expect(processor.state.customDomains).toMatchObject([
       {
+        certificateDelegationCname: {
+          name: "_acme-challenge.garple.com",
+          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+        },
         cloudflareHostnameId: "custom-hostname-1",
         error: "Cloudflare is unavailable",
         hostname: "garple.com",
@@ -315,6 +335,10 @@ describe("ProjectProcessor custom domains", () => {
   it("preserves an existing Cloudflare snapshot when a domain is re-added", async () => {
     const stream = new MemoryStream();
     const activeSnapshot = {
+      certificateDelegationCname: {
+        name: "_acme-challenge.garple.com",
+        value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+      },
       cloudflareHostnameId: "custom-hostname-1",
       error: null,
       hostname: "garple.com",
@@ -369,6 +393,10 @@ describe("ProjectProcessor custom domains", () => {
 
     expect(processor.state.customDomains).toMatchObject([
       {
+        certificateDelegationCname: {
+          name: "_acme-challenge.garple.com",
+          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+        },
         cloudflareHostnameId: "custom-hostname-1",
         error: null,
         hostname: "garple.com",

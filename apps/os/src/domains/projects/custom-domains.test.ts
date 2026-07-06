@@ -117,6 +117,13 @@ describe("custom domain provisioning", () => {
           return Response.json({ success: true, result: customHostname });
         }
 
+        if (url.pathname === "/client/v4/zones/zone-1/dcv_delegation/uuid") {
+          return Response.json({
+            success: true,
+            result: { uuid: "248299803bb79c97" },
+          });
+        }
+
         return Response.json(
           { success: false, errors: [{ message: "not found" }] },
           { status: 404 },
@@ -143,6 +150,10 @@ describe("custom domain provisioning", () => {
       },
     ]);
     expect(snapshot).toMatchObject({
+      certificateDelegationCname: {
+        name: "_acme-challenge.garple.com",
+        value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+      },
       cloudflareHostnameId: "custom-hostname-1",
       hostname: "garple.com",
       status: "pending_validation",
@@ -201,6 +212,13 @@ describe("custom domain provisioning", () => {
           });
         }
 
+        if (url.pathname === "/client/v4/zones/zone-1/dcv_delegation/uuid") {
+          return Response.json({
+            success: true,
+            result: { uuid: "248299803bb79c97" },
+          });
+        }
+
         return Response.json(
           { success: false, errors: [{ message: "not found" }] },
           { status: 404 },
@@ -212,6 +230,10 @@ describe("custom domain provisioning", () => {
 
     const snapshot = await provisioner.refresh({ hostname: "garple.com", project });
 
+    expect(snapshot.certificateDelegationCname).toEqual({
+      name: "_acme-challenge.garple.com",
+      value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+    });
     expect(snapshot.status).toBe("active");
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
@@ -355,13 +377,53 @@ describe("custom domain provisioning", () => {
           status: "active",
         },
         "garple.com",
+        { dcvDelegationUuid: "248299803bb79c97" },
       ),
     ).toMatchObject({
+      certificateDelegationCname: {
+        name: "_acme-challenge.garple.com",
+        value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+      },
       cloudflareHostnameId: "custom-hostname-1",
       hostname: "garple.com",
       sslStatus: "active",
       status: "active",
       wildcard: true,
+    });
+  });
+
+  it("keeps TXT validation fallback when delegated DCV is unavailable", () => {
+    expect(
+      toProjectCustomDomainCloudflareSnapshot(
+        {
+          hostname: "garple.com",
+          id: "custom-hostname-1",
+          ssl: {
+            status: "pending_validation",
+            validation_records: [
+              {
+                status: "pending",
+                txt_name: "_acme-challenge.garple.com",
+                txt_value: "ssl-token",
+              },
+            ],
+            wildcard: true,
+          },
+          status: "pending",
+        },
+        "garple.com",
+      ),
+    ).toMatchObject({
+      certificateDelegationCname: null,
+      hostname: "garple.com",
+      status: "pending_validation",
+      validationRecords: [
+        {
+          name: "_acme-challenge.garple.com",
+          status: "pending",
+          value: "ssl-token",
+        },
+      ],
     });
   });
 });
