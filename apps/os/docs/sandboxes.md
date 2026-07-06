@@ -198,9 +198,10 @@ Wiring (three points):
 The domain lives in `src/domains/sandboxes/cloudflare/`; the container class
 is a same-script Durable Object in the os worker
 ([worker topology](./worker-topology.md)) with the image built from
-`Dockerfile.sandbox` (`docker.io/cloudflare/sandbox:<sdk-version>` — keep the
+`sandbox/Dockerfile` (`docker.io/cloudflare/sandbox:<sdk-version>` — keep the
 tag in lockstep with the `@cloudflare/sandbox` version in package.json; the
-SDK logs a version-skew warning otherwise).
+SDK logs a version-skew warning otherwise). Files under `sandbox/root/` are
+copied into `/root/` in the image, which is the sandbox process user's home.
 
 ## Identity: why `get()` is async
 
@@ -227,7 +228,7 @@ Durable Object namespace and any sandbox call fails at the constructor with
 OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev start --detach
 ```
 
-Startup builds the image from `Dockerfile.sandbox` (first run pulls the
+Startup builds the image from `sandbox/Dockerfile` (first run pulls the
 ~500MB base image — a couple of minutes) and vite prints
 `⚡️ Containers successfully built`. Containers are created lazily: the first
 `exec` boots the container, so expect it to take tens of seconds locally

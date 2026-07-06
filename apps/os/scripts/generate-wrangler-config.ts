@@ -211,7 +211,7 @@ function workerBindings(input: {
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
-        image: "./Dockerfile.sandbox",
+        image: "./sandbox/Dockerfile",
         instance_type: "lite",
         // Sized for e2e churn: the preview lanes provision a fresh project
         // (and sandbox container) per test, and idle containers hold an

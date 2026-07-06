@@ -61,6 +61,20 @@ const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
 const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
 type SandboxEnvVars = Record<string, string>;
 
+/**
+ * Env vars every sandbox gets by default so a coding agent works out of the
+ * box: the provider keys the baked CLIs read, pointed at conventional project
+ * secret paths as `getSecret(...)` placeholders (substituted only at egress).
+ * A project that seeds a key at one of these paths lets its agents code
+ * immediately; if the path has no secret, the var is harmless until used (the
+ * egress substitution then fails loudly). `configureEnvVars` overrides any of
+ * these per sandbox.
+ */
+const DEFAULT_SANDBOX_ENV: SandboxEnvVars = {
+  OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai-api-key" })',
+  ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic-api-key" })',
+};
+
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
 // stream result) are not exported by the SDK, so recover them from the
 // overloaded base signature rather than mirroring the interfaces (which would
@@ -505,9 +519,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   }
 
   async #applyStoredEnvVars(): Promise<void> {
-    const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY);
-    if (stored === undefined || Object.keys(stored).length === 0) return;
-    await super.setEnvVars(stored);
+    // Defaults first, explicit config last — so a project that seeds the
+    // conventional provider secrets gets a code-ready sandbox with no setup,
+    // while configureEnvVars still wins for anything it sets.
+    const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
+    await super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored });
   }
 
   // ---------------------------------------------------------------------------

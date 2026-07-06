@@ -101,7 +101,7 @@ without touching npm at all.
 
 ### Image and toolchain versioning
 
-`Dockerfile.sandbox` gains `RUN npm i -g wrangler@<pin> esbuild@<pin>` (node
+`apps/os/sandbox/Dockerfile` gains `RUN npm i -g wrangler@<pin> esbuild@<pin>` (node
 24 + npm are already in the base image). Build keys include a new
 `BUILD_TOOLCHAIN_VERSION` constant — bumped when the toolchain pins change,
 deliberately NOT the image digest (routine base-image security rebuilds must

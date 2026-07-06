@@ -25,8 +25,7 @@ RUN npm install -g @openai/codex && codex --version
 # Default Codex to gpt-5.5 with high reasoning for every sandbox (config.toml is
 # read from $HOME/.codex; the exec shell runs as root). A per-call `-m` / `-c`
 # still overrides. Verified: a headless gpt-5.5/high turn completes in ~8s.
-RUN mkdir -p /root/.codex \
-  && printf 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n' > /root/.codex/config.toml
+COPY root/ /root/
 
 # The base image already EXPOSEs 3000 (the SDK control-plane port the Durable
 # Object dials for exec/files/etc.); restated for clarity and so miniflare's

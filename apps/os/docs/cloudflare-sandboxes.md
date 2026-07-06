@@ -16,8 +16,9 @@ First-party roots:
 - Changelog (containers): <https://developers.cloudflare.com/changelog/product/containers/>
 
 Versions we pin: `@cloudflare/sandbox` **0.12.3**, `@cloudflare/containers` **0.3.7**
-(image `docker.io/cloudflare/sandbox:0.12.3` in `apps/os/Dockerfile.sandbox` —
-keep the tag in lockstep with the SDK or it logs a version-skew warning).
+(base image `docker.io/cloudflare/sandbox:0.12.3` in
+`apps/os/sandbox/Dockerfile` — keep the tag in lockstep with the SDK or it logs
+a version-skew warning).
 
 ---
 
@@ -31,7 +32,7 @@ Cloudflare's primitives like this:
 | DO namespace binding           | `SANDBOX`                                               | `env.SANDBOX`, declared in the generated wrangler config                                                                                     |
 | DO class (the container class) | `CloudflareSandboxDurableObject`                        | extends the SDK's `Sandbox`; one `containers` entry names it                                                                                 |
 | DO name → identity             | `{projectId}.iterate{path}`                             | `DurableObjectNameCodec`; the path IS the sandbox address (an agent's own `/agents/...` path, or `/sandboxes/cloudflare/...` for standalone) |
-| Container image                | `Dockerfile.sandbox` → `cloudflare/sandbox:0.12.3`      | one image for the whole class                                                                                                                |
+| Container image                | `sandbox/Dockerfile` → `cloudflare/sandbox:0.12.3`      | one image for the whole class                                                                                                                |
 | Cloudflare "application"       | `os-<env>-cloudflaresandboxdurableobject-<config>`      | the container app the class deploys as — the id you pass to `wrangler containers instances`                                                  |
 | Instances                      | one per live sandbox (per DO id)                        | ephemeral; idle-destroyed after `sleepAfter` (3m)                                                                                            |
 | Persistent storage             | R2 bucket `os-<env>-sandboxes`, binding `BACKUP_BUCKET` | one bucket per env; each sandbox is a `/{projectId}{path}` prefix (backup/restore, see [Sandboxes](./sandboxes.md))                          |
@@ -104,7 +105,17 @@ Caveats:
 
 Every sandbox carries a durable env-var map — a `Record<string,string>` applied
 to every command (`exec`, `startProcess`, …), conventionally ALL_CAPS keys.
-Configure it:
+
+**Defaults for code-out-of-the-box:** every sandbox starts with
+`OPENAI_API_KEY` and `ANTHROPIC_API_KEY` pointed at conventional project secret
+paths (`/secrets/openai-api-key`, `/secrets/anthropic-api-key`) as `getSecret`
+placeholders. Seed a provider key at one of those paths and an agent's sandbox
+can run Codex/Claude immediately (Codex still needs a one-time
+`printf %s "$OPENAI_API_KEY" | codex login --with-api-key` — its 0.142 build
+won't use the env key otherwise). Nothing seeded → the var is harmless until a
+call actually uses it (egress substitution then fails loudly).
+
+Override or add to the defaults with `configureEnvVars` (explicit config wins):
 
 ```ts
 await itx.sandbox.configureEnvVars({
@@ -132,9 +143,9 @@ from its environment and calls Claude, but the key lives only in the secret
 system. The secret at that path must allow the provider host (e.g.
 `api.anthropic.com` / `api.openai.com`) in its egress allowlist.
 
-**The coding agent** is baked into our own image (`Dockerfile.sandbox`), not a
-Cloudflare image variant. We ship the **Codex CLI** (`codex`, on PATH), which
-uses `OPENAI_API_KEY`:
+**The coding agent** is baked into our own image (`sandbox/Dockerfile`), not a
+Cloudflare image variant. The image also copies `sandbox/root/` into `/root/`.
+We ship the **Codex CLI** (`codex`, on PATH), which uses `OPENAI_API_KEY`:
 
 ```ts
 // Codex needs a one-time login that reads the key from the env (it doesn't
