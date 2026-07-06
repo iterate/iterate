@@ -14,8 +14,10 @@ import {
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { parseConfig } from "../../config.ts";
 import { loadResolvedWorker, resolveWorkerSource } from "../workers/worker-loader.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
+import { isPlatformSecretPath, resolvePlatformSecretReference } from "./platform-secrets.ts";
 import { secretWorkerBinding } from "./secret-entrypoint.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
@@ -287,9 +289,22 @@ export class SecretDurableObject extends DurableObject<Env> {
             );
           }
         } else {
-          const resolved = await this.env.SECRET.getByName(
-            DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
-          ).resolveSecretReference({ fields: [...fields], origin, usedBy: this.#name.projectId });
+          // A foreign reference resolves either from a virtual platform secret
+          // (env-backed, design §4) or another secret's DO — each enforcing its
+          // own pin. Substitution stays in trusted DO code, never the jail.
+          const resolved = isPlatformSecretPath(path)
+            ? resolvePlatformSecretReference({
+                config: parseConfig(this.env),
+                fields: [...fields],
+                path,
+              })
+            : await this.env.SECRET.getByName(
+                DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
+              ).resolveSecretReference({
+                fields: [...fields],
+                origin,
+                usedBy: this.#name.projectId,
+              });
           for (const [field, value] of Object.entries(resolved))
             values.set(`${path} ${field}`, value);
         }

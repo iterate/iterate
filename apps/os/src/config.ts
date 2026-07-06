@@ -114,6 +114,15 @@ export const AppConfig = z.object({
           oauthClientSecret: redacted(z.string().trim().min(1)),
         })
         .optional(),
+      /** The dummy third-party used to prove the integrations model end to end
+       * (apps/dummy-petshop). Its client credentials back the FIRST-PARTY
+       * petshop lane's `/secrets/platform/integrations/petshop` reference. */
+      petshop: z
+        .object({
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+        })
+        .optional(),
     })
     .default({}),
   typeIdPrefix: z
