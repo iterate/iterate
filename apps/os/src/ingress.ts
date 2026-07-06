@@ -28,6 +28,7 @@
  */
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
+import { isEventDocsHostname } from "~/lib/event-docs-host.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
 export type IngressResolvers = {
@@ -169,6 +170,14 @@ function isOsHost(input: {
     new URL(input.baseUrl ?? input.requestUrl.toString()).hostname,
   );
   if (input.host === appHostname) return true;
+  if (
+    isEventDocsHostname({
+      appBaseUrl: input.baseUrl,
+      requestUrl: input.requestUrl.toString(),
+    })
+  ) {
+    return true;
+  }
   // Local dev serves the app on the bare loopback base itself.
   return input.bases.some((rawBase) => {
     const base = normalizeIngressHost(normalizeProjectHostnameBase(rawBase));

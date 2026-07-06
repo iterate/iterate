@@ -22,6 +22,17 @@ it("keeps the OS host on the app lane", async () => {
   expect(route).toMatchObject({ lane: "os" });
 });
 
+it("keeps the event docs host on the app lane", async () => {
+  const route = await decideIngressRoute({
+    config: PREVIEW_CONFIG,
+    method: "GET",
+    resolvers: resolversThatShouldNotBeUsed(),
+    url: "https://events.iterate-preview-2.com/stream/created",
+  });
+
+  expect(route).toMatchObject({ lane: "os" });
+});
+
 it("treats the bare localhost project-host base as an OS app-host alias", async () => {
   const route = await decideIngressRoute({
     config: DEV_CONFIG,

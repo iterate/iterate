@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as EventDocsProcessorSlugRouteImport } from './routes/$eventDocsProcessorSlug'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
@@ -23,6 +24,7 @@ import { Route as AdminReplRouteImport } from './routes/admin/repl'
 import { Route as AdminProjectsRouteImport } from './routes/admin/projects'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
 import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
+import { Route as EventDocsProcessorSlugSplatRouteImport } from './routes/$eventDocsProcessorSlug.$'
 import { Route as AdminStreamsRouteRouteImport } from './routes/admin/streams/route'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AdminStreamsIndexRouteImport } from './routes/admin/streams/index'
@@ -54,6 +56,11 @@ const AdminRoute = AdminRouteImport.update({
 } as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EventDocsProcessorSlugRoute = EventDocsProcessorSlugRouteImport.update({
+  id: '/$eventDocsProcessorSlug',
+  path: '/$eventDocsProcessorSlug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -116,6 +123,12 @@ const AppItxReplRoute = AppItxReplRouteImport.update({
   path: '/itx-repl',
   getParentRoute: () => AppRoute,
 } as any)
+const EventDocsProcessorSlugSplatRoute =
+  EventDocsProcessorSlugSplatRouteImport.update({
+    id: '/$',
+    path: '/$',
+    getParentRoute: () => EventDocsProcessorSlugRoute,
+  } as any)
 const AdminStreamsRouteRoute = AdminStreamsRouteRouteImport.update({
   id: '/streams',
   path: '/streams',
@@ -253,9 +266,11 @@ const AppProjectsProjectSlugAgentsStreamsSplatRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$eventDocsProcessorSlug': typeof EventDocsProcessorSlugRouteWithChildren
   '/admin': typeof AdminRouteWithChildren
   '/projects': typeof AppProjectsRouteRouteWithChildren
   '/admin/streams': typeof AdminStreamsRouteRouteWithChildren
+  '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
@@ -291,6 +306,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$eventDocsProcessorSlug': typeof EventDocsProcessorSlugRouteWithChildren
+  '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
@@ -325,10 +342,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$eventDocsProcessorSlug': typeof EventDocsProcessorSlugRouteWithChildren
   '/_app': typeof AppRouteWithChildren
   '/admin': typeof AdminRouteWithChildren
   '/_app/projects': typeof AppProjectsRouteRouteWithChildren
   '/admin/streams': typeof AdminStreamsRouteRouteWithChildren
+  '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/_app/itx-repl': typeof AppItxReplRoute
   '/_app/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
@@ -366,9 +385,11 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$eventDocsProcessorSlug'
     | '/admin'
     | '/projects'
     | '/admin/streams'
+    | '/$eventDocsProcessorSlug/$'
     | '/itx-repl'
     | '/new-project'
     | '/admin/projects'
@@ -404,6 +425,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/$eventDocsProcessorSlug'
+    | '/$eventDocsProcessorSlug/$'
     | '/itx-repl'
     | '/new-project'
     | '/admin/projects'
@@ -437,10 +460,12 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/$eventDocsProcessorSlug'
     | '/_app'
     | '/admin'
     | '/_app/projects'
     | '/admin/streams'
+    | '/$eventDocsProcessorSlug/$'
     | '/_app/itx-repl'
     | '/_app/new-project'
     | '/admin/projects'
@@ -477,6 +502,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  EventDocsProcessorSlugRoute: typeof EventDocsProcessorSlugRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
   AdminRoute: typeof AdminRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
@@ -501,6 +527,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$eventDocsProcessorSlug': {
+      id: '/$eventDocsProcessorSlug'
+      path: '/$eventDocsProcessorSlug'
+      fullPath: '/$eventDocsProcessorSlug'
+      preLoaderRoute: typeof EventDocsProcessorSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -586,6 +619,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/itx-repl'
       preLoaderRoute: typeof AppItxReplRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/$eventDocsProcessorSlug/$': {
+      id: '/$eventDocsProcessorSlug/$'
+      path: '/$'
+      fullPath: '/$eventDocsProcessorSlug/$'
+      preLoaderRoute: typeof EventDocsProcessorSlugSplatRouteImport
+      parentRoute: typeof EventDocsProcessorSlugRoute
     }
     '/admin/streams': {
       id: '/admin/streams'
@@ -751,6 +791,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface EventDocsProcessorSlugRouteChildren {
+  EventDocsProcessorSlugSplatRoute: typeof EventDocsProcessorSlugSplatRoute
+}
+
+const EventDocsProcessorSlugRouteChildren: EventDocsProcessorSlugRouteChildren =
+  {
+    EventDocsProcessorSlugSplatRoute: EventDocsProcessorSlugSplatRoute,
+  }
+
+const EventDocsProcessorSlugRouteWithChildren =
+  EventDocsProcessorSlugRoute._addFileChildren(
+    EventDocsProcessorSlugRouteChildren,
+  )
+
 interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugIntegrationsRoute: typeof AppProjectsProjectSlugIntegrationsRoute
   AppProjectsProjectSlugReactivityRoute: typeof AppProjectsProjectSlugReactivityRoute
@@ -879,6 +933,7 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  EventDocsProcessorSlugRoute: EventDocsProcessorSlugRouteWithChildren,
   AppRoute: AppRouteWithChildren,
   AdminRoute: AdminRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
