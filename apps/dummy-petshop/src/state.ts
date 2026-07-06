@@ -34,6 +34,9 @@ export interface PetshopState {
   clients: Record<string, OauthClient>;
   /** `jti` values of refresh tokens the backdoor has revoked. */
   revokedRefreshTokenIds: string[];
+  /** `jti` values of authorization codes already exchanged — codes are
+   * single-use (RFC 6749 §4.1.2), so a replayed code is rejected. */
+  usedAuthorizationCodeIds: string[];
   /** Current webhook HMAC secret; rotatable via the backdoor. */
   webhookSigningSecret: string;
   /** While > 0, POST /oauth/token returns 500 and decrements — for retry specs. */
@@ -60,6 +63,7 @@ export class PetshopStateDurableObject extends DurableObject {
         },
       },
       revokedRefreshTokenIds: [],
+      usedAuthorizationCodeIds: [],
       // Random per environment so signature specs prove real verification,
       // not a hardcoded constant. Persisted immediately so it is stable
       // across reads; readable (and rotatable) through the backdoor.
@@ -105,6 +109,19 @@ export class PetshopStateDurableObject extends DurableObject {
       state.revokedRefreshTokenIds.push(refreshTokenId);
     }
     await this.#save(state);
+  }
+
+  /** Consume a single-use authorization code by its jti. Returns true the
+   * first time, false on replay (RFC 6749 §4.1.2). Defaults the field so state
+   * persisted before this existed still works. */
+  async consumeAuthorizationCode(codeId: string): Promise<boolean> {
+    const state = await this.#load();
+    const used = state.usedAuthorizationCodeIds ?? [];
+    if (used.includes(codeId)) return false;
+    used.push(codeId);
+    state.usedAuthorizationCodeIds = used;
+    await this.#save(state);
+    return true;
   }
 
   async rotateSigningSecret(): Promise<string> {

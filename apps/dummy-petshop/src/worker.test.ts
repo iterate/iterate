@@ -184,6 +184,29 @@ describe("token exchange", () => {
     expect(await pets.json()).toMatchObject({ owner: "Jonas" });
   });
 
+  test("authorization codes are single-use (a replayed code is rejected)", async () => {
+    const shop = makeShop();
+    const location = await approve(shop, {
+      client_id: DEFAULT_CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+    });
+    const code = location.searchParams.get("code") ?? "";
+    const body = { grant_type: "authorization_code", code, redirect_uri: REDIRECT_URI };
+    const first = await exchange(shop, {
+      clientId: DEFAULT_CLIENT_ID,
+      clientSecret: DEFAULT_CLIENT_SECRET,
+      body,
+    });
+    expect(first.status).toBe(200);
+    const replay = await exchange(shop, {
+      clientId: DEFAULT_CLIENT_ID,
+      clientSecret: DEFAULT_CLIENT_SECRET,
+      body,
+    });
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
   test("the API rejects requests without a live bearer token", async () => {
     const shop = makeShop();
     expect((await shop("/api/me")).status).toBe(401);

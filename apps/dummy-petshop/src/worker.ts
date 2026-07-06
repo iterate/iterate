@@ -61,6 +61,7 @@ export interface PetshopDeps {
     | "rotateSigningSecret"
     | "setTokenEndpointFailures"
     | "consumeTokenEndpointFailure"
+    | "consumeAuthorizationCode"
   >;
   sealKey: string;
   backdoorSecret?: string;
@@ -77,6 +78,8 @@ export interface PetshopDeps {
 /** Sealed authorization code; redirectUri is re-checked at exchange (RFC 6749 §4.1.3). */
 interface CodePayload {
   t: "code";
+  /** Makes the code single-use: recorded spent on first exchange (RFC 6749 §4.1.2). */
+  jti: string;
   sub: string;
   clientId: string;
   redirectUri: string;
@@ -213,6 +216,7 @@ async function mintCodeRedirect(
 ): Promise<Response> {
   const payload: CodePayload = {
     t: "code",
+    jti: crypto.randomUUID(),
     sub: params.user.slice(0, 64) || "Demo User",
     clientId: params.clientId,
     redirectUri: params.redirectUri,
@@ -301,6 +305,10 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     }
     if (code.redirectUri !== (form.get("redirect_uri") ?? "")) {
       return json({ error: "invalid_grant", error_description: "redirect_uri mismatch" }, 400);
+    }
+    // Single-use: a replayed code is rejected (RFC 6749 §4.1.2).
+    if (!(await deps.state.consumeAuthorizationCode(code.jti))) {
+      return json({ error: "invalid_grant", error_description: "code already used" }, 400);
     }
     return issueTokens({
       sub: code.sub,
