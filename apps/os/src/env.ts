@@ -72,17 +72,15 @@ export interface Env {
   /** Account owning {@link Env.BACKUP_BUCKET}, for the SDK's presigned URLs. */
   CLOUDFLARE_R2_ACCOUNT_ID: string;
   /**
-   * How sandbox workspace backups move to R2. Deployed envs use `"presigned"`
-   * (the SDK presigns `*.r2.cloudflarestorage.com` URLs and the container
-   * transfers directly — through project egress like all container traffic;
-   * requires the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY secrets). Local dev
-   * uses `"local"` (archives stream through the Durable Object's local R2
-   * binding — presigned URLs don't exist under `wrangler dev`). Set per env
-   * by generate-wrangler-config.ts.
+   * R2 S3-API credentials for presigning backup transfers (optional Doppler
+   * secret). When present, the SDK presigns `*.r2.cloudflarestorage.com` URLs
+   * and the container transfers archives directly — fast, and through project
+   * egress like all container traffic. When absent (local dev always; a
+   * deployed env until someone mints keys), the sandbox falls back to the
+   * SDK's bucket-binding transfer: archives stream through the Durable
+   * Object's {@link Env.BACKUP_BUCKET} binding — slower, but zero-config and
+   * the only mode `wrangler dev` supports.
    */
-  SANDBOX_BACKUP_MODE: "presigned" | "local";
-  /** R2 S3-API credentials for presigning backup transfers (Doppler secret;
-   * absent in local dev, where SANDBOX_BACKUP_MODE is "local"). */
   R2_ACCESS_KEY_ID?: string;
   /** See {@link Env.R2_ACCESS_KEY_ID}. */
   R2_SECRET_ACCESS_KEY?: string;

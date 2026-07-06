@@ -120,11 +120,6 @@ function workerBindings(input: {
    * churn spins sandboxes faster than they idle out, and a saturated cap
    * 503s every sandbox exec (observed live at 10/10 on preview-3). */
   maxContainerInstances?: number;
-  /** Local dev (the top-level config): sandbox workspace backups stream
-   * through miniflare's local R2 binding instead of presigned
-   * `*.r2.cloudflarestorage.com` URLs, which don't exist under `wrangler
-   * dev`. */
-  localDev?: boolean;
 }) {
   return {
     vars: {
@@ -137,7 +132,6 @@ function workerBindings(input: {
       // from Doppler (OPTIONAL_SECRETS).
       BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
       CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
-      SANDBOX_BACKUP_MODE: input.localDev ? "local" : "presigned",
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -256,7 +250,7 @@ export const config = {
   // image on Docker/OrbStack and pairs each container with a proxy-everything
   // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
   dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
-  ...workerBindings({ workerName: "os", accountId: "", localDev: true }),
+  ...workerBindings({ workerName: "os", accountId: "" }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
   secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },

@@ -293,6 +293,14 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * fast; reinstalling dependencies is the restored workspace's job. The
    * handle is only overwritten AFTER `createBackup` succeeds, so a failed
    * backup can never orphan the previous good snapshot.
+   *
+   * Transfer mode is chosen by what the env provides: with R2 S3 credentials
+   * the SDK presigns `*.r2.cloudflarestorage.com` URLs and the container
+   * transfers directly (fast, and through project egress like all container
+   * traffic); without them — local dev always, a deployed env until keys are
+   * minted — archives stream through the Durable Object's BACKUP_BUCKET
+   * binding (the SDK's `localBucket` mode: slower, but zero-config and the
+   * only mode `wrangler dev` supports).
    */
   async #backupWorkspace(): Promise<void> {
     if (!this.#workspaceProvisioned) return;
@@ -303,10 +311,18 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       ttl: SANDBOX_BACKUP_TTL_SECONDS,
       gitignore: true,
       excludes: ["node_modules"],
-      ...(this.env.SANDBOX_BACKUP_MODE === "local" ? { localBucket: true } : {}),
+      ...(this.#canPresignBackupTransfers() ? {} : { localBucket: true }),
     });
     this.ctx.storage.kv.put(BACKUP_HANDLE_STORAGE_KEY, backup);
     this.#emitLifecycleEvent("backup-created", { backupId: backup.id });
+  }
+
+  #canPresignBackupTransfers(): boolean {
+    return Boolean(
+      this.env.R2_ACCESS_KEY_ID &&
+      this.env.R2_SECRET_ACCESS_KEY &&
+      this.env.CLOUDFLARE_R2_ACCOUNT_ID,
+    );
   }
 
   /**

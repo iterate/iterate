@@ -66,14 +66,15 @@ hung off the SDK's own lifecycle hooks:
 Plumbing: **one bucket per env**, `${osWorkerName}-sandboxes`, created by
 `ensure-resources` (create-only) and bound as `BACKUP_BUCKET` — that exact
 binding name is the SDK's contract, as are the `BACKUP_BUCKET_NAME` /
-`CLOUDFLARE_R2_ACCOUNT_ID` vars and `R2_ACCESS_KEY_ID` /
-`R2_SECRET_ACCESS_KEY` presigning secrets (optional Doppler secrets; an env
-without them still runs sandboxes, it just re-clones every start). Deployed
-envs transfer archives via presigned `*.r2.cloudflarestorage.com` URLs — real
-hosts, so backup traffic flows **through project egress like every other
-container request**. Local dev sets `SANDBOX_BACKUP_MODE=local`: archives
-stream through miniflare's local R2 binding, since presigned URLs don't exist
-under `wrangler dev`.
+`CLOUDFLARE_R2_ACCOUNT_ID` vars and the `R2_ACCESS_KEY_ID` /
+`R2_SECRET_ACCESS_KEY` presigning secrets. The secrets are optional and select
+the transfer mode: **with** them the SDK presigns
+`*.r2.cloudflarestorage.com` URLs and the container transfers archives
+directly — fast, and through project egress like every other container
+request; **without** them (local dev always — presigned URLs don't exist under
+`wrangler dev` — and any deployed env until R2 keys are minted into Doppler)
+archives stream through the Durable Object's `BACKUP_BUCKET` binding — slower,
+but zero-config, and persistence works either way.
 
 **Honest limit:** this is snapshot-granular, not a continuously-persistent
 disk. A container that _crashes_ (rather than idling out) loses what changed
