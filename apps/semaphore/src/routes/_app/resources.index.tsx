@@ -1,6 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useTransition } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { env } from "cloudflare:workers";
+import { toast } from "@iterate-com/ui/components/sonner";
+import { z } from "zod";
 import type { SemaphoreResourceRecord } from "~/contract.ts";
 import { requireAdminPrincipal } from "~/lib/require-admin.ts";
 import { listResourcesFromDb } from "~/lib/resource-store.ts";
@@ -65,6 +68,76 @@ const loadResources = createServerFn({ method: "GET" }).handler(async ({ context
   return resources.map(serializeResource);
 });
 
+// Matches the PR preview flow's lease length (scripts/preview: a slot belongs
+// to its PR for the PR's life; expiry is the abandoned-PR safety valve).
+const CLAIM_LEASE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Operator lease actions from the dashboard. Claiming records the holder on
+ * the lease (like `pnpm preview acquire`) — it does not deploy anything;
+ * releasing evicts whatever lease is on the slot. Both are attributed: claims
+ * to the given holder, releases logged against the operator's identity.
+ */
+const mutateSlotLease = createServerFn({ method: "POST" })
+  .inputValidator(
+    z.discriminatedUnion("action", [
+      z.object({
+        action: z.literal("claim"),
+        type: z.string().trim().min(1),
+        slug: z.string().trim().min(1),
+        holder: z.string().trim().min(1).max(200),
+      }),
+      z.object({
+        action: z.literal("release"),
+        type: z.string().trim().min(1),
+        slug: z.string().trim().min(1),
+      }),
+    ]),
+  )
+  .handler(async ({ context, data }) => {
+    requireAdminPrincipal(context);
+    const coordinator = env.RESOURCE_COORDINATOR.getByName(data.type);
+    const currentLease = await coordinator.getLease({ type: data.type, slug: data.slug });
+
+    if (data.action === "claim") {
+      if (currentLease) {
+        return {
+          changed: false,
+          message: `Already leased by ${currentLease.holder ?? "unknown"}.`,
+        };
+      }
+      const lease = await coordinator.acquireSpecific({
+        type: data.type,
+        slug: data.slug,
+        leaseMs: CLAIM_LEASE_MS,
+        holder: data.holder,
+      });
+      if (!lease) {
+        throw new Error("Slot is not available to claim.");
+      }
+      return {
+        changed: true,
+        message: `${data.slug} claimed for ${data.holder} until ${new Date(lease.expiresAt).toISOString()}.`,
+      };
+    }
+
+    if (!currentLease) {
+      return { changed: false, message: `${data.slug} is already available.` };
+    }
+    const released = await coordinator.release({
+      type: data.type,
+      slug: data.slug,
+      leaseId: currentLease.leaseId,
+    });
+    if (!released) {
+      throw new Error("Failed to release the lease.");
+    }
+    return {
+      changed: true,
+      message: `${data.slug} released (was held by ${currentLease.holder ?? "unknown"}).`,
+    };
+  });
+
 export const Route = createFileRoute("/_app/resources/")({
   loader: () => loadResources(),
   component: ResourcesIndexPage,
@@ -102,12 +175,15 @@ function ResourcesIndexPage() {
     return () => clearInterval(interval);
   }, [router]);
 
+  // Most recent activity first: freshly claimed/released slots surface at the
+  // top; never-touched slots sink to the bottom in slot order.
   const previewSlots = data
     .filter((resource) => resource.type === ENVIRONMENT_CONFIG_LEASE_TYPE)
     .sort(
       (left, right) =>
+        (right.lastAcquiredAt ?? 0) - (left.lastAcquiredAt ?? 0) ||
         (previewSlotNumber(left.slug) ?? Number.MAX_SAFE_INTEGER) -
-        (previewSlotNumber(right.slug) ?? Number.MAX_SAFE_INTEGER),
+          (previewSlotNumber(right.slug) ?? Number.MAX_SAFE_INTEGER),
     );
   const otherResources = data.filter((resource) => resource.type !== ENVIRONMENT_CONFIG_LEASE_TYPE);
   const groupedResources = otherResources.reduce((groups, resource) => {
@@ -186,8 +262,8 @@ function PreviewEnvironmentsSection({ slots }: { slots: SerializableSemaphoreRes
       <div className="space-y-1">
         <p className="font-medium">Preview environments</p>
         <p className="text-xs text-muted-foreground">
-          {leasedCount} leased · {slots.length - leasedCount} available · refreshes every{" "}
-          {DASHBOARD_REFRESH_MS / 1000}s
+          {leasedCount} leased · {slots.length - leasedCount} available · most recently acquired
+          first · refreshes every {DASHBOARD_REFRESH_MS / 1000}s
         </p>
       </div>
 
@@ -220,9 +296,40 @@ function formatInstant(epochMs: number) {
 }
 
 function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
   const slotNumber = previewSlotNumber(slot.slug);
   const pullRequestUrl = holderPullRequestUrl(slot.holder);
   const leased = slot.leaseState === "leased";
+
+  function runLeaseAction(input: Parameters<typeof mutateSlotLease>[0]["data"]) {
+    startTransition(async () => {
+      try {
+        const result = await mutateSlotLease({ data: input });
+        (result.changed ? toast.success : toast.info)(result.message);
+        await router.invalidate();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    });
+  }
+
+  function onRelease() {
+    if (!window.confirm(`Release ${slot.slug} (held by ${slot.holder ?? "unknown"})?`)) return;
+    runLeaseAction({ action: "release", type: slot.type, slug: slot.slug });
+  }
+
+  function onClaim() {
+    const answer = window.prompt(`Claim ${slot.slug} — for which PR? (number, e.g. 1656)`);
+    if (answer === null) return;
+    const trimmed = answer.trim();
+    const holder = /^#?\d+$/.test(trimmed) ? `pr-${trimmed.replace(/^#/, "")}` : trimmed;
+    if (!holder) {
+      toast.error("Enter a PR number (or any holder name).");
+      return;
+    }
+    runLeaseAction({ action: "claim", type: slot.type, slug: slot.slug, holder });
+  }
 
   return (
     <div
@@ -298,6 +405,28 @@ function PreviewSlotCard({ slot }: { slot: SerializableSemaphoreResource }) {
             {JSON.stringify(slot, null, 2)}
           </pre>
         </details>
+
+        <div className="flex gap-2 pt-1">
+          {leased ? (
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={onRelease}
+              className="rounded-md border border-foreground/20 bg-background/40 px-3 py-1.5 text-xs font-medium hover:bg-background/70 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPending ? "Working…" : "Release"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={onClaim}
+              className="rounded-md border border-foreground/20 bg-background/40 px-3 py-1.5 text-xs font-medium hover:bg-background/70 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPending ? "Working…" : "Claim for PR…"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
