@@ -82,12 +82,16 @@ describe("AppConfig", () => {
       prefix: "APP_CONFIG_",
       env: {
         APP_CONFIG: JSON.stringify(baseConfig),
+        APP_CONFIG_INTEGRATIONS__EXA: JSON.stringify({
+          apiKey: "exa-api-key",
+        }),
         APP_CONFIG_INTEGRATIONS__PARALLEL: JSON.stringify({
           apiKey: "parallel-api-key",
         }),
       },
     });
 
+    expect(parsed.integrations.exa?.apiKey.exposeSecret()).toEqual("exa-api-key");
     expect(parsed.integrations.parallel?.apiKey.exposeSecret()).toEqual("parallel-api-key");
   });
 

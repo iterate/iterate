@@ -139,11 +139,32 @@ type FetchOnly = Pick<Fetcher, "fetch">;
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
-const PLATFORM_FETCHER: FetchOnly = {
-  fetch(input, init) {
-    return fetch(input, init);
-  },
-};
+const PARALLEL_PLATFORM_SECRET_PATH = "/secrets/platform/integrations/parallel";
+
+function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
+  if (!parseConfig(env).integrations.parallel?.apiKey) {
+    throw new Error("Parallel is not configured for this OS deployment.");
+  }
+
+  return OpenApiRpcTarget.createLazyClient(
+    {
+      baseUrl: PARALLEL_API_BASE_URL,
+      headers: {
+        "x-api-key": `getSecret("${PARALLEL_PLATFORM_SECRET_PATH}", "apiKey")`,
+      },
+      specUrl: PARALLEL_OPENAPI_SPEC_URL,
+    },
+    {
+      description: {
+        instructions:
+          "Parallel API using Iterate's platform API key. Methods are raw OpenAPI operationIds discovered lazily from Parallel's OpenAPI spec.",
+        parent: input.parent,
+        types: "export type Parallel = OpenApiRpc;",
+      },
+      egress: input.egress,
+    },
+  );
+}
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -579,6 +600,10 @@ class SecretRpcTarget extends RpcTarget implements Secret {
     return this.durableObjectStub.matches(input);
   }
 
+  sign(input: Parameters<Secret["sign"]>[0]) {
+    return this.durableObjectStub.sign(input);
+  }
+
   update(input: Parameters<Secret["update"]>[0]) {
     return this.durableObjectStub.update(input);
   }
@@ -627,7 +652,7 @@ class AiRpcTarget extends RpcTarget implements Ai {
  * HMAC-signed OAuth state minted by startOAuthFlow, verified itx-side.
  */
 class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
@@ -639,6 +664,13 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     return env.CAPABILITY_HOST.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
     );
+  }
+
+  get parallel(): OpenApiRpc {
+    return parallelOpenApiTarget({
+      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      parent: "a project itx (itx.integrations.parallel)",
+    });
   }
 
   /** The dotted call surface: built-in slugs dispatch here; unknown slugs
@@ -707,6 +739,13 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       });
     }
 
+    if (slug === "parallel") {
+      const [, ...operationPath] = path;
+      return await (
+        this.parallel as unknown as Pick<CapabilityHost, "invokeCapability">
+      ).invokeCapability({ args, path: operationPath });
+    }
+
     if (BUILTIN_INTEGRATION_SLUGS.has(slug)) {
       throw new Error(
         `builtin integration "${slug}" has no dispatch branch — add one in IntegrationsRpcTarget.invokeCapability`,
@@ -752,6 +791,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
         'GitHub: await itx.integrations.github["<connection>"].api.request({ path: "/user/repos" }) — paths relative to https://api.github.com; for shell/git work, use a sandbox with ensureGithubAuth.',
+        "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape — copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
       types: [
@@ -776,6 +816,8 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
         "}",
+        "// itx.integrations.parallel exposes a flat OpenAPI RPC target:",
+        "type Parallel = OpenApiRpc;",
       ].join("\n"),
       children: {
         completeConnect:
@@ -783,6 +825,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         list: "Every connection the project holds (built-in journals plus provided mounts).",
+        parallel: "Parallel API RPC target using Iterate's platform API key.",
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
       },
       parent: "a project itx (itx.integrations)",
@@ -1827,6 +1870,7 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   get integrations(): ProjectIntegrations {
     return new IntegrationsRpcTarget({
       auth: this.#props.auth,
+      ctx: this.#props.ctx,
       projectId: this.#props.projectId,
     });
   }
@@ -1844,27 +1888,10 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   }
 
   get parallel(): OpenApiRpc {
-    const apiKey = parseConfig(env).integrations.parallel?.apiKey.exposeSecret();
-    if (!apiKey) {
-      throw new Error("Parallel is not configured for this OS deployment.");
-    }
-
-    return OpenApiRpcTarget.createLazyClient(
-      {
-        baseUrl: PARALLEL_API_BASE_URL,
-        headers: { "x-api-key": apiKey },
-        specUrl: PARALLEL_OPENAPI_SPEC_URL,
-      },
-      {
-        description: {
-          instructions:
-            "Parallel API using Iterate's platform API key. Methods are raw OpenAPI operationIds discovered from Parallel's OpenAPI spec.",
-          parent: "a project itx (itx.parallel)",
-          types: "export type Parallel = OpenApiRpc;",
-        },
-        egress: PLATFORM_FETCHER,
-      },
-    );
+    return parallelOpenApiTarget({
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+      parent: "a project itx (itx.parallel)",
+    });
   }
 
   get repos() {

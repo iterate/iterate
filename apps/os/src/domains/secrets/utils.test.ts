@@ -6,6 +6,7 @@
 import { describe, expect, test } from "vitest";
 import {
   computeHmacHex,
+  computeSignatureBase64Url,
   secretReferencePathsFromHeaders,
   secretReferencesFromHeaders,
   SecretSubstitutionError,
@@ -82,5 +83,41 @@ describe("compute helpers", () => {
     expect(timingSafeStringEqual("abc", "abc")).toBe(true);
     expect(timingSafeStringEqual("abc", "abd")).toBe(false);
     expect(timingSafeStringEqual("abc", "abcd")).toBe(false);
+  });
+
+  test("computeSignatureBase64Url produces an RS256 signature the public key verifies", async () => {
+    // A real cryptographic round trip (not a golden string): generate an RSA
+    // keypair, export the private key to PKCS#8 PEM (what a GitHub App secret
+    // holds), sign an App-JWT-shaped payload, and verify with the public key.
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    );
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey));
+    let b64 = "";
+    for (const byte of pkcs8) b64 += String.fromCharCode(byte);
+    const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(b64)}\n-----END PRIVATE KEY-----`;
+
+    const payload = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhcHAtaWQifQ"; // header.payload
+    const sig = await computeSignatureBase64Url({ algo: "RS256", privateKeyPem: pem, payload });
+
+    expect(sig).not.toContain("=");
+    expect(sig).not.toMatch(/[+/]/); // base64url, not base64
+    const sigBytes = Uint8Array.from(atob(sig.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+      c.charCodeAt(0),
+    );
+    const ok = await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      keyPair.publicKey,
+      sigBytes as BufferSource,
+      new TextEncoder().encode(payload) as BufferSource,
+    );
+    expect(ok).toBe(true);
   });
 });

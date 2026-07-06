@@ -5,6 +5,7 @@ import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type {
   DynamicWorkerRef,
   SecretComputeHmacInput,
+  SecretComputeSignInput,
   SecretDescription,
   SecretUpdateInput,
 } from "../../types.ts";
@@ -15,14 +16,23 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
-import { loadResolvedWorker, resolveWorkerSource } from "../workers/worker-loader.ts";
+import {
+  loadResolvedWorker,
+  resolveWorkerSource,
+  type WorkerBindings,
+} from "../workers/worker-loader.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
-import { isPlatformSecretPath, resolvePlatformSecretReference } from "./platform-secrets.ts";
-import { secretWorkerBinding } from "./secret-entrypoint.ts";
+import {
+  assertPlatformApiSecretReferencesAllowed,
+  isPlatformSecretPath,
+  resolvePlatformSecretReference,
+} from "./platform-secrets.ts";
+import { appSecretBinding, secretWorkerBinding } from "./secret-entrypoint.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   computeHmacHex,
+  computeSignatureBase64Url,
   type ResolvedFields,
   secretErrorResponse,
   secretReferencesFromHeaders,
@@ -159,6 +169,21 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /**
+   * RS256 signature over caller-supplied bytes (base64url) — the JWT-signing
+   * primitive (GitHub App JWTs, ADR 0006). Signs with a private key held in
+   * this secret without ever returning it: same "answers computed under the
+   * key, never the key" attenuation as `hmac`, which is why it is safe to
+   * expose and safe to hand a jail (as a compute-only `env.APP`).
+   */
+  async sign(input: SecretComputeSignInput): Promise<string> {
+    return await computeSignatureBase64Url({
+      algo: input.algo,
+      payload: input.payload,
+      privateKeyPem: selectSecretField(await this.#readMaterial(), input.field),
+    });
+  }
+
+  /**
    * Resolve this secret's own placeholders for a chained egress request, on
    * behalf of the entry secret that holds the request. Platform-only (reachable
    * through the SECRET namespace stub, never the public capability). Enforces
@@ -223,13 +248,26 @@ export class SecretDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     });
+    // Optional compute-only APP binding: when the installing integration set
+    // `props.appSecretPath`, hand the worker `env.APP` (sign/hmac/matches over
+    // the app-tier secret, never its bytes — ADR 0006) so it can sign App JWTs.
+    // App-tier credentials that ride a header stay `getSecret(appPath, …)`
+    // placeholders resolved at the outbound; APP is only for signing.
+    const appSecretPath = worker.props?.appSecretPath;
+    const bindings: WorkerBindings = { SECRET: binding };
+    if (typeof appSecretPath === "string") {
+      bindings.APP = appSecretBinding(this.ctx.exports, {
+        path: appSecretPath,
+        projectId: this.#name.projectId,
+      });
+    }
     const resolved = await resolveWorkerSource({
       projectId: this.#name.projectId,
       source: worker.source,
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
     const stub = loadResolvedWorker({
-      bindings: { SECRET: binding },
+      bindings,
       globalOutbound: binding,
       projectId: this.#name.projectId,
       ref: worker,
@@ -280,17 +318,25 @@ export class SecretDurableObject extends DurableObject<Env> {
       // hop substitutes in trusted DO code, never in the jail (ADR 0005).
       const values = new Map<string, string>();
       for (const [path, fields] of fieldsByPath) {
-        const resolved = isPlatformSecretPath(path)
-          ? resolvePlatformSecretReference({ config: parseConfig(this.env), fields, path })
-          : path === this.#name.path
-            ? await this.resolveSecretReference({
-                fields,
-                url: request.url,
-                usedBy: this.#name.projectId,
-              })
-            : await this.env.SECRET.getByName(
-                DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
-              ).resolveSecretReference({ fields, url: request.url, usedBy: this.#name.projectId });
+        let resolved: ResolvedFields;
+        if (isPlatformSecretPath(path)) {
+          assertPlatformApiSecretReferencesAllowed({ fields, path, url: request.url });
+          resolved = resolvePlatformSecretReference({
+            config: parseConfig(this.env),
+            fields,
+            path,
+          });
+        } else if (path === this.#name.path) {
+          resolved = await this.resolveSecretReference({
+            fields,
+            url: request.url,
+            usedBy: this.#name.projectId,
+          });
+        } else {
+          resolved = await this.env.SECRET.getByName(
+            DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
+          ).resolveSecretReference({ fields, url: request.url, usedBy: this.#name.projectId });
+        }
         for (const [field, value] of Object.entries(resolved))
           values.set(`${path} ${field}`, value);
       }

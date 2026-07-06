@@ -14,7 +14,19 @@ import {
 } from "@iterate-com/ui/components/item";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { AlertCircle, Circle, Github, Mail, MessageSquare } from "lucide-react";
+import {
+  AlertCircle,
+  Brain,
+  Circle,
+  Cloud,
+  ExternalLink,
+  Github,
+  KeyRound,
+  Mail,
+  MessageSquare,
+  Search as SearchIcon,
+  Sparkles,
+} from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -34,6 +46,45 @@ type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
 });
+
+const BUILTIN_API_INTEGRATIONS = [
+  {
+    description:
+      "First-party OpenAPI RPC target for Parallel Search, Extract, Task, FindAll, Monitor, and Chat.",
+    docsUrl: "https://docs.parallel.ai/",
+    icon: Brain,
+    keyReference: 'x-api-key: getSecret("/secrets/platform/integrations/parallel", "apiKey")',
+    name: "Parallel",
+    namespace: "itx.integrations.parallel",
+  },
+  {
+    description:
+      "Built-in Exa MCP client for web search and page fetch; API-key egress can use the Exa platform key when configured.",
+    docsUrl: "https://exa.ai/docs/reference/getting-started",
+    icon: SearchIcon,
+    keyReference: 'x-api-key: getSecret("/secrets/platform/integrations/exa", "apiKey")',
+    name: "Exa",
+    namespace: "itx.mcp.exa",
+  },
+  {
+    description:
+      "Workers AI binding for model calls at the edge. No secret placeholder is needed for the built-in target.",
+    docsUrl: "https://developers.cloudflare.com/workers-ai/",
+    icon: Cloud,
+    keyReference: "Call itx.ai.run(model, body)",
+    name: "Cloudflare Edge AI",
+    namespace: "itx.ai",
+  },
+  {
+    description:
+      "OpenAI API calls through project egress or workers without storing a project-owned OpenAI key.",
+    docsUrl: "https://platform.openai.com/docs/api-reference",
+    icon: Sparkles,
+    keyReference: 'Authorization: Bearer getSecret("/secrets/platform/openai", "apiKey")',
+    name: "OpenAI",
+    namespace: "itx.egress.fetch",
+  },
+] as const;
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
@@ -162,7 +213,7 @@ function ProjectIntegrationsContent() {
   });
 
   const panel = (
-    <>
+    <div className="space-y-4">
       {oauthErrorLabel ? (
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
@@ -170,6 +221,21 @@ function ProjectIntegrationsContent() {
           <AlertDescription>{oauthErrorLabel}</AlertDescription>
         </Alert>
       ) : null}
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-sm font-medium">Built-in API integrations</h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Iterate-managed keys stay server-side. Use the first-party target where one exists, or
+            an allowlisted <code>getSecret(...)</code> header reference through project egress.
+            Usage is charged to this project.
+          </p>
+        </div>
+        <ItemGroup className="space-y-3">
+          {BUILTIN_API_INTEGRATIONS.map((integration) => (
+            <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+          ))}
+        </ItemGroup>
+      </section>
       <ItemGroup className="space-y-3">
         <Item variant="outline" className="items-start justify-between gap-4 p-4">
           <ItemMedia variant="icon">
@@ -281,7 +347,7 @@ function ProjectIntegrationsContent() {
           </Item>
         ) : null}
       </ItemGroup>
-    </>
+    </div>
   );
 
   return (
@@ -297,6 +363,46 @@ function ProjectIntegrationsContent() {
 /** Journals persist after disconnect; only status-connected entries count. */
 function connectedCount(entries: ConnectionEntry[]): number {
   return entries.filter((entry) => entry.status?.connected).length;
+}
+
+function BuiltInApiIntegrationRow({
+  integration,
+}: {
+  integration: (typeof BUILTIN_API_INTEGRATIONS)[number];
+}) {
+  const Icon = integration.icon;
+
+  return (
+    <Item variant="outline" className="items-start justify-between gap-4 p-4">
+      <ItemMedia variant="icon">
+        <Icon className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>{integration.name}</ItemTitle>
+        <code className="block w-fit max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          {integration.namespace}
+        </code>
+        <ItemDescription>{integration.description}</ItemDescription>
+        <div className="mt-2 flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+          <KeyRound className="mt-0.5 size-3.5 shrink-0" />
+          <code className="min-w-0 break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-relaxed text-foreground">
+            {integration.keyReference}
+          </code>
+        </div>
+      </ItemContent>
+      <ItemActions>
+        <a
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium whitespace-nowrap hover:bg-muted hover:text-foreground"
+          href={integration.docsUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <ExternalLink className="size-3.5" />
+          Docs
+        </a>
+      </ItemActions>
+    </Item>
+  );
 }
 
 function ConnectionRow({

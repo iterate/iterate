@@ -5,11 +5,23 @@
 
 import { describe, expect, test } from "vitest";
 import type { AppConfig } from "../../config.ts";
-import { isPlatformSecretPath, resolvePlatformSecretReference } from "./platform-secrets.ts";
+import {
+  assertPlatformApiSecretReferencesAllowed,
+  isPlatformSecretPath,
+  resolvePlatformSecretReference,
+  substitutePlatformSecretReferences,
+} from "./platform-secrets.ts";
 import { SecretSubstitutionError } from "./utils.ts";
 
 const config = {
+  openAiApiKey: { exposeSecret: () => "openai-platform-key" },
   integrations: {
+    exa: {
+      apiKey: { exposeSecret: () => "exa-platform-key" },
+    },
+    parallel: {
+      apiKey: { exposeSecret: () => "parallel-platform-key" },
+    },
     petshop: {
       oauthClientId: "petshop-default",
       oauthClientSecret: { exposeSecret: () => "petshop-default-secret" },
@@ -33,6 +45,67 @@ describe("resolvePlatformSecretReference", () => {
     });
     expect(resolved.basicAuth).toBe(btoa("petshop-default:petshop-default-secret"));
     expect(resolved.clientId).toBe("petshop-default");
+  });
+
+  test("API-key platform integrations expose apiKey and whole-material fields", () => {
+    const resolved = resolvePlatformSecretReference({
+      config,
+      fields: ["", "apiKey"],
+      path: "/secrets/platform/integrations/parallel",
+    });
+    expect(resolved[""]).toBe("parallel-platform-key");
+    expect(resolved.apiKey).toBe("parallel-platform-key");
+  });
+
+  test("OpenAI exposes the deployment API key", () => {
+    const resolved = resolvePlatformSecretReference({
+      config,
+      fields: ["apiKey"],
+      path: "/secrets/platform/openai",
+    });
+    expect(resolved.apiKey).toBe("openai-platform-key");
+  });
+
+  test("direct platform-key egress substitutes only for allowlisted provider origins", () => {
+    const request = new Request("https://api.parallel.ai/v1/tasks/runs", {
+      headers: {
+        "x-api-key": 'getSecret("/secrets/platform/integrations/parallel", "apiKey")',
+      },
+    });
+
+    const substituted = substitutePlatformSecretReferences({ config, request });
+
+    expect(substituted.headers.get("x-api-key")).toBe("parallel-platform-key");
+  });
+
+  test("direct platform-key egress rejects the wrong origin", () => {
+    const request = new Request("https://example.com/v1/tasks/runs", {
+      headers: {
+        "x-api-key": 'getSecret("/secrets/platform/integrations/parallel", "apiKey")',
+      },
+    });
+
+    expect(() => substitutePlatformSecretReferences({ config, request })).toThrow(
+      SecretSubstitutionError,
+    );
+  });
+
+  test("chained platform API-key references keep their provider-origin pin", () => {
+    expect(() =>
+      assertPlatformApiSecretReferencesAllowed({
+        fields: ["apiKey"],
+        path: "/secrets/platform/integrations/parallel",
+        url: "https://example.com/v1/tasks/runs",
+      }),
+    ).toThrow(SecretSubstitutionError);
+
+    expect(() =>
+      assertPlatformApiSecretReferencesAllowed({
+        fields: ["clientSecret"],
+        path: "/secrets/platform/integrations/petshop",
+        url: "https://example.com/oauth/token",
+      }),
+    ).not.toThrow();
   });
 
   test("unknown slug throws secret_not_found", () => {

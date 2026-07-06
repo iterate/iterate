@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
+import { parseConfig } from "../../config.ts";
 import type { Env } from "../../env.ts";
 import {
   itxForScope,
@@ -15,7 +16,15 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
-import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
+import {
+  isPlatformSecretPath,
+  substitutePlatformSecretReferences,
+} from "../secrets/platform-secrets.ts";
+import {
+  secretErrorResponse,
+  secretReferencePathsFromHeaders,
+  SecretSubstitutionError,
+} from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
@@ -127,13 +136,33 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (secretPaths.length === 0) return fetch(request);
 
     // A request may reference several secrets (app-tier + connection-tier).
-    // Hand it to any one of them — the Secret DO's fetch() resolves each
-    // referenced secret, every hop enforcing its own host pin (see
-    // SecretDurableObject.resolveSecretReference).
+    // Hand it to a concrete project secret when one exists; the Secret DO's
+    // fetch() resolves each referenced secret, every hop enforcing its own
+    // host pin (see SecretDurableObject.resolveSecretReference).
+    const entrySecretPath = secretPaths.find((path) => !isPlatformSecretPath(path));
+    if (!entrySecretPath) {
+      try {
+        return await fetch(
+          substitutePlatformSecretReferences({
+            config: parseConfig(this.env),
+            request,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof SecretSubstitutionError) {
+          return secretErrorResponse(
+            error.code,
+            error.code === "secret_not_allowed_for_origin" ? 403 : 400,
+          );
+        }
+        throw error;
+      }
+    }
+
     return this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
-        path: secretPaths[0]!,
+        path: entrySecretPath,
       }),
     ).fetch(request);
   }

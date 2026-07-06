@@ -130,6 +130,13 @@ export const AppConfig = z.object({
           apiKey: redacted(z.string().trim().min(1)),
         })
         .optional(),
+      /** First-party Exa API access. Optional because Exa also exposes a
+       * public MCP server that does not require deployment credentials. */
+      exa: z
+        .object({
+          apiKey: redacted(z.string().trim().min(1)),
+        })
+        .optional(),
     })
     .default({}),
   typeIdPrefix: z

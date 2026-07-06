@@ -1,5 +1,10 @@
 import { type AppConfig } from "../../config.ts";
-import { type ResolvedFields, SecretSubstitutionError } from "./utils.ts";
+import {
+  type ResolvedFields,
+  secretReferencesFromHeaders,
+  SecretSubstitutionError,
+  substituteSecretHeaders,
+} from "./utils.ts";
 
 /**
  * Virtual, env-backed platform secrets (design §4). A `/secrets/platform/**`
@@ -9,36 +14,36 @@ import { type ResolvedFields, SecretSubstitutionError } from "./utils.ts";
  * secret, never readable/updatable, never handed into a jail), which is how a
  * first-party integration's app-tier OAuth client credentials reach a secret
  * worker's refresh request without any project ever holding platform bytes
- * (ADR 0005). Their host pin is the entry secret's pin for now — a per-provider
- * platform pin is future work (this is an internal tool; see the design's
- * "Future work").
+ * (ADR 0005). A small allowlist below also exposes first-party API keys for
+ * direct project egress, pinned to their provider API origins.
  */
 
 const PLATFORM_PREFIX = "/secrets/platform/";
+const PLATFORM_API_SECRET_EGRESS_ORIGINS: Record<string, readonly string[]> = {
+  "/secrets/platform/integrations/exa": ["https://api.exa.ai"],
+  "/secrets/platform/integrations/parallel": ["https://api.parallel.ai"],
+  "/secrets/platform/openai": ["https://api.openai.com"],
+};
 
 export function isPlatformSecretPath(path: string): boolean {
   return path.startsWith(PLATFORM_PREFIX);
 }
 
 /**
- * Resolve the requested fields of a `/secrets/platform/integrations/<slug>`
- * reference from AppConfig. Exposes `clientId`, `clientSecret`, and the
- * convenience `basicAuth` (base64 of `clientId:clientSecret`, RFC 6749 §2.3.1
- * HTTP Basic client authentication — the required-to-support form, so a refresh
- * worker rides the app credential in an `Authorization: Basic …` header).
+ * Resolve the requested fields of a platform secret reference from AppConfig.
+ *
+ * `/secrets/platform/integrations/<slug>` can expose OAuth app credentials
+ * (`clientId`, `clientSecret`, `basicAuth`) and/or an API key (`apiKey`, plus
+ * whole-material `getSecret(path)` when the integration is API-key-only).
+ * `/secrets/platform/openai` exposes the deployment OpenAI API key.
  */
 export function resolvePlatformSecretReference(input: {
   config: AppConfig;
   fields: string[];
   path: string;
 }): ResolvedFields {
-  const creds = platformIntegrationCredentials(input.config, input.path);
-  if (creds === null) throw new SecretSubstitutionError("secret_not_found");
-  const table: Record<string, string> = {
-    basicAuth: btoa(`${creds.clientId}:${creds.clientSecret}`),
-    clientId: creds.clientId,
-    clientSecret: creds.clientSecret,
-  };
+  const table = platformSecretFields(input.config, input.path);
+  if (table === null) throw new SecretSubstitutionError("secret_not_found");
   const resolved: ResolvedFields = {};
   for (const field of input.fields) {
     const value = table[field];
@@ -48,16 +53,102 @@ export function resolvePlatformSecretReference(input: {
   return resolved;
 }
 
-function platformIntegrationCredentials(
+export function substitutePlatformSecretReferences(input: {
+  config: AppConfig;
+  request: Request;
+}): Request {
+  const references = secretReferencesFromHeaders(input.request.headers);
+  const origin = new URL(input.request.url).origin;
+  const fieldsByPath = new Map<string, string[]>();
+
+  for (const reference of references) {
+    if (!isPlatformSecretPath(reference.path)) {
+      throw new SecretSubstitutionError("secret_reference_required");
+    }
+    const allowedOrigins = PLATFORM_API_SECRET_EGRESS_ORIGINS[reference.path];
+    if (allowedOrigins === undefined || !allowedOrigins.includes(origin)) {
+      throw new SecretSubstitutionError("secret_not_allowed_for_origin");
+    }
+    const fields = fieldsByPath.get(reference.path) ?? [];
+    fields.push(reference.field ?? "");
+    fieldsByPath.set(reference.path, fields);
+  }
+
+  const values = new Map<string, string>();
+  for (const [path, fields] of fieldsByPath) {
+    const resolved = resolvePlatformSecretReference({ config: input.config, fields, path });
+    for (const [field, value] of Object.entries(resolved)) values.set(`${path} ${field}`, value);
+  }
+
+  return substituteSecretHeaders(input.request, (reference) => {
+    const value = values.get(`${reference.path} ${reference.field ?? ""}`);
+    if (value === undefined) throw new SecretSubstitutionError("secret_reference_field_not_found");
+    return value;
+  });
+}
+
+export function assertPlatformApiSecretReferencesAllowed(input: {
+  fields: string[];
+  path: string;
+  url: string;
+}) {
+  if (!input.fields.some((field) => field === "" || field === "apiKey")) return;
+
+  const origin = new URL(input.url).origin;
+  const allowedOrigins = PLATFORM_API_SECRET_EGRESS_ORIGINS[input.path];
+  if (allowedOrigins === undefined || !allowedOrigins.includes(origin)) {
+    throw new SecretSubstitutionError("secret_not_allowed_for_origin");
+  }
+}
+
+/**
+ * One field's raw material string from a platform secret, for the compute-only
+ * `env.APP` binding (which runs `hmac`/`sign`/`matches` over it — ADR 0006).
+ * `undefined` field selects the whole-material value (the API-key-only case).
+ * Throws SecretSubstitutionError when the secret or field is absent.
+ */
+export function platformSecretMaterialField(
   config: AppConfig,
   path: string,
-): { clientId: string; clientSecret: string } | null {
+  field?: string,
+): string {
+  const fields = platformSecretFields(config, path);
+  if (fields === null) throw new SecretSubstitutionError("secret_not_found");
+  const value = fields[field ?? ""];
+  if (value === undefined) throw new SecretSubstitutionError("secret_reference_field_not_found");
+  return value;
+}
+
+function platformSecretFields(config: AppConfig, path: string): Record<string, string> | null {
+  if (path === "/secrets/platform/openai") {
+    const apiKey = config.openAiApiKey.exposeSecret();
+    return { "": apiKey, apiKey };
+  }
+
   const match = /^\/secrets\/platform\/integrations\/([a-z0-9-]+)$/.exec(path);
   if (match === null) return null;
   // integrations is a fixed-key object in config; index dynamically by slug.
   const creds = (config.integrations as Record<string, unknown>)[match[1]!] as
-    | { oauthClientId: string; oauthClientSecret: { exposeSecret(): string } }
+    | {
+        apiKey?: { exposeSecret(): string };
+        oauthClientId?: string;
+        oauthClientSecret?: { exposeSecret(): string };
+      }
     | undefined;
-  if (creds?.oauthClientId === undefined) return null;
-  return { clientId: creds.oauthClientId, clientSecret: creds.oauthClientSecret.exposeSecret() };
+  if (creds === undefined) return null;
+
+  const fields: Record<string, string> = {};
+  if (creds.oauthClientId !== undefined && creds.oauthClientSecret !== undefined) {
+    const clientSecret = creds.oauthClientSecret.exposeSecret();
+    fields.basicAuth = btoa(`${creds.oauthClientId}:${clientSecret}`);
+    fields.clientId = creds.oauthClientId;
+    fields.clientSecret = clientSecret;
+  }
+  if (creds.apiKey !== undefined) {
+    const apiKey = creds.apiKey.exposeSecret();
+    fields[""] = apiKey;
+    fields.apiKey = apiKey;
+  }
+
+  return Object.keys(fields).length > 0 ? fields : null;
 }

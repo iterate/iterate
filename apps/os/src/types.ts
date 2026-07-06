@@ -341,18 +341,23 @@ export type CompleteConnectResult =
 /**
  * The `itx.integrations` collection.
  *
- * Every dotted call is `{slug}.{connection}.{...method}`. Built-in slugs
- * (`slack`, `google`) dispatch to deployment code —
+ * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
+ * Built-in slugs (`slack`, `google`, `github`) dispatch to deployment code —
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method, `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy — and every other slug resolves through the ITX
- * capability table under the `integrations` prefix, so
+ * the Gmail REST proxy, and `itx.integrations.github["jonas"].api.request(...)`
+ * the GitHub REST proxy — and every other slug resolves through the ITX
+ * capability table under the `integrations` prefix. The exception is
+ * `itx.integrations.parallel`: a first-party API-key RPC target, not a
+ * connection and not returned by `list()`. For provided integrations,
  * `itx.integrations.waitrose.mum.searchProducts("milk")` reaches whatever the
  * project mounted at `["integrations", "waitrose", "mum"]`. There is no
  * implicit connection: a built-in call without a connection name is an error.
  * Management verbs (OAuth, disconnect) are connection-scoped.
  */
 export interface ProjectIntegrations extends Describable {
+  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  parallel: OpenApiRpc;
   /** Every connection the project holds: `/integrations/<slug>/<connection>`
    * journals plus provided mounts from the capability table (deduped by path;
    * a mount over its own webhook journal is one entry). */
@@ -584,6 +589,10 @@ export interface Secret extends Describable {
   hmac(input: SecretComputeHmacInput): Promise<string>;
   /** Constant-time equality of a caller value against a field. */
   matches(input: { field?: string; value: string }): Promise<boolean>;
+  /** RS256 signature over caller bytes (base64url). Signs with a private key
+   * held in the secret without ever returning it — the JWT-signing primitive
+   * for App-installation tokens (ADR 0006). */
+  sign(input: SecretComputeSignInput): Promise<string>;
   processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
 }
@@ -603,6 +612,15 @@ export type SecretUpdateInput = {
  * if omitted), the digest algorithm, and the caller-composed payload. */
 export type SecretComputeHmacInput = {
   algo: "sha1" | "sha256";
+  field?: string;
+  payload: string | Uint8Array;
+};
+
+/** Input to `Secret.sign` — the field holding the PKCS#8 PEM private key
+ * (whole material if omitted), the signature algorithm, and the caller-composed
+ * payload (e.g. a JWT `header.payload`). */
+export type SecretComputeSignInput = {
+  algo: "RS256";
   field?: string;
   payload: string | Uint8Array;
 };
