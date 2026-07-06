@@ -13,6 +13,6 @@ export interface WellKnownSkillsRegistry {
 }
 
 export const wellKnownSkillsRegistry: WellKnownSkillsRegistry = {
-  "skills": [],
-  "fileContents": {}
+  skills: [],
+  fileContents: {},
 };
