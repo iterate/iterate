@@ -4,8 +4,6 @@ import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
-type ProjectProcessorArgs = ConstructorParameters<typeof ProjectProcessor>[0];
-
 class MemoryStream implements Stream {
   readonly events: StreamEvent[] = [];
 
@@ -149,7 +147,7 @@ describe("ProjectProcessor custom domains", () => {
       itx: {
         projectId: project.id,
         worker: { processEvent: vi.fn() },
-      } as unknown as ProjectProcessorArgs["itx"],
+      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
       stream,
     });
     const cursor = { offset: 0 };

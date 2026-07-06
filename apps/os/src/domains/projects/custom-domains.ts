@@ -21,17 +21,6 @@ type CloudflareError = {
   message?: string;
 };
 
-type CloudflareApiEnvelope<T> = {
-  errors?: CloudflareError[];
-  result?: T;
-  success?: boolean;
-};
-
-type CloudflareZone = {
-  id: string;
-  name: string;
-};
-
 type CloudflareValidationRecord = {
   name?: unknown;
   status?: unknown;
@@ -56,12 +45,6 @@ type CloudflareCustomHostname = {
     wildcard?: boolean;
   } | null;
   status?: string;
-};
-
-type CloudflareCustomHostnameProvisionerOptions = {
-  config: AppConfig;
-  directory: KVNamespace;
-  fetch?: Fetch;
 };
 
 export type ProjectCustomDomainProvisioner = {
@@ -90,9 +73,11 @@ export function normalizeProjectCustomDomain(input: {
   return hostname;
 }
 
-export function createCloudflareCustomDomainProvisioner(
-  options: CloudflareCustomHostnameProvisionerOptions,
-): ProjectCustomDomainProvisioner {
+export function createCloudflareCustomDomainProvisioner(options: {
+  config: AppConfig;
+  directory: KVNamespace;
+  fetch?: Fetch;
+}): ProjectCustomDomainProvisioner {
   const fetcher = options.fetch ?? fetch;
 
   return {
@@ -177,7 +162,7 @@ async function assertHostnameAvailable(input: {
 }
 
 async function createCustomHostnameWithDuplicateRecovery(input: {
-  client: CloudflareCustomHostnameClient;
+  client: Awaited<ReturnType<typeof cloudflareClient>>;
   hostname: string;
   project: ProjectDirectoryRecord;
 }): Promise<CloudflareCustomHostname> {
@@ -197,8 +182,6 @@ async function createCustomHostnameWithDuplicateRecovery(input: {
   }
 }
 
-type CloudflareCustomHostnameClient = Awaited<ReturnType<typeof cloudflareClient>>;
-
 async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
   const token = input.config.cloudflare.apiToken?.exposeSecret();
   if (!token) throw new Error("Cloudflare API token is not configured.");
@@ -215,14 +198,18 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
         ...init.headers,
       },
     });
-    const body = (await response.json().catch(() => ({}))) as CloudflareApiEnvelope<T>;
+    const body = (await response.json().catch(() => ({}))) as {
+      errors?: CloudflareError[];
+      result?: T;
+      success?: boolean;
+    };
     if (!response.ok || body.success === false) {
       throw new Error(cloudflareErrorMessage(path, response.status, body.errors));
     }
     return body.result as T;
   };
 
-  const zones = await request<CloudflareZone[]>(
+  const zones = await request<Array<{ id: string; name: string }>>(
     `/zones?account.id=${encodeURIComponent(accountId)}&name=${encodeURIComponent(zoneName)}&per_page=5`,
   );
   const zone = zones.find((candidate) => candidate.name === zoneName);
