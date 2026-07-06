@@ -24,6 +24,7 @@ apps/os/wrangler.builder.jsonc
 apps/auth/wrangler.jsonc
 apps/semaphore/wrangler.jsonc
 apps/streams-example-app/wrangler.jsonc
+apps/dummy-petshop/wrangler.jsonc
 
 !.dev.vars.example
 .env*

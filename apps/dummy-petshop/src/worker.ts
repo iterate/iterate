@@ -1,0 +1,502 @@
+/**
+ * dummy-petshop — a deliberately fake third-party service ("the pet shop")
+ * for exercising Iterate's integrations & secrets system end to end
+ * (apps/os/docs/integrations-and-secrets-design.md §7 S0, "Petshop ×2" §3):
+ * an OAuth 2.0 provider with Basic client auth at the token endpoint and
+ * short-TTL sealed tokens, a Waitrose-shaped legacy email+password login,
+ * a small bearer-protected API, HMAC-signed outbound webhooks, and a test
+ * backdoor. GET / documents the whole surface.
+ *
+ * The worker is stateless: durable state is one JSON blob in the
+ * PetshopStateDurableObject (state.ts) and every code/token is a sealed
+ * AES-GCM blob (seal.ts). handlePetshopRequest is a plain function of
+ * (request, deps), so unit tests drive the full HTTP surface in Node against
+ * the real state class over an in-memory storage fake.
+ */
+import dedent from "dedent";
+import { hmacSha256Hex, nowSeconds, seal, unseal } from "./seal.ts";
+import {
+  DEFAULT_ACCESS_TTL_SECONDS,
+  DEFAULT_CLIENT_ID,
+  DEFAULT_CLIENT_SECRET,
+  PetshopStateDurableObject,
+} from "./state.ts";
+
+export { PetshopStateDurableObject };
+
+/** Authorization codes only need to survive the redirect back to the callback. */
+const CODE_TTL_SECONDS = 120;
+
+/** Bindings the worker runs with (wrangler.jsonc, generated from the root envs.ts). */
+export interface Env {
+  PETSHOP_STATE: DurableObjectNamespace<PetshopStateDurableObject>;
+  /** Seals every code/token; 32 bytes base64. Deploy-minted unless pinned in Doppler (scripts/deploy.ts). */
+  PETSHOP_SEAL_KEY: string;
+  /** When set, /__backdoor* requires it in the x-petshop-backdoor header. */
+  PETSHOP_BACKDOOR_SECRET?: string;
+}
+
+/**
+ * What route handlers need from the environment. `state` is the Durable
+ * Object's RPC stub in production and a plain PetshopStateDurableObject over
+ * an in-memory storage fake in unit tests — Pick<> keeps the two
+ * structurally interchangeable.
+ */
+export interface PetshopDeps {
+  state: Pick<
+    PetshopStateDurableObject,
+    | "getState"
+    | "createClient"
+    | "expireAccessTokens"
+    | "revokeRefreshToken"
+    | "rotateSigningSecret"
+    | "setTokenEndpointFailures"
+    | "consumeTokenEndpointFailure"
+  >;
+  sealKey: string;
+  backdoorSecret?: string;
+}
+
+/** Sealed authorization code; redirectUri is re-checked at exchange (RFC 6749 §4.1.3). */
+interface CodePayload {
+  t: "code";
+  sub: string;
+  clientId: string;
+  redirectUri: string;
+  exp: number;
+}
+
+/** Sealed access token; `epoch` must still equal the state's accessTokenEpoch. */
+interface AccessPayload {
+  t: "access";
+  sub: string;
+  clientId: string;
+  epoch: number;
+  exp: number;
+}
+
+/** Sealed refresh token: never expires, individually revocable via `jti`. */
+interface RefreshPayload {
+  t: "refresh";
+  sub: string;
+  clientId: string;
+  jti: string;
+}
+
+function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: { "content-type": "application/json", ...headers },
+  });
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  return ((await request.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+}
+
+// The index doubles as endpoint documentation, so anyone poking a deployed
+// instance sees the whole surface without opening the repo.
+const INDEX = dedent`
+  🐾 dummy-petshop — a fake third party for integrations & secrets e2e
+     (apps/os/docs/integrations-and-secrets-design.md §7 S0)
+
+  GET  /oauth/authorize     ?client_id&redirect_uri&state — consent page; add &approve=1[&user=x] to skip it (test lane)
+  POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
+  POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1)
+  POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
+  GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}
+  GET  /api/pets            the account's (entirely fictional) pets
+
+  GET  /__backdoor/state                   the whole mutable state, for spec assertions
+  POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
+  POST /__backdoor/expire-tokens           invalidate every outstanding access token (epoch bump)
+  POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
+  POST /__backdoor/rotate-signing-secret   new webhook HMAC secret
+  POST /__backdoor/fail-token-endpoint     {times} → next N POST /oauth/token calls return 500
+  POST /__backdoor/webhooks/fire           {url, event?, badSignature?} → POST a signed webhook there now
+
+  Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
+  webhooks are signed x-petshop-signature-256: sha256=<hex hmac of the raw body> · the backdoor is open
+  unless PETSHOP_BACKDOOR_SECRET is set, in which case send it as x-petshop-backdoor.
+`;
+
+function consentPage(params: { clientId: string; redirectUri: string; state: string }): string {
+  const hidden = (
+    [
+      ["client_id", params.clientId],
+      ["redirect_uri", params.redirectUri],
+      ["state", params.state],
+    ] as const
+  )
+    .map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}" />`)
+    .join("\n");
+  return dedent`
+    <!doctype html>
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pet Shop — authorize</title>
+    <style>
+      body{font-family:-apple-system,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#fef9f0}
+      main{background:#fff;border-radius:12px;box-shadow:0 2px 24px rgba(0,0,0,.08);padding:2.5rem;width:22rem}
+      h1{font-size:1.2rem;margin:0 0 .5rem} p{color:#555;font-size:.9rem}
+      label{display:block;font-size:.8rem;font-weight:600;margin:1rem 0 .3rem}
+      input[type=text]{width:100%;box-sizing:border-box;padding:.6rem;border:1px solid #ccc;border-radius:8px}
+      button{margin-top:1.5rem;width:100%;padding:.7rem;border:0;border-radius:8px;background:#d97706;color:#fff;font-weight:600;font-size:1rem;cursor:pointer}
+    </style></head>
+    <body><main>
+    <h1>🐾 Pet Shop</h1>
+    <p><b>${escapeHtml(params.clientId)}</b> wants access to your (entirely fictional) pets.</p>
+    <form method="post" action="/oauth/authorize">
+    ${hidden}
+    <label for="user">Your name</label>
+    <input type="text" id="user" name="user" value="Demo User" />
+    <button type="submit">Approve</button>
+    </form>
+    </main></body></html>
+  `;
+}
+
+/** The authorize-time validations: registered client_id, absolute redirect_uri. Null when acceptable. */
+async function authorizeRejection(
+  deps: PetshopDeps,
+  clientId: string,
+  redirectUri: string,
+): Promise<Response | null> {
+  const state = await deps.state.getState();
+  if (!state.clients[clientId]) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: `unknown client_id ${JSON.stringify(clientId)} — mint one via POST /__backdoor/clients`,
+      },
+      400,
+    );
+  }
+  if (!URL.canParse(redirectUri)) {
+    return json(
+      { error: "invalid_request", error_description: "redirect_uri must be an absolute URL" },
+      400,
+    );
+  }
+  return null;
+}
+
+async function mintCodeRedirect(
+  params: { clientId: string; redirectUri: string; state: string; user: string },
+  deps: PetshopDeps,
+): Promise<Response> {
+  const payload: CodePayload = {
+    t: "code",
+    sub: params.user.slice(0, 64) || "Demo User",
+    clientId: params.clientId,
+    redirectUri: params.redirectUri,
+    exp: nowSeconds() + CODE_TTL_SECONDS,
+  };
+  const target = new URL(params.redirectUri);
+  target.searchParams.set("code", await seal(payload, deps.sealKey));
+  if (params.state) target.searchParams.set("state", params.state);
+  return Response.redirect(target.toString(), 302);
+}
+
+/** RFC 6749 §2.3.1 HTTP Basic client auth — the required-to-support method the OS side's Basic-auth header placeholder exercises. */
+function basicClientCredentials(
+  request: Request,
+): { clientId: string; clientSecret: string } | null {
+  const header = request.headers.get("authorization") ?? "";
+  if (!/^basic /i.test(header)) return null;
+  try {
+    const decoded = atob(header.slice(6).trim());
+    const colon = decoded.indexOf(":");
+    if (colon < 0) return null;
+    return {
+      clientId: decodeURIComponent(decoded.slice(0, colon)),
+      clientSecret: decodeURIComponent(decoded.slice(colon + 1)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function issueTokens(input: {
+  sub: string;
+  clientId: string;
+  ttlSeconds: number;
+  epoch: number;
+  sealKey: string;
+}): Promise<Response> {
+  const access: AccessPayload = {
+    t: "access",
+    sub: input.sub,
+    clientId: input.clientId,
+    epoch: input.epoch,
+    exp: nowSeconds() + input.ttlSeconds,
+  };
+  const refresh: RefreshPayload = {
+    t: "refresh",
+    sub: input.sub,
+    clientId: input.clientId,
+    jti: crypto.randomUUID(),
+  };
+  return json({
+    access_token: await seal(access, input.sealKey),
+    token_type: "bearer",
+    expires_in: input.ttlSeconds,
+    refresh_token: await seal(refresh, input.sealKey),
+  });
+}
+
+async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Response> {
+  if (await deps.state.consumeTokenEndpointFailure()) {
+    return json(
+      {
+        error: "temporarily_unavailable",
+        error_description: "backdoor-scheduled failure (POST /__backdoor/fail-token-endpoint)",
+      },
+      500,
+    );
+  }
+  const credentials = basicClientCredentials(request);
+  const state = await deps.state.getState();
+  const client = credentials ? state.clients[credentials.clientId] : undefined;
+  if (!credentials || !client || client.clientSecret !== credentials.clientSecret) {
+    return json({ error: "invalid_client" }, 401, {
+      "www-authenticate": 'Basic realm="dummy-petshop"',
+    });
+  }
+  const form = new URLSearchParams(await request.text());
+  const grantType = form.get("grant_type");
+  if (grantType === "authorization_code") {
+    const code = await unseal<CodePayload>(form.get("code") ?? "", deps.sealKey);
+    if (!code || code.t !== "code" || code.clientId !== credentials.clientId) {
+      return json({ error: "invalid_grant" }, 400);
+    }
+    if (code.exp < nowSeconds()) {
+      return json({ error: "invalid_grant", error_description: "code expired" }, 400);
+    }
+    if (code.redirectUri !== (form.get("redirect_uri") ?? "")) {
+      return json({ error: "invalid_grant", error_description: "redirect_uri mismatch" }, 400);
+    }
+    return issueTokens({
+      sub: code.sub,
+      clientId: credentials.clientId,
+      ttlSeconds: client.accessTokenTtlSeconds,
+      epoch: state.accessTokenEpoch,
+      sealKey: deps.sealKey,
+    });
+  }
+  if (grantType === "refresh_token") {
+    const refresh = await unseal<RefreshPayload>(form.get("refresh_token") ?? "", deps.sealKey);
+    if (!refresh || refresh.t !== "refresh" || refresh.clientId !== credentials.clientId) {
+      return json({ error: "invalid_grant" }, 400);
+    }
+    if (state.revokedRefreshTokenIds.includes(refresh.jti)) {
+      return json({ error: "invalid_grant", error_description: "refresh token revoked" }, 400);
+    }
+    return issueTokens({
+      sub: refresh.sub,
+      clientId: credentials.clientId,
+      ttlSeconds: client.accessTokenTtlSeconds,
+      epoch: state.accessTokenEpoch,
+      sealKey: deps.sealKey,
+    });
+  }
+  return json({ error: "unsupported_grant_type" }, 400);
+}
+
+/**
+ * The Waitrose stand-in (design R8): email+password → short-TTL bearer
+ * token, no refresh token — re-minting through this endpoint IS the refresh
+ * path. Deterministic for e2e: any email, password "correct-horse".
+ */
+async function legacyLogin(request: Request, deps: PetshopDeps): Promise<Response> {
+  const body = await readJson(request);
+  const email = typeof body.email === "string" ? body.email : "";
+  if (!email || body.password !== "correct-horse") {
+    return json({ error: "invalid_credentials" }, 401);
+  }
+  const state = await deps.state.getState();
+  const access: AccessPayload = {
+    t: "access",
+    sub: email,
+    clientId: "legacy-login",
+    epoch: state.accessTokenEpoch,
+    exp: nowSeconds() + DEFAULT_ACCESS_TTL_SECONDS,
+  };
+  return json({
+    accessToken: await seal(access, deps.sealKey),
+    expiresInSeconds: DEFAULT_ACCESS_TTL_SECONDS,
+  });
+}
+
+/** Resolve the request's bearer token to a live access grant, or null (absent, tampered, expired, epoch-revoked). */
+async function accessGrant(request: Request, deps: PetshopDeps): Promise<AccessPayload | null> {
+  const header = request.headers.get("authorization") ?? "";
+  if (!/^bearer /i.test(header)) return null;
+  const grant = await unseal<AccessPayload>(header.slice(7).trim(), deps.sealKey);
+  if (!grant || grant.t !== "access" || grant.exp < nowSeconds()) return null;
+  if (grant.epoch !== (await deps.state.getState()).accessTokenEpoch) return null;
+  return grant;
+}
+
+/** POST a JSON payload signed GitHub-style: `x-petshop-signature-256: sha256=<hex hmac>`. Delivery failure is reported, not thrown. */
+async function deliverWebhook(input: {
+  url: string;
+  secret: string;
+  payload: unknown;
+}): Promise<{ url: string; status: number; signature: string; payload: string }> {
+  const body = JSON.stringify(input.payload);
+  const signature = `sha256=${await hmacSha256Hex(input.secret, body)}`;
+  const response = await fetch(input.url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-petshop-signature-256": signature },
+    body,
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => null);
+  return { url: input.url, status: response?.status ?? 0, signature, payload: body };
+}
+
+async function backdoor(key: string, request: Request, deps: PetshopDeps): Promise<Response> {
+  if (deps.backdoorSecret && request.headers.get("x-petshop-backdoor") !== deps.backdoorSecret) {
+    return json(
+      { error: "backdoor_locked", error_description: "send the x-petshop-backdoor header" },
+      403,
+    );
+  }
+  if (key === "GET /__backdoor/state") return json(await deps.state.getState());
+  if (key === "POST /__backdoor/clients") {
+    const body = await readJson(request);
+    const ttl = body.accessTokenTtlSeconds;
+    return json(
+      await deps.state.createClient(
+        typeof ttl === "number" && ttl > 0 ? { accessTokenTtlSeconds: Math.ceil(ttl) } : {},
+      ),
+      201,
+    );
+  }
+  if (key === "POST /__backdoor/expire-tokens") {
+    return json({ accessTokenEpoch: await deps.state.expireAccessTokens() });
+  }
+  if (key === "POST /__backdoor/revoke-refresh-token") {
+    const body = await readJson(request);
+    const token = typeof body.refreshToken === "string" ? body.refreshToken : "";
+    const refresh = await unseal<RefreshPayload>(token, deps.sealKey);
+    if (!refresh || refresh.t !== "refresh") {
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "refreshToken must be a sealed refresh token",
+        },
+        400,
+      );
+    }
+    await deps.state.revokeRefreshToken(refresh.jti);
+    return json({ revokedRefreshTokenId: refresh.jti });
+  }
+  if (key === "POST /__backdoor/rotate-signing-secret") {
+    return json({ webhookSigningSecret: await deps.state.rotateSigningSecret() });
+  }
+  if (key === "POST /__backdoor/fail-token-endpoint") {
+    const times = (await readJson(request)).times;
+    if (typeof times !== "number" || !Number.isInteger(times) || times < 0) {
+      return json(
+        { error: "invalid_request", error_description: "times must be a non-negative integer" },
+        400,
+      );
+    }
+    await deps.state.setTokenEndpointFailures(times);
+    return json({ tokenEndpointFailuresRemaining: times });
+  }
+  if (key === "POST /__backdoor/webhooks/fire") {
+    const body = await readJson(request);
+    const url = typeof body.url === "string" ? body.url : "";
+    if (!URL.canParse(url)) {
+      return json(
+        { error: "invalid_request", error_description: "url must be an absolute URL" },
+        400,
+      );
+    }
+    const state = await deps.state.getState();
+    return json(
+      await deliverWebhook({
+        url,
+        secret: body.badSignature
+          ? "definitely-not-the-signing-secret"
+          : state.webhookSigningSecret,
+        payload: body.event ?? { event: "petshop.test", firedAt: new Date().toISOString() },
+      }),
+    );
+  }
+  return json({ error: "not_found" }, 404);
+}
+
+export async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promise<Response> {
+  const url = new URL(request.url);
+  const key = `${request.method} ${url.pathname}`;
+
+  if (key === "GET /") {
+    return new Response(INDEX, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  }
+  if (key === "GET /oauth/authorize") {
+    const params = {
+      clientId: url.searchParams.get("client_id") ?? "",
+      redirectUri: url.searchParams.get("redirect_uri") ?? "",
+      state: url.searchParams.get("state") ?? "",
+    };
+    const rejection = await authorizeRejection(deps, params.clientId, params.redirectUri);
+    if (rejection) return rejection;
+    // The consent-free lane: specs and agents append &approve=1 instead of
+    // scripting a form submit; browsers land on the consent page.
+    if (url.searchParams.get("approve") === "1") {
+      return mintCodeRedirect({ ...params, user: url.searchParams.get("user") ?? "" }, deps);
+    }
+    return new Response(consentPage(params), {
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+  }
+  if (key === "POST /oauth/authorize") {
+    const form = await request.formData();
+    const params = {
+      clientId: String(form.get("client_id") ?? ""),
+      redirectUri: String(form.get("redirect_uri") ?? ""),
+      state: String(form.get("state") ?? ""),
+      user: String(form.get("user") ?? ""),
+    };
+    const rejection = await authorizeRejection(deps, params.clientId, params.redirectUri);
+    return rejection ?? (await mintCodeRedirect(params, deps));
+  }
+  if (key === "POST /oauth/token") return tokenEndpoint(request, deps);
+  if (key === "POST /api/legacy-login") return legacyLogin(request, deps);
+  if (key === "GET /api/me" || key === "GET /api/pets") {
+    const grant = await accessGrant(request, deps);
+    if (!grant) return json({ error: "invalid_token" }, 401);
+    if (key === "GET /api/me") {
+      return json({
+        sub: grant.sub,
+        clientId: grant.clientId,
+        tokenExpiresInSeconds: grant.exp - nowSeconds(),
+      });
+    }
+    return json({
+      owner: grant.sub,
+      pets: [
+        { id: "pet-1", name: "Biscuit", species: "beagle" },
+        { id: "pet-2", name: "Goldie", species: "goldfish" },
+      ],
+    });
+  }
+  if (url.pathname.startsWith("/__backdoor/")) return backdoor(key, request, deps);
+  return json({ error: "not_found" }, 404);
+}
+
+export default {
+  fetch(request: Request, env: Env): Promise<Response> {
+    return handlePetshopRequest(request, {
+      state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
+      sealKey: env.PETSHOP_SEAL_KEY,
+      backdoorSecret: env.PETSHOP_BACKDOOR_SECRET,
+    });
+  },
+};
