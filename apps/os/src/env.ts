@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
  * The OS worker's binding contract — the binding names wrangler.jsonc
@@ -27,6 +28,12 @@ export interface Env {
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Cloudflare Email Service send binding backing `itx.email`. Bound in every
+   * wrangler env block including local dev, where miniflare simulates sends
+   * (logs + local .eml files) instead of delivering real mail.
+   */
+  EMAIL: SendEmailBinding;
   SECRET_ENCRYPTION_KEY: string;
   /** Content-addressed dynamic worker build artifact cache
    * (domains/workers/artifact-store.ts). Every entry is reproducible from its

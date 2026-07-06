@@ -163,6 +163,12 @@ function workerBindings(input: {
     // the env by that exact name. Addressed by name, so — unlike KV/D1 — no
     // per-env id in envs.ts. In local dev miniflare provides it automatically.
     r2_buckets: [{ binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` }],
+    // Email Service send binding for itx.email. Sender authorization is
+    // enforced in OS (a project only sends as <slug>@<hostname base>, see
+    // rpc-targets.ts EmailRpcTarget) — allowed_sender_addresses can't hold a
+    // dynamic per-project set. Local dev gets the same binding; miniflare
+    // simulates sends instead of delivering real mail.
+    send_email: [{ name: "EMAIL" }],
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,

@@ -30,31 +30,41 @@ A user-facing project routing label that can appear in hostnames and URLs.
 _Avoid_: project ID, stable project identity
 
 **Stream Runtime**:
-The shared implementation and core types for durable append-only streams.
+The OS implementation and core contracts for durable append-only streams,
+centered on `apps/os/src/domains/streams`.
 _Avoid_: Events app stream implementation
 
-**OS Streams API**:
-OS-owned oRPC procedures that expose project stream operations by thinly wrapping the Stream Runtime.
-_Avoid_: OS Stream API, Events app stream API, Events contract
+**StreamCollection**:
+The project-bound itx catalog (`itx.streams`) that vends path-addressed
+**Stream** handles. Admin sessions also expose `session.streams` for
+deployment-wide streams.
+_Avoid_: StreamsCapability, OS Streams API, Events app stream API, Events contract
 
-**StreamsCapability**:
-A project-bound RPC capability for stream operations, optionally narrowed to a default Event Stream Path.
+**Stream**:
+A path-addressed RPC capability for one durable event stream: append events,
+page committed history, wait for or subscribe to events, and inspect runtime
+state.
 _Avoid_: StreamCapability, generic stream client
 
 **Secret**:
-A project-scoped credential record whose Secret Material may be read by authorized OS runtime capabilities.
+A project-scoped credential record whose Secret Material is write-only through
+the public itx surface and may be used only by authorized server-side runtime
+paths such as egress and integrations.
 _Avoid_: environment variable, integration, connection
 
 **Secret Material**:
-The raw credential value stored for a Secret.
+The raw credential value stored encrypted for a Secret. Public itx APIs do not
+return it.
 _Avoid_: token, key, secret metadata
 
 **Secret Metadata**:
-Non-material descriptive or operational data returned with a Secret, such as provider, scope, expiry, or connection details.
+Non-material descriptive or operational data returned with a Secret, such as
+egress allowlists and audit state.
 _Avoid_: secret, secret value
 
-**SecretsCapability**:
-A project-bound RPC capability for reading and managing Secrets for one ProjectId.
+**SecretCollection**:
+A project-bound itx catalog (`itx.secrets`) for creating, listing, and updating
+Secret records.
 _Avoid_: global secret client, egress proxy
 
 **OAuth Client Configuration**:
@@ -101,15 +111,17 @@ _Avoid_: app config, runtime config
 - A **ProjectId** identifies durable stream storage.
 - A **ProjectSlug** may route users to a project, but must not be used as durable stream identity.
 - Project-scoped stream APIs should carry **ProjectId**, not parallel slug and ID fields.
-- **Stream Runtime** belongs in shared code; app contracts may import or re-export its core types.
-- OS uses the **OS Streams API** for stream access; the standalone Events app that once owned streams has been deleted.
-- A **StreamsCapability** is always scoped to one **ProjectId**.
-- A **StreamsCapability** may be narrowed to one default stream path, making path arguments optional for operations such as append and read.
-- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, are relative to the default stream path.
-- In a narrowed **StreamsCapability**, stream paths with a leading slash are absolute within the same **ProjectId** and still constrained by capability policy.
+- **Stream Runtime** lives in OS today; reusable callers should program
+  against the public itx contract in `apps/os/src/types.ts`.
+- OS uses **StreamCollection** and **Stream** for public stream access; the
+  standalone Events app that once owned streams has been deleted.
+- A project **StreamCollection** is scoped to one **ProjectId**.
+- A **Stream** path is absolute within its ProjectId; nested handles are
+  created with `stream.at(path)`.
 - In the current OS secrets slice, every **Secret** belongs to exactly one **ProjectId**.
 - A **Secret** may have **Secret Metadata** in addition to **Secret Material**.
-- For the current OS secrets/codemode slice, `getSecret` returns raw **Secret Material** and **Secret Metadata**, not a Secret Reference for later egress substitution.
+- `getSecret({ path })` is an egress placeholder string. It is not a public
+  secret-read API and does not return raw **Secret Material**.
 - **OAuth Client Configuration** belongs in **App Config** because workers and local/Docker runtimes need it when handling OAuth callbacks and webhooks.
 - A **Connection** may yield a project-wide **Secret** that runtime capabilities can read.
 - In the current OS secrets slice, every **Connection** is project-level; user-level and organization-level Connections are out of scope.
@@ -120,16 +132,12 @@ _Avoid_: app config, runtime config
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
 - In OS, **Processor Subscriptions** deliver events to processors hosted inside the relevant domain Durable Object through `createStreamProcessorHost`; domain Durable Objects remain command and capability owners and inject runtime dependencies.
-- The OS `packages/streams` migration is a POC cutover, not a backwards-compatible data migration; existing stream histories may be discarded.
-- During the OS `packages/streams` migration, OS-specific processor contracts stay in OS code for now; `@iterate-com/streams` remains app-agnostic runtime infrastructure.
-- The first OS `packages/streams` migration slice is creating and accessing a **Project** through oRPC with current OS behavior preserved after the stream cutover.
-- The first OS `packages/streams` migration slice used host-side compatibility where needed while keeping processor dependencies explicit.
-- The first OS `packages/streams` migration slice keeps broad project stream append authority; stream safety and event-type policy are out of scope.
-- The OS `packages/streams` migration uses only the new **Processor Subscription** event schema; legacy callable subscription events are not translated.
-- **SecretsCapability** and **Workspace** lifecycle are out of scope for the first OS `packages/streams` migration slice.
+- Processor contracts and implementations live with their OS domains unless a
+  reusable runtime boundary is explicitly extracted later.
 - **App Config** is available inside deployed app code.
 - **Deployment Config** is available to deploy scripts only.
-- Cloudflare API credentials and cross-script binding script names belong in **Deployment Config**, not **App Config**.
+- Cloudflare API credentials, worker names, resource IDs, hostnames, and
+  generated binding layout belong in **Deployment Config**, not **App Config**.
 
 ## Example dialogue
 
@@ -145,8 +153,8 @@ _Avoid_: app config, runtime config
 > **Dev:** "Can I use the project slug in a Durable Object name?"
 > **Domain expert:** "No — use **ProjectId** for durable identity. **ProjectSlug** is routing language."
 
-> **Dev:** "Should a Worker script name used for a cross-script Durable Object binding live in App Config?"
-> **Domain expert:** "No — that is **Deployment Config**, because only the deploy scripts need it to create the binding."
+> **Dev:** "Should a Cloudflare worker name or Durable Object binding layout live in App Config?"
+> **Domain expert:** "No — that is **Deployment Config**. Running app code receives typed bindings; deploy scripts generate the binding layout from envs.ts."
 
 ## Flagged ambiguities
 
@@ -154,19 +162,15 @@ _Avoid_: app config, runtime config
 - "dependencies" was used for both public processor contracts and backend services — resolved: use **Processor dependencies** for public contracts/catalogs and **Runtime dependencies** for backend services.
 - "well-behaved processor defaults" sounded moralizing and vague — resolved: use **Standard processor behavior** for the shared self-registration pieces.
 - "project" identity was mixed between slugs and IDs — resolved: use **ProjectId** for durable identity and **ProjectSlug** for routing labels.
-- Durable stream implementation was treated as app-owned — resolved: use **ProjectId** as the project-scoped API identifier and keep stream runtime infrastructure app-agnostic.
-- OS stream access was coupled to the Events contract — resolved: expose an **OS Streams API** that wraps the shared Stream Runtime directly.
+- Durable stream implementation was treated as app-owned or shared depending on
+  the migration phase — resolved for today's code: the runtime lives under OS,
+  and the public contract is `StreamCollection` / `Stream` in `types.ts`.
+- OS stream access was coupled to the Events contract — resolved: expose
+  **StreamCollection** and **Stream** over itx directly.
 - Processor subscriptions were described as WebSocket callbacks or domain Durable Object `afterAppend` callbacks — resolved: use **Processor Subscriptions** delivered to hosted stream processors.
-- Stream migration was initially discussed as a staged compatibility move with side-by-side bindings — resolved for the POC: cut over the existing `STREAM` binding and port functionality until tests pass again.
-- Moving all stream processor contracts into `@iterate-com/streams` would make the generic stream runtime OS-aware — resolved for now: keep OS-specific processor contracts in OS code.
-- "Getting started" could mean proving a domain processor such as Repo first or proving raw stream browsing first — resolved: start by replacing old streams in OS and proving a **Project** can be created and accessed through oRPC after the cutover, without intentionally bypassing current Project lifecycle behavior.
-- Porting Project lifecycle directly to `packages/streams` processor shape could front-load contract churn — resolved for the first slice: use a compatibility adapter for existing OS processor contracts if it keeps current behavior intact.
-- Stream append policy could be tightened during the cutover — resolved for the POC: leave broad append authority in place and focus on getting the new runtime working.
-- Legacy callable subscription events could be translated during migration — resolved for the hardcore cutover: emit and consume only the new `packages/streams` **Processor Subscription** schema.
-- Secrets and workspaces were listed as possible stream-owned domain objects — resolved for the first slice: keep them as existing capabilities/stateful surfaces.
 - "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for deploy-script-only inputs.
-- "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **OS Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.
-- "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets/codemode slice: `getSecret` is a raw **Secret Material** read through **SecretsCapability**.
+- "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **StreamCollection** for the catalog and **Stream** for one path-addressed handle.
+- "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets slice: `getSecret({ path })` is a placeholder consumed by egress; public secret APIs never return material.
 - "Slack OAuth client" could mean the OAuth app config, a workspace connection, or a token — resolved: provider OAuth app settings are **OAuth Client Configuration** in **App Config**.
 - "Slack connection" could mean the OAuth app, workspace claim, or token — resolved: the Slack workspace grant is a **Slack Team Claim**, an instance of **Provider Claim**, and its token is a project-wide **Secret**.
 - "Google connection" was initially considered user-scoped because OS1 works that way — resolved for the current OS secrets slice: Google Connections are project-level, and user-level Secrets are out of scope.

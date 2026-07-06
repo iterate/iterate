@@ -457,6 +457,9 @@ const repo = itx.repos.get(vars.repoPath ?? "/");
 const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
 
+// Path-scoped repos need first-use creation; the default project repo already exists.
+if (vars.repoPath) await repo.create();
+
 // Seed a known starting point. Agents can skip this when editing an existing file.
 await repo.commitFiles({
   message: "Seed edit example",
@@ -739,6 +742,22 @@ return {
   count: list.length,
   sample: list.slice(0, 5).map((model) => model?.name ?? model),
 };
+`.trim(),
+  },
+  {
+    id: "email-send",
+    title: "Send an email from the project's address",
+    description:
+      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — run it interactively with an address you own.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const receipt = await itx.email.send({
+  to: "you@example.com", // a mailbox you own — this sends real mail
+  subject: "Hello from itx",
+  text: "Sent by an agent through Cloudflare Email Service.",
+});
+return receipt; // { from: "<slug>@<hostname base>", messageId }
 `.trim(),
   },
 ];

@@ -37,9 +37,9 @@ export const AppConfig = z.object({
   serviceAuthToken: redacted(z.string().trim().min(1)),
   googleClientId: publicValue(z.string().trim().min(1)),
   googleClientSecret: redacted(z.string().trim().min(1)),
-  /** Resend sender domain / API key for the email-OTP lane. */
-  resendDomain: z.string().trim().default(""),
-  resendApiKey: redacted(z.string().default("")),
+  /** Sender domain for the email-OTP lane, used with Cloudflare Email Service.
+   * Must be onboarded/verified in Email Service or OTP sends fail. */
+  emailSenderDomain: z.string().trim().default(""),
   /** Glob allowlist gating who may sign up. */
   signupAllowlist: z.string().default(""),
   /** Glob allowlist promoting matching emails to platform admin. */

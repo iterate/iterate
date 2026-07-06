@@ -148,9 +148,11 @@ the same allow/deny/secret-substitution policy as the rest of the project.
 
 Wiring (three points):
 
-- `src/worker.ts` re-exports `ContainerProxy` from `@cloudflare/sandbox` — the
-  SDK dials it via `ctx.exports.ContainerProxy` to route intercepted egress;
-  without the export, interception throws at container start.
+- `src/worker.ts` re-exports `ContainerProxy` from `@cloudflare/sandbox` —
+  the SDK dials it via `ctx.exports.ContainerProxy` to route intercepted
+  egress; without the export, interception throws at container start. This is
+  a same-script WorkerEntrypoint export on the OS worker, not a separate
+  sandbox worker.
 - `CloudflareSandboxDurableObject` sets `static outbound` (the catch-all egress
   handler) and `interceptHttps = true`. The handler runs in the ContainerProxy
   WorkerEntrypoint, so it only has the container's opaque Durable Object id; it
