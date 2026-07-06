@@ -40,6 +40,7 @@ import {
   substituteSecretHeaders,
   SecretSubstitutionError,
   timingSafeStringEqual,
+  unwrapSecretEgressRequest,
 } from "./utils.ts";
 
 type SecretState = InstanceType<typeof SecretProcessor>["state"];
@@ -211,25 +212,25 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * The public entry: a secret worker (if installed) overrides fetch, otherwise
-   * the default substituting egress runs (design §2.2). The dispatcher requires
-   * a placeholder in the no-worker case — that IS how you "use" a plain secret.
+   * The one public entry, doing double duty disambiguated by URL path (only
+   * `fetch` can carry a WebSocket upgrade, so this can't split into RPC methods):
+   *
+   * - **Jail egress lane** (the worker's own outbound, wrapped by
+   *   SecretEntrypoint to the egress sentinel URL): substitute header
+   *   placeholders + terminal fetch, WS-capable, and NEVER re-run the worker.
+   *   A placeholder is not required — a worker holding its own bytes (Discord's
+   *   frame token) still reaches its pinned hosts here.
+   * - **Consumer traffic**: a secret worker (if installed) overrides fetch;
+   *   otherwise the default substituting egress runs, requiring a placeholder —
+   *   that IS how you "use" a plain secret (design §2.2).
    */
   async fetch(request: Request): Promise<Response> {
+    const egress = unwrapSecretEgressRequest(request);
+    if (egress !== null) return await this.#egressFetch(egress, { requirePlaceholder: false });
+
     const worker = (await this.#snapshot()).worker;
     if (worker === null) return await this.#egressFetch(request, { requirePlaceholder: true });
     return await this.#runWorker(worker, request);
-  }
-
-  /**
-   * The default secret behaviour, exposed to the secret worker as both
-   * `env.SECRET.fetch` and its jail `globalOutbound` (see SecretEntrypoint):
-   * substitute header placeholders and perform the terminal fetch. Unlike the
-   * public `fetch`, a placeholder is not required — a worker that holds its own
-   * bytes (Discord's frame token) still reaches its pinned hosts through here.
-   */
-  defaultFetch(request: Request): Promise<Response> {
-    return this.#egressFetch(request, { requirePlaceholder: false });
   }
 
   /**

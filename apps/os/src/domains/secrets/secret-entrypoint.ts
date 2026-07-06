@@ -8,7 +8,12 @@ import type {
 } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { isPlatformSecretPath, platformSecretMaterialField } from "./platform-secrets.ts";
-import { computeHmacHex, computeSignatureBase64Url, timingSafeStringEqual } from "./utils.ts";
+import {
+  computeHmacHex,
+  computeSignatureBase64Url,
+  timingSafeStringEqual,
+  wrapSecretEgressRequest,
+} from "./utils.ts";
 
 /** Props identifying which secret a secret worker's `env.SECRET` is bound to.
  * Minted by the hosting Secret DO, never chosen by worker code. */
@@ -43,7 +48,11 @@ export class SecretEntrypoint extends WorkerEntrypoint<Env, SecretWorkerBindingP
   }
 
   fetch(request: Request): Promise<Response> {
-    return this.#stub.defaultFetch(request);
+    // MUST be the DO's native fetch() (not an RPC method): only fetch can carry
+    // a WebSocket upgrade + return a 101 + WebSocket, and an RPC return cannot
+    // serialize a WebSocket. Wrap to the egress sentinel URL so the DO's fetch
+    // routes this to substituting egress rather than re-running the worker.
+    return this.#stub.fetch(wrapSecretEgressRequest(request));
   }
 
   read(): Promise<unknown> {

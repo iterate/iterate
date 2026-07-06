@@ -183,6 +183,38 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/**
+ * Sentinel URL marking a request as JAIL EGRESS on the SecretEntrypoint → Secret
+ * DO hop. The Secret DO's `fetch()` does double duty — consumer traffic (which
+ * may run the worker) vs the worker's own outbound (which must NOT re-run the
+ * worker, just substitute + terminal fetch) — and per workerd only the `fetch`
+ * method can carry a WebSocket upgrade, so the two are disambiguated **by URL
+ * path**, not an RPC method or a header. The jail's outbound is wrapped to this
+ * URL (real target in `?target=`) so the DO routes it to egress and can hand a
+ * 101 + WebSocket back natively (an RPC method return cannot serialize a
+ * WebSocket). See SecretDurableObject.fetch and secret-entrypoint.ts.
+ */
+const SECRET_EGRESS_SENTINEL = "https://secret-egress.iterate.internal/__egress";
+
+/** Wrap the jailed worker's outbound request for the DO's egress lane: keep its
+ * method/headers/body (incl. a WS `Upgrade`) verbatim, only re-point the URL to
+ * the egress sentinel with the real target in `?target=`. */
+export function wrapSecretEgressRequest(request: Request): Request {
+  const wrapped = `${SECRET_EGRESS_SENTINEL}?target=${encodeURIComponent(request.url)}`;
+  return new Request(wrapped, request);
+}
+
+/** The reverse of {@link wrapSecretEgressRequest}: if `request` is an egress-lane
+ * request, return it re-pointed at its real target (method/headers/body copied);
+ * otherwise null (it's ordinary consumer traffic). */
+export function unwrapSecretEgressRequest(request: Request): Request | null {
+  const url = new URL(request.url);
+  if (`${url.origin}${url.pathname}` !== SECRET_EGRESS_SENTINEL) return null;
+  const target = url.searchParams.get("target");
+  if (target === null) return null;
+  return new Request(target, request);
+}
+
 type SecretErrorCode =
   | "secret_material_not_a_string"
   | "secret_not_allowed_for_origin"
