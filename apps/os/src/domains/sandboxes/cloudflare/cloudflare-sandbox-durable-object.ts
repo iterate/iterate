@@ -27,6 +27,26 @@ const SANDBOX_WORKSPACE_DIR = "/workspace";
 const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/project`;
 
 /**
+ * The platform repo baked into the image with `pnpm install` already run.
+ * It lives outside `/workspace` because workspace restore overlays that tree
+ * and backups intentionally exclude node_modules. A symlink exposes it at the
+ * conventional workspace repo path after every restore/start.
+ */
+const BAKED_ITERATE_REPO_SOURCE_DIR = "/opt/iterate/iterate";
+const BAKED_ITERATE_REPO_WORKSPACE_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate/iterate`;
+
+/**
+ * The sandbox warm-up script, baked into the image (see
+ * `apps/os/sandbox/warmup.sh` and the `COPY` in `apps/os/sandbox/Dockerfile`).
+ * The Durable Object runs it on the container during provisioning, in the
+ * background, to get the baked coding tools logged in and ready (e.g. Codex).
+ * Keeping the steps in a reviewable shell asset — rather than command strings
+ * spread through this class — is what lets the whole start → restore/clone →
+ * warm-up saga read as one thing and stay easy to extend.
+ */
+const SANDBOX_WARMUP_SCRIPT_PATH = "/opt/iterate/warmup.sh";
+
+/**
  * How long a sandbox's workspace backup survives without the sandbox waking
  * again (the SDK GCs backups after their ttl). 90 days: long enough that any
  * plausibly-still-wanted workspace comes back intact, short enough that the
@@ -352,8 +372,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // or cloned). Gates the idle-time backup: snapshotting a half-provisioned
   // workspace would overwrite the pointer to the last GOOD backup.
   #workspaceProvisioned = false;
-  // Per-container memo for the lazy Codex login (auth lives on ephemeral disk).
-  #codexLogin: Promise<void> | undefined;
+  // Per-container memo for the background warm-up script (tool logins land on
+  // the ephemeral container disk, so a fresh container re-runs it).
+  #warmup: Promise<void> | undefined;
 
   override async onStart(): Promise<void> {
     await super.onStart();
@@ -377,9 +398,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     //   guard's in-flight one (two clones racing `rm -rf` in one directory).
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
-    // Codex auth (~/.codex/auth.json) lives on the ephemeral container disk, so
-    // a fresh container is logged out — clear the per-container login memo.
-    this.#codexLogin = undefined;
+    // A fresh container has an empty disk (tool auth is gone), so warm-up must
+    // run again — clear the per-container memo.
+    this.#warmup = undefined;
   }
 
   override async onStop(): Promise<void> {
@@ -532,27 +553,41 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   }
 
   /**
-   * Log Codex in so `codex exec` works out of the box (Codex 0.142 won't use
-   * the `OPENAI_API_KEY` env directly — it needs a one-time `codex login
-   * --with-api-key`). Kicked off in the BACKGROUND during provisioning
-   * (overlapping the clone), memoized per container (auth.json is on the
-   * ephemeral disk). Reads the key from the env, where it is a getSecret
-   * placeholder substituted at egress, so no material is handled here.
-   * Best-effort: a failure (e.g. no provider secret seeded) is logged and the
-   * memo cleared so a later provision retries; a `codex exec` that happens to
-   * beat it just surfaces its own auth error, and the next call is logged in.
+   * Run the baked warm-up script ({@link SANDBOX_WARMUP_SCRIPT_PATH}) so the
+   * container's coding tools are ready to use out of the box — e.g. Codex 0.142
+   * won't use the `OPENAI_API_KEY` env directly, it needs a one-time
+   * `codex login --with-api-key`, which the script does. Kicked off in the
+   * BACKGROUND during provisioning (overlapping the clone) and memoized per
+   * container (tool auth is on the ephemeral disk). The script reads its keys
+   * from the env, where they are getSecret placeholders substituted at egress,
+   * so no material is handled here.
+   *
+   * Emits `sandbox/warmed-up` on success (so the whole start → restore/clone →
+   * warm-up saga is visible on the sandbox's stream) or `sandbox/warmup-failed`
+   * otherwise. Best-effort: a failure is logged and the memo cleared so a later
+   * provision retries; the script itself keeps each step optional, so a missing
+   * provider secret degrades to a tool that surfaces its own auth error on use,
+   * not a failed warm-up.
    */
-  #ensureCodexLogin(): Promise<void> {
-    this.#codexLogin ??= (async () => {
-      const result = await super.exec('printf %s "$OPENAI_API_KEY" | codex login --with-api-key');
+  #runWarmup(): Promise<void> {
+    this.#warmup ??= (async () => {
+      const result = await super.exec(`bash ${SANDBOX_WARMUP_SCRIPT_PATH}`);
       if (result.exitCode !== 0) {
-        throw new Error(`codex login failed (exit ${result.exitCode}): ${result.stderr}`);
+        throw new Error(`sandbox warm-up failed (exit ${result.exitCode}): ${result.stderr}`);
       }
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/warmed-up",
+        payload: {},
+      });
     })().catch((error: unknown) => {
-      console.warn("sandbox background codex login failed", error);
-      this.#codexLogin = undefined; // let a later provision retry
+      console.warn("sandbox warm-up failed", error);
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/warmup-failed",
+        payload: { error: String(error) },
+      });
+      this.#warmup = undefined; // let a later provision retry
     });
-    return this.#codexLogin;
+    return this.#warmup;
   }
 
   // ---------------------------------------------------------------------------
@@ -705,16 +740,17 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       // below runs with the configured vars. Done BEFORE the clone so the
       // background Codex login (which reads the env) can overlap it.
       await this.#applyStoredEnvVars();
-      // Log Codex in in the BACKGROUND — it reads the OPENAI_API_KEY env
-      // placeholder (substituted at egress) and writes auth.json, so `codex
-      // exec` just works without any per-command login line. Kicked off here so
-      // it overlaps the (slower) clone and is ready by the time the workspace
-      // is; failures are self-contained (see the method).
-      this.ctx.waitUntil(this.#ensureCodexLogin());
+      // Run the warm-up script in the BACKGROUND — it reads the env placeholders
+      // (substituted at egress) to log the baked tools in, so they just work
+      // without any per-command login line. Kicked off here so it overlaps the
+      // (slower) clone and is ready by the time the workspace is; it emits
+      // sandbox/warmed-up and its failures are self-contained (see the method).
+      this.ctx.waitUntil(this.#runWarmup());
       // Clone when the restore didn't produce a checkout (no backup yet, the
       // backup expired, or it somehow predates the repo). #cloneProjectRepo
       // probes the marker itself, so a restored checkout makes this a no-op.
       await this.#cloneProjectRepo();
+      await this.#ensureBakedIterateRepoLink();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag
@@ -821,5 +857,23 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       }
     }
     throw lastError;
+  }
+
+  async #ensureBakedIterateRepoLink(): Promise<void> {
+    const bakedRepo = await super.exists(`${BAKED_ITERATE_REPO_SOURCE_DIR}/pnpm-lock.yaml`);
+    if (!bakedRepo.exists) return;
+
+    const result = await super.exec(
+      [
+        `mkdir -p ${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate`,
+        `rm -rf ${BAKED_ITERATE_REPO_WORKSPACE_DIR}`,
+        `ln -s ${BAKED_ITERATE_REPO_SOURCE_DIR} ${BAKED_ITERATE_REPO_WORKSPACE_DIR}`,
+      ].join(" && "),
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `linking baked Iterate repo failed (exit ${result.exitCode}): ${result.stderr}`,
+      );
+    }
   }
 }

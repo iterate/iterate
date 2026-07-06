@@ -152,6 +152,19 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           }),
         );
         return;
+      case "events.iterate.com/sandbox/warmed-up":
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/sandbox-warmed-up@${event.offset}`,
+            payload: {
+              content:
+                "FYI (no reply needed): your sandbox finished warming up — the baked coding tools (e.g. `codex`) are logged in and ready, so you can run them directly with no per-command login. If you started a task before this arrived and hit an auth error, just retry.",
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          }),
+        );
+        return;
       default:
         return;
     }

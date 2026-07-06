@@ -287,6 +287,7 @@ export const AgentProcessorContract = defineProcessorContract({
     // transitions as FYI inputs — see the processor. Never trigger the LLM.
     "events.iterate.com/sandbox/workspace-restored",
     "events.iterate.com/sandbox/workspace-cloned",
+    "events.iterate.com/sandbox/warmed-up",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",

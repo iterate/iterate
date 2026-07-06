@@ -32,6 +32,16 @@ const SANDBOX_EVENTS = {
       "Background workspace provisioning failed after its retries; the next ensureProjectRepo() call retries from scratch.",
     payloadSchema: z.object({ error: z.string() }),
   },
+  "events.iterate.com/sandbox/warmed-up": {
+    description:
+      "The sandbox warmup script (apps/os/sandbox/warmup.sh, baked into the image) ran to completion on the container — the baked coding tools are logged in and ready to use. Runs in the background during provisioning, overlapping the repo clone; this is the last step of the start → restore/clone → warm-up saga.",
+    payloadSchema: z.object({}),
+  },
+  "events.iterate.com/sandbox/warmup-failed": {
+    description:
+      "The sandbox warmup script exited non-zero. The sandbox is still usable (warm-up is best-effort — individual tool logins are self-healing), but a baked tool may need a manual login; the next provisioning run re-runs warm-up.",
+    payloadSchema: z.object({ error: z.string() }),
+  },
   "events.iterate.com/sandbox/backup-created": {
     description:
       "/workspace was snapshotted to R2 as the container idled out (the SDK's onActivityExpired hook); this backup is what the next start restores.",
@@ -59,7 +69,7 @@ const SANDBOX_EVENTS = {
  * projection and takes no actions (`emits: []`).
  *
  * Event order tells the persistence story: container-started →
- * workspace-restored | workspace-cloned → … → backup-created →
+ * workspace-restored | workspace-cloned → warmed-up → … → backup-created →
  * container-stopped, then the next start restores the named backup.
  */
 export const SandboxProcessorContract = defineProcessorContract({
@@ -72,6 +82,9 @@ export const SandboxProcessorContract = defineProcessorContract({
     running: z.boolean().default(false),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
+    /** Whether the current container finished its warmup script (baked tools
+     * logged in and ready). Reset implicitly by the next container-started. */
+    warmedUp: z.boolean().default(false),
     /** The sandbox's configured env-var map (key → getSecret placeholder /
      * literal), merged across all `configured` events. */
     env: z.record(z.string(), z.string()).default({}),
@@ -81,6 +94,7 @@ export const SandboxProcessorContract = defineProcessorContract({
     "events.iterate.com/sandbox/container-started",
     "events.iterate.com/sandbox/container-stopped",
     "events.iterate.com/sandbox/backup-created",
+    "events.iterate.com/sandbox/warmed-up",
     "events.iterate.com/sandbox/configured",
   ],
   emits: [],

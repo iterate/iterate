@@ -98,14 +98,15 @@ processor contract** (`sandbox-processor-contract.ts`); the Durable Object
 builds every event through it (`SandboxProcessorContract.buildEvent`), so
 emission and declaration cannot drift. `SandboxProcessor`
 (`sandbox-processor-implementation.ts`) holds the contract and folds the
-events into a small status projection (`running`, `lastBackupId`) — it takes
-no actions and is not yet wired to a processor host.
+events into a small status projection (`running`, `lastBackupId`, `warmedUp`) —
+it takes no actions and is not yet wired to a processor host.
 
 | Hook / moment                | Event (`events.iterate.com/sandbox/…`)                                                                                                    |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `onStart`                    | `container-started`                                                                                                                       |
 | workspace restored           | `workspace-restored` (with `backupId`)                                                                                                    |
 | workspace freshly cloned     | `workspace-cloned`                                                                                                                        |
+| warm-up script ran           | `warmed-up` (baked tools logged in & ready) / `warmup-failed` (with `error`; best-effort, re-runs next provision)                         |
 | background provisioning died | `workspace-setup-failed` (with `error`; the next `ensureProjectRepo()` retries from scratch)                                              |
 | `onActivityExpired` backup   | `backup-created` (with `backupId`) / `backup-failed` (with `error`)                                                                       |
 | `onStop`                     | `container-stopped` (may arrive on wake — the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake) |
@@ -114,10 +115,12 @@ Appends are best-effort by design: lifecycle telemetry never blocks or fails a
 container start/stop.
 
 For an **agent's** sandbox, the agent processor turns the resume/fresh-start
-transitions (`workspace-restored`, `workspace-cloned`) into model-visible FYI
-inputs with `dont-trigger-request` — so the agent, next time it acts, knows its
-`itx.sandbox` was restored (and that gitignored paths like `node_modules` were
-not snapshotted) or freshly cloned, without those events starting an LLM turn.
+transitions (`workspace-restored`, `workspace-cloned`) and warm-up completion
+(`warmed-up`) into model-visible FYI inputs with `dont-trigger-request` — so the
+agent, next time it acts, knows its `itx.sandbox` was restored (and that
+gitignored paths like `node_modules` were not snapshotted) or freshly cloned,
+and that its baked coding tools are logged in and ready — without those events
+starting an LLM turn.
 
 ## The project repo is always checked out
 
@@ -202,6 +205,10 @@ is a same-script Durable Object in the os worker
 tag in lockstep with the `@cloudflare/sandbox` version in package.json; the
 SDK logs a version-skew warning otherwise). Files under `sandbox/root/` are
 copied into `/root/` in the image, which is the sandbox process user's home.
+The image also bakes this monorepo into `/opt/iterate/iterate` with
+`pnpm install` already run; after each workspace restore/start, the sandbox
+exposes it at `/workspace/repos/github.com/iterate/iterate` with a symlink so
+workspace backups cannot hide or prune the installed `node_modules`.
 
 ## Identity: why `get()` is async
 

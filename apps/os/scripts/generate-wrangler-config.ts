@@ -211,9 +211,10 @@ function workerBindings(input: {
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
-        // Wrangler builds local Dockerfiles from their containing directory by
-        // default, so sandbox/root/ is available to COPY into /root/.
         image: "./sandbox/Dockerfile",
+        // The sandbox image bakes this repo into /opt/iterate/iterate, so the
+        // Docker build context must be the monorepo root, not apps/os/sandbox.
+        image_build_context: "../..",
         instance_type: "lite",
         // Sized for e2e churn: the preview lanes provision a fresh project
         // (and sandbox container) per test, and idle containers hold an

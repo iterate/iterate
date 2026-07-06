@@ -29,24 +29,27 @@ describe("SandboxProcessor", () => {
       events: [
         event("events.iterate.com/sandbox/container-started"),
         event("events.iterate.com/sandbox/workspace-cloned"),
+        event("events.iterate.com/sandbox/warmed-up"),
         event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
         event("events.iterate.com/sandbox/container-stopped"),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: false },
+      state: { lastBackupId: "bkp-1", running: false, warmedUp: true },
     });
 
     await processor.ingest({
       events: [
+        // A fresh container starts logged-out, so container-started resets
+        // warmedUp until this container reports its own warm-up.
         event("events.iterate.com/sandbox/container-started"),
         event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: true },
+      state: { lastBackupId: "bkp-1", running: true, warmedUp: false },
     });
   });
 

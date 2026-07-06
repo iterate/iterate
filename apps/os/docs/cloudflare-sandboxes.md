@@ -36,7 +36,7 @@ Cloudflare's primitives like this:
 | Cloudflare "application"       | `os-<env>-cloudflaresandboxdurableobject-<config>`      | the container app the class deploys as — the id you pass to `wrangler containers instances`                                                  |
 | Instances                      | one per live sandbox (per DO id)                        | ephemeral; idle-destroyed after `sleepAfter` (3m)                                                                                            |
 | Persistent storage             | R2 bucket `os-<env>-sandboxes`, binding `BACKUP_BUCKET` | one bucket per env; each sandbox is a `/{projectId}{path}` prefix (backup/restore, see [Sandboxes](./sandboxes.md))                          |
-| Workspace inside the container | `/workspace`, repo at `/workspace/repos/project`        | `/workspace/repos/project` is the default `cwd`                                                                                              |
+| Workspace inside the container | `/workspace`, repo at `/workspace/repos/project`        | `/workspace/repos/project` is the default `cwd`; the baked platform repo is exposed at `/workspace/repos/github.com/iterate/iterate`         |
 
 Key consequences:
 
@@ -110,12 +110,15 @@ to every command (`exec`, `startProcess`, …), conventionally ALL_CAPS keys.
 `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` pointed at conventional project secret
 paths (`/secrets/openai-api-key`, `/secrets/anthropic-api-key`) as `getSecret`
 placeholders. Seed a provider key at one of those paths and an agent's sandbox
-can run Codex immediately — the sandbox DO runs `codex login --with-api-key`
-(reading the env placeholder) **in the background during provisioning**,
-memoized per container, so it's ready by the time the sandbox is used and
-callers never write a login line (Codex 0.142 won't use the env key directly).
-Nothing seeded → the var is harmless until a call actually uses it (egress
-substitution then fails loudly).
+can run Codex immediately — the sandbox DO runs the **warm-up script**
+(`sandbox/warmup.sh`, baked into the image at `/opt/iterate/warmup.sh`) **in the
+background during provisioning**, memoized per container, which does
+`codex login --with-api-key` (reading the env placeholder) so it's ready by the
+time the sandbox is used and callers never write a login line (Codex 0.142 won't
+use the env key directly). Warm-up completion is a `sandbox/warmed-up` event on
+the sandbox's stream (see the lifecycle saga below); add container-side setup by
+editing the script, not the DO. Nothing seeded → the var is harmless until a
+call actually uses it (egress substitution then fails loudly).
 
 Override or add to the defaults with `configureEnvVars` (explicit config wins):
 
@@ -146,11 +149,16 @@ system. The secret at that path must allow the provider host (e.g.
 `api.anthropic.com` / `api.openai.com`) in its egress allowlist.
 
 **The coding agent** is baked into our own image (`sandbox/Dockerfile`), not a
-Cloudflare image variant. The image also copies `sandbox/root/` into `/root/`.
-We ship the **Codex CLI** (`codex`, on PATH), which uses `OPENAI_API_KEY`:
+Cloudflare image variant. The image also copies `sandbox/root/` into `/root/`
+and bakes this monorepo into `/opt/iterate/iterate` with `pnpm install` already
+run. The Durable Object exposes that checkout at
+`/workspace/repos/github.com/iterate/iterate` with a symlink after workspace
+restore, so the installed `node_modules` do not get stripped by workspace
+backups. We ship the **Codex CLI** (`codex`, on PATH), which uses
+`OPENAI_API_KEY`:
 
 ```ts
-// No login line needed — the sandbox DO logs Codex in (reading the
+// No login line needed — the warm-up script logs Codex in (reading the
 // OPENAI_API_KEY env placeholder) in the background during provisioning. Both
 // that login and the model call egress through project policy, which
 // substitutes the real key for the placeholder — verified live: `codex exec`
@@ -228,9 +236,10 @@ Logs** pipeline, so:
 - **`labels`** — the sandbox DO sets `{ app: "iterate-os", component: "sandbox" }`
   so instances are filterable in Containers analytics.
 - **Lifecycle as stream events** — our own addition, not Cloudflare's: every
-  sandbox appends `container-started` / `container-stopped` /
-  `workspace-restored` / `workspace-cloned` / `backup-created` / `backup-failed`
-  to the stream at its own path (see [Sandboxes](./sandboxes.md#lifecycle-hooks--stream-events)).
+  sandbox appends its whole start → provision → warm-up saga to the stream at
+  its own path — `container-started` → (`workspace-restored` | `workspace-cloned`)
+  → `warmed-up` (or `warmup-failed`) → … → `backup-created` / `backup-failed` →
+  `container-stopped` (see [Sandboxes](./sandboxes.md#lifecycle-hooks--stream-events)).
   For an agent's sandbox that is the agent's own journal.
 
 Docs: <https://developers.cloudflare.com/workers/observability/logs/workers-logs/>,

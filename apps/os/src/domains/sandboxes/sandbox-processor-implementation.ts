@@ -19,11 +19,15 @@ export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorCon
   }: Parameters<StreamProcessor<typeof SandboxProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/sandbox/container-started":
-        return { ...state, running: true };
+        // A fresh container starts logged-out (auth lives on ephemeral disk);
+        // warm-up re-runs, so this container is not warmed up until it reports so.
+        return { ...state, running: true, warmedUp: false };
       case "events.iterate.com/sandbox/container-stopped":
         return { ...state, running: false };
       case "events.iterate.com/sandbox/backup-created":
         return { ...state, lastBackupId: event.payload.backupId };
+      case "events.iterate.com/sandbox/warmed-up":
+        return { ...state, warmedUp: true };
       case "events.iterate.com/sandbox/configured":
         // Merge the newly-configured env map over the known one (config merges).
         return { ...state, env: { ...state.env, ...event.payload.env } };
