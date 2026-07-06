@@ -502,10 +502,12 @@ export interface SandboxCollection extends Describable {
  * \`exec(command)\`, \`readFile\`/\`writeFile\`/\`listFiles\`, \`startProcess\`,
  * \`gitCheckout\`, \`exposePort\`, \`destroy()\`, … — so this contract deliberately
  * does not re-declare that surface (same stance as {@link McpClientRpc}); see
- * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
- * container start kicks off a clone of the project's repo to
- * \`/workspace/repo\` — \`await sandbox.ensureProjectRepo()\` before work that
- * depends on it.
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
+ * project repo is ALWAYS checked out at \`/workspace/repos/project\`, which is
+ * also the default working directory — a bare \`exec("ls")\` lists the project.
+ * Every command awaits that provisioning internally, so no explicit
+ * \`ensureProjectRepo()\` is needed first (it stays available to await the
+ * checkout deterministically).
  */
 export type CloudflareSandbox = object;
 

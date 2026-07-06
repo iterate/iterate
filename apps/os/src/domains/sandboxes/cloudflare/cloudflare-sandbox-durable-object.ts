@@ -18,8 +18,13 @@ import { normalizeSandboxPath } from "../utils.ts";
  */
 const SANDBOX_WORKSPACE_DIR = "/workspace";
 
-/** Where the project repo is checked out, inside the persisted workspace. */
-const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repo`;
+/**
+ * Where the project repo is checked out, inside the persisted workspace, and
+ * the default working directory of every command that doesn't choose its own
+ * `cwd`. The plural `repos/` segment leaves room for additional checkouts
+ * beside the project's own.
+ */
+const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/project`;
 
 /**
  * How long a sandbox's workspace backup survives without the sandbox waking
@@ -31,8 +36,36 @@ const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repo`;
  */
 const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
 
-/** Durable pointer to the newest good workspace backup (a DirectoryBackup). */
-const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup";
+/**
+ * Durable pointer to the newest good workspace backup (a DirectoryBackup).
+ *
+ * The `-v2` suffix abandons any backup taken under the previous workspace
+ * layout, where the repo lived at `/workspace/repo` instead of
+ * {@link SANDBOX_PROJECT_REPO_DIR}. Restoring such a snapshot would leave the
+ * old checkout at the old path while provisioning cloned a fresh one at the
+ * new path — a confusing dual tree whose restored (uncommitted) work the
+ * default cwd would ignore. Dropping the old handle instead makes the first
+ * start after this change do one clean clone at the new path; the orphaned R2
+ * objects GC on their ttl. Safe because a workspace backup is in-flight
+ * scratch — durable work lives in the repo, committed and pushed.
+ */
+const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
+
+// The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
+// stream result) are not exported by the SDK, so recover them from the
+// overloaded base signature rather than mirroring the interfaces (which would
+// drift). `ReturnType` collapses to the last overload, so match BOTH call
+// signatures in one conditional and `infer` each return — this is what lets the
+// override below restate the overloads with the SDK's exact types.
+type ReadFileReturns = Sandbox<Env>["readFile"] extends {
+  (path: string, options: { encoding: "none"; sessionId?: string }): infer Stream;
+  (
+    path: string,
+    options?: { encoding?: "utf8" | "utf-8" | "base64"; sessionId?: string },
+  ): infer Buffered;
+}
+  ? { stream: Stream; buffered: Buffered }
+  : never;
 
 // The container-outbound handler runs in the ContainerProxy WorkerEntrypoint,
 // not on a sandbox instance, so it only gets the container's opaque Durable
@@ -113,11 +146,13 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *      right for identity and the backup handle (as used here), not a repo
  *      checkout.
  *
- * 2. The project repo is ALWAYS checked out at {@link SANDBOX_PROJECT_REPO_DIR}.
- *    Every container start provisions the workspace — restore the last
- *    snapshot if one exists, then clone the repo if the checkout is still
- *    missing — and `ensureProjectRepo()` is the awaitable guarantee for
- *    repo-dependent work.
+ * 2. The project repo is ALWAYS checked out at {@link SANDBOX_PROJECT_REPO_DIR},
+ *    UNCONDITIONALLY: every public command and file operation is guarded by
+ *    `ensureProjectRepo()` (see the overrides), so the first thing any caller
+ *    can do already sees a provisioned workspace — restored from the last
+ *    snapshot, with the repo cloned fresh when the snapshot lacked it.
+ *    Commands also default their `cwd` to the repo checkout, so a bare
+ *    `exec("ls")` lists the project.
  *
  * 3. ALL container egress is routed through the project's egress decision
  *    point, exactly like a dynamic worker's `globalOutbound` — see the
@@ -294,28 +329,22 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       type: "events.iterate.com/sandbox/container-started",
       payload: {},
     });
-    // Provision the workspace — restore the last backup, clone the repo if the
-    // checkout is still missing — in the BACKGROUND. It cannot run inside
-    // `onStart` itself: `onStart` executes in the container framework's
-    // blockConcurrencyWhile, which has a hard ~30s budget and resets the
-    // Durable Object on overrun (verified live), and a cold clone or a large
-    // restore can exceed it — and timer events are input-gated in here, so the
-    // work cannot even bound itself with a deadline. Callers that need the
-    // workspace await `ensureProjectRepo()`.
-    //
     // Each start is a fresh container process (empty disk), so a readiness
-    // promise from a previous container must not satisfy this one.
+    // promise or provisioned flag from a previous container must not satisfy
+    // this one. Provisioning itself is NOT kicked off here:
+    //
+    // - It cannot run inline — `onStart` executes in the container framework's
+    //   blockConcurrencyWhile, which has a hard ~30s budget and resets the
+    //   Durable Object on overrun (verified live), and a cold clone or a large
+    //   restore can exceed it.
+    // - A background kick would be redundant AND racy: every workspace-touching
+    //   command is guarded by `ensureProjectRepo()` (see the overrides below),
+    //   so nothing can observe the workspace before provisioning anyway — and
+    //   when a guard's own restore is what booted this container, an eager
+    //   kick here would spawn a SECOND provisioning run concurrent with the
+    //   guard's in-flight one (two clones racing `rm -rf` in one directory).
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
-    this.ctx.waitUntil(
-      this.#ensureWorkspace().catch((error: unknown) => {
-        console.error("sandbox workspace setup failed", error);
-        this.#emitLifecycleEvent({
-          type: "events.iterate.com/sandbox/workspace-setup-failed",
-          payload: { error: String(error) },
-        });
-      }),
-    );
   }
 
   override async onStop(): Promise<void> {
@@ -395,10 +424,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   /**
    * The workspace guarantee, awaitable: resolves once `/workspace` is
    * provisioned for the CURRENT container — the last backup restored (fast)
-   * and `/workspace/repo` holding a completed checkout (cloned fresh when the
-   * backup lacked one or there was no backup). Idempotent and safe to call any
-   * time — provisioning starts automatically on every container start, so this
-   * usually returns quickly; await it before work that depends on the repo.
+   * and {@link SANDBOX_PROJECT_REPO_DIR} holding a completed checkout (cloned
+   * fresh when the backup lacked one or there was no backup). Idempotent and
+   * safe to call any time. Callers rarely need it explicitly: every
+   * workspace-touching command below is guarded by it, which is what makes
+   * "the repo is ALWAYS checked out" unconditional rather than an etiquette.
    *
    * Named `ensureProjectRepo` for its callers — the repo is the thing they
    * wait on — but it guarantees the whole workspace.
@@ -412,6 +442,142 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       await run;
       if (this.#workspaceReady === run) return;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // The workspace guarantee, enforced: every public command and file operation
+  // below awaits `ensureProjectRepo()` before touching the container, so no
+  // caller can ever observe `/workspace` without the project repo checked out
+  // at SANDBOX_PROJECT_REPO_DIR — the guarantee is unconditional, not an
+  // "await ensureProjectRepo() first" etiquette. This also closes an integrity
+  // window: a write landing before the snapshot restore would be silently
+  // clobbered BY the restore.
+  //
+  // Command runners additionally default `cwd` to the repo checkout, so a bare
+  // `exec("ls")` operates on the project like a developer's shell would; an
+  // explicit `cwd` always wins.
+  //
+  // Notes for maintainers:
+  // - These are real prototype methods, not `field = () => …` — instance
+  //   fields are invisible over workers RPC, and callers hold this class's
+  //   bare stub.
+  // - Provisioning itself must call `super.*` (it runs INSIDE the guard;
+  //   `this.*` would deadlock on its own promise). The SDK's backup/restore
+  //   internals use their own private exec paths and are unaffected.
+  // - Session objects are covered via guarded `createSession`; the SDK's
+  //   session wrappers route their file ops back through these methods.
+  // - New SDK methods start unguarded — add workspace-touching ones here.
+  // ---------------------------------------------------------------------------
+
+  override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
+    await this.ensureProjectRepo();
+    const [command, options] = args;
+    return super.exec(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+  }
+
+  override async execStream(...args: Parameters<Sandbox<Env>["execStream"]>) {
+    await this.ensureProjectRepo();
+    const [command, options] = args;
+    return super.execStream(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+  }
+
+  override async startProcess(...args: Parameters<Sandbox<Env>["startProcess"]>) {
+    await this.ensureProjectRepo();
+    const [command, options, sessionId] = args;
+    return super.startProcess(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }, sessionId);
+  }
+
+  override async createSession(...args: Parameters<Sandbox<Env>["createSession"]>) {
+    await this.ensureProjectRepo();
+    const [options] = args;
+    return super.createSession({ cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+  }
+
+  override async runCode(...args: Parameters<Sandbox<Env>["runCode"]>) {
+    await this.ensureProjectRepo();
+    return super.runCode(...args);
+  }
+
+  override async runCodeStream(...args: Parameters<Sandbox<Env>["runCodeStream"]>) {
+    await this.ensureProjectRepo();
+    return super.runCodeStream(...args);
+  }
+
+  override async gitCheckout(...args: Parameters<Sandbox<Env>["gitCheckout"]>) {
+    await this.ensureProjectRepo();
+    return super.gitCheckout(...args);
+  }
+
+  override async mkdir(...args: Parameters<Sandbox<Env>["mkdir"]>) {
+    await this.ensureProjectRepo();
+    return super.mkdir(...args);
+  }
+
+  override async writeFile(...args: Parameters<Sandbox<Env>["writeFile"]>) {
+    await this.ensureProjectRepo();
+    return super.writeFile(...args);
+  }
+
+  override async deleteFile(...args: Parameters<Sandbox<Env>["deleteFile"]>) {
+    await this.ensureProjectRepo();
+    return super.deleteFile(...args);
+  }
+
+  override async renameFile(...args: Parameters<Sandbox<Env>["renameFile"]>) {
+    await this.ensureProjectRepo();
+    return super.renameFile(...args);
+  }
+
+  override async moveFile(...args: Parameters<Sandbox<Env>["moveFile"]>) {
+    await this.ensureProjectRepo();
+    return super.moveFile(...args);
+  }
+
+  // `readFile` is overloaded (encoding "none" returns a stream result vs the
+  // default read result), and neither result type is exported. Restate both
+  // overloads with return types recovered from the base's own signature (via
+  // {@link ReadFileReturn}) — no mirrored interfaces to drift, still a
+  // prototype method (a `field = () => …` would be invisible over RPC).
+  override readFile(
+    path: string,
+    options: { encoding: "none"; sessionId?: string },
+  ): ReadFileReturns["stream"];
+  override readFile(
+    path: string,
+    options?: { encoding?: "utf8" | "utf-8" | "base64"; sessionId?: string },
+  ): ReadFileReturns["buffered"];
+  // Permissive implementation signature (hidden from callers — the two typed
+  // overloads above are the public contract); the standard shape for
+  // implementing an overloaded method.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overloaded impl signature
+  override async readFile(path: string, options?: any): Promise<any> {
+    await this.ensureProjectRepo();
+    return super.readFile(path, options);
+  }
+
+  override async readFileStream(...args: Parameters<Sandbox<Env>["readFileStream"]>) {
+    await this.ensureProjectRepo();
+    return super.readFileStream(...args);
+  }
+
+  override async listFiles(...args: Parameters<Sandbox<Env>["listFiles"]>) {
+    await this.ensureProjectRepo();
+    return super.listFiles(...args);
+  }
+
+  override async exists(...args: Parameters<Sandbox<Env>["exists"]>) {
+    await this.ensureProjectRepo();
+    return super.exists(...args);
+  }
+
+  override async watch(...args: Parameters<Sandbox<Env>["watch"]>) {
+    await this.ensureProjectRepo();
+    return super.watch(...args);
+  }
+
+  override async checkChanges(...args: Parameters<Sandbox<Env>["checkChanges"]>) {
+    await this.ensureProjectRepo();
+    return super.checkChanges(...args);
   }
 
   #ensureWorkspace(): Promise<void> {
@@ -441,6 +607,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       }
       this.#workspaceProvisioned = true;
     })().catch((error: unknown) => {
+      console.error("sandbox workspace setup failed", error);
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/workspace-setup-failed",
+        payload: { error: String(error) },
+      });
       // Let the next ensure retry instead of caching the failure forever —
       // but only clear OUR OWN registration; a stale failing run must not
       // clobber the promise of the newer run that replaced it.
@@ -478,11 +649,15 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     }
   }
 
+  // Provisioning calls the SDK through `super.*` throughout: the public
+  // methods on THIS class are guarded by ensureProjectRepo() (see the
+  // overrides above), and provisioning runs inside that guard — `this.*`
+  // would deadlock on its own promise.
   async #cloneProjectRepo(): Promise<void> {
     // Probe a marker only a completed clone has — a bare directory check
     // would treat the debris of an interrupted checkout as done and leave
     // the sandbox without the repo until the container is replaced.
-    const existing = await this.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
+    const existing = await super.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
     if (existing.exists) return;
 
     const repo = this.env.REPO.getByName(
@@ -505,9 +680,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // backoff instead of failing the sandbox start on one bad response.
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
+      await super.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
       try {
-        const result = await this.gitCheckout(remote.toString(), {
+        const result = await super.gitCheckout(remote.toString(), {
           branch: access.defaultBranch,
           targetDir: SANDBOX_PROJECT_REPO_DIR,
         });
