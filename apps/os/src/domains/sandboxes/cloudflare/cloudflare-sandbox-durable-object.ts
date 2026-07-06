@@ -2,7 +2,6 @@ import type { OutboundHandler } from "@cloudflare/containers";
 import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
-import { githubTokenSecretPath } from "../../integrations/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
 import {
