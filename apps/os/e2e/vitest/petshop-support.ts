@@ -197,3 +197,157 @@ export function petshopWorkerRef(input: { appSecretPath: string; tokenUrl: strin
     },
   };
 }
+
+/** The three WebSocket credential shapes petshop and the OS side prove (design
+ * §9 D6). Selected per request via the `x-relay-shape` header. */
+export type PetshopWsShape = "frame" | "header" | "subprotocol";
+
+/** The `x-relay-shape` header the gateway relay worker reads to pick the shape. */
+export const PETSHOP_WS_SHAPE_HEADER = "x-relay-shape";
+
+/**
+ * The OS-side gateway RELAY secret worker (design §9 D6, and the OpenAI-Realtime
+ * relay shape of §3). It proves that a jailed secret worker can hold an outbound
+ * WebSocket to a third party with the credential injected THREE ways, dialing
+ * petshop's gateway through `env.SECRET.fetch` — which is both the pinned,
+ * substituting egress AND the jail's `globalOutbound`:
+ *
+ *   - "frame":       dial /gateway with no credential header, then read() the
+ *                    access token and send it in an IDENTIFY frame (Discord
+ *                    shape — the worker legitimately holds its own bytes).
+ *   - "header":      dial /gateway-header with `Authorization: Bearer
+ *                    getSecret(path, "accessToken")` — the placeholder is
+ *                    substituted at the jailed outbound; the worker never holds
+ *                    the token (OpenAI-Realtime shape).
+ *   - "subprotocol": dial /gateway-subprotocol with the token placeholder inside
+ *                    `Sec-WebSocket-Protocol` (browser-WS shape).
+ *
+ * Its fetch() has two modes so the proof needs no live socket back to the Node
+ * client: a real consumer WS upgrade is accepted and pumped verbatim to petshop
+ * (the design-faithful relay), while a PLAIN request drives the handshake
+ * internally and returns the observed frames as JSON — the deterministic e2e
+ * path. `SECRET_PATH` is this connection secret's own path (for the placeholder)
+ * and `PETSHOP_ORIGIN` its pinned host, both inlined at install time.
+ */
+function petshopGatewayRelayWorkerSource(input: {
+  petshopOrigin: string;
+  secretPath: string;
+}): string {
+  return `
+    import { WorkerEntrypoint } from "cloudflare:workers";
+
+    const PETSHOP_ORIGIN = ${JSON.stringify(input.petshopOrigin)};
+    const SECRET_PATH = ${JSON.stringify(input.secretPath)};
+    // The self-reference placeholder resolved (headers only) at the jailed
+    // outbound — never held by this worker.
+    const TOKEN_REF = 'getSecret("' + SECRET_PATH + '", "accessToken")';
+    const PROBE_TIMEOUT_MS = 8000;
+
+    export default class PetshopGatewayRelayWorker extends WorkerEntrypoint {
+      async fetch(request) {
+        const shape = request.headers.get(${JSON.stringify(PETSHOP_WS_SHAPE_HEADER)}) || "frame";
+        const upstream = await this.#openUpstream(shape);
+        if (!upstream) {
+          return Response.json({ shape, outcome: "upstream_upgrade_failed", frames: [] }, { status: 502 });
+        }
+        // A live consumer WS → transparent relay (OpenAI-Realtime shape). A plain
+        // request → internal probe returning JSON (the deterministic e2e path).
+        if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+          return this.#relayToConsumer(upstream, shape);
+        }
+        return this.#probe(upstream, shape);
+      }
+
+      // Dial petshop's gateway for a shape and return the un-accepted socket, so
+      // callers attach listeners synchronously right after accept() (no await in
+      // between, or petshop's hello/ready could arrive before a listener exists).
+      async #openUpstream(shape) {
+        let url = PETSHOP_ORIGIN + "/gateway";
+        const headers = { Upgrade: "websocket" };
+        if (shape === "header") {
+          url = PETSHOP_ORIGIN + "/gateway-header";
+          headers.Authorization = "Bearer " + TOKEN_REF;
+        } else if (shape === "subprotocol") {
+          url = PETSHOP_ORIGIN + "/gateway-subprotocol";
+          headers["Sec-WebSocket-Protocol"] = "petshop.v1, petshop.access-token." + TOKEN_REF;
+        }
+        // env.SECRET.fetch = the pinned, substituting egress (also our
+        // globalOutbound): it resolves the placeholder in the upgrade headers and
+        // relays the socket back through the Secret DO's WS-jail branch.
+        const response = await this.env.SECRET.fetch(url, { headers });
+        return response.webSocket || null;
+      }
+
+      // Discord frame shape only: hold our own token and send the IDENTIFY frame
+      // (read() is legal in-jail — the isolate can only reach the pinned host,
+      // ADR 0005). Header/subprotocol shapes already authed at the upgrade.
+      async #identifyIfFrame(socket, shape) {
+        if (shape !== "frame") return;
+        const material = await this.env.SECRET.read();
+        socket.send(JSON.stringify({ op: "identify", token: material.accessToken }));
+      }
+
+      async #probe(socket, shape) {
+        const frames = [];
+        socket.accept();
+        const settled = new Promise((resolve) => {
+          let probed = false;
+          socket.addEventListener("message", (event) => {
+            const raw = typeof event.data === "string"
+              ? event.data
+              : new TextDecoder().decode(event.data);
+            let frame;
+            try { frame = JSON.parse(raw); } catch { frame = { op: "raw", raw }; }
+            frames.push(frame);
+            if (frame.op === "ready" && !probed) {
+              probed = true;
+              socket.send(JSON.stringify({ op: "probe", shape }));
+            }
+            if (frame.op === "echo") resolve("echoed");
+            if (frame.op === "invalid") resolve("invalid");
+          });
+          socket.addEventListener("close", (event) => resolve("closed:" + event.code));
+          socket.addEventListener("error", () => resolve("error"));
+        });
+        await this.#identifyIfFrame(socket, shape);
+        const timeout = new Promise((resolve) => setTimeout(() => resolve("timeout"), PROBE_TIMEOUT_MS));
+        const outcome = await Promise.race([settled, timeout]);
+        try { socket.close(1000, "probe complete"); } catch (_e) {}
+        return Response.json({ shape, outcome, frames });
+      }
+
+      async #relayToConsumer(upstream, shape) {
+        const pair = new WebSocketPair();
+        const client = pair[0];
+        const server = pair[1];
+        upstream.accept();
+        server.accept();
+        this.#pump(server, upstream);
+        this.#pump(upstream, server);
+        await this.#identifyIfFrame(upstream, shape);
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      #pump(from, to) {
+        from.addEventListener("message", (event) => { try { to.send(event.data); } catch (_e) {} });
+        from.addEventListener("close", (event) => { try { to.close(event.code, event.reason); } catch (_e) {} });
+        from.addEventListener("error", () => { try { to.close(1011, "relay error"); } catch (_e) {} });
+      }
+    }
+  `;
+}
+
+/** A worker ref installing the gateway relay worker on a connection secret. */
+export function petshopGatewayRelayWorkerRef(input: { petshopOrigin: string; secretPath: string }) {
+  return {
+    type: "stateless" as const,
+    path: "/",
+    source: {
+      files: {
+        type: "inline" as const,
+        files: { "worker.js": petshopGatewayRelayWorkerSource(input) },
+      },
+      options: { bundle: false, entryPoint: "worker.js" },
+    },
+  };
+}

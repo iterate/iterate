@@ -15,10 +15,14 @@
  */
 import dedent from "dedent";
 import {
+  bearerTokenFromHeader,
+  type GatewayConnectionState,
+  type GatewayDeps,
   handleGatewayMessage,
+  handleUpgradeAuth,
   helloFrame,
   newGatewayConnection,
-  type GatewayConnectionState,
+  subprotocolAuth,
 } from "./gateway.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { type Pet, seedPets } from "./pets.ts";
@@ -135,7 +139,9 @@ const INDEX = dedent`
   POST /rpc/*               oRPC handler for the pets API (what an @orpc/client talks); bearer-protected
   GET|POST /api/v2/*        the same pets procedures served REST-shaped (per the OpenAPI doc)
   GET|POST /mcp             MCP server (streamable HTTP): tools list_pets, get_pet, create_pet; bearer-protected
-  GET  /gateway  (websocket) — send {op:identify, token} as the first frame
+  GET  /gateway               (websocket) — token in the first {op:identify, token} FRAME (Discord shape)
+  GET  /gateway-header        (websocket) — token in the Authorization: Bearer UPGRADE header (OpenAI-Realtime shape)
+  GET  /gateway-subprotocol   (websocket) — token in Sec-WebSocket-Protocol as "petshop.access-token.<token>" (browser-WS shape)
 
   GET  /__backdoor/state                   the whole mutable state, for spec assertions
   POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
@@ -463,46 +469,126 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
   return json({ error: "not_found" }, 404);
 }
 
+/** The gateway's validation deps, projected from the request deps: the sealing
+ * key and a per-call read of the CURRENT access-token epoch (so a token revoked
+ * between upgrade and auth is rejected, exactly like the HTTP routes). */
+function gatewayDeps(deps: PetshopDeps): GatewayDeps {
+  return {
+    sealKey: deps.sealKey,
+    getAccessTokenEpoch: () => deps.state.getState().then((s) => s.accessTokenEpoch),
+  };
+}
+
+/** Send a reaction's frames in order, then close if it asked to. */
+function applyReaction(
+  server: WebSocket,
+  reaction: { send: string[]; close?: { code: number; reason: string } },
+): void {
+  for (const frame of reaction.send) server.send(frame);
+  if (reaction.close) server.close(reaction.close.code, reaction.close.reason);
+}
+
 /**
- * The Discord-style gateway (integrations-and-secrets-design.md §R2, §3
- * "Discord"): accept a WebSocket, greet with a hello frame, and run the whole
- * protocol through `handleGatewayMessage` — the credential rides *inside* the
- * IDENTIFY frame, not an Authorization header. Stateless and per-connection,
- * so no Durable Object; the current access-token epoch is read once at
- * upgrade, which is all the token validation needs.
+ * Wire the per-frame ECHO loop shared by all three gateways: once a connection
+ * is identified (by IDENTIFY frame or a valid upgrade), every further frame runs
+ * through `handleGatewayMessage`, which echoes it. The frame shape also does its
+ * IDENTIFY here (the connection starts un-identified); the header/subprotocol
+ * shapes pass an already-identified connection, so this only ever echoes for
+ * them. Any per-frame failure closes with the auth-failed code, never throws.
+ */
+function attachGatewayEchoLoop(
+  server: WebSocket,
+  connection: GatewayConnectionState,
+  deps: PetshopDeps,
+): void {
+  server.addEventListener("message", (event) => {
+    // Node/tests may hand us a string; a real client can also send binary.
+    const raw = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
+    void handleGatewayMessage(connection, raw, gatewayDeps(deps))
+      .then((reaction) => applyReaction(server, reaction))
+      .catch(() => server.close(4001, "authentication failed"));
+  });
+}
+
+/**
+ * The Discord-style gateway (integrations-and-secrets-design.md §R2, §9 D6):
+ * accept a WebSocket, greet with a hello frame, and run the protocol through
+ * `handleGatewayMessage` — the credential rides *inside* the IDENTIFY frame, so
+ * authentication happens on the first client frame, not at the upgrade. On the
+ * OS side a secret worker holds the token (SECRET.read()) and sends the frame.
  */
 async function gatewayUpgrade(request: Request, deps: PetshopDeps): Promise<Response> {
-  if (request.headers.get("Upgrade") !== "websocket") {
-    return json(
-      { error: "upgrade_required", error_description: "GET /gateway is a websocket" },
-      426,
-    );
-  }
+  const guard = requireWebsocketUpgrade(request, "/gateway");
+  if (guard) return guard;
+
+  const [client, server] = websocketPair();
+  const connection = newGatewayConnection();
+  server.send(helloFrame());
+  attachGatewayEchoLoop(server, connection, deps);
+  return new Response(null, { status: 101, webSocket: client });
+}
+
+/**
+ * The OpenAI-Realtime-style gateway (§9 D6): the sealed access token rides in
+ * the `Authorization: Bearer` UPGRADE header. On the OS side that header is a
+ * `getSecret(...)` placeholder substituted at the jailed outbound before the
+ * dial, so the worker never holds the token. Auth happens at the handshake:
+ * a valid token opens an already-identified socket that then echoes frames.
+ */
+async function gatewayHeaderUpgrade(request: Request, deps: PetshopDeps): Promise<Response> {
+  const guard = requireWebsocketUpgrade(request, "/gateway-header");
+  if (guard) return guard;
+
+  const [client, server] = websocketPair();
+  server.send(helloFrame());
+  const token = bearerTokenFromHeader(request.headers.get("authorization"));
+  const auth = await handleUpgradeAuth(token, gatewayDeps(deps));
+  applyReaction(server, auth);
+  attachGatewayEchoLoop(server, { identified: auth.identified }, deps);
+  return new Response(null, { status: 101, webSocket: client });
+}
+
+/**
+ * The browser-WS-style gateway (§9 D6): the token is smuggled in
+ * `Sec-WebSocket-Protocol` as `petshop.access-token.<token>` (browsers cannot
+ * set arbitrary headers). We extract + validate it at the handshake and echo
+ * back the REAL selected subprotocol (never the token carrier) in the 101, per
+ * the WebSocket spec. On the OS side the carrier value is a `getSecret(...)`
+ * placeholder substituted at the jailed outbound.
+ */
+async function gatewaySubprotocolUpgrade(request: Request, deps: PetshopDeps): Promise<Response> {
+  const guard = requireWebsocketUpgrade(request, "/gateway-subprotocol");
+  if (guard) return guard;
+
+  const { token, selected } = subprotocolAuth(request.headers.get("sec-websocket-protocol"));
+  const [client, server] = websocketPair();
+  server.send(helloFrame());
+  const auth = await handleUpgradeAuth(token, gatewayDeps(deps));
+  applyReaction(server, auth);
+  attachGatewayEchoLoop(server, { identified: auth.identified }, deps);
+  // The selected subprotocol must be echoed in the 101 handshake response (RFC
+  // 6455 §4.2.2). It is a real protocol, never the credential carrier.
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+    ...(selected === null ? {} : { headers: { "sec-websocket-protocol": selected } }),
+  });
+}
+
+/** The 426 guard every gateway shares: a plain (non-Upgrade) request is not a
+ * socket. Returns the error response, or null when the request is an upgrade. */
+function requireWebsocketUpgrade(request: Request, path: string): Response | null {
+  if (request.headers.get("Upgrade") === "websocket") return null;
+  return json({ error: "upgrade_required", error_description: `GET ${path} is a websocket` }, 426);
+}
+
+/** Construct a WebSocketPair as `[client, server]` with the server end accepted. */
+function websocketPair(): [WebSocket, WebSocket] {
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
   server.accept();
-
-  const connection: GatewayConnectionState = newGatewayConnection();
-  server.send(helloFrame());
-
-  server.addEventListener("message", (event) => {
-    // Node/tests may hand us a string; a real client can also send binary.
-    const raw = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
-    // Run the protocol, then apply its reaction to the socket. Any failure to
-    // process a frame closes with the auth-failed code rather than throwing.
-    void handleGatewayMessage(connection, raw, {
-      sealKey: deps.sealKey,
-      getAccessTokenEpoch: () => deps.state.getState().then((s) => s.accessTokenEpoch),
-    })
-      .then((reaction) => {
-        for (const frame of reaction.send) server.send(frame);
-        if (reaction.close) server.close(reaction.close.code, reaction.close.reason);
-      })
-      .catch(() => server.close(4001, "authentication failed"));
-  });
-
-  return new Response(null, { status: 101, webSocket: client });
+  return [client, server];
 }
 
 export async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promise<Response> {
@@ -576,10 +662,13 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     if (!grant) return json({ error: "invalid_token" }, 401);
     return handleMcpRequest(request, { owner: grant.sub, pets: deps.pets });
   }
-  // The Discord-style WebSocket gateway: the sealed access token arrives in an
-  // IDENTIFY frame, not a header — so authentication lives inside the socket,
-  // not here at the route boundary.
+  // The WebSocket gateways (§9 D6). Three shapes, same sealed access token,
+  // presented three ways — the OS side proves it can inject the credential into
+  // each: a frame (/gateway), the Authorization upgrade header (/gateway-header),
+  // and the Sec-WebSocket-Protocol upgrade header (/gateway-subprotocol).
   if (key === "GET /gateway") return gatewayUpgrade(request, deps);
+  if (key === "GET /gateway-header") return gatewayHeaderUpgrade(request, deps);
+  if (key === "GET /gateway-subprotocol") return gatewaySubprotocolUpgrade(request, deps);
   if (url.pathname.startsWith("/__backdoor/")) return backdoor(key, request, deps);
   return json({ error: "not_found" }, 404);
 }

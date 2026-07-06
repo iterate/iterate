@@ -10,11 +10,16 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   AUTH_FAILED_CLOSE_CODE,
+  bearerTokenFromHeader,
+  GATEWAY_SUBPROTOCOL,
   type GatewayDeps,
   handleGatewayMessage,
+  handleUpgradeAuth,
   HEARTBEAT_INTERVAL_MS,
   helloFrame,
   newGatewayConnection,
+  SUBPROTOCOL_TOKEN_PREFIX,
+  subprotocolAuth,
 } from "./gateway.ts";
 import { randomSealKey, seal } from "./seal.ts";
 
@@ -170,5 +175,89 @@ describe("gateway identify", () => {
     const reaction = await handleGatewayMessage(newGatewayConnection(), "not json at all", deps);
     expect(parse(reaction.send)[0].op).toBe("invalid");
     expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
+  });
+});
+
+describe("bearerTokenFromHeader (/gateway-header shape)", () => {
+  test("extracts the bearer token, case-insensitively", () => {
+    expect(bearerTokenFromHeader("Bearer abc.def")).toBe("abc.def");
+    expect(bearerTokenFromHeader("bearer   xyz  ")).toBe("xyz");
+  });
+
+  test("null for absent or non-bearer headers", () => {
+    expect(bearerTokenFromHeader(null)).toBeNull();
+    expect(bearerTokenFromHeader("")).toBeNull();
+    expect(bearerTokenFromHeader("Basic Zm9v")).toBeNull();
+    expect(bearerTokenFromHeader("Bearer ")).toBeNull();
+  });
+});
+
+describe("subprotocolAuth (/gateway-subprotocol shape)", () => {
+  test("pulls the token from the carrier and selects a non-token protocol to echo", () => {
+    const token = "sealed-token-value";
+    const parsed = subprotocolAuth(`${GATEWAY_SUBPROTOCOL}, ${SUBPROTOCOL_TOKEN_PREFIX}${token}`);
+    expect(parsed.token).toBe(token);
+    // The echoed protocol is the real one, never the credential carrier.
+    expect(parsed.selected).toBe(GATEWAY_SUBPROTOCOL);
+  });
+
+  test("carrier order does not matter and the token is never selected", () => {
+    const token = "abc";
+    const parsed = subprotocolAuth(`${SUBPROTOCOL_TOKEN_PREFIX}${token}, ${GATEWAY_SUBPROTOCOL}`);
+    expect(parsed.token).toBe(token);
+    expect(parsed.selected).toBe(GATEWAY_SUBPROTOCOL);
+    expect(parsed.selected).not.toContain(token);
+  });
+
+  test("no carrier → null token; no header → null token and null selected", () => {
+    expect(subprotocolAuth(GATEWAY_SUBPROTOCOL)).toEqual({
+      token: null,
+      selected: GATEWAY_SUBPROTOCOL,
+    });
+    expect(subprotocolAuth(null)).toEqual({ token: null, selected: null });
+  });
+});
+
+describe("handleUpgradeAuth (header + subprotocol shapes)", () => {
+  test("a valid token → identified, ready then a pet.created dispatch, no close", async () => {
+    const key = randomSealKey();
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
+    const token = await sealedAccessToken(key, { sub: "Jonas", clientId: "petshop-default" });
+
+    const reaction = await handleUpgradeAuth(token, deps);
+    expect(reaction.identified).toBe(true);
+    expect(reaction.close).toBeUndefined();
+    const [ready, dispatch] = parse(reaction.send);
+    expect(ready).toEqual({ op: "ready", user: { sub: "Jonas", clientId: "petshop-default" } });
+    expect(dispatch).toEqual({
+      op: "dispatch",
+      type: "pet.created",
+      data: { id: "pet-3", name: "Rex", species: "terrier" },
+    });
+  });
+
+  test("missing / garbage / foreign-key / expired / epoch-revoked → invalid + close 4001, not identified", async () => {
+    const key = randomSealKey();
+    const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
+
+    const expectRejected = (reaction: Awaited<ReturnType<typeof handleUpgradeAuth>>) => {
+      expect(reaction.identified).toBe(false);
+      expect(parse(reaction.send)[0].op).toBe("invalid");
+      expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
+    };
+
+    expectRejected(await handleUpgradeAuth(null, deps));
+    expectRejected(await handleUpgradeAuth("not-a-real-token", deps));
+    expectRejected(await handleUpgradeAuth(await sealedAccessToken(randomSealKey()), deps));
+
+    const epochRevoked: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 1 };
+    expectRejected(
+      await handleUpgradeAuth(await sealedAccessToken(key, { epoch: 0 }), epochRevoked),
+    );
+
+    const token = await sealedAccessToken(key);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 121_000);
+    expectRejected(await handleUpgradeAuth(token, deps));
   });
 });

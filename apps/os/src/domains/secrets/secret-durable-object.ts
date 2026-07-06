@@ -347,6 +347,19 @@ export class SecretDurableObject extends DurableObject<Env> {
           throw new SecretSubstitutionError("secret_reference_field_not_found");
         return value;
       });
+
+      // The WS-jail branch (design §9 D6, ADR 0005). A WebSocket handshake IS an
+      // HTTP request, so a secret worker's outbound upgrade flows through here
+      // (its jail globalOutbound === env.SECRET === this default egress) exactly
+      // like a plain fetch, and its upgrade headers substituted above the same
+      // way — headers only, so the Authorization (OpenAI-Realtime shape) and
+      // Sec-WebSocket-Protocol (browser-WS shape) credential placeholders are
+      // already resolved. Frames are never touched: the Discord frame shape has
+      // the worker hold its own token via SECRET.read() and send it in a frame,
+      // which needs no substitution. See #relayUpgrade for the relay itself.
+      if (isWebSocketUpgrade(substituted)) {
+        return await this.#relayUpgrade(substituted);
+      }
       return await fetch(substituted);
     } catch (error) {
       if (error instanceof SecretSubstitutionError) {
@@ -357,6 +370,44 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
       throw error;
     }
+  }
+
+  /**
+   * Relay an already-substituted, already-pin-checked WebSocket upgrade to its
+   * pinned upstream and shuttle frames verbatim in both directions (design §9
+   * D6). This is the standard workerd WS proxy: dial the upstream with the
+   * upgrade request (workerd returns the accepted socket on `response.webSocket`
+   * when the origin answers 101), then bridge it to a fresh WebSocketPair whose
+   * client end goes back to the caller (the jailed secret worker) — so the DO
+   * owns both legs and the caller is transparently wired to the upstream.
+   *
+   * Frames are NOT inspected or substituted — substitution is header-only and
+   * already happened at the handshake. Raw TCP (`connect()`) can never reach
+   * here: the jail's only outbound is this SecretEntrypoint Fetcher, which
+   * exposes no `connect`, and we reject any non-http(s) scheme defensively.
+   */
+  async #relayUpgrade(request: Request): Promise<Response> {
+    const scheme = new URL(request.url).protocol;
+    if (scheme !== "https:" && scheme !== "http:") {
+      // A WS handshake is dialed as http(s)+Upgrade; anything else (ws:, wss:,
+      // or a raw scheme) is not a fetch we pin-check, so refuse it.
+      throw new SecretSubstitutionError("secret_not_allowed_for_origin");
+    }
+
+    const upstream = await fetch(request);
+    const upstreamSocket = (upstream as Response & { webSocket?: WebSocket | null }).webSocket;
+    // Upstream refused the upgrade (401/426/etc.): hand the caller that response
+    // so a bad credential surfaces exactly like the HTTP egress path's 401.
+    if (upstreamSocket == null) return upstream;
+
+    upstreamSocket.accept();
+    const pair = new WebSocketPair();
+    const clientEnd = pair[0];
+    const callerEnd = pair[1];
+    callerEnd.accept();
+    pumpWebSocket(callerEnd, upstreamSocket);
+    pumpWebSocket(upstreamSocket, callerEnd);
+    return new Response(null, { status: 101, webSocket: clientEnd });
   }
 
   async #snapshot(): Promise<SecretState> {
@@ -394,6 +445,44 @@ export class SecretDurableObject extends DurableObject<Env> {
 function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
   for (const url of egress.urls) new URL(url);
   return { urls: [...egress.urls] };
+}
+
+/** A request is a WebSocket handshake when it carries `Upgrade: websocket`
+ * (case-insensitive) — the one signal that separates the WS-jail branch from a
+ * plain egress fetch. */
+function isWebSocketUpgrade(request: Request): boolean {
+  return request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+}
+
+/** Forward every frame (and the close/error signal) from one accepted socket to
+ * the other, verbatim — one direction of the relay. `event.data` is a string or
+ * ArrayBuffer and `send` accepts both, so frames pass through untouched. All
+ * sends/closes are best-effort: once a peer is gone, the other close winds the
+ * bridge down. */
+function pumpWebSocket(from: WebSocket, to: WebSocket): void {
+  from.addEventListener("message", (event) => {
+    try {
+      to.send(event.data);
+    } catch {
+      closeQuietly(to, 1011, "relay send failed");
+    }
+  });
+  from.addEventListener("close", (event) => closeQuietly(to, event.code, event.reason));
+  from.addEventListener("error", () => closeQuietly(to, 1011, "relay error"));
+}
+
+/** Close a socket without throwing: an already-closed socket or a reserved close
+ * code (workerd rejects some) must not blow up the other leg's relay. */
+function closeQuietly(ws: WebSocket, code?: number, reason?: string): void {
+  try {
+    ws.close(code, reason);
+  } catch {
+    try {
+      ws.close();
+    } catch {
+      // Already closed — nothing to do.
+    }
+  }
 }
 
 /**

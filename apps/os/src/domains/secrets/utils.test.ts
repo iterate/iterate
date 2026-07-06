@@ -66,6 +66,34 @@ describe("substituteSecretHeaders", () => {
     });
     expect(substituted.headers.get("authorization")).toBe("Bearer re_live_123");
   });
+
+  // A WS handshake IS an HTTP request, so upgrade headers substitute the same
+  // way — this is exactly what the Secret DO's WS-jail branch relies on for the
+  // header + subprotocol credential shapes (design §9 D6). Substitution stays
+  // header-only; frames are never touched.
+  test("substitutes the Authorization and Sec-WebSocket-Protocol upgrade headers", () => {
+    const path = "/secrets/integrations/petshop-home/jonas";
+    const request = new Request("https://petshop.example/gateway-subprotocol", {
+      headers: {
+        upgrade: "websocket",
+        authorization: `Bearer getSecret("${path}", "accessToken")`,
+        "sec-websocket-protocol": `petshop.v1, petshop.access-token.getSecret("${path}", "accessToken")`,
+      },
+    });
+    const substituted = substituteSecretHeaders(request, ({ path: p, field }) => {
+      expect(p).toBe(path);
+      expect(field).toBe("accessToken");
+      return "sealed-access-token";
+    });
+    expect(substituted.headers.get("authorization")).toBe("Bearer sealed-access-token");
+    // The real subprotocol survives verbatim; only the token carrier is filled.
+    expect(substituted.headers.get("sec-websocket-protocol")).toBe(
+      "petshop.v1, petshop.access-token.sealed-access-token",
+    );
+    // The upgrade intent is preserved through the header rewrite (a fresh
+    // Request cloned from the original).
+    expect(substituted.headers.get("upgrade")).toBe("websocket");
+  });
 });
 
 describe("compute helpers", () => {

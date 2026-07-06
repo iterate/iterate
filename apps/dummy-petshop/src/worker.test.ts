@@ -531,18 +531,26 @@ describe("webhooks", () => {
   });
 });
 
-describe("gateway route", () => {
-  test("GET / documents the websocket gateway", async () => {
+describe("gateway routes", () => {
+  test("GET / documents all three websocket gateways", async () => {
     const shop = makeShop();
-    expect(await (await shop("/")).text()).toContain("/gateway");
+    const index = await (await shop("/")).text();
+    expect(index).toContain("/gateway");
+    expect(index).toContain("/gateway-header");
+    expect(index).toContain("/gateway-subprotocol");
   });
 
-  test("GET /gateway without an Upgrade header is 426, not a socket", async () => {
-    const shop = makeShop();
-    const response = await shop("/gateway");
-    expect(response.status).toBe(426);
-    expect(await response.json()).toMatchObject({ error: "upgrade_required" });
-  });
+  // The socket path (WebSocketPair + 101) only exists in workerd, so the Node
+  // unit lane can only assert the 426 guard; the live e2e drives the sockets.
+  test.each(["/gateway", "/gateway-header", "/gateway-subprotocol"])(
+    "GET %s without an Upgrade header is 426, not a socket",
+    async (path) => {
+      const shop = makeShop();
+      const response = await shop(path);
+      expect(response.status).toBe(426);
+      expect(await response.json()).toMatchObject({ error: "upgrade_required" });
+    },
+  );
 });
 
 describe("backdoor lock", () => {
