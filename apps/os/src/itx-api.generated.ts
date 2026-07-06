@@ -1118,10 +1118,11 @@ export type OpenApiRpc = object;
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
  * does not re-declare that surface (same stance as `McpClientRpc`); see
- * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
- * container start kicks off a clone of the project's repo to
- * `/workspace/repo` — `await sandbox.ensureProjectRepo()` before work that
- * depends on it.
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
+ * project's repo is ALWAYS checked out at `/workspace/repos/project` (with
+ * working git credentials), which is also the default working directory — a
+ * bare `exec("ls")` lists the project; no `ensureProjectRepo()` call needed
+ * first.
  */
 export type CloudflareSandbox = object;
 
