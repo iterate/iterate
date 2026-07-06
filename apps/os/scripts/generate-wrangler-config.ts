@@ -190,9 +190,9 @@ function workerBindings(input: {
 }
 
 /**
- * Every hostname routed to the os worker: the app base URL, the MCP host,
- * and the project-host patterns. The zone is the hostname minus its first
- * label for app/MCP hosts; project bases are themselves zones.
+ * Every hostname routed to the os worker: the app base URL, public event docs,
+ * the MCP host, and the project-host patterns. The zone is the hostname minus
+ * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
  *
  * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
  * The catch-all `*base/*` should subsume the others, but the live preview
@@ -203,9 +203,11 @@ function workerBindings(input: {
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
+  const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
+    { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
     ...env.projectHostnameBases.flatMap((base) => [
       { pattern: `${base}/*`, zone_name: base },

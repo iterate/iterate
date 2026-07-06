@@ -18,6 +18,7 @@ type RootAuthSnapshot = {
    * `?redirect=` return address.
    */
   appOrigin: string | undefined;
+  isEventDocsHost: boolean;
 };
 
 /**
@@ -48,6 +49,7 @@ export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServ
       baseUrl: context.config.baseUrl,
       requestUrl: context.rawRequest?.url,
     }),
+    isEventDocsHost: context.isEventDocsHost,
   };
 });
 

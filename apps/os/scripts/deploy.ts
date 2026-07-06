@@ -91,6 +91,7 @@ export default async function deploy(
         ok: (status) => status === 200 || (status >= 300 && status < 400),
         label: "dashboard",
       },
+      { url: `${env.eventDocsBaseUrl}/`, ok: (status) => status === 200, label: "event docs" },
       { url: `${env.baseUrl}/api`, ok: (status) => status < 500, label: "os api" },
     ],
   });

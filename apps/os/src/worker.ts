@@ -94,7 +94,7 @@ export default {
     const config = parseConfig(env);
 
     const mcpRequest = rewriteMcpHostRequest({ config, request });
-    if (mcpRequest) return await appFetch(mcpRequest, ctx, config);
+    if (mcpRequest) return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
 
     const route = await decideIngressRoute({
       config,
@@ -105,7 +105,9 @@ export default {
     });
     if (route.lane !== "os") return await apiFetch(request, ctx, config, route);
 
-    return await appFetch(request, ctx, config);
+    return await appFetch(request, ctx, config, {
+      isEventDocsHost: route.hostKind === "eventDocs",
+    });
   },
 };
 
@@ -114,7 +116,12 @@ export default {
  * /api routes (inbound MCP, health). Every request emits one structured
  * "wide event" log line.
  */
-async function appFetch(request: Request, ctx: ExecutionContext, config: AppConfig) {
+async function appFetch(
+  request: Request,
+  ctx: ExecutionContext,
+  config: AppConfig,
+  host: { isEventDocsHost: boolean },
+) {
   return withEvlog(
     { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
     async ({ log }) => {
@@ -127,6 +134,7 @@ async function appFetch(request: Request, ctx: ExecutionContext, config: AppConf
 
       const context: RequestContext = {
         config: requestConfig,
+        isEventDocsHost: host.isEventDocsHost,
         log,
         rawRequest: request,
         waitUntil: (promise) => ctx.waitUntil(promise),

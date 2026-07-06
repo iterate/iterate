@@ -17,6 +17,7 @@ import type { Principal } from "~/auth/principal.ts";
 export interface RequestContext {
   /** Runtime config with `baseUrl` defaulted to the request origin. */
   config: AppConfig;
+  isEventDocsHost: boolean;
   log: SharedRequestLogger;
   rawRequest?: Request;
   /** `ExecutionContext.waitUntil`, for work that should outlive the response. */
