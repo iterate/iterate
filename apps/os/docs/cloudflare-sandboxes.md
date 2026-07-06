@@ -129,21 +129,31 @@ from its environment and calls Claude, but the key lives only in the secret
 system. The secret at that path must allow the provider host (e.g.
 `api.anthropic.com` / `api.openai.com`) in its egress allowlist.
 
-**The coding agent** is pre-installed: our image is the `-opencode` variant
-(`cloudflare/sandbox:<v>-opencode`), which bundles the **OpenCode** CLI — no
-custom agent build. OpenCode is model-agnostic and reads
-`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` from the environment:
+**The coding agent** is baked into our own image (`Dockerfile.sandbox`), not a
+Cloudflare image variant. We ship the **Codex CLI** (`codex`, on PATH), which
+uses `OPENAI_API_KEY`:
 
 ```ts
 // repo is already checked out at the cwd; the key resolves at egress
 const r = await itx.sandbox.exec(
-  'opencode run --model openai/gpt-4o-mini "summarize README.md in one line"',
+  'codex exec --skip-git-repo-check -m gpt-4o-mini "summarize README.md in one line"',
 );
 ```
 
-(There is no first-party `-claude`/`-codex` image variant; to use the Claude
-Code or Codex CLIs instead, `npm i -g @anthropic-ai/claude-code` / `@openai/codex`
-at runtime or bake them into `Dockerfile.sandbox`.)
+Why baked, not the `-opencode` variant or a runtime install: OpenCode's `run`
+does a ~45s cold bootstrap per call, and installing an agent at container start
+is slow AND unreliable (the sandbox's egress is intercepted + HTTPS-MITM'd, so
+`npm`/installer downloads hang or fail at runtime). At **build** time the
+network is clean, so baking is faster (zero per-run install) and reliable. Cost
+is real but minimal: `@openai/codex` is a single ~280MB statically-linked Rust
+binary (npm pulls linux-x64 only — nothing to trim), pulled once per instance
+and cached in Cloudflare's registry.
+
+Claude Code is **not baked yet** (it adds another ~240MB self-contained binary,
+and we have no Anthropic key wired to exercise it). Add it the same way — a
+`RUN curl -fsSL https://claude.ai/install.sh | bash` line (its native installer,
+symlinked onto PATH) — when there's an Anthropic key in the secret system. There
+is no first-party `-claude`/`-codex` Cloudflare image variant.
 
 ---
 

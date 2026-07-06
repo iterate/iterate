@@ -1,15 +1,28 @@
-# The `-opencode` variant of the sandbox base image: identical to the plain
-# `cloudflare/sandbox:<version>` runtime plus the OpenCode CLI (`opencode`,
-# `npm i -g opencode-ai`) pre-installed — so every sandbox ships with a real
-# coding agent and we build no custom agent layer. OpenCode is model-agnostic
-# and reads ANTHROPIC_API_KEY / OPENAI_API_KEY from the environment (set via
-# the sandbox env-var map, values as getSecret(...) placeholders that the
-# project egress path substitutes — the key never enters the container). See
-# docs/cloudflare-sandboxes.md. Keep the tag in lockstep with the
-# @cloudflare/sandbox version in package.json or the SDK warns on skew.
-FROM docker.io/cloudflare/sandbox:0.12.3-opencode
+# The sandbox container image: the plain Cloudflare Sandbox runtime plus the
+# Codex CLI, BAKED IN at build time.
+#
+# Why baked, not the `-opencode` variant or a runtime install:
+#   - the `-opencode` image only ships OpenCode, whose `run` does a ~45s cold
+#     bootstrap per invocation — unacceptable;
+#   - installing an agent at container start is slow AND unreliable, because a
+#     sandbox's egress is intercepted + HTTPS-MITM'd by project policy, so the
+#     agents' installers hang or fail at runtime. At BUILD time the network is
+#     clean, so baking is both faster (zero per-run install) and reliable.
+#
+# Cost: codex is a single statically-linked Rust binary (~280MB); npm pulls the
+# linux-x64 build only, so there is nothing further to trim. Claude Code is
+# intentionally NOT baked yet (it would add another ~240MB self-contained
+# binary, and we have no Anthropic key wired to exercise it) — add it the same
+# way when needed. The image is pulled once per new instance and cached in
+# Cloudflare's registry. See docs/cloudflare-sandboxes.md.
+FROM docker.io/cloudflare/sandbox:0.12.3
 
-# The sandbox control plane listens on 3000 (the SDK's reserved port);
-# miniflare reads EXPOSE to know which port to health-check in local dev.
-# (The opencode variant also serves OpenCode on 4096; we don't health-check it.)
+# Codex CLI (OpenAI). npm global; its bin lands on the exec shell's PATH
+# (/usr/local/bin). Uses OPENAI_API_KEY, injected via the sandbox env-var map
+# as a getSecret placeholder and substituted at egress (never in the container).
+RUN npm install -g @openai/codex && codex --version
+
+# The base image already EXPOSEs 3000 (the SDK control-plane port the Durable
+# Object dials for exec/files/etc.); restated for clarity and so miniflare's
+# local-dev health-check has an explicit port. Not for app services.
 EXPOSE 3000
