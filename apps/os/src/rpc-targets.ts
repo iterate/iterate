@@ -1560,14 +1560,18 @@ export class ProjectCollectionRpcTarget extends RpcTarget {
         slug: record.slug,
         organizationId: record.organizationId,
         organizationName: null,
+        organizationSlug: null,
       }));
     }
 
     if (userPrincipal) {
-      const organizationNames = new Map(
+      const organizationsById = new Map(
         userPrincipal.organizations.map((organization) => [
           organization.id,
-          organization.name ?? null,
+          {
+            name: organization.name ?? null,
+            slug: organization.slug,
+          },
         ]),
       );
       const projectIds = new Set([
@@ -1583,7 +1587,8 @@ export class ProjectCollectionRpcTarget extends RpcTarget {
               id: claim.id,
               slug: claim.slug,
               organizationId: claim.organizationId,
-              organizationName: organizationNames.get(claim.organizationId) ?? null,
+              organizationName: organizationsById.get(claim.organizationId)?.name ?? null,
+              organizationSlug: organizationsById.get(claim.organizationId)?.slug ?? null,
             };
           }
           return await this.#directoryEntryBase(projectId);
@@ -1609,6 +1614,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget {
       slug: record?.slug ?? projectId,
       organizationId: record?.organizationId ?? null,
       organizationName: null,
+      organizationSlug: null,
     };
   }
 }

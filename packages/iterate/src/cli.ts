@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
+import type { RpcStub } from "capnweb";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
@@ -13,9 +14,18 @@ import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
+import type {
+  ItxAuthCredentials,
+  Project,
+  ProjectListEntry,
+  Session,
+  Stream,
+} from "../../../apps/os/src/itx-api.generated.ts";
+import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import {
   CONFIG_PATH,
   Config,
+  DEFAULT_CONFIG_NAME,
   readConfig,
   readConfigFile,
   removeConfigSession,
@@ -27,6 +37,10 @@ import {
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
 const OAUTH_REFRESH_SKEW_MS = 60_000;
+const DEFAULT_CHAT_AGENT_PATH = "/agents/onboarding";
+type OsAuthHeaders = { cookie?: string; authorization?: string };
+type OsAuth = { credentials: ItxAuthCredentials; requestHeaders?: HeadersInit };
+type CreateOsSession = (input: { auth: OsAuth; baseUrl: string }) => RpcStub<Session>;
 
 const isAgent =
   process.env.AGENT === "1" ||
@@ -122,15 +136,18 @@ const runInheritedProcess = async (input: {
   }
 };
 
+const hasConfig = (configFile: ReturnType<typeof readConfigFile>, name: string) =>
+  name === DEFAULT_CONFIG_NAME || Boolean(configFile.configs?.[name]);
+
 /**
  * Resolve which config name to use.
- * Priority: --config flag > workspace match (walk up from cwd) > default > single-config auto > error
+ * Priority: --config flag > workspace match (walk up from cwd) > default > single-config auto > built-in prd
  */
 const resolveConfigName = (workspacePath: string): string | Error => {
   const configFile = readConfigFile();
 
   if (configFlagOverride) {
-    if (!configFile.configs?.[configFlagOverride]) {
+    if (!hasConfig(configFile, configFlagOverride)) {
       return new Error(
         `Config "${configFlagOverride}" not found. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
       );
@@ -143,7 +160,7 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   while (dir && dir !== "/") {
     const match = configFile.workspaces?.[dir];
     if (match) {
-      if (!configFile.configs?.[match]) {
+      if (!hasConfig(configFile, match)) {
         return new Error(`Workspace "${dir}" maps to config "${match}" which doesn't exist.`);
       }
       return match;
@@ -152,7 +169,7 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   }
 
   if (configFile.default) {
-    if (!configFile.configs?.[configFile.default]) {
+    if (!hasConfig(configFile, configFile.default)) {
       return new Error(
         `Default config "${configFile.default}" doesn't exist. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
       );
@@ -164,10 +181,7 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   const configNames = Object.keys(configFile.configs || {});
   if (configNames.length === 1) return configNames[0];
 
-  return new Error(
-    `No config resolved for ${workspacePath}. Run \`iterate config set <name>\` or set a default with \`iterate config use <name>\`.\n` +
-      `  Config file: ${CONFIG_PATH}`,
-  );
+  return DEFAULT_CONFIG_NAME;
 };
 
 function resolveConfig(workspacePath: string): { name: string; config: Config } | Error;
@@ -194,10 +208,7 @@ function resolveConfig(
  * Get auth headers for OS API calls based on the resolved config's stored session.
  * OAuth sessions are refreshed when possible.
  */
-const getOsAuthHeaders = async (
-  config: Config,
-  configName?: string,
-): Promise<{ cookie?: string; authorization?: string }> => {
+const getOsAuthHeaders = async (config: Config, configName?: string): Promise<OsAuthHeaders> => {
   let session = config.session;
   if (!session) {
     throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
@@ -216,6 +227,177 @@ const getOsAuthHeaders = async (
     return { cookie: session.cookie };
   }
   throw new Error(`Stored session for ${config.osBaseUrl} has no token or cookie.`);
+};
+
+const osAuthFromHeaders = (headers: OsAuthHeaders): OsAuth => {
+  if (headers.authorization) {
+    const match = /^Bearer\s+(.+)$/i.exec(headers.authorization);
+    if (!match) throw new Error("Stored OS authorization header is not a bearer token.");
+    return { credentials: { type: "bearer", token: match[1] } };
+  }
+  if (headers.cookie) {
+    return {
+      credentials: { type: "from-server-cookie" },
+      requestHeaders: { cookie: headers.cookie },
+    };
+  }
+  throw new Error("No OS auth credentials available.");
+};
+
+const osAuthFromEnvironment = (): OsAuth | undefined => {
+  const adminSecret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  if (adminSecret) return { credentials: { type: "admin-secret", secret: adminSecret } };
+
+  const bearerToken = process.env.ITERATE_BEARER_TOKEN?.trim();
+  if (bearerToken) return { credentials: { type: "bearer", token: bearerToken } };
+
+  return undefined;
+};
+
+const disposeRpc = (stub: { [Symbol.dispose]?: () => void } | undefined) => {
+  try {
+    stub?.[Symbol.dispose]?.();
+  } catch {
+    // Broken transports may already have disposed the remote side.
+  }
+};
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const headersRecord = (headers: HeadersInit | undefined): Record<string, string> | undefined => {
+  if (headers === undefined) return undefined;
+  return Object.fromEntries(new Headers(headers).entries());
+};
+
+const withAuthenticatedOsSession = async <T>(input: {
+  auth: OsAuth;
+  baseUrl: string;
+  createSession?: CreateOsSession;
+  run: (session: RpcStub<Session>) => Promise<T>;
+}): Promise<T> => {
+  const session =
+    input.createSession?.({ auth: input.auth, baseUrl: input.baseUrl }) ??
+    (connectItx({
+      auth: input.auth.credentials,
+      baseUrl: input.baseUrl,
+      headers: headersRecord(input.auth.requestHeaders),
+    }) as RpcStub<Session>);
+
+  try {
+    return await input.run(session);
+  } finally {
+    disposeRpc(session);
+  }
+};
+
+export const verifyOsSession = async (input: {
+  authHeaders: OsAuthHeaders;
+  baseUrl: string;
+  createSession?: CreateOsSession;
+}) => {
+  return await withAuthenticatedOsSession({
+    auth: osAuthFromHeaders(input.authHeaders),
+    baseUrl: input.baseUrl,
+    createSession: input.createSession,
+    run: async (session) => await session.__describe(),
+  });
+};
+
+const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
+  let projectItx: RpcStub<Project> | undefined;
+  let agentStream: RpcStub<Stream> | undefined;
+  try {
+    projectItx = (await session.projects.create({
+      projectId: project.id,
+      slug: project.slug,
+      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+      waitUntilCreated: false,
+    })) as unknown as RpcStub<Project>;
+    agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
+    await agentStream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
+      timeoutMs: 15_000,
+    });
+  } catch (error) {
+    throw new Error(
+      `Project "${project.slug}" (${project.id}) exists in auth but is missing in OS. Failed to set it up for chat: ${errorMessage(error)}`,
+    );
+  } finally {
+    disposeRpc(agentStream);
+    disposeRpc(projectItx);
+  }
+  return project.id;
+};
+
+const accessibleProjectsMessage = (projects: ProjectListEntry[]) =>
+  projects.length === 0
+    ? "No accessible projects found."
+    : `Accessible projects: ${projects
+        .map((project) => `${project.slug} (${project.id}, ${project.deploymentStatus})`)
+        .join(", ")}.`;
+
+export const resolveChatProject = async (input: {
+  auth: OsAuth;
+  baseUrl: string;
+  configName: string;
+  configPath: string;
+  configuredDefaultProject?: string;
+  createSession?: CreateOsSession;
+  explicitProject?: string;
+}) => {
+  const configured = input.explicitProject || input.configuredDefaultProject;
+
+  return await withAuthenticatedOsSession({
+    auth: input.auth,
+    baseUrl: input.baseUrl,
+    createSession: input.createSession,
+    run: async (session) => {
+      let projects: ProjectListEntry[];
+      try {
+        projects = await session.projects.list();
+      } catch (error) {
+        if (configured) {
+          throw new Error(
+            `Failed to resolve project "${configured}" for config "${input.configName}" in ${input.configPath}. The CLI could not list accessible projects, so it cannot resolve slugs or recover auth-known projects that are missing in OS: ${errorMessage(error)}`,
+          );
+        }
+        throw new Error(
+          `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. Failed to list accessible projects: ${errorMessage(error)}`,
+        );
+      }
+
+      if (configured) {
+        const project = projects.find(
+          (candidate) => candidate.id === configured || candidate.slug === configured,
+        );
+        if (!project) {
+          if (configured.startsWith("prj_")) return configured;
+          throw new Error(
+            `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
+          );
+        }
+        if (project.deploymentStatus === "missing") {
+          return await setupMissingProjectForChat(session, project);
+        }
+        return project.id;
+      }
+
+      const readyProjects = projects.filter((project) => project.deploymentStatus === "ready");
+      const candidates = readyProjects.length > 0 ? readyProjects : projects;
+      if (candidates.length === 1) {
+        const project = candidates[0]!;
+        if (project.deploymentStatus === "missing") {
+          return await setupMissingProjectForChat(session, project);
+        }
+        return project.id;
+      }
+
+      throw new Error(
+        `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
+      );
+    },
+  });
 };
 
 const sessionNeedsRefresh = (session: StoredSession) => {
@@ -279,6 +461,20 @@ type OAuthTokenResponse = {
 const base64Url = (buffer: Buffer) => buffer.toString("base64url");
 
 const randomBase64Url = (byteLength = 32) => base64Url(randomBytes(byteLength));
+
+export const oauthResourceForOsBaseUrl = (osBaseUrl: string) => {
+  const url = new URL(osBaseUrl);
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+  if (loopbackHosts.has(url.hostname)) {
+    return `${url.protocol}//${url.hostname}`;
+  }
+
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+  return url.toString().replace(/\/$/, "");
+};
 
 const openUrlInBrowser = async (url: string) => {
   try {
@@ -481,7 +677,7 @@ const oauthTokenToSession = (
   };
 };
 
-const refreshOAuthSession = async (input: {
+export const refreshOAuthSession = async (input: {
   config: Config;
   configName?: string;
   session: StoredSession;
@@ -495,7 +691,7 @@ const refreshOAuthSession = async (input: {
     grant_type: "refresh_token",
     client_id: input.session.clientId,
     refresh_token: input.session.refreshToken,
-    resource: input.config.osBaseUrl,
+    resource: oauthResourceForOsBaseUrl(input.config.osBaseUrl),
   });
   if (input.session.scope) body.set("scope", input.session.scope);
 
@@ -522,6 +718,7 @@ const refreshOAuthSession = async (input: {
 
 const oauthLogin = async (config: Config): Promise<StoredSession> => {
   const authBaseUrl = config.authBaseUrl;
+  const resource = oauthResourceForOsBaseUrl(config.osBaseUrl);
   const codeVerifier = randomBase64Url(48);
   const state = randomBase64Url(32);
   const callback = await startOAuthCallbackServer();
@@ -532,7 +729,7 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
   authorizeUrl.searchParams.set("client_id", clientId);
   authorizeUrl.searchParams.set("redirect_uri", callback.redirectUri);
   authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
-  authorizeUrl.searchParams.set("resource", config.osBaseUrl);
+  authorizeUrl.searchParams.set("resource", resource);
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set(
     "code_challenge",
@@ -542,7 +739,9 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
 
   console.error(`\nOpening browser to authenticate with Iterate:\n`);
   console.error(`  ${authorizeUrl.href}\n`);
-  await openUrlInBrowser(authorizeUrl.href);
+  if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") {
+    await openUrlInBrowser(authorizeUrl.href);
+  }
 
   let callbackResult: { code: string; state: string; redirectUri: string };
   try {
@@ -561,7 +760,7 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
     code: callbackResult.code,
     codeVerifier,
     redirectUri: callbackResult.redirectUri,
-    resource: config.osBaseUrl,
+    resource,
   });
   const session = oauthTokenToSession(token, { clientId, refreshToken: undefined });
   session.clientId = clientId;
@@ -644,24 +843,16 @@ const getOsProcedures = async (params: {
 };
 
 const launcherProcedures = {
-  ping: os.handler(async () => {
+  ping: os.input(z.object({})).handler(async () => {
     const resolved = resolveConfig(process.cwd(), { throw: true });
     const { config } = resolved;
-    const osClient = createORPCClient(
-      new RPCLink({
-        url: `${config.osBaseUrl}/api/orpc/`,
-        fetch: async (request: URL | Request, init?: RequestInit) => {
-          const authHeaders = await getOsAuthHeaders(config, resolved.name);
-          const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
-          if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
-          if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
-          return fetch(request, { ...init, headers });
-        },
-      }),
-    );
-    return (osClient as any).ping().catch((e: Error) => {
-      throw new Error(`Failed to ping OS: ${e}`);
+    const description = await verifyOsSession({
+      authHeaders: await getOsAuthHeaders(config, resolved.name),
+      baseUrl: config.osBaseUrl,
+    }).catch((error: unknown) => {
+      throw new Error(`Failed to verify OS session: ${errorMessage(error)}`);
     });
+    return { message: "OS session valid", principal: description.principal };
   }),
   login: os
     .input(z.object({}))
@@ -678,22 +869,11 @@ const launcherProcedures = {
       // Update in-memory config so subsequent verification and calls see the token.
       config.session = oauthResult;
 
-      const osClient = createORPCClient(
-        new RPCLink({
-          url: `${config.osBaseUrl}/api/orpc/`,
-          fetch: async (request: URL | Request, init?: RequestInit) => {
-            const authHeaders = await getOsAuthHeaders(config, resolved.name);
-            const headers = new Headers(
-              request instanceof Request ? request.headers : init?.headers,
-            );
-            if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
-            if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
-            return fetch(request, { ...init, headers });
-          },
-        }),
-      );
-      await (osClient as any).ping().catch((e: Error) => {
-        throw new Error(`Failed to ping OS: ${e}`);
+      await verifyOsSession({
+        authHeaders: await getOsAuthHeaders(config, resolved.name),
+        baseUrl: config.osBaseUrl,
+      }).catch((error: unknown) => {
+        throw new Error(`Failed to verify OS session: ${errorMessage(error)}`);
       });
       return {
         message: "Logged in successfully",
@@ -703,6 +883,7 @@ const launcherProcedures = {
     }),
 
   logout: os
+    .input(z.object({}))
     .meta({ description: "Remove stored session for the current config" })
     .handler(async () => {
       const resolved = resolveConfig(process.cwd(), { throw: true });
@@ -718,14 +899,16 @@ const launcherProcedures = {
           .trim()
           .min(1)
           .optional()
-          .describe("OS project id (prj_…). Defaults to the active config's defaultProject."),
+          .describe(
+            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+          ),
         agentPath: z
           .string()
           .trim()
           .min(1)
           .startsWith("/agents/")
           .optional()
-          .default("/agents/onboarding")
+          .default(DEFAULT_CHAT_AGENT_PATH)
           .describe("Agent stream path to chat with (default: /agents/onboarding)"),
       }),
     )
@@ -736,12 +919,20 @@ const launcherProcedures = {
       // Resolved here, not in the input schema: the schema is built at module
       // load, before `--config` has been consumed.
       const resolved = resolveConfig(process.cwd(), { throw: true });
-      const project = input.project || resolved.config.defaultProject;
-      if (!project) {
-        throw new Error(
-          `No project specified. Pass --project or set "defaultProject" on config "${resolved.name}" in ${CONFIG_PATH}.`,
-        );
-      }
+      const envAuth = osAuthFromEnvironment();
+      let storedAuthHeaders: OsAuthHeaders | undefined;
+      const getStoredAuthHeaders = async () => {
+        storedAuthHeaders ??= await getOsAuthHeaders(resolved.config, resolved.name);
+        return storedAuthHeaders;
+      };
+      const project = await resolveChatProject({
+        auth: envAuth ?? osAuthFromHeaders(await getStoredAuthHeaders()),
+        baseUrl: resolved.config.osBaseUrl,
+        configName: resolved.name,
+        configPath: CONFIG_PATH,
+        configuredDefaultProject: resolved.config.defaultProject,
+        explicitProject: input.project,
+      });
       const command = buildChatCommand({
         osBaseUrl: resolved.config.osBaseUrl,
         projectId: project,
@@ -753,11 +944,8 @@ const launcherProcedures = {
       // launcher owns the OAuth refresh machinery — and hand the TUI a plain
       // bearer token; the capnweb WebSocket authenticates once at connect.
       const env: Record<string, string | undefined> = { ITERATE_CONFIG_NAME: resolved.name };
-      const hasEnvCredentials = ["APP_CONFIG_ADMIN_API_SECRET", "ITERATE_BEARER_TOKEN"].some(
-        (name) => process.env[name]?.trim(),
-      );
-      if (!hasEnvCredentials) {
-        const headers = await getOsAuthHeaders(resolved.config, resolved.name);
+      if (!envAuth) {
+        const headers = await getStoredAuthHeaders();
         const token = headers.authorization?.replace(/^Bearer /, "");
         if (!token) {
           throw new Error(
@@ -770,15 +958,19 @@ const launcherProcedures = {
     }),
 
   orgs: {
-    list: os.meta({ description: "List organizations from the auth worker" }).handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      const authClient = await getAuthWorkerClient(resolved.config);
-      return await authClient.user.myOrganizations();
-    }),
+    list: os
+      .input(z.object({}))
+      .meta({ description: "List organizations from the auth worker" })
+      .handler(async () => {
+        const resolved = resolveConfig(process.cwd(), { throw: true });
+        const authClient = await getAuthWorkerClient(resolved.config);
+        return await authClient.user.myOrganizations();
+      }),
   },
 
   config: {
     get: os
+      .input(z.object({}))
       .meta({ default: true, description: "Show config, resolved target, and session status" })
       .handler(async () => {
         const configFile = readConfigFile();
@@ -813,23 +1005,26 @@ const launcherProcedures = {
           session: sessions[resolved.name],
         };
       }),
-    list: os.meta({ description: "List all named configs" }).handler(async () => {
-      const configFile = readConfigFile();
-      const currentName = resolveConfigName(process.cwd());
-      const configs = configFile.configs || {};
-      return {
-        configs: Object.fromEntries(
-          Object.entries(configs).map(([name, cfg]) => [
-            name,
-            {
-              osBaseUrl: cfg.osBaseUrl,
-              active: name === currentName ? true : undefined,
-            },
-          ]),
-        ),
-        default: configFile.default,
-      };
-    }),
+    list: os
+      .input(z.object({}))
+      .meta({ description: "List all named configs" })
+      .handler(async () => {
+        const configFile = readConfigFile();
+        const currentName = resolveConfigName(process.cwd());
+        const configs = { [DEFAULT_CONFIG_NAME]: {}, ...(configFile.configs || {}) };
+        return {
+          configs: Object.fromEntries(
+            Object.entries(configs).map(([name, cfg]) => [
+              name,
+              {
+                osBaseUrl: Config.parse(cfg).osBaseUrl,
+                active: name === currentName ? true : undefined,
+              },
+            ]),
+          ),
+          default: configFile.default,
+        };
+      }),
 
     set: os
       .input(
@@ -880,7 +1075,7 @@ const launcherProcedures = {
       .meta({ description: "Set the default config" })
       .handler(async ({ input }) => {
         const configFile = readConfigFile();
-        if (!configFile.configs?.[input.name]) {
+        if (input.name !== DEFAULT_CONFIG_NAME && !configFile.configs?.[input.name]) {
           throw new Error(
             `Config "${input.name}" not found. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
           );
@@ -890,15 +1085,18 @@ const launcherProcedures = {
         return { default: input.name };
       }),
 
-    current: os.meta({ description: "Show which config is active and why" }).handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      return {
-        name: resolved.name,
-        config: resolved.config,
-        resolvedAuthBaseUrl: resolved.config.authBaseUrl,
-        resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
-      };
-    }),
+    current: os
+      .input(z.object({}))
+      .meta({ description: "Show which config is active and why" })
+      .handler(async () => {
+        const resolved = resolveConfig(process.cwd(), { throw: true });
+        return {
+          name: resolved.name,
+          config: resolved.config,
+          resolvedAuthBaseUrl: resolved.config.authBaseUrl,
+          resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
+        };
+      }),
   },
 };
 
