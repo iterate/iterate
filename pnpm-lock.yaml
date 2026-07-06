@@ -57,6 +57,9 @@ patchedDependencies:
   capnweb@0.8.0:
     hash: e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24
     path: patches/capnweb@0.8.0.patch
+  middlewright@0.1.1:
+    hash: 8989bbdb2dc46603be6d00e1b3dbfc20a2eb24a0faefb3c5446491ddb4426552
+    path: patches/middlewright@0.1.1.patch
 
 importers:
 
@@ -128,7 +131,7 @@ importers:
         version: 16.3.2
       middlewright:
         specifier: 0.1.1
-        version: 0.1.1(@playwright/test@1.60.0)
+        version: 0.1.1(patch_hash=8989bbdb2dc46603be6d00e1b3dbfc20a2eb24a0faefb3c5446491ddb4426552)(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -22464,7 +22467,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@0.1.1(@playwright/test@1.60.0):
+  middlewright@0.1.1(patch_hash=8989bbdb2dc46603be6d00e1b3dbfc20a2eb24a0faefb3c5446491ddb4426552)(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2

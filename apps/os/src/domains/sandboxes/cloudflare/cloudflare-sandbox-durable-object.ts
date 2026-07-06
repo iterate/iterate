@@ -115,6 +115,31 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   override sleepAfter = "3m";
 
   /**
+   * Idle expiry DESTROYS the container instead of the SDK's stop (SIGTERM).
+   * A stopped container keeps its instance ASSIGNED to this Durable Object,
+   * and assignments count against the app's max_instances and never expire on
+   * their own (`wrangler containers info` on a slot mid-marathon: active 0,
+   * assigned 99 — including day-old idle slots still holding their last run's
+   * assignments; only destroy or an app rollout releases them). Every e2e
+   * fixture creates a fresh sandbox DO, so stop-on-idle leaks ~7-8 assignments
+   * per preview e2e run and the cap wedges every new sandbox start after
+   * ~a dozen runs — the real mechanism behind the recurring "Container is
+   * starting/provisioning" windows (docs/preview-e2e-flake-hunt.md flake 23,
+   * superseding the flake 19/20 theories). Destroy costs us nothing extra: a
+   * sandbox filesystem is ephemeral across sleep anyway (see class docs), so
+   * stop-then-wake and destroy-then-wake are the same cold boot + re-clone.
+   * The SDK's keepAlive guard is preserved (its own override skips shutdown
+   * when a caller enabled keepAlive; the field is private, hence the cast).
+   */
+  override async onActivityExpired(): Promise<void> {
+    const keepAlive = (this as unknown as { keepAliveEnabled?: boolean }).keepAliveEnabled === true;
+    if (keepAlive) {
+      return super.onActivityExpired();
+    }
+    await this.destroy();
+  }
+
+  /**
    * Record who this sandbox is before any other traffic reaches it.
    *
    * Identity normally derives from the Durable Object name, but container

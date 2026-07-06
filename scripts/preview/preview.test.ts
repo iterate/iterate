@@ -71,6 +71,12 @@ describe("preview workflow scope", () => {
     // The preview lifecycle is one Depot CI workflow; a change to it triggers
     // a full-fleet preview and must be mirrored in that file's own paths list.
     expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
+    // Dependency manifests can change every app's build output; a diff that
+    // touches only them must select the full fleet, not "no apps affected"
+    // (which strands the fleet's recorded heads behind the PR head).
+    expect(cloudflarePreviewSharedPaths).toContain("pnpm-lock.yaml");
+    expect(cloudflarePreviewSharedPaths).toContain("pnpm-workspace.yaml");
+    expect(cloudflarePreviewSharedPaths).toContain("patches/**");
   });
 });
 
