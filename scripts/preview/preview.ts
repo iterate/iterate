@@ -1071,6 +1071,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
+        // Remove stale retry-telemetry files FIRST — before any step that can
+        // exit the lane early (the smoke gate below). They survive from a
+        // previous run on the same machine (marathon loops), and
+        // collectRetryTelemetry runs pass or fail, so a leftover file would
+        // report a previous run's retries against this one.
+        `rm -f ${osVitestRetryTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
@@ -1101,11 +1107,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // rc=124 auto-retry used to live here; it fired zero times in ~200
         // Depot runs and was the one place retry layers could stack.
         //
-        // Retry telemetry: stale files are removed first (they survive from
-        // a previous run on the same machine — marathon loops), then the
-        // vitest lane writes its retry JSON for preview.ts to fold into the
-        // PR body alongside Playwright's playwright-results.json.
-        `rm -f ${osVitestRetryTelemetryFile} ../../test-results/playwright-results.json`,
+        // Retry telemetry: the vitest lane writes its retry JSON (stale
+        // files were removed at the top of this script) for preview.ts to
+        // fold into the PR body alongside Playwright's
+        // playwright-results.json.
         `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
