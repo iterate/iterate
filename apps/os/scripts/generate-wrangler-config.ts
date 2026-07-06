@@ -118,6 +118,11 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
     name: "jonastemplestein",
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB5Jd9GS/iVC1nWpIwrM3lhecTuXhsz8NoV8QcyOIuzK",
   },
+  {
+    name: "jonas-sandbox-debug",
+    public_key:
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP+VckcAWnI0ZbBLsxmKWJtv7lbDwPWcjN37dR/VYlLq sandbox-debug",
+  },
 ];
 
 const DO_CLASSES = {
