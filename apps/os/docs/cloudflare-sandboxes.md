@@ -89,14 +89,61 @@ Caveats:
 - SSH won't **start** a stopped instance, and an open SSH session alone won't
   keep an instance alive past `sleepAfter` — hold it with a running process, or
   just re-`exec` to reset the idle timer.
-- **Full process visibility** inside the SSH shell (seeing the sandbox's own
-  processes, not just your shell) depends on the **`containers_pid_namespace`**
-  compatibility flag. We have **not** set it — it's an edge-side compat flag we
-  couldn't validate locally, and a bad flag fails deploys. To enable, add it to
-  `compatibility_flags` and verify against a preview first. Docs:
-  <https://developers.cloudflare.com/containers/ssh/>.
+- **Process view**: the **`containers_pid_namespace`** compatibility flag gives
+  each container its own pid namespace (its entrypoint as PID 1; SSH shows just
+  that sandbox's processes, not the whole VM). It's **default-on at our
+  `compatibility_date`** (≥ 2026-04-01) — we stay on the latest date, so we get
+  the isolated view for free and do **not** list the flag (we don't carry
+  default flags). Docs: <https://developers.cloudflare.com/containers/ssh/>.
 - SSH is for humans debugging. Programmatic "run a command in the container" is
   the SDK's `exec()` (goes through our egress + cwd guards), not SSH.
+
+---
+
+## Environment variables & running a coding agent
+
+Every sandbox carries a durable env-var map — a `Record<string,string>` applied
+to every command (`exec`, `startProcess`, …), conventionally ALL_CAPS keys.
+Configure it:
+
+```ts
+await itx.sandbox.configureEnvVars({
+  // value is a getSecret placeholder — the material never enters the container
+  ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic-api-key" })',
+  OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai-api-key" })',
+});
+```
+
+It merges into the stored map (empty string clears a key), persists it in
+Durable Object storage, and re-applies it on every container start (so it
+survives sleep/restart). It records an `env-configured` **event** on the
+sandbox's stream carrying only the KEYS — values never touch the stream.
+
+**The secret never enters the container.** A value like
+`getSecret({ path: "…" })` is set verbatim as the env var; when the coding
+agent puts it in a request header to the model API, the project egress path
+substitutes the real material on the way out (the same
+allowlist + substitution used for all sandbox egress — see
+[Sandboxes → Egress](./sandboxes.md)). So an agent reads `ANTHROPIC_API_KEY`
+from its environment and calls Claude, but the key lives only in the secret
+system. The secret at that path must allow the provider host (e.g.
+`api.anthropic.com` / `api.openai.com`) in its egress allowlist.
+
+**The coding agent** is pre-installed: our image is the `-opencode` variant
+(`cloudflare/sandbox:<v>-opencode`), which bundles the **OpenCode** CLI — no
+custom agent build. OpenCode is model-agnostic and reads
+`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` from the environment:
+
+```ts
+// repo is already checked out at the cwd; the key resolves at egress
+const r = await itx.sandbox.exec(
+  'opencode run --model openai/gpt-4o-mini "summarize README.md in one line"',
+);
+```
+
+(There is no first-party `-claude`/`-codex` image variant; to use the Claude
+Code or Codex CLIs instead, `npm i -g @anthropic-ai/claude-code` / `@openai/codex`
+at runtime or bake them into `Dockerfile.sandbox`.)
 
 ---
 

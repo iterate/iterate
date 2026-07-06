@@ -51,6 +51,16 @@ const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
  */
 const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
 
+/**
+ * Durable env-var map for the sandbox (see {@link CloudflareSandboxDurableObject}).
+ * A `Record<string,string>` applied to every command in the container;
+ * conventionally ALL_CAPS keys whose values are `getSecret({ path })`
+ * placeholders — so the material stays in the secret system and is injected
+ * only at egress, never entering the container.
+ */
+const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
+type SandboxEnvVars = Record<string, string>;
+
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
 // stream result) are not exported by the SDK, so recover them from the
 // overloaded base signature rather than mirroring the interfaces (which would
@@ -449,6 +459,55 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     }
   }
 
+  /**
+   * Set environment variables for the sandbox — the durable `Record<string,
+   * string>` applied to every command (`exec`, `startProcess`, …). Merges into
+   * the stored map (pass a var with an empty string to clear it), so callers
+   * build the environment incrementally.
+   *
+   * The intended value shape is a `getSecret({ path })` placeholder: the
+   * material then stays in the secret system and is substituted only at egress
+   * (the project egress path already does this for any header carrying the
+   * placeholder), so a coding agent can read e.g. `ANTHROPIC_API_KEY` from the
+   * environment and call the provider, yet the real key never enters the
+   * container. Plain non-secret values are fine too. NEVER pass raw secret
+   * material — it would sit in the container's environment and the container
+   * filesystem's snapshots.
+   *
+   * Not guarded by `ensureProjectRepo()` (it's configuration, valid before the
+   * container ever boots): the map is persisted now and re-applied during
+   * provisioning; if a container is already running, the delta is applied to it
+   * immediately. Emits an `env-configured` event recording the KEYS (never the
+   * values) for the sandbox's stream/journal.
+   */
+  async configureEnvVars(vars: SandboxEnvVars): Promise<{ keys: string[] }> {
+    const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
+    const merged = { ...stored, ...vars };
+    this.ctx.storage.kv.put(SANDBOX_ENV_STORAGE_KEY, merged);
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/env-configured",
+      payload: { keys: Object.keys(vars) },
+    });
+    // Apply the delta to a running container so an in-flight session picks it
+    // up without a restart; if it isn't provisioned yet, provisioning applies
+    // the full stored map. Best-effort — never fail configuration on a
+    // transient container hiccup.
+    if (this.#workspaceProvisioned) {
+      await super
+        .setEnvVars(vars)
+        .catch((error: unknown) =>
+          console.warn("sandbox configureEnvVars: applying to running container failed", error),
+        );
+    }
+    return { keys: Object.keys(merged) };
+  }
+
+  async #applyStoredEnvVars(): Promise<void> {
+    const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY);
+    if (stored === undefined || Object.keys(stored).length === 0) return;
+    await super.setEnvVars(stored);
+  }
+
   // ---------------------------------------------------------------------------
   // The workspace guarantee, enforced: every public command and file operation
   // below awaits `ensureProjectRepo()` before touching the container, so no
@@ -598,6 +657,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       // backup expired, or it somehow predates the repo). #cloneProjectRepo
       // probes the marker itself, so a restored checkout makes this a no-op.
       await this.#cloneProjectRepo();
+      // Re-apply the durable env map onto THIS container (the SDK does not
+      // document env persistence across restart), so every guarded command
+      // below runs with the configured vars — done before the workspace is
+      // marked ready, i.e. before any command can run.
+      await this.#applyStoredEnvVars();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag

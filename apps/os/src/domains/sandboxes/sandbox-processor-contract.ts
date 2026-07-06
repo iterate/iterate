@@ -42,6 +42,11 @@ const SANDBOX_EVENTS = {
       "The idle-time workspace snapshot failed; the container still stops, and the previous good backup (if any) remains the restore source.",
     payloadSchema: z.object({ error: z.string() }),
   },
+  "events.iterate.com/sandbox/env-configured": {
+    description:
+      "The sandbox's environment-variable map was configured. Records only the KEYS set — values (getSecret placeholders / non-secret literals) live in Durable Object storage, never on the stream.",
+    payloadSchema: z.object({ keys: z.array(z.string()) }),
+  },
 } as const;
 
 /**
@@ -67,12 +72,15 @@ export const SandboxProcessorContract = defineProcessorContract({
     running: z.boolean().default(false),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
+    /** The env-var keys configured on the sandbox (values live in DO storage). */
+    envKeys: z.array(z.string()).default([]),
   }),
   events: SANDBOX_EVENTS,
   consumes: [
     "events.iterate.com/sandbox/container-started",
     "events.iterate.com/sandbox/container-stopped",
     "events.iterate.com/sandbox/backup-created",
+    "events.iterate.com/sandbox/env-configured",
   ],
   emits: [],
 });

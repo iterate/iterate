@@ -1,5 +1,15 @@
-FROM docker.io/cloudflare/sandbox:0.12.3
+# The `-opencode` variant of the sandbox base image: identical to the plain
+# `cloudflare/sandbox:<version>` runtime plus the OpenCode CLI (`opencode`,
+# `npm i -g opencode-ai`) pre-installed — so every sandbox ships with a real
+# coding agent and we build no custom agent layer. OpenCode is model-agnostic
+# and reads ANTHROPIC_API_KEY / OPENAI_API_KEY from the environment (set via
+# the sandbox env-var map, values as getSecret(...) placeholders that the
+# project egress path substitutes — the key never enters the container). See
+# docs/cloudflare-sandboxes.md. Keep the tag in lockstep with the
+# @cloudflare/sandbox version in package.json or the SDK warns on skew.
+FROM docker.io/cloudflare/sandbox:0.12.3-opencode
 
 # The sandbox control plane listens on 3000 (the SDK's reserved port);
 # miniflare reads EXPOSE to know which port to health-check in local dev.
+# (The opencode variant also serves OpenCode on 4096; we don't health-check it.)
 EXPOSE 3000

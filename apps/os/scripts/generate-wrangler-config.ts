@@ -88,7 +88,14 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // that misses one would be silent drift. (Deliberately distinct from
 // WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
 // hashed into build keys and moves on its own schedule.)
-const COMPATIBILITY_DATE = "2026-06-17";
+//
+// Policy: stay on the LATEST — keep this at the newest date the pinned workerd
+// supports (its build date; a later date errors as "in the future" locally).
+// Bump it alongside the workerd/miniflare catalog bump in pnpm-workspace.yaml,
+// so we always run current compat behavior and never accumulate opt-in flags
+// for things that became default. Only genuinely non-default flags go in
+// compatibility_flags below.
+const COMPATIBILITY_DATE = "2026-07-01";
 
 // The os worker (reader) and the builder (writer) must name the same
 // miniflare namespace in local dev or cache reads never see builds.
@@ -158,6 +165,12 @@ function workerBindings(input: {
       // from Doppler (OPTIONAL_SECRETS).
       BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
       CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
+      // Sandbox DO↔container control-plane transport. HTTP is still the SDK
+      // default in 0.12.3 but is removed from SDK releases after 2026-07-09
+      // (tunnels/code-interpreter already require RPC); RPC is the future
+      // default, so opt in now. Independent of container egress interception.
+      // See docs/cloudflare-sandboxes.md.
+      SANDBOX_TRANSPORT: "rpc",
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -288,10 +301,12 @@ export const config = {
   name: "os",
   main: "./src/worker.ts",
   compatibility_date: COMPATIBILITY_DATE,
-  // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
-  // loader need Node APIs. global_fetch_strictly_public: same-zone
-  // subrequests (auth worker, worker-hosted e2e fixtures through project
-  // egress) must traverse Worker routes instead of going to origin.
+  // Only NON-default flags belong here (we stay on the latest
+  // compatibility_date, so anything default-on at that date is redundant).
+  // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker loader
+  // need Node APIs. global_fetch_strictly_public: same-zone subrequests (auth
+  // worker, worker-hosted e2e fixtures through project egress) must traverse
+  // Worker routes instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
