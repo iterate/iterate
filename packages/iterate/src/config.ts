@@ -10,8 +10,8 @@ const XDG_CONFIG_PARENT = join(
 
 export const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 export const DEFAULT_CONFIG_NAME = "prd";
-export const DEFAULT_OS_BASE_URL = "https://os.iterate.com";
-export const DEFAULT_AUTH_BASE_URL = "https://auth.iterate.com";
+const DEFAULT_OS_BASE_URL = "https://os.iterate.com";
+const DEFAULT_AUTH_BASE_URL = "https://auth.iterate.com";
 
 /** Stored session (lives inside a config entry) */
 export const StoredSession = z.object({
