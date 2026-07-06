@@ -762,19 +762,26 @@ return { supported: supported.slice(0, 10), converted };
     id: "ai-generate-image",
     title: "Generate an image with a Workers AI model",
     description:
-      "Runs xAI Grok Imagine Image through itx.ai.run(). The model returns a hosted image URL in result.image. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-image/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Runs Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure, so run it interactively.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
-const response = await itx.ai.run("xai/grok-imagine-image", {
-  prompt: "A compact product photo of a brushed steel desk lamp on a white background",
-  aspect_ratio: "1:1",
-  resolution: "1k",
+const form = new FormData();
+form.append("prompt", "A compact product photo of a brushed steel desk lamp on a white background");
+form.append("width", "512");
+form.append("height", "512");
+
+const formResponse = new Response(form);
+const response = await itx.ai.run("@cf/black-forest-labs/flux-2-klein-9b", {
+  multipart: {
+    body: formResponse.body,
+    contentType: formResponse.headers.get("content-type"),
+  },
 });
 
 return {
-  docs: "https://developers.cloudflare.com/ai/models/xai/grok-imagine-image/",
-  imageUrl: response?.result?.image,
+  docs: "https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/",
+  imageBytesApprox: response?.image ? Math.floor((response.image.length * 3) / 4) : null,
   response,
 };
 `.trim(),
