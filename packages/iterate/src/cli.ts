@@ -25,6 +25,7 @@ import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import {
   CONFIG_PATH,
   Config,
+  DEFAULT_CONFIG_NAME,
   readConfig,
   readConfigFile,
   removeConfigSession,
@@ -135,15 +136,18 @@ const runInheritedProcess = async (input: {
   }
 };
 
+const hasConfig = (configFile: ReturnType<typeof readConfigFile>, name: string) =>
+  name === DEFAULT_CONFIG_NAME || Boolean(configFile.configs?.[name]);
+
 /**
  * Resolve which config name to use.
- * Priority: --config flag > workspace match (walk up from cwd) > default > single-config auto > error
+ * Priority: --config flag > workspace match (walk up from cwd) > default > single-config auto > built-in prd
  */
 const resolveConfigName = (workspacePath: string): string | Error => {
   const configFile = readConfigFile();
 
   if (configFlagOverride) {
-    if (!configFile.configs?.[configFlagOverride]) {
+    if (!hasConfig(configFile, configFlagOverride)) {
       return new Error(
         `Config "${configFlagOverride}" not found. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
       );
@@ -156,7 +160,7 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   while (dir && dir !== "/") {
     const match = configFile.workspaces?.[dir];
     if (match) {
-      if (!configFile.configs?.[match]) {
+      if (!hasConfig(configFile, match)) {
         return new Error(`Workspace "${dir}" maps to config "${match}" which doesn't exist.`);
       }
       return match;
@@ -165,7 +169,7 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   }
 
   if (configFile.default) {
-    if (!configFile.configs?.[configFile.default]) {
+    if (!hasConfig(configFile, configFile.default)) {
       return new Error(
         `Default config "${configFile.default}" doesn't exist. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
       );
@@ -177,10 +181,7 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   const configNames = Object.keys(configFile.configs || {});
   if (configNames.length === 1) return configNames[0];
 
-  return new Error(
-    `No config resolved for ${workspacePath}. Run \`iterate config set <name>\` or set a default with \`iterate config use <name>\`.\n` +
-      `  Config file: ${CONFIG_PATH}`,
-  );
+  return DEFAULT_CONFIG_NAME;
 };
 
 function resolveConfig(workspacePath: string): { name: string; config: Config } | Error;
@@ -309,6 +310,7 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
     projectItx = (await session.projects.create({
       projectId: project.id,
       slug: project.slug,
+      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
       waitUntilCreated: false,
     })) as unknown as RpcStub<ProjectRpcTarget>;
     agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
@@ -871,6 +873,7 @@ const launcherProcedures = {
     }),
 
   logout: os
+    .input(z.object({}))
     .meta({ description: "Remove stored session for the current config" })
     .handler(async () => {
       const resolved = resolveConfig(process.cwd(), { throw: true });
@@ -945,15 +948,19 @@ const launcherProcedures = {
     }),
 
   orgs: {
-    list: os.meta({ description: "List organizations from the auth worker" }).handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      const authClient = await getAuthWorkerClient(resolved.config);
-      return await authClient.user.myOrganizations();
-    }),
+    list: os
+      .input(z.object({}))
+      .meta({ description: "List organizations from the auth worker" })
+      .handler(async () => {
+        const resolved = resolveConfig(process.cwd(), { throw: true });
+        const authClient = await getAuthWorkerClient(resolved.config);
+        return await authClient.user.myOrganizations();
+      }),
   },
 
   config: {
     get: os
+      .input(z.object({}))
       .meta({ default: true, description: "Show config, resolved target, and session status" })
       .handler(async () => {
         const configFile = readConfigFile();
@@ -988,23 +995,26 @@ const launcherProcedures = {
           session: sessions[resolved.name],
         };
       }),
-    list: os.meta({ description: "List all named configs" }).handler(async () => {
-      const configFile = readConfigFile();
-      const currentName = resolveConfigName(process.cwd());
-      const configs = configFile.configs || {};
-      return {
-        configs: Object.fromEntries(
-          Object.entries(configs).map(([name, cfg]) => [
-            name,
-            {
-              osBaseUrl: cfg.osBaseUrl,
-              active: name === currentName ? true : undefined,
-            },
-          ]),
-        ),
-        default: configFile.default,
-      };
-    }),
+    list: os
+      .input(z.object({}))
+      .meta({ description: "List all named configs" })
+      .handler(async () => {
+        const configFile = readConfigFile();
+        const currentName = resolveConfigName(process.cwd());
+        const configs = { [DEFAULT_CONFIG_NAME]: {}, ...(configFile.configs || {}) };
+        return {
+          configs: Object.fromEntries(
+            Object.entries(configs).map(([name, cfg]) => [
+              name,
+              {
+                osBaseUrl: Config.parse(cfg).osBaseUrl,
+                active: name === currentName ? true : undefined,
+              },
+            ]),
+          ),
+          default: configFile.default,
+        };
+      }),
 
     set: os
       .input(
@@ -1055,7 +1065,7 @@ const launcherProcedures = {
       .meta({ description: "Set the default config" })
       .handler(async ({ input }) => {
         const configFile = readConfigFile();
-        if (!configFile.configs?.[input.name]) {
+        if (input.name !== DEFAULT_CONFIG_NAME && !configFile.configs?.[input.name]) {
           throw new Error(
             `Config "${input.name}" not found. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
           );
@@ -1065,15 +1075,18 @@ const launcherProcedures = {
         return { default: input.name };
       }),
 
-    current: os.meta({ description: "Show which config is active and why" }).handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      return {
-        name: resolved.name,
-        config: resolved.config,
-        resolvedAuthBaseUrl: resolved.config.authBaseUrl,
-        resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
-      };
-    }),
+    current: os
+      .input(z.object({}))
+      .meta({ description: "Show which config is active and why" })
+      .handler(async () => {
+        const resolved = resolveConfig(process.cwd(), { throw: true });
+        return {
+          name: resolved.name,
+          config: resolved.config,
+          resolvedAuthBaseUrl: resolved.config.authBaseUrl,
+          resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
+        };
+      }),
   },
 };
 

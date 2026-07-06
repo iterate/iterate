@@ -9,6 +9,9 @@ const XDG_CONFIG_PARENT = join(
 );
 
 export const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
+export const DEFAULT_CONFIG_NAME = "prd";
+export const DEFAULT_OS_BASE_URL = "https://os.iterate.com";
+export const DEFAULT_AUTH_BASE_URL = "https://auth.iterate.com";
 
 /** Stored session (lives inside a config entry) */
 export const StoredSession = z.object({
@@ -26,8 +29,8 @@ export type StoredSession = z.infer<typeof StoredSession>;
 /** A named config — describes which server to talk to and how to authenticate. */
 export const Config = z.object({
   defaultProject: z.string().optional(),
-  osBaseUrl: z.string().optional().default("https://os.iterate.com"),
-  authBaseUrl: z.string().optional().default("https://auth.iterate.com"),
+  osBaseUrl: z.string().optional().default(DEFAULT_OS_BASE_URL),
+  authBaseUrl: z.string().optional().default(DEFAULT_AUTH_BASE_URL),
   session: StoredSession.optional(),
 });
 
@@ -42,6 +45,13 @@ const ConfigFile = z.object({
 });
 
 type ConfigFile = z.infer<typeof ConfigFile>;
+
+const normalizeConfig = (config: Config): Config => ({
+  ...config,
+  // Strip trailing slashes to avoid double-slash URLs downstream.
+  osBaseUrl: config.osBaseUrl.replace(/\/+$/, ""),
+  authBaseUrl: config.authBaseUrl.replace(/\/+$/, ""),
+});
 
 export const readConfigFile = (): ConfigFile => {
   if (!existsSync(CONFIG_PATH)) return {};
@@ -72,7 +82,7 @@ export function readConfig(name: string): Config | Error;
 export function readConfig(name: string, options: { throw: true }): Config;
 export function readConfig(name: string, options?: { throw: true }): Config | Error {
   const result = ((): Config | Error => {
-    const raw = readConfigFile().configs?.[name];
+    const raw = readConfigFile().configs?.[name] ?? (name === DEFAULT_CONFIG_NAME ? {} : undefined);
     if (!raw) return new Error(`Config "${name}" not found in ${CONFIG_PATH}`);
     const parsed = Config.safeParse(raw);
     if (!parsed.success) {
@@ -80,10 +90,7 @@ export function readConfig(name: string, options?: { throw: true }): Config | Er
         `Invalid config "${name}" in ${CONFIG_PATH}:\n${z.prettifyError(parsed.error)}`,
       );
     }
-    // Strip trailing slashes to avoid double-slash URLs downstream.
-    parsed.data.osBaseUrl = parsed.data.osBaseUrl.replace(/\/+$/, "");
-    parsed.data.authBaseUrl = parsed.data.authBaseUrl.replace(/\/+$/, "");
-    return parsed.data;
+    return normalizeConfig(parsed.data);
   })();
   if (result instanceof Error && options?.throw) throw result;
   return result;
@@ -95,8 +102,8 @@ export function readConfig(name: string, options?: { throw: true }): Config | Er
  */
 export const updateConfigSession = (configName: string, session: StoredSession): void => {
   const configFile = readConfigFile();
-  const entry = configFile.configs?.[configName];
-  if (!entry) throw new Error(`Config "${configName}" not found`);
+  configFile.configs ||= {};
+  const entry = (configFile.configs[configName] ||= normalizeConfig(Config.parse({})));
   entry.session = { ...entry.session, ...session };
   writeConfigFile(configFile);
 };

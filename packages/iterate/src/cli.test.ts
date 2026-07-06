@@ -11,6 +11,7 @@ const createFakeSession = (input: {
     id: string;
     organizationId: string | null;
     organizationName: string | null;
+    organizationSlug: string | null;
     slug: string;
   }>;
 }) => {
@@ -97,6 +98,7 @@ describe("resolveChatProject", () => {
           id: "prj_only",
           organizationId: null,
           organizationName: null,
+          organizationSlug: null,
           slug: "only",
         },
       ],
@@ -129,6 +131,7 @@ describe("resolveChatProject", () => {
           id: "prj_missing",
           organizationId: null,
           organizationName: null,
+          organizationSlug: null,
           slug: "missing",
         },
       ],
@@ -170,6 +173,7 @@ describe("resolveChatProject", () => {
           id: "prj_default",
           organizationId: null,
           organizationName: null,
+          organizationSlug: null,
           slug: "default",
         },
       ],
@@ -193,6 +197,42 @@ describe("resolveChatProject", () => {
     });
   });
 
+  test("passes the organization slug when setting up a missing project", async () => {
+    let createArgs: unknown;
+    const fake = createFakeSession({
+      onProjectCreate: (args) => {
+        createArgs = args;
+      },
+      projects: [
+        {
+          deploymentStatus: "missing",
+          id: "prj_org_project",
+          organizationId: "org_123",
+          organizationName: "Acme",
+          organizationSlug: "acme",
+          slug: "org-project",
+        },
+      ],
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        createSession: fake.createSession,
+      }),
+    ).resolves.toBe("prj_org_project");
+
+    expect(createArgs).toEqual({
+      organizationSlug: "acme",
+      projectId: "prj_org_project",
+      slug: "org-project",
+      waitUntilCreated: false,
+    });
+  });
+
   test("keeps asking for an explicit project when multiple projects are accessible", async () => {
     const fake = createFakeSession({
       projects: [
@@ -201,6 +241,7 @@ describe("resolveChatProject", () => {
           id: "prj_one",
           organizationId: null,
           organizationName: null,
+          organizationSlug: null,
           slug: "one",
         },
         {
@@ -208,6 +249,7 @@ describe("resolveChatProject", () => {
           id: "prj_two",
           organizationId: null,
           organizationName: null,
+          organizationSlug: null,
           slug: "two",
         },
       ],
