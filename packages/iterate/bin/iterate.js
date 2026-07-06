@@ -28,6 +28,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const pkgRoot = dirname(__dirname);
 
+// `npx iterate` and `bunx iterate` should exercise the package that the runner
+// just installed. Normal installed/global executions still delegate to local
+// repo source below, which keeps monorepo development fast.
+const isEphemeralPackageRunner = () =>
+  process.env.npm_command === "exec" &&
+  (process.env.npm_lifecycle_event === "npx" || process.env.npm_lifecycle_event === "bunx");
+
 /**
  * Find a local version of the iterate CLI that differs from the currently
  * running script. Returns an importable module path, or null.
@@ -64,7 +71,7 @@ const findLocalModule = () => {
   return null;
 };
 
-const localModule = findLocalModule();
+const localModule = isEphemeralPackageRunner() ? null : findLocalModule();
 if (localModule) {
   const { runCli } = await import(localModule);
   await runCli();
