@@ -106,9 +106,11 @@ the Playwright-conventional `CI` and `VIDEO_MODE`).
 - **Playwright** writes `test-results/` at the repo root: traces, videos, and
   screenshots under `test-results/playwright-output`, plus HTML and JSON
   reports.
-- **Preview CI** uploads all of the above (`test-results`,
-  `apps/os/test-results`, `/tmp/os-e2e-*`) as a CI artifact — see
-  `previewTestArtifacts` in `scripts/preview/preview.ts`.
+- **Preview CI** collects all of the above (`test-results`,
+  `apps/os/test-results`, `/tmp/os-e2e-*`) into the repo-level
+  `test-results/` directory, then uploads that one workspace-relative directory
+  as a CI artifact. The source paths are tracked as `previewTestArtifacts` in
+  `scripts/preview/preview.ts`.
 
 ## Retries and timeouts
 

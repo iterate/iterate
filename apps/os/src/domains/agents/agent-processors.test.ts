@@ -913,6 +913,30 @@ describe("file attachments in the LLM request", () => {
     });
   });
 
+  it("reflects sent-message attachments back into model-visible history", async () => {
+    const stream = new MemoryStream();
+    const processor = new AgentProcessor({ stream });
+    await stream.append({
+      type: "events.iterate.com/agents/web-message-sent",
+      payload: { message: "Here is your cat!", files: [attachment] },
+    });
+    await deliverNewEvents({ processor, stream, cursors: new Map() });
+
+    const reflected = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(reflected?.payload).toMatchObject({
+      content: "The assistant sent this visible web-chat message: Here is your cat!",
+      files: [attachment],
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    });
+
+    // ...so the next request's history carries the image the agent sent.
+    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestId: 99 });
+    const userMessage = body.messages.find((message) => message.role === "user");
+    expect(userMessage?.files).toEqual([attachment]);
+  });
+
   it("flattens attachments to actionable hint lines for text-only models", () => {
     const flattened = flattenMessageToText({
       role: "user",

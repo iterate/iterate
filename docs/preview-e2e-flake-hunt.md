@@ -61,6 +61,10 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
   attempts, each with a fresh session + project, matching the vitest lane's
   `retry: 2` policy; a broken slot still fails all three inside ~5min.
+- **2026-07-07 quota correction**: the preview cap was reduced 500 → 200.
+  Cap 500 helped a single marathon slot, but multiple preview slots at
+  `standard-1` exceeded the dev/preview account memory quota and blocked new
+  deploys.
 - **marathon7** `pvtfkq146g`: 21 clean, run 22 failed in
   `streams-example-app`'s vitest lane: `Network connection lost.` on a
   392ms-old fresh WebSocket (edge blip) — and that suite had NO retry config
@@ -576,11 +580,13 @@ sandbox-exec went ~20-40s (runs 1-10) → 2.1-2.8min (runs 30-32, shaving the
 happened at exactly `assigned == max_instances` (20, then 100). Response:
 preview cap raised 100 → **500** (`generate-wrangler-config.ts`) so a whole
 50-run marathon's cumulative creations (~3-8 sandboxes/run) never saturate
-the pool; lite instances bill on usage, so the headroom is free. Destroy
-remains correct — it is what lets an idle fleet drain back to zero instead of
-holding slots forever. If sustained-churn claim latency reproduces at 500,
-this becomes a Cloudflare Containers escalation (pool-manager degradation
-under DO-binding churn), not an app-side fix.
+the pool. On 2026-07-07 this was reduced to **200** because several preview
+slots at 500 `standard-1` instances exceeded the dev/preview account memory
+quota and blocked deploys. Destroy remains correct — it is what lets an idle
+fleet drain back to zero instead of holding slots forever. If sustained-churn
+claim latency reproduces at 200, this becomes a Cloudflare Containers
+escalation (pool-manager degradation under DO-binding churn), not an app-side
+fix.
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 

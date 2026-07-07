@@ -36,6 +36,8 @@ import {
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
 import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
+import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
+import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -52,7 +54,7 @@ import {
   mintProjectFileUrl,
   putProjectFile,
   readProjectFile,
-  sanitizeFileFilename,
+  storeAgentFileAttachments,
 } from "./domains/files/project-files.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
@@ -104,6 +106,8 @@ import type {
   Repo,
   RepoCollection,
   SandboxCollection,
+  Scheduler,
+  SchedulerCollection,
   Secret,
   SecretCollection,
   SecretDescription,
@@ -269,6 +273,92 @@ class ProjectStreamCollectionRpcTarget
 
   list() {
     return projectProcessorState(this.projectProps.projectId).then((state) => state.streams);
+  }
+}
+
+/**
+ * One Scheduler handle: a thin forwarder to the SchedulerDurableObject for a
+ * `/scheduler/**` stream. The command surface (set/cancel/trigger/list) runs
+ * on the DO so every write returns read-your-writes visible and alarm-armed;
+ * this target only normalizes input sugar before dialing.
+ */
+class SchedulerRpcTarget extends RpcTarget implements Scheduler {
+  async __describe() {
+    return describeNode({
+      instructions:
+        `The Scheduler at "${this.props.path}": keyed Schedules that run itx scripts on a ` +
+        "recurrence ({ at } | { every: seconds } | { cron, timezone? }; set() also accepts " +
+        "{ in: seconds }). Scripts are function-expression STRINGS `async (itx, schedule, trigger) " +
+        "=> { ... }` running with project-root authority, at least once per Trigger — derive " +
+        "append idempotency keys from trigger.executionId. Every Schedule change and Trigger " +
+        "outcome is an event on this stream.",
+      children: {
+        cancel: "Remove a Schedule by key (idempotent).",
+        list: "Every Schedule, reduced from the stream.",
+        set: "Upsert a Schedule: { key, recurrence, script, metadata? }.",
+        trigger: "Run a Schedule now (advances a recurring clock, consumes a one-shot).",
+      },
+      parent: "schedulers.get(path)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string; path: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get #durableObjectStub() {
+    return env.SCHEDULER.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: this.props.path,
+      }),
+    );
+  }
+
+  set(input: Parameters<Scheduler["set"]>[0]) {
+    return this.#durableObjectStub.setSchedule({
+      action: { kind: "itx-script", script: input.script },
+      key: input.key,
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      recurrence: canonicalRecurrence(input.recurrence, Date.now()),
+    });
+  }
+
+  cancel(key: Parameters<Scheduler["cancel"]>[0]) {
+    return this.#durableObjectStub.cancelSchedule(key);
+  }
+
+  list() {
+    return this.#durableObjectStub.listSchedules();
+  }
+
+  trigger(key: Parameters<Scheduler["trigger"]>[0]) {
+    return this.#durableObjectStub.triggerSchedule(key);
+  }
+}
+
+class SchedulerCollectionRpcTarget extends RpcTarget implements SchedulerCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Scheduler catalog: get(path) returns the Scheduler at a /scheduler/** path. The default is itx.scheduler (= get("/scheduler/primary")); extra Schedulers are for isolating noisy workloads.',
+      children: { get: "The Scheduler at a path." },
+      parent: "a project itx (itx.schedulers)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get(path: string) {
+    return new SchedulerRpcTarget({
+      auth: this.props.auth,
+      path: normalizeSchedulerPath(path),
+      projectId: this.props.projectId,
+    });
   }
 }
 
@@ -1225,8 +1315,11 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   async __describe() {
     return describeNode({
       instructions:
-        "An agent's web-chat door: sendMessage({ message }) appends the agent's reply to its stream (what the user sees).",
-      children: { sendMessage: "Say something to the user." },
+        "An agent's web-chat door: sendMessage({ message, files? }) appends the agent's reply " +
+        "to its stream (what the user sees). `files` attaches generated files — base64 " +
+        "strings (itx.ai.run image output), Uint8Array, Blob, or a stream — which render " +
+        "inline in the chat and stay model-visible on later turns.",
+      children: { sendMessage: "Say something to the user (optionally with file attachments)." },
       parent: "agent.chat / itx.chat (agent scopes only)",
     });
   }
@@ -1247,9 +1340,18 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   async sendMessage(input: Parameters<AgentChat["sendMessage"]>[0]) {
     const message = input.message.trim();
     if (message === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
+    const files =
+      input.files === undefined || input.files.length === 0
+        ? undefined
+        : await storeAgentFileAttachments({
+            agentPath: this.props.path,
+            config: parseConfig(env),
+            files: input.files,
+            projectId: this.props.projectId,
+          });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: { message },
+      payload: { message, ...(files === undefined ? {} : { files }) },
     });
     return event;
   }
@@ -1345,33 +1447,12 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   async addFiles(input: Parameters<Agent["addFiles"]>[0]) {
     if (input.files.length === 0) throw new Error("agent.addFiles requires at least one file.");
-    const config = parseConfig(env);
-    const files = await Promise.all(
-      input.files.map(async (file) => {
-        const filename = sanitizeFileFilename(file.filename);
-        // A short random prefix keeps two same-named uploads in one
-        // conversation from overwriting each other under last-write-wins paths.
-        const path = `${this.#path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
-        const metadata = await putProjectFile({
-          contentType: file.contentType,
-          data: file.data,
-          path,
-          projectId: this.#props.projectId,
-        });
-        const url = await mintProjectFileUrl({
-          config,
-          path,
-          projectId: this.#props.projectId,
-        });
-        return {
-          contentType: metadata.contentType,
-          filename,
-          path: metadata.path,
-          size: metadata.size,
-          url,
-        };
-      }),
-    );
+    const files = await storeAgentFileAttachments({
+      agentPath: this.#path,
+      config: parseConfig(env),
+      files: input.files,
+      projectId: this.#props.projectId,
+    });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agent/input-added",
       payload: {
@@ -2005,6 +2086,9 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes: "Path-addressed Cloudflare sandboxes.",
+  scheduler:
+    'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
+  schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
   worker: "The default repo-backed project worker.",
@@ -2246,6 +2330,17 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   get sandboxes() {
     return new SandboxCollectionRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
+  }
+
+  get scheduler(): Scheduler {
+    return this.schedulers.get(SCHEDULER_PRIMARY_PATH);
+  }
+
+  get schedulers(): SchedulerCollection {
+    return new SchedulerCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });

@@ -53,18 +53,23 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           }),
         );
         return;
-      case "events.iterate.com/agents/web-message-sent":
+      case "events.iterate.com/agents/web-message-sent": {
+        // Files the agent attached to its own message ride the reflection too,
+        // so the model SEES what it sent (vision) on later turns.
+        const files = event.payload.files;
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
             idempotencyKey: `agent/render-web-response@${event.offset}`,
             payload: {
               content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
+              ...(files === undefined || files.length === 0 ? {} : { files }),
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
           }),
         );
         return;
+      }
       case "events.iterate.com/agent/input-added": {
         // Scheduling the next LLM request is derived from reduced state at the
         // end of the batch (see #settleLlmRequestScheduling); the only

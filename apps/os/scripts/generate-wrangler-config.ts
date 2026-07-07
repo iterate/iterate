@@ -144,10 +144,46 @@ const DO_CLASSES = {
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SANDBOX: "CloudflareSandboxDurableObject",
+  SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
 } as const;
+
+// Durable Object migration history. Deployed workers only apply tags NEWER
+// than the one they already passed, so a new class must arrive in a NEW tag —
+// adding it to an existing tag is silently ignored on every existing
+// deployment and the deploy fails at bind time with API error 10061. Fresh
+// workers (local dev, new envs) replay all tags in order.
+const DO_MIGRATIONS = [
+  {
+    tag: "v1",
+    new_sqlite_classes: [
+      "AgentDurableObject",
+      "CapabilityHostDurableObject",
+      "ProjectDurableObject",
+      "RepoDurableObject",
+      "CloudflareSandboxDurableObject",
+      "SecretDurableObject",
+      "StreamDurableObject",
+      "StatefulWorkerDurableObject",
+    ],
+  },
+  { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
+];
+
+// Every bound class needs a migration entry (and nothing else does).
+{
+  const migrated = new Set(DO_MIGRATIONS.flatMap((migration) => migration.new_sqlite_classes));
+  const bound = Object.values(DO_CLASSES);
+  const missing = bound.filter((className) => !migrated.has(className));
+  const stale = [...migrated].filter((className) => !(bound as string[]).includes(className));
+  if (missing.length > 0 || stale.length > 0) {
+    throw new Error(
+      `DO_MIGRATIONS out of sync with DO_CLASSES (missing: ${missing.join(", ") || "none"}; stale: ${stale.join(", ") || "none"})`,
+    );
+  }
+}
 
 /** Binding config identical across local dev and every deployed env, apart from names/ids. */
 function workerBindings(input: {
@@ -319,21 +355,12 @@ function envBlock(env: DeployedEnv) {
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // Sandbox containers are `lite` and bill on usage, not reservation, so a
-    // high cap is free headroom. Idle containers are destroyed (not just
-    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
-    // which releases their instance slot — but under sustained churn the
-    // platform backfills released slots into an "assigned" warm pool that
-    // rides at max_instances, and sandbox start latency grows as the pool
-    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
-    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
-    // `wrangler containers info` reached the cap;
-    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
-    // comfortably exceed a whole marathon's cumulative sandbox creations
-    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
-    // prd churns far less (real agent sandboxes, no fixture storms) and
-    // destroy-on-idle bounds its growth.
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
+    // Preview e2e creates many short-lived sandboxes, and the platform keeps
+    // inactive/stopped instances counted against the container app long enough
+    // that too-small caps wedge tests. Keep preview caps high enough for churn
+    // but below the dev/preview account quota so several slots can coexist.
+    // prd churns far less (real agent sandboxes, no fixture storms).
+    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 200,
   });
   return {
     name: env.osWorkerName,
@@ -385,7 +412,7 @@ export const config = {
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.
-  migrations: [{ tag: "v1", new_sqlite_classes: Object.values(DO_CLASSES) }],
+  migrations: DO_MIGRATIONS,
   // Local dev: containers off by default so `pnpm dev` never requires Docker —
   // sandbox Durable Objects fail at their constructor until you opt in with
   // `OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev`, which builds the sandbox

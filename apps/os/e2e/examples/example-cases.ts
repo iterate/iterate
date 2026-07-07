@@ -86,6 +86,25 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
+  "scheduler-basics": {
+    // Matrix runtimes can share a project; a per-runtime key keeps the
+    // set/list/cancel dance from racing a sibling runtime's copy.
+    vars: ({ marker }) => ({ schedulerKey: `examples/daily-report-${marker}` }),
+    assert: (result, _ctx, expect) => {
+      const shaped = result as { found: boolean; nextTriggerAt: string | null };
+      expect(shaped.found).toBe(true);
+      // Next weekday 9am London is always a parseable future instant.
+      expect(Date.parse(shaped.nextTriggerAt ?? "")).toBeGreaterThan(Date.now());
+    },
+  },
+  "scheduler-agent-checkin": {
+    vars: ({ marker }) => ({ schedulerKey: `examples/agent-checkin-${marker}` }),
+    assert: (result, _ctx, expect) => {
+      // { every: 3600 } anchored at set time: the next occurrence is ahead.
+      const shaped = result as { nextTriggerAt: string | null };
+      expect(Date.parse(shaped.nextTriggerAt ?? "")).toBeGreaterThan(Date.now());
+    },
+  },
   "describe-project": {
     assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ projectId });

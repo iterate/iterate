@@ -8,7 +8,13 @@ import {
   type ReactNode,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BanIcon, ChevronRightIcon, CodeIcon, PaperclipIcon } from "lucide-react";
+import {
+  BanIcon,
+  ChevronRightIcon,
+  CircleQuestionMarkIcon,
+  CodeIcon,
+  PaperclipIcon,
+} from "lucide-react";
 import type {
   AgentUiActivity,
   AgentUiCodeStep,
@@ -28,6 +34,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
@@ -240,6 +247,10 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
   expandedIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
+  if (item.kind === "stream-woken") {
+    return <StreamWakeRow item={item} />;
+  }
+
   if (item.kind !== "activity") {
     if (item.kind === "user") {
       return (
@@ -266,6 +277,7 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
           <MessageResponse className="min-w-0 max-w-full overflow-hidden">
             {item.text}
           </MessageResponse>
+          <MessageAttachments files={item.files} hasText={item.text !== ""} />
         </MessageContent>
       </Message>
     );
@@ -280,6 +292,50 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     />
   );
 });
+
+function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-woken" }> }) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+
+  return (
+    <div
+      className="flex items-center gap-3 py-3"
+      data-testid="agent-feed-stream-woken"
+      data-kind="stream-woken"
+    >
+      <div className="h-px flex-1 bg-purple-500/45" />
+      <div className="flex shrink-0 items-center gap-1.5">
+        <time
+          className="font-mono text-xs font-medium text-purple-700 dark:text-purple-300"
+          dateTime={dateTime}
+          title={formatDateTime(item.timestampMs)}
+        >
+          {item.text}
+        </time>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Why did this stream Durable Object wake?"
+                className="inline-flex size-4 items-center justify-center rounded-full text-purple-700/75 transition-colors hover:text-purple-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/60 dark:text-purple-300/75 dark:hover:text-purple-200"
+              />
+            }
+          >
+            <CircleQuestionMarkIcon className="size-3.5" aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-80 text-left leading-snug">
+            <p>
+              This can happen when the Durable Object is evicted or crashed, and most often when we
+              do a production deployment. All Durable Objects currently crash and do not recover
+              cleanly; we will fix that in the future.
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      <div className="h-px flex-1 bg-purple-500/45" />
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Settled activity: the quiet "Ran code 2× · 3 requests · 7.4 s" row
@@ -386,12 +442,12 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
       {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
-      <UserMessageAttachments files={item.files} hasText={item.text !== ""} />
+      <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
   );
 }
 
-function UserMessageAttachments({
+function MessageAttachments({
   files,
   hasText,
 }: {
@@ -402,13 +458,13 @@ function UserMessageAttachments({
   return (
     <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
       {files.map((file) => (
-        <UserMessageAttachment key={file.path} file={file} />
+        <MessageAttachment key={file.path} file={file} />
       ))}
     </div>
   );
 }
 
-function UserMessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   if (file.contentType.startsWith("image/")) {
     return (
       <a href={file.url} target="_blank" rel="noreferrer" className="block max-w-full">

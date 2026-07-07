@@ -4,13 +4,14 @@ import type { Event } from "./types.ts";
 // Reduced state model + pure batch planner
 //
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
-// requests · 7.4 s") → assistant message. SETTLED items are emitted as ops
-// that the agent-ui processor writes into the `agent_feed_items` SQLite
-// table (the TanStack virtual list reads those rows); the reduced state holds
-// only what is still in flight — the live activity with partially streamed
-// thinking/response text, the presence roster, and the next dense row index.
-// The live part renders as one element below the list, straight from this
-// state, and exists only while work is active.
+// requests · 7.4 s") → assistant message, with quiet stream wake dividers.
+// SETTLED items are emitted as ops that the agent-ui processor writes into
+// the `agent_feed_items` SQLite table (the TanStack virtual list reads those
+// rows); the reduced state holds only what is still in flight — the live
+// activity with partially streamed thinking/response text, the presence
+// roster, and the next dense row index. The live part renders as one element
+// below the list, straight from this state, and exists only while work is
+// active.
 //
 // Mirrors `browser-event-feed`'s planFeedOps contract: `reduce` advances
 // state one event at a time, `processEventBatch` plans the whole batch from
@@ -79,7 +80,14 @@ export type AgentUiMessageItem = {
   files?: AgentUiFileAttachment[];
 };
 
-export type AgentUiItem = AgentUiMessageItem | AgentUiActivity;
+export type AgentUiStreamWakeItem = {
+  kind: "stream-woken";
+  id: string;
+  text: string;
+  timestampMs: number;
+};
+
+export type AgentUiItem = AgentUiMessageItem | AgentUiActivity | AgentUiStreamWakeItem;
 
 export type AgentUiProcessorAnnouncement = {
   slug: string;
@@ -164,6 +172,7 @@ const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
+const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -193,6 +202,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const text = readString(event, "content");
       const files = readFileAttachments(event);
       if (text == null || files.length === 0) return state;
+      // Reflections of the agent's own sent messages (the processor's
+      // "The assistant sent this visible web-chat message" inputs, keyed
+      // agent/render-web-response@<offset>) carry the SAME attachments the
+      // web-message-sent event already rendered as an assistant bubble —
+      // they exist for the model's eyes, not the user's.
+      if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-file-${event.offset}`,
@@ -206,10 +221,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case "events.iterate.com/agents/tui-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
+      const files = readFileAttachments(event);
       const item: AgentUiMessageItem = {
         kind: "assistant",
         id: `assistant-${event.offset}`,
         text,
+        ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
       return emitItem(state, ops, item);
@@ -438,12 +455,19 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case STREAM_WOKEN: {
       // Every connection died with the previous stream incarnation; survivors
       // re-dial and re-land as fresh connected facts.
-      return {
+      const next = {
         ...state,
         presence: state.presence.map((entry) =>
           entry.connected ? { ...entry, connected: false } : entry,
         ),
       };
+      if (isInitialStreamWake(event)) return next;
+      return emitItem(next, ops, {
+        kind: "stream-woken",
+        id: `stream-woken-${event.offset}`,
+        text: STREAM_WAKE_LABEL,
+        timestampMs,
+      });
     }
 
     default:
@@ -465,6 +489,11 @@ function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): A
     steps: [],
     startedAtMs,
   };
+}
+
+function isInitialStreamWake(event: Event): boolean {
+  // Brand-new streams commit stream/created at offset 1 and stream/woken at offset 2.
+  return event.offset <= 2;
 }
 
 function liveHasRunningStep(live: AgentUiActivity | null): boolean {
