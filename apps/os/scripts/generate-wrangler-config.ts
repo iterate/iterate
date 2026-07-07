@@ -62,10 +62,6 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__PETSHOP",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
-  // Local dev must load the baked auth JWKS too; otherwise forge-minted
-  // browser sessions from `pnpm auth:mint --browser-url` fail with
-  // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
-  "APP_CONFIG_ITERATE_AUTH__JWKS",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
@@ -397,16 +393,35 @@ function envBlock(env: DeployedEnv) {
  */
 function localDevBindings() {
   const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  const localAuthJwks = localDevAuthJwks();
   return {
     ...bindings,
     vars: {
       ...bindings.vars,
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev trusts forge-minted sessions by deriving the public key from
+      // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
+      // Doppler here: stale snapshots caused login verification failures.
+      ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
     },
   };
 }
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
+
+function localDevAuthJwks() {
+  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  if (!forgePrivateJwk) return undefined;
+
+  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
+    string,
+    unknown
+  > & { d?: string };
+  if (!publicJwk.kid || !publicJwk.kty) {
+    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
+  }
+  return JSON.stringify({ keys: [publicJwk] });
+}
 
 export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
