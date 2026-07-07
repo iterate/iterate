@@ -3,7 +3,7 @@
  * saturation.
  *
  * Each runScript call below becomes a distinct inline Dynamic Worker source.
- * On deployed Workers, five concurrent long-lived scripts from one
+ * On deployed Workers, twenty concurrent long-lived scripts from one
  * capability-host scope must all complete instead of sharing one Durable Object
  * as the dynamic-loader owner and tripping "Too many concurrent dynamic
  * workers".
@@ -11,7 +11,7 @@
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
 
-const SCRIPT_COUNT = 5;
+const SCRIPT_COUNT = 20;
 const SCRIPT_HOLD_MS = 30_000;
 const MAX_CONCURRENT_COMPLETION_MS = 50_000;
 
