@@ -232,8 +232,8 @@ export function computeReport(files: ChangedFile[]) {
  * share of the largest group's churn, split green/red by its add/remove ratio.
  */
 export function renderTable(report: ReturnType<typeof computeReport>) {
-  const count = (n: number, sign: "+" | "-" | "") =>
-    n === 0 ? "0" : `${sign}${Math.abs(n).toLocaleString("en-US")}`;
+  // Always signed, even +0/-0, matching GitHub's own diffstat.
+  const count = (n: number, sign: "+" | "-") => `${sign}${Math.abs(n).toLocaleString("en-US")}`;
   const maxChurn = Math.max(...report.rows.map((row) => row.added + row.removed), 1);
   const bar = (row: GroupRow) => {
     const churn = row.added + row.removed;
