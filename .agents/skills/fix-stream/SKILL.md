@@ -6,7 +6,7 @@ publish: false
 
 # fix-stream
 
-Given stream URL where agent chat went wrong. Dump events. Judge complaint. Seed real events into unit test. Red test -> PR -> fix -> green -> minimise fixture. Written caveman-style: terse on purpose, all substance kept.
+Given stream URL where agent chat went wrong. Dump events. Judge complaint. Seed real events into repro test. Red test -> PR -> fix -> green -> minimise fixture.
 
 ## 1. Dump events
 
@@ -23,7 +23,7 @@ Dump full journal (getEvents caps at 500 -> page):
 
 ```bash
 doppler run --project os --config prd -- pnpm --dir apps/os cli itx run \
-  --context <prj_id> --file dump.ts   # script body below, save in scratchpad
+  --context <prj_id> --file dump.ignoreme.ts   # script body below, save in scratchpad
 ```
 
 ```ts
@@ -43,11 +43,11 @@ Strip pnpm banner from stdout before JSON.parse (find first `[\n`).
 
 ## 2. Diagnose
 
-Print conversation: `user-message-received` payload.content vs `web-message-sent` payload.message, with offsets. Find where user visibly lost: silence after input, wrong answer, error leak. Zoom into offsets around bad part — full payloads. Usual smoking gun: `agent/llm-request-completed` with `result.status: "failure"` and no `agent/output-added` after. Complaint = user-level symptom, not mechanism. Write it down before reading product code.
+Print conversation: `user-message-received` payload.content vs `web-message-sent` payload.message, with offsets. Find where user visibly lost: silence after input, wrong answer, error leak. Zoom into offsets around bad part — full payloads. Complaint = user-level symptom, not mechanism. If there was an API error but the system recovered fine, that's probably not what the complaint is about. Write down the complaint before reading product code.
 
-## 3. Repro test — unit lane, not e2e
+## 3. Repro test — in-memory, not e2e
 
-Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> unit lane. Harness lives in `apps/os/src/domains/agents/test-helpers.ts`: `MemoryStream`, `deliverNewEvents`, `fakeResponsesWebSocket` (openai-ws). Fake `ai.run` for cloudflare-ai — see `agent-processors.test.ts` for usage of all.
+Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/agents/test-helpers.ts`: `MemoryStream`, `deliverNewEvents`, `fakeResponsesWebSocket` (openai-ws). Fake `ai.run` for cloudflare-ai — see `agent-processors.test.ts` for usage of all.
 
 Test file: `apps/os/src/domains/agents/stream-repros/<slug>-<id>-<complaint>.test.ts`. Fixture JSON next to it.
 
@@ -132,5 +132,5 @@ End state: fixture tens of events, not thousands. Test readable top-to-bottom: s
 - Idempotency keys in fixture: keep. Replay dedup depends on them.
 - Provider checkpoint: without readState prime, historical `llm-request-requested` may re-execute (state folded per batch, completion not yet visible). Prime both processors.
 - Assertion `afterOffset: badEvent.offset` — seeded history may contain matching event types; scope waits past seed.
-- Signed URLs in fixtures expire (7d default) — fine for unit tests (nothing fetches), note if test ever goes e2e.
+- Signed URLs in fixtures expire (7d default) — fine here (nothing fetches), note if test ever goes e2e.
 - Debounce is 250ms (`DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS`) — waitForEvent timeouts of 1–2s plenty; no sleeps.
