@@ -705,12 +705,17 @@ prd is destroyed on rollout"):
   petshop) vend `<connection>` handles + secrets at
   `/secrets/integrations/<slug>/<connection>`; connectionless (parallel/exa)
   are one platform-key call, not in `list()`.
-- **D4** ONE generic webhook door `/api/integrations/<slug>/webhook` + ONE
-  provider-agnostic fan-in directory keyed `(slug, externalId) →
-{projectId, connection}` (generalize the Slack team-directory stream to
-  `integration/connection-claimed`, fold-on-read, synchronous claim at
-  connect, `external_id_already_claimed` on conflict). Per-slug code does only
-  the two provider-specific things: verify signature + extract external id.
+- **D4** Inbound webhooks route through each integration's OWN imperative
+  `fetch(request, config)` handler — verify however it likes, own its
+  sub-paths (Slack's Events API + interactivity + url_verification), stick
+  things on a stream or not. NOT a webhook framework (no `{verify, extract,
+buildEvent}` spec run by a generic loop — not every integration is "one
+  verifiable stream"). The door is a tiny chain returning the first handler to
+  claim the request. The one shared piece is a provider-agnostic fan-in
+  directory keyed `(slug, externalId) → {projectId, connection}` (fold-on-read,
+  synchronous claim at connect, `external_id_already_claimed` on conflict) plus
+  a plain `routeIntegrationWebhook(slug, externalId, event)` helper a handler
+  CALLS to append to the claimed connection's stream.
 - **D5** First-party GitHub connects via **App installation** (external id =
   `installation_id`), replacing the OAuth-user flow. Its installation token is
   minted **in a jailed worker** that signs the App JWT via a new **`sign()`**
@@ -728,6 +733,15 @@ prd is destroyed on rollout"):
 - **D9** If petshop proves all three WS shapes end-to-end, **Discord the
   integration is out of scope** (its frame shape is petshop-proven); the WS
   jail branch and the OpenAI-shaped relay stay in.
+- **D10** The itx caller SDK for a connectionful integration WRAPS THE REAL
+  VENDOR SDK and replays the caller's dotted path onto it — Slack = a real
+  `@slack/web-api` WebClient, GitHub = a real `@octokit/rest` Octokit — never a
+  hand-mapped method table. Each SDK's transport is redirected through the
+  connection secret's jailed egress with a `getSecret(...)` placeholder auth
+  header (Octokit via `request.fetch`; WebClient via a custom Axios `adapter`),
+  so the token never leaves its Secret DO. `invokeCapability({ path, args })` →
+  `replayPathCall(instance, { path, args })`. Both bundle + run on workerd
+  (nodejs_compat) because the custom transport bypasses their Node HTTP layer.
 
 **Stages (each independently green; e2e in new spec files):**
 

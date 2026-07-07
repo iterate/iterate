@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -45,6 +46,9 @@ type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list
 
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
+  /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
+   * flow on mount, then clears itself so a refresh never re-triggers. */
+  connect: z.string().optional(),
 });
 
 const BUILTIN_API_INTEGRATIONS = [
@@ -107,6 +111,7 @@ function ProjectIntegrationsPage() {
 
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { project } = Route.useLoaderData();
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
@@ -212,6 +217,24 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
 
+  // Deep link: `?connect=<slug>` auto-starts the matching connect flow — the same
+  // mutation a click on that Connect button fires — then clears the param so a
+  // refresh (or landing back here after the OAuth round-trip) never re-triggers it.
+  // `mutate` is stable per mutation, so the effect depends on those rather than the
+  // per-render mutation objects (which would re-run it before the param clears).
+  const connectSlack = startSlack.mutate;
+  const connectGoogle = startGoogle.mutate;
+  const connectGithub = startGithub.mutate;
+  useEffect(() => {
+    const slug = search.connect;
+    if (!slug) return;
+    void navigate({ search: (previous) => ({ ...previous, connect: undefined }), replace: true });
+    if (slug === "slack") connectSlack();
+    else if (slug === "google") connectGoogle();
+    else if (slug === "github") connectGithub();
+    // Unknown slug: ignored.
+  }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
+
   const panel = (
     <div className="space-y-4">
       {oauthErrorLabel ? (
@@ -304,7 +327,7 @@ function ProjectIntegrationsContent() {
             <ItemDescription>
               {connectedCount(githubConnections) > 0
                 ? `${connectedCount(githubConnections)} connected account${connectedCount(githubConnections) === 1 ? "" : "s"}`
-                : "Connect GitHub for the REST API and gh/git inside sandboxes."}
+                : "Connect GitHub for the REST API and repo webhooks, plus gh/git inside sandboxes."}
             </ItemDescription>
             {githubConnections.map((entry) => (
               <ConnectionRow
