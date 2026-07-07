@@ -697,19 +697,12 @@ export interface SecretCollection extends Describable {
   list(): Promise<StreamListItem[]>;
 }
 
-/** Path-addressed secret capability. Secret material has no public read API. */
+/** Path-addressed secret capability. Secret material has no public read API:
+ * material never leaves the Secret Durable Object except substituted into a
+ * request bound for one of the secret's pinned egress hosts. */
 export interface Secret extends Describable {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
-  /** Keyed HMAC over caller bytes (hex). Verification without revealing the
-   * key — see design §2.1. */
-  hmac(input: SecretComputeHmacInput): Promise<string>;
-  /** Constant-time equality of a caller value against a field. */
-  matches(input: { field?: string; value: string }): Promise<boolean>;
-  /** RS256 signature over caller bytes (base64url). Signs with a private key
-   * held in the secret without ever returning it — the JWT-signing primitive
-   * for App-installation tokens (ADR 0006). */
-  sign(input: SecretComputeSignInput): Promise<string>;
   processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
 }
@@ -720,27 +713,54 @@ export type SecretUpdateInput = {
    * the whole-material placeholder working; structured material is addressed
    * by \`field\` in placeholders (design §2.1). */
   material?: unknown;
-  /** The secret worker that overrides this secret's fetch() (design §2.2), or
-   * \`null\` to clear it. Omitted leaves any installed worker unchanged. */
-  worker?: DynamicWorkerRef | null;
+  /** A named refresh strategy the secret runs in trusted DO code when a
+   * substituted request 401s (or a referenced field is missing), or \`null\` to
+   * clear it. Omitted leaves any configured strategy unchanged. */
+  refresh?: SecretRefresh | null;
 };
 
-/** Input to \`Secret.hmac\` — the field of material to sign under (whole material
- * if omitted), the digest algorithm, and the caller-composed payload. */
-export type SecretComputeHmacInput = {
-  algo: "sha1" | "sha256";
-  field?: string;
-  payload: string | Uint8Array;
-};
+/**
+ * A reference to a deployment-owned platform credential, resolved from typed
+ * AppConfig in trusted platform code — never stored in project material, never
+ * readable. Each known config path carries its own allowed-origin list
+ * (platform-secrets.ts), so a credential can only ever be sent to the hosts it
+ * belongs to, no matter who configured the reference.
+ */
+export type PlatformCredsRef = { platform: string };
 
-/** Input to \`Secret.sign\` — the field holding the PKCS#8 PEM private key
- * (whole material if omitted), the signature algorithm, and the caller-composed
- * payload (e.g. a JWT \`header.payload\`). */
-export type SecretComputeSignInput = {
-  algo: "RS256";
-  field?: string;
-  payload: string | Uint8Array;
-};
+/**
+ * A named credential-refresh strategy a secret runs in its own trusted DO
+ * code — one shared implementation per protocol instead of a worker copied
+ * into every secret. Client credentials come from the secret's own material
+ * (\`"material"\`, the bring-your-own-app case) or a platform config reference
+ * (built-ins). Exchange endpoints must fall within the secret's pinned egress
+ * hosts, so refresh preserves the cell invariant: bytes only ever leave toward
+ * pinned hosts.
+ */
+export type SecretRefresh =
+  | {
+      kind: "oauth-refresh-token";
+      /** RFC 6749 refresh_token grant target (e.g. the provider's /token URL).
+       * Its origin must be within the secret's pinned egress hosts. */
+      tokenEndpoint: string;
+      /** Where the Basic client credential comes from: \`"material"\` reads
+       * clientId/clientSecret fields of this secret's own material. */
+      clientCreds: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "github-app-installation";
+      /** GitHub API origin (or a stand-in in e2e). Its origin must be within
+       * the secret's pinned egress hosts. */
+      apiBase: string;
+      /** The App id — the JWT issuer (public). */
+      appId: string;
+      /** The installation this connection acts as (public — it is the
+       * connection's external id, not secret material). */
+      installationId: string;
+      /** Where the App's RS256 private key comes from: \`"material"\` reads the
+       * privateKey field of this secret's own material (bring-your-own-App). */
+      privateKey: PlatformCredsRef | "material";
+    };
 
 export type SecretDescription = {
   audit: {
@@ -751,8 +771,8 @@ export type SecretDescription = {
   };
   egress: { urls: string[] };
   hasMaterial: boolean;
-  /** Whether a secret worker overrides this secret's fetch() (design §2.2). */
-  hasWorker: boolean;
+  /** The configured refresh strategy's kind, or null when none is configured. */
+  refresh: SecretRefresh["kind"] | null;
 };
 
 export type StreamListItem = {

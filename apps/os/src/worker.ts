@@ -74,7 +74,6 @@ export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-d
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
-export { AppSecretEntrypoint, SecretEntrypoint } from "./domains/secrets/secret-entrypoint.ts";
 // The container-outbound gateway. The container runtime dials it through
 // `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every
 // sandbox container's outbound HTTP(S) reaches it before anything leaves the

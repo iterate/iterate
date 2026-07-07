@@ -75,9 +75,9 @@ processor forwards thread events to
 `/agents/slack/<connection>/<channel>/ts-<ts>` agent streams, so a Slack agent
 recovers its connection from its own stream path — which is how its replies
 pick the right bot token, and how **multiple Slack workspaces in one project
-just work**. Google connections are named from the account email; Gmail calls
-resolve a fresh access token from the connection's journal (refresh events
-land back on the same journal).
+just work**. Google connections are named from the account email; tokens live
+in the connection secret, refreshed on 401 by the Secret DO's shared
+`oauth-refresh-token` strategy (nothing token-shaped ever lands on a journal).
 
 Slack Web API calls never hold material: the request carries a
 `getSecret(path)` placeholder for the connection's token and traverses
@@ -86,13 +86,11 @@ records `secret/used` audit events. There is **no fallback token** — a typo'd
 or disconnected connection name errors loudly instead of silently posting with
 a deployment-wide credential.
 
-**Status is a journal tail-fold for both providers** — one machine, no
+**Status is a journal tail-fold for every provider** — one machine, no
 per-provider mechanism: `getConnection` pages backwards from the journal head
 (`streamEventsNewestFirst`) and stops at the first lifecycle fact
-(connected/disconnected). Google's token state is the same fold with refresh
-events layering onto the connected fact across page boundaries. Nothing
-snapshots a processor: the slack router's whole state is its
-`channel:thread_ts → streamPath` routing table.
+(connected/disconnected). Nothing snapshots a processor: the slack router's
+whole state is its `channel:thread_ts → streamPath` routing table.
 
 **`list()` = journals ∪ mounts, deduped by path.** Every
 `/integrations/<slug>/<connection>` stream in the project's catalogue is one
@@ -165,41 +163,38 @@ The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at
 `["integrations"]` itself is still a collision).
 
-## GitHub: the third builtin, and the sandbox handoff
+## GitHub: the third builtin
 
-GitHub earned builtin status the moment it needed a deployment-owned connect
-flow plus a credential handoff no substitution hop can cover:
+GitHub connects as a **GitHub App installation** (deep-link to
+`github.com/apps/<appSlug>/installations/new` → callback with an
+`installation_id`; no code exchange, no user token):
 
-- **Connect** uses the deployment's GitHub App (its OAuth client credentials
-  in `APP_CONFIG_INTEGRATIONS__GITHUB`): the standard web flow through
-  `startOAuthFlow`/`completeConnect`, connection named from the GitHub login,
-  user token stored at `/secrets/integrations/github/<connection>/token` with
-  a GitHub-hosts egress allowlist, `github/connected` on the journal. One
-  exchange half + one `recordConnection` call — the shape every provider pays.
-- **API calls** stay confined:
-  `itx.integrations.github["<connection>"].api.request({ path: "/user/repos" })`
-  carries a `getSecret` placeholder through project egress like every other
-  builtin.
-- **`gh` in a sandbox just works** via
-  `await sandbox.ensureGithubAuth({ connection: "<name>" })`: the sandbox
-  Durable Object (platform code) pulls the token through the Secret DO's
-  **audited platform reveal** and plants `GH_TOKEN`/`GITHUB_TOKEN` in the
-  container session plus a git credential helper for github.com remotes.
-  A container runs its own TLS to github.com — there is no egress hop to
-  substitute a placeholder at — so this is the one lane where material leaves
-  the Secret DO as bytes: `revealForPlatformUse` is not on the public secret
-  capability (agents and project scripts can never call it), refuses when the
-  egress allowlist is empty (disconnect kills reveals and substitutions
-  alike), and every reveal lands on the audit trail as
-  `sandbox:{projectId}:{path}`. Session env and container filesystems are
-  ephemeral — re-run it after a restart, and name the connection explicitly.
+- **Connect**: the callback claims the installation — connection named
+  `install-<id>`, empty material in the connection secret plus the
+  `github-app-installation` refresh strategy (App id + installation id are
+  public strategy config; the App private key resolves from
+  `APP_CONFIG_INTEGRATIONS__GITHUB` at mint time), `github/connected` on the
+  journal, `installation_id` claimed in the directory. One exchange half +
+  one `recordConnection` call — the shape every provider pays.
+- **API calls**: `itx.integrations.github["<connection>"]` is a real wrapped
+  Octokit (`rest.*`, `request(...)`, `graphql(...)`) whose transport carries a
+  `getSecret` placeholder through the connection secret's fetch. The Secret
+  DO mints the installation token on first use and re-mints on 401 — trusted
+  DO code signing the App JWT, no worker, no jail.
+- **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
+  with plain WebCrypto, and route on `installation_id`.
+- **`gh` in sandboxes** is the deferred follow-up, and it needs no byte
+  handoff: ALL container egress (HTTPS included, MITM'd with the container
+  CA) routes through the project egress door, so a sandbox holds only a
+  placeholder `GH_TOKEN` and substitution + re-mint happen en route. The one
+  wrinkle to solve when it lands: git sends Basic auth (base64), so configure
+  `git http.<url>.extraheader` with a Bearer placeholder instead of a
+  credential helper.
 
-Known limit: if the deployment's GitHub App issues _expiring_ user tokens,
-`expiresAt` is recorded on the connected fact and refresh is the deferred
-derived-secrets follow-up. The provided-lane exhibits remain in the catalogue:
-`github-mcp-connect` (GitHub's MCP server mounted under the `github-mcp` slug
-— built-in slugs cannot be shadowed) and `github-webhooks-project-worker`
-(deliveries landing on the project host's own worker).
+The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
+(GitHub's MCP server mounted under the `github-mcp` slug — built-in slugs
+cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
+on the project host's own worker).
 
 ## Deliberately not built
 
@@ -219,9 +214,10 @@ derived-secrets follow-up. The provided-lane exhibits remain in the catalogue:
   is an error that tells you to name a connection, not a guess.
 - **Webhook signature verification in project workers** — worker code cannot
   hold the HMAC secret (substitution is egress-header-only); capability-URL
-  tokens are the workaround. The clean platform close, when demanded, is a
-  small `secret.verifyHmac({ payload, signature })` op on the Secret DO.
-- **Derived secrets** (OAuth refresh as a generic secret derivation; hourly
-  GitHub App installation tokens) — a secrets-domain change; Google refresh
-  stays in `google-tokens.ts` for now, reading the journal tail newest-first
-  so per-call cost does not grow with refresh history.
+  tokens are the workaround. The userspace verification story returns with the
+  jail lane (ADR 0005), not as a compute method on the public secret.
+- **A generic refresh framework.** Refresh is two named strategies in the
+  Secret DO (`oauth-refresh-token`, `github-app-installation`) — one shared
+  implementation per protocol, parameterized per secret. Providers whose
+  credential dance fits neither wait for the userspace jail lane rather than
+  growing a strategy interpreter.

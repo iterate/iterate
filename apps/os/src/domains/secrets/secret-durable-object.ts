@@ -2,13 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type {
-  DynamicWorkerRef,
-  SecretComputeHmacInput,
-  SecretComputeSignInput,
-  SecretDescription,
-  SecretUpdateInput,
-} from "../../types.ts";
+import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -16,35 +10,37 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
-import {
-  loadResolvedWorker,
-  resolveWorkerSource,
-  type WorkerBindings,
-} from "../workers/worker-loader.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
-import {
-  assertPlatformApiSecretReferencesAllowed,
-  isPlatformSecretPath,
-  resolvePlatformSecretReference,
-} from "./platform-secrets.ts";
-import { appSecretBinding, secretWorkerBinding } from "./secret-entrypoint.ts";
+import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
-  computeHmacHex,
   computeSignatureBase64Url,
-  type ResolvedFields,
   secretErrorResponse,
   secretReferencesFromHeaders,
   selectSecretField,
   substituteSecretHeaders,
   SecretSubstitutionError,
-  timingSafeStringEqual,
-  unwrapSecretEgressRequest,
 } from "./utils.ts";
 
 type SecretState = InstanceType<typeof SecretProcessor>["state"];
 
+/**
+ * One path-addressed secret. THE INVARIANT (the whole design, one sentence):
+ * material goes in; nothing comes out except a request to a pinned host.
+ *
+ * There is no read lane, no reveal lane, no compute lane. The only verb that
+ * touches material is `fetch()`: substitute `getSecret(...)` placeholders in
+ * trusted DO code and dispatch to a host on the secret's egress allowlist.
+ * Credential refresh is a NAMED STRATEGY run by this same trusted code
+ * (`refresh` on the folded state) whose exchange endpoint must itself fall
+ * within the pin — so a refresh, like any use, only ever moves bytes toward
+ * pinned hosts.
+ *
+ * WebSocket egress (an Upgrade request through this same `fetch()`) is
+ * deliberately deferred, not foreclosed: it returns as a pure addition inside
+ * this surface when a consumer exists.
+ */
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
@@ -55,6 +51,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     }),
   });
   readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
+
+  // In-flight refresh, shared across concurrent callers (single-flight): a
+  // burst of 401s must not fan out into N token exchanges — duplicate mints
+  // trip provider rate limits and race last-write-wins on the stored token.
+  #refreshing: Promise<void> | undefined;
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
@@ -71,13 +72,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async update(input: SecretUpdateInput) {
-    if (input.material === undefined && input.egress === undefined && input.worker === undefined) {
-      throw new Error("secret.update requires material, egress, or worker");
-    }
-    if (input.worker != null && input.worker.type !== "stateless") {
-      // Secret workers are stateless dynamic workers — the Secret DO owns all
-      // durability (design §2.2). A stateful ref has nowhere to live here.
-      throw new Error("secret worker must be a stateless dynamic worker");
+    if (input.material === undefined && input.egress === undefined && input.refresh === undefined) {
+      throw new Error("secret.update requires material, egress, or refresh");
     }
 
     const current = (await this.#secretProcessor.snapshot()).state;
@@ -104,7 +100,7 @@ export class SecretDurableObject extends DurableObject<Env> {
                 this.env.SECRET_ENCRYPTION_KEY,
               ),
             }),
-        ...(input.worker === undefined ? {} : { worker: input.worker }),
+        ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
       },
     });
     return event!;
@@ -119,249 +115,75 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Audited platform reveal: the ONE lane where material leaves this Durable
-   * Object as bytes rather than by substitution — for credentials that must
-   * exist outside a fetch header (the exemplar: GH_TOKEN in a sandbox
-   * container's environment, where `gh` and `git` do their own TLS and no
-   * egress hop exists to substitute at).
-   *
-   * Deliberately NOT on the public Secret capability (rpc-targets.ts): agents
-   * and project scripts can never call it. It is reachable only through the
-   * raw env.SECRET namespace stubs that platform code holds.
-   */
-  async revealForPlatformUse(input: { usedBy: string }): Promise<string> {
-    const material = await this.#readMaterial({ requireEgress: true });
-    await this.#appendUsed(input.usedBy);
-    return selectSecretField(material);
-  }
-
-  /**
-   * The worker's own material, for a secret worker inside the jail (design
-   * §2.2). Reachable only through the SECRET namespace stub / the SecretEntrypoint
-   * binding, never the public capability. Reading is fine: the jail's network
-   * reach is the secret's pinned hosts, so the bytes cannot leave (ADR 0005).
-   */
-  read(): Promise<unknown> {
-    return this.#readMaterial();
-  }
-
-  /**
-   * Keyed HMAC over caller-supplied bytes, hex-encoded — the webhook
-   * verification primitive (GitHub `sha256=`, Slack `v0=`, Stripe, …). It
-   * attenuates "the signing key" to "answers computed under the key": a MAC
-   * cannot be inverted, so this is safe to expose on the public Secret
-   * capability. See design §2.1.
-   */
-  async hmac(input: SecretComputeHmacInput): Promise<string> {
-    return await computeHmacHex({
-      algo: input.algo,
-      key: selectSecretField(await this.#readMaterial(), input.field),
-      payload: input.payload,
-    });
-  }
-
-  /** Constant-time equality of a caller value against a field (a URL-embedded
-   * verification token, say) — the other half of verification-without-reveal. */
-  async matches(input: { field?: string; value: string }): Promise<boolean> {
-    return timingSafeStringEqual(
-      selectSecretField(await this.#readMaterial(), input.field),
-      input.value,
-    );
-  }
-
-  /**
-   * RS256 signature over caller-supplied bytes (base64url) — the JWT-signing
-   * primitive (GitHub App JWTs, ADR 0006). Signs with a private key held in
-   * this secret without ever returning it: same "answers computed under the
-   * key, never the key" attenuation as `hmac`, which is why it is safe to
-   * expose and safe to hand a jail (as a compute-only `env.APP`).
-   */
-  async sign(input: SecretComputeSignInput): Promise<string> {
-    return await computeSignatureBase64Url({
-      algo: input.algo,
-      payload: input.payload,
-      privateKeyPem: selectSecretField(await this.#readMaterial(), input.field),
-    });
-  }
-
-  /**
-   * Resolve this secret's own placeholders for a chained egress request, on
-   * behalf of the entry secret that holds the request. Platform-only (reachable
-   * through the SECRET namespace stub, never the public capability). Enforces
-   * THIS secret's host pin against the terminal destination — so a secret's
-   * bytes only ever go to a host it trusts, however the chain was assembled —
-   * and records the use.
-   */
-  async resolveSecretReference(input: {
-    fields: string[];
-    /** The full terminal request URL: its origin is pin-checked, and the whole
-     * URL (path included) is recorded on the audit trail as lastUsedUrl. */
-    url: string;
-    usedBy: string;
-  }): Promise<ResolvedFields> {
-    const material = await this.#readMaterial({
-      origin: new URL(input.url).origin,
-      requireEgress: true,
-    });
-    const resolved: ResolvedFields = {};
-    for (const field of input.fields) {
-      resolved[field] = selectSecretField(material, field === "" ? undefined : field);
-    }
-    await this.#appendUsed(input.usedBy, input.url);
-    return resolved;
-  }
-
-  /**
-   * The one public entry, doing double duty disambiguated by URL path (only
-   * `fetch` can carry a WebSocket upgrade, so this can't split into RPC methods):
-   *
-   * - **Jail egress lane** (the worker's own outbound, wrapped by
-   *   SecretEntrypoint to the egress sentinel URL): substitute header
-   *   placeholders + terminal fetch, WS-capable, and NEVER re-run the worker.
-   *   A placeholder is not required — a worker holding its own bytes (Discord's
-   *   frame token) still reaches its pinned hosts here.
-   * - **Consumer traffic**: a secret worker (if installed) overrides fetch;
-   *   otherwise the default substituting egress runs, requiring a placeholder —
-   *   that IS how you "use" a plain secret (design §2.2).
+   * The one lane material travels: substitute this secret's placeholders into
+   * the request and dispatch it to a pinned host. With a refresh strategy
+   * configured, a missing token mints before the first use and a 401 triggers
+   * one refresh-and-retry — the shared strategy replaces the per-secret worker
+   * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
-    const egress = unwrapSecretEgressRequest(request);
-    if (egress !== null) return await this.#egressFetch(egress, { requirePlaceholder: false });
-
-    const worker = (await this.#snapshot()).worker;
-    if (worker === null) return await this.#egressFetch(request, { requirePlaceholder: true });
-    return await this.#runWorker(worker, request);
-  }
-
-  /**
-   * Load and invoke the secret worker. Jailed exactly like every other dynamic
-   * worker (WorkerLoader), but with two swapped constructor arguments: the
-   * `env.SECRET` binding and the `globalOutbound` are one SecretEntrypoint stub
-   * pinned to this secret — so the isolate's only network reach is this
-   * secret's hosts and every call substitutes placeholders in trusted DO code
-   * (design §2.2, ADR 0005). Loaded on demand; eviction just reloads.
-   */
-  async #runWorker(worker: DynamicWorkerRef, request: Request): Promise<Response> {
-    if (worker.type !== "stateless") {
-      throw new Error("secret worker must be a stateless dynamic worker");
-    }
-    const binding = secretWorkerBinding(this.ctx.exports, {
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    });
-    // Optional compute-only APP binding: when the installing integration set
-    // `props.appSecretPath`, hand the worker `env.APP` (sign/hmac/matches over
-    // the app-tier secret, never its bytes — ADR 0006) so it can sign App JWTs.
-    // App-tier credentials that ride a header stay `getSecret(appPath, …)`
-    // placeholders resolved at the outbound; APP is only for signing.
-    const appSecretPath = worker.props?.appSecretPath;
-    const bindings: WorkerBindings = { SECRET: binding };
-    if (typeof appSecretPath === "string") {
-      bindings.APP = appSecretBinding(this.ctx.exports, {
-        path: appSecretPath,
-        projectId: this.#name.projectId,
-      });
-    }
-    const resolved = await resolveWorkerSource({
-      projectId: this.#name.projectId,
-      source: worker.source,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
-    });
-    const stub = loadResolvedWorker({
-      bindings,
-      globalOutbound: binding,
-      projectId: this.#name.projectId,
-      ref: worker,
-      resolved,
-      scopePath: this.#name.path,
-    });
-    const entrypoint = stub.getEntrypoint(worker.entrypoint, {
-      props: worker.props ?? {},
-    }) as { fetch(request: Request): Promise<Response> };
-    return await entrypoint.fetch(request);
-  }
-
-  async #egressFetch(
-    request: Request,
-    { requirePlaceholder }: { requirePlaceholder: boolean },
-  ): Promise<Response> {
     let references;
     try {
       references = secretReferencesFromHeaders(request.headers);
     } catch {
       return secretErrorResponse("secret_reference_required", 400);
     }
-    if (requirePlaceholder && references.length === 0) {
-      return secretErrorResponse("secret_reference_required", 400);
+    if (references.length === 0) return secretErrorResponse("secret_reference_required", 400);
+    if (references.some((reference) => reference.path !== this.#name.path)) {
+      // One request, one secret: cross-secret chaining is not supported.
+      return secretErrorResponse("secret_reference_foreign", 400);
+    }
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      // Deferred, not foreclosed: WS egress returns inside this same surface.
+      return Response.json({ error: "websocket egress is not supported yet" }, { status: 501 });
     }
 
-    const origin = new URL(request.url).origin;
     try {
       const state = await this.#snapshot();
-      // This secret owns the outbound: the destination must be pinned here even
-      // when every placeholder is for another (app-tier) secret.
+      const origin = new URL(request.url).origin;
       if (!state.egress.urls.some((url) => new URL(url).origin === origin)) {
         throw new SecretSubstitutionError("secret_not_allowed_for_origin");
       }
 
-      // Group the requested fields by the secret that owns them (fields are
-      // already unique per header — secretReferencesFromHeaders dedupes).
-      const fieldsByPath = new Map<string, string[]>();
-      for (const reference of references) {
-        const fields = fieldsByPath.get(reference.path) ?? [];
-        fields.push(reference.field ?? "");
-        fieldsByPath.set(reference.path, fields);
-      }
-
-      // Each referenced secret resolves its own fields and records the use:
-      // this secret inline (a same-DO method call), a virtual platform secret
-      // from config (§4), or another secret's DO — one mechanism, and every
-      // hop substitutes in trusted DO code, never in the jail (ADR 0005).
-      const values = new Map<string, string>();
-      for (const [path, fields] of fieldsByPath) {
-        let resolved: ResolvedFields;
-        if (isPlatformSecretPath(path)) {
-          assertPlatformApiSecretReferencesAllowed({ fields, path, url: request.url });
-          resolved = resolvePlatformSecretReference({
-            config: parseConfig(this.env),
-            fields,
-            path,
-          });
-        } else if (path === this.#name.path) {
-          resolved = await this.resolveSecretReference({
-            fields,
-            url: request.url,
-            usedBy: this.#name.projectId,
-          });
-        } else {
-          resolved = await this.env.SECRET.getByName(
-            DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
-          ).resolveSecretReference({ fields, url: request.url, usedBy: this.#name.projectId });
+      // A refresh-and-retry needs the body twice; clone while it is still
+      // undisturbed. A body that cannot clone just loses the retry.
+      let retrySource: Request | null = null;
+      if (state.refresh !== null) {
+        try {
+          retrySource = request.clone() as unknown as Request;
+        } catch {
+          retrySource = null;
         }
-        for (const [field, value] of Object.entries(resolved))
-          values.set(`${path} ${field}`, value);
       }
 
-      const substituted = substituteSecretHeaders(request, (reference) => {
-        const value = values.get(`${reference.path} ${reference.field ?? ""}`);
-        if (value === undefined)
-          throw new SecretSubstitutionError("secret_reference_field_not_found");
-        return value;
-      });
-
-      // The WS-jail branch (design §9 D6, ADR 0005). A WebSocket handshake IS an
-      // HTTP request, so a secret worker's outbound upgrade flows through here
-      // (its jail globalOutbound === env.SECRET === this default egress) exactly
-      // like a plain fetch, and its upgrade headers substituted above the same
-      // way — headers only, so the Authorization (OpenAI-Realtime shape) and
-      // Sec-WebSocket-Protocol (browser-WS shape) credential placeholders are
-      // already resolved. Frames are never touched: the Discord frame shape has
-      // the worker hold its own token via SECRET.read() and send it in a frame,
-      // which needs no substitution. See #relayUpgrade for the relay itself.
-      if (isWebSocketUpgrade(substituted)) {
-        return await this.#relayUpgrade(substituted);
+      let substituted: Request;
+      try {
+        substituted = await this.#substitute(request, state);
+      } catch (error) {
+        // No material / missing field with a strategy configured: mint first
+        // (the first-use case — e.g. a fresh GitHub installation), then retry.
+        if (state.refresh === null || retrySource === null || !isMintableMiss(error)) throw error;
+        await this.#refresh(state.refresh);
+        substituted = await this.#substitute(retrySource, await this.#snapshot());
+        retrySource = null;
       }
-      return await fetch(substituted);
+
+      await this.#appendUsed(this.#name.projectId, request.url);
+      const response = await fetch(substituted);
+      if (response.status !== 401 || state.refresh === null || retrySource === null) {
+        return response;
+      }
+
+      try {
+        await this.#refresh(state.refresh);
+      } catch {
+        // The provider (or config) refused the refresh: the original 401 is
+        // the caller's answer, not an opaque exception.
+        return response;
+      }
+      const retried = await this.#substitute(retrySource, await this.#snapshot());
+      await this.#appendUsed(this.#name.projectId, request.url);
+      return await fetch(retried);
     } catch (error) {
       if (error instanceof SecretSubstitutionError) {
         return secretErrorResponse(
@@ -373,62 +195,137 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
   }
 
-  /**
-   * Relay an already-substituted, already-pin-checked WebSocket upgrade to its
-   * pinned upstream and shuttle frames verbatim in both directions (design §9
-   * D6). This is the standard workerd WS proxy: dial the upstream with the
-   * upgrade request (workerd returns the accepted socket on `response.webSocket`
-   * when the origin answers 101), then bridge it to a fresh WebSocketPair whose
-   * client end goes back to the caller (the jailed secret worker) — so the DO
-   * owns both legs and the caller is transparently wired to the upstream.
-   *
-   * Frames are NOT inspected or substituted — substitution is header-only and
-   * already happened at the handshake. Raw TCP (`connect()`) can never reach
-   * here: the jail's only outbound is this SecretEntrypoint Fetcher, which
-   * exposes no `connect`, and we reject any non-http(s) scheme defensively.
-   */
-  async #relayUpgrade(request: Request): Promise<Response> {
-    const scheme = new URL(request.url).protocol;
-    if (scheme !== "https:" && scheme !== "http:") {
-      // A WS handshake is dialed as http(s)+Upgrade; anything else (ws:, wss:,
-      // or a raw scheme) is not a fetch we pin-check, so refuse it.
-      throw new SecretSubstitutionError("secret_not_allowed_for_origin");
+  /** Substitute this secret's placeholders from decrypted material. */
+  async #substitute(request: Request, state: SecretState): Promise<Request> {
+    const material =
+      state.encryptedMaterial === null ? null : await this.#decrypt(state.encryptedMaterial);
+    return substituteSecretHeaders(request, (reference) => {
+      if (material === null) throw new SecretSubstitutionError("secret_not_found");
+      return selectSecretField(material, reference.field);
+    });
+  }
+
+  #refresh(refresh: SecretRefresh): Promise<void> {
+    this.#refreshing ??= this.#doRefresh(refresh).finally(() => {
+      this.#refreshing = undefined;
+    });
+    return this.#refreshing;
+  }
+
+  async #doRefresh(refresh: SecretRefresh): Promise<void> {
+    const state = await this.#snapshot();
+    const material =
+      state.encryptedMaterial === null ? {} : await this.#decrypt(state.encryptedMaterial);
+    const record = asMaterialRecord(material);
+    if (refresh.kind === "oauth-refresh-token") {
+      await this.#refreshOAuthToken(refresh, state, record);
+    } else {
+      await this.#mintGithubInstallationToken(refresh, state, record);
     }
+  }
 
-    const upstream = await fetch(request);
-    const upstreamSocket = (upstream as Response & { webSocket?: WebSocket | null }).webSocket;
-    // Upstream refused the upgrade (401/426/etc.): hand the caller that response
-    // so a bad credential surfaces exactly like the HTTP egress path's 401.
-    if (upstreamSocket == null) return upstream;
+  /**
+   * RFC 6749 refresh_token grant — the one shared implementation that replaces
+   * the per-secret OAuth refresh worker. The refresh token comes from this
+   * secret's own material; the Basic client credential from material
+   * (bring-your-own-app) or a platform config ref (built-ins, origin-pinned in
+   * platform-secrets.ts). The token endpoint must fall within this secret's
+   * own egress pin: refresh only ever moves bytes toward pinned hosts.
+   */
+  async #refreshOAuthToken(
+    refresh: Extract<SecretRefresh, { kind: "oauth-refresh-token" }>,
+    state: SecretState,
+    material: Record<string, unknown>,
+  ): Promise<void> {
+    assertOriginPinned(refresh.tokenEndpoint, state);
+    const refreshToken = readStringField(material, "refreshToken");
+    const creds =
+      refresh.clientCreds === "material"
+        ? {
+            clientId: readStringField(material, "clientId"),
+            clientSecret: readStringField(material, "clientSecret"),
+          }
+        : resolvePlatformClientCreds(
+            parseConfig(this.env),
+            refresh.clientCreds,
+            refresh.tokenEndpoint,
+          );
+    const response = await fetch(refresh.tokenEndpoint, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
+    });
+    if (!response.ok) throw new Error(`oauth refresh failed with HTTP ${response.status}`);
+    const data = (await response.json()) as { access_token?: string; refresh_token?: string };
+    if (typeof data.access_token !== "string") {
+      throw new Error("oauth refresh returned no access_token");
+    }
+    await this.update({
+      material: {
+        ...material,
+        accessToken: data.access_token,
+        // Providers may rotate the refresh token on use; keep the newest.
+        ...(typeof data.refresh_token === "string" ? { refreshToken: data.refresh_token } : {}),
+      },
+    });
+  }
 
-    upstreamSocket.accept();
-    const pair = new WebSocketPair();
-    const clientEnd = pair[0];
-    const callerEnd = pair[1];
-    callerEnd.accept();
-    pumpWebSocket(callerEnd, upstreamSocket);
-    pumpWebSocket(upstreamSocket, callerEnd);
-    return new Response(null, { status: 101, webSocket: clientEnd });
+  /**
+   * GitHub App installation-token mint: sign an App JWT (RS256, iss = appId,
+   * iat 60s in the past per GitHub's clock-drift guidance), POST it to
+   * /app/installations/{id}/access_tokens on the pinned apiBase, store the
+   * returned token. The private key comes from material (bring-your-own-App)
+   * or the first-party platform config ref (pinned to api.github.com).
+   */
+  async #mintGithubInstallationToken(
+    refresh: Extract<SecretRefresh, { kind: "github-app-installation" }>,
+    state: SecretState,
+    material: Record<string, unknown>,
+  ): Promise<void> {
+    assertOriginPinned(refresh.apiBase, state);
+    const privateKeyPem =
+      refresh.privateKey === "material"
+        ? readStringField(material, "privateKey")
+        : resolvePlatformGithubAppKey(parseConfig(this.env), refresh.privateKey, refresh.apiBase)
+            .privateKey;
+    const now = Math.floor(Date.now() / 1000);
+    const signingInput = `${base64UrlOfJson({ alg: "RS256", typ: "JWT" })}.${base64UrlOfJson({
+      iat: now - 60,
+      exp: now + 540,
+      iss: refresh.appId,
+    })}`;
+    const signature = await computeSignatureBase64Url({
+      algo: "RS256",
+      payload: signingInput,
+      privateKeyPem,
+    });
+    const response = await fetch(
+      `${refresh.apiBase.replace(/\/$/, "")}/app/installations/${refresh.installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${signingInput}.${signature}`,
+          "user-agent": "iterate-os",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`github installation token mint failed: HTTP ${response.status}`);
+    }
+    const data = (await response.json()) as { token?: string };
+    if (typeof data.token !== "string") {
+      throw new Error("github installation token mint returned no token");
+    }
+    await this.update({ material: { ...material, accessToken: data.token } });
   }
 
   async #snapshot(): Promise<SecretState> {
     await this.#processorHost.catchUp(SecretProcessorContract.slug);
     return (await this.#secretProcessor.snapshot()).state;
-  }
-
-  async #readMaterial(opts: { origin?: string; requireEgress?: boolean } = {}): Promise<unknown> {
-    const state = await this.#snapshot();
-    if (state.encryptedMaterial === null) throw new SecretSubstitutionError("secret_not_found");
-    if (opts.requireEgress && state.egress.urls.length === 0) {
-      throw new SecretSubstitutionError("secret_not_allowed_for_origin");
-    }
-    if (
-      opts.origin !== undefined &&
-      !state.egress.urls.some((url) => new URL(url).origin === opts.origin)
-    ) {
-      throw new SecretSubstitutionError("secret_not_allowed_for_origin");
-    }
-    return await this.#decrypt(state.encryptedMaterial);
   }
 
   async #decrypt(encrypted: NonNullable<SecretState["encryptedMaterial"]>): Promise<unknown> {
@@ -448,42 +345,41 @@ function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
   return { urls: [...egress.urls] };
 }
 
-/** A request is a WebSocket handshake when it carries `Upgrade: websocket`
- * (case-insensitive) — the one signal that separates the WS-jail branch from a
- * plain egress fetch. */
-function isWebSocketUpgrade(request: Request): boolean {
-  return request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+/** A substitution miss a refresh strategy can fill: no material yet, or the
+ * referenced field (the not-yet-minted access token) absent. */
+function isMintableMiss(error: unknown): boolean {
+  return (
+    error instanceof SecretSubstitutionError &&
+    (error.code === "secret_not_found" || error.code === "secret_reference_field_not_found")
+  );
 }
 
-/** Forward every frame (and the close/error signal) from one accepted socket to
- * the other, verbatim — one direction of the relay. `event.data` is a string or
- * ArrayBuffer and `send` accepts both, so frames pass through untouched. All
- * sends/closes are best-effort: once a peer is gone, the other close winds the
- * bridge down. */
-function pumpWebSocket(from: WebSocket, to: WebSocket): void {
-  from.addEventListener("message", (event) => {
-    try {
-      to.send(event.data);
-    } catch {
-      closeQuietly(to, 1011, "relay send failed");
-    }
-  });
-  from.addEventListener("close", (event) => closeQuietly(to, event.code, event.reason));
-  from.addEventListener("error", () => closeQuietly(to, 1011, "relay error"));
-}
-
-/** Close a socket without throwing: an already-closed socket or a reserved close
- * code (workerd rejects some) must not blow up the other leg's relay. */
-function closeQuietly(ws: WebSocket, code?: number, reason?: string): void {
-  try {
-    ws.close(code, reason);
-  } catch {
-    try {
-      ws.close();
-    } catch {
-      // Already closed — nothing to do.
-    }
+/** An exchange endpoint must fall within the secret's own egress pin — the
+ * cell invariant applies to refresh traffic exactly as to substitution. */
+function assertOriginPinned(url: string, state: SecretState): void {
+  const origin = new URL(url).origin;
+  if (!state.egress.urls.some((pinned) => new URL(pinned).origin === origin)) {
+    throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
+}
+
+function asMaterialRecord(material: unknown): Record<string, unknown> {
+  if (typeof material !== "object" || material === null || Array.isArray(material)) {
+    throw new SecretSubstitutionError("secret_material_not_a_string");
+  }
+  return material as Record<string, unknown>;
+}
+
+function readStringField(material: Record<string, unknown>, field: string): string {
+  const value = material[field];
+  if (typeof value !== "string") {
+    throw new SecretSubstitutionError("secret_reference_field_not_found");
+  }
+  return value;
+}
+
+function base64UrlOfJson(value: unknown): string {
+  return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /**
@@ -496,6 +392,6 @@ function describeSecretState(state: SecretState): SecretDescription {
     audit: state.audit,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
-    hasWorker: state.worker !== null,
+    refresh: state.refresh?.kind ?? null,
   };
 }

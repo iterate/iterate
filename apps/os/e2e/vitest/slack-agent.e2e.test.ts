@@ -13,6 +13,10 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../src/types.ts";
 import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
+import {
+  CONNECTION_CLAIMED_EVENT_TYPE,
+  INTEGRATION_DIRECTORY_STREAM_PATH,
+} from "../../src/domains/integrations/utils.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -21,7 +25,6 @@ const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const CONNECTION = "main-slack";
 const SLACK_BOT_TOKEN_SECRET_PATH = `/secrets/integrations/slack/${CONNECTION}/bot-token`;
 const SLACK_INTEGRATION_STREAM_PATH = `/integrations/slack/${CONNECTION}`;
-const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-directory";
 
 function slackSigningSecret(): string | null {
   const raw = process.env.APP_CONFIG_INTEGRATIONS__SLACK;
@@ -131,10 +134,10 @@ test.skipIf(signingSecret === null)(
         },
       },
     );
-    using directory = root.streams.get(SLACK_TEAM_DIRECTORY_STREAM_PATH);
+    using directory = root.streams.get(INTEGRATION_DIRECTORY_STREAM_PATH);
     await directory.append({
-      type: "events.iterate.com/slack/team-claimed",
-      payload: { connection: CONNECTION, projectId, teamId, teamName: `e2e-${RUN_SUFFIX}` },
+      type: CONNECTION_CLAIMED_EVENT_TYPE,
+      payload: { connection: CONNECTION, externalId: teamId, projectId, slug: "slack" },
     });
 
     // --- An unclaimed team's validly-signed event must be ACKed 200 and
@@ -149,7 +152,10 @@ test.skipIf(signingSecret === null)(
       await signedSlackWebhookRequest(unclaimedBody, signingSecret!),
     );
     expect(unclaimedResponse.status).toBe(200);
-    expect(await unclaimedResponse.json()).toMatchObject({ ok: true, ignored: "team-not-claimed" });
+    expect(await unclaimedResponse.json()).toMatchObject({
+      ok: true,
+      ignored: "external-id-not-claimed",
+    });
 
     // --- A badly-signed request is the one deliberate non-2xx (trust boundary).
     const badSignature = await signedSlackWebhookRequest(unclaimedBody, "wrong-signing-secret");

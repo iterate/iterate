@@ -2,13 +2,13 @@
 // rides one named connection's secret. The installation token never leaves its
 // Secret Durable Object: every request Octokit makes carries a
 // `getSecret(path, "accessToken")` placeholder Authorization header and is
-// dispatched through the connection secret's own `fetch()`, which mints the
-// installation token on first use, refreshes it on a 401 (the in-jail
-// github-install worker), substitutes the placeholder, and pins the host. The
-// caller (itx.integrations.github["<conn>"]) replays its dotted path straight
-// onto this instance (rpc-targets.ts), so it IS Octokit — `rest.repos.get(...)`,
-// `request("GET /...")`, `graphql(...)` — never a hand-mapped surface. Mirrors
-// the Slack WebClient wrapping in slack-api.ts.
+// dispatched through the connection secret's own `fetch()`, whose
+// github-app-installation strategy mints the installation token on first use,
+// re-mints on 401, substitutes the placeholder, and pins the host — all in
+// trusted DO code. The caller (itx.integrations.github["<conn>"]) replays its
+// dotted path straight onto this instance (rpc-targets.ts), so it IS Octokit —
+// `rest.repos.get(...)`, `request("GET /...")`, `graphql(...)` — never a
+// hand-mapped surface. Mirrors the Slack WebClient wrapping in slack-api.ts.
 
 import { Octokit } from "@octokit/rest";
 import { itxEnv } from "../../env.ts";
@@ -17,8 +17,8 @@ import { githubConnectionSecretPath } from "./utils.ts";
 
 /**
  * A connection-scoped Octokit whose every request is routed through the GitHub
- * connection secret's `fetch()` with the access-token placeholder — so the token
- * stays in the jail and every call lands on the secret's audit trail.
+ * connection secret's `fetch()` with the access-token placeholder — the token
+ * never leaves the Secret DO, and every call lands on the secret's audit trail.
  *
  * `baseUrl` overrides the GitHub API origin (a petshop stand-in in e2e);
  * omitted, Octokit uses `https://api.github.com`.

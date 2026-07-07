@@ -1,7 +1,7 @@
-// Gmail REST proxy (v6): the request goes through the connection secret's
-// fetch (the jailed refresh worker) carrying a `getSecret(...)` Authorization
-// placeholder — the secret substitutes the fresh access token and refreshes on
-// 401. No token bytes ever reach this code (design §3).
+// Gmail REST proxy: the request goes through the connection secret's fetch
+// carrying a `getSecret(...)` Authorization placeholder — the Secret DO
+// substitutes the fresh access token and its oauth-refresh-token strategy
+// refreshes on 401. No token bytes ever reach this code.
 
 import type { GmailRequestInput } from "../../types.ts";
 
@@ -12,7 +12,7 @@ export async function callGmailApi(input: {
    * connection secret substitutes; never a raw token. */
   authorization: string;
   /** Sends the composed request through the connection secret's fetch (the DO
-   * stub), which runs the refresh worker (substitute + 401→refresh→retry). */
+   * stub): substitute + 401→refresh→retry, all in trusted DO code. */
   send: (request: Request) => Promise<Response>;
 }) {
   const method = (input.request.method ?? "GET").trim().toUpperCase();

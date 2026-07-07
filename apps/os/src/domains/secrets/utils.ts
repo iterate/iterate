@@ -17,11 +17,17 @@ const SECRET_REFERENCE =
  * field of that secret's material to substitute. */
 type SecretReference = { field?: string; path: string };
 
-/** The substituted string a referenced secret owes each requested field of a
- * chained egress request. The empty-string key `""` is the whole-material
- * placeholder (`getSecret({ path })` with no field). Shared by the Secret DO's
- * resolver and the platform-secret resolver. */
-export type ResolvedFields = Record<string, string>;
+/**
+ * The platform-credential placeholder: `getSecret({ platform: "<configPath>" })`
+ * references a deployment-owned API key by its literal AppConfig path (e.g.
+ * `integrations.parallel.apiKey`). Resolved by the project egress door from
+ * typed config against a known allowlist (platform-secrets.ts) — never a
+ * Durable Object, never project material.
+ */
+const PLATFORM_REFERENCE = /getSecret\(\s*\{\s*platform\s*:\s*"([^"]+)"\s*\}\s*\)/g;
+
+/** One parsed platform placeholder: the AppConfig path it references. */
+type PlatformReference = { platform: string };
 
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
@@ -47,10 +53,37 @@ export function secretReferencesFromHeaders(headers: Headers): SecretReference[]
 }
 
 /** The distinct secret PATHS referenced across all headers — used by the
- * project egress door to pick which Secret DO to hand the request to (any
- * referenced secret can chain the rest) and as a cheap presence check. */
+ * project egress door to pick which Secret DO to hand the request to (exactly
+ * one; multi-secret requests are not supported) and as a cheap presence check. */
 export function secretReferencePathsFromHeaders(headers: Headers): string[] {
   return [...new Set(secretReferencesFromHeaders(headers).map((reference) => reference.path))];
+}
+
+/** Every distinct platform-credential placeholder across all headers. */
+export function platformReferencesFromHeaders(headers: Headers): PlatformReference[] {
+  const byPath = new Map<string, PlatformReference>();
+  headers.forEach((value) => {
+    for (const match of value.matchAll(PLATFORM_REFERENCE)) {
+      byPath.set(match[1]!, { platform: match[1]! });
+    }
+  });
+  return [...byPath.values()];
+}
+
+/** Rewrites every `getSecret({ platform: ... })` placeholder in every header
+ * using `resolve`. Runs in trusted platform code (the project egress door). */
+export function substitutePlatformHeaders(
+  request: Request,
+  resolve: (reference: PlatformReference) => string,
+): Request {
+  const headers = new Headers(request.headers);
+  headers.forEach((value, name) => {
+    headers.set(
+      name,
+      value.replaceAll(PLATFORM_REFERENCE, (_match, platform: string) => resolve({ platform })),
+    );
+  });
+  return new Request(request, { headers });
 }
 
 /**
@@ -185,43 +218,12 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/**
- * Sentinel URL marking a request as JAIL EGRESS on the SecretEntrypoint → Secret
- * DO hop. The Secret DO's `fetch()` does double duty — consumer traffic (which
- * may run the worker) vs the worker's own outbound (which must NOT re-run the
- * worker, just substitute + terminal fetch) — and per workerd only the `fetch`
- * method can carry a WebSocket upgrade, so the two are disambiguated **by URL
- * path**, not an RPC method or a header. The jail's outbound is wrapped to this
- * URL (real target in `?target=`) so the DO routes it to egress and can hand a
- * 101 + WebSocket back natively (an RPC method return cannot serialize a
- * WebSocket). See SecretDurableObject.fetch and secret-entrypoint.ts.
- */
-const SECRET_EGRESS_SENTINEL = "https://secret-egress.iterate.internal/__egress";
-
-/** Wrap the jailed worker's outbound request for the DO's egress lane: keep its
- * method/headers/body (incl. a WS `Upgrade`) verbatim, only re-point the URL to
- * the egress sentinel with the real target in `?target=`. */
-export function wrapSecretEgressRequest(request: Request): Request {
-  const wrapped = `${SECRET_EGRESS_SENTINEL}?target=${encodeURIComponent(request.url)}`;
-  return new Request(wrapped, request);
-}
-
-/** The reverse of {@link wrapSecretEgressRequest}: if `request` is an egress-lane
- * request, return it re-pointed at its real target (method/headers/body copied);
- * otherwise null (it's ordinary consumer traffic). */
-export function unwrapSecretEgressRequest(request: Request): Request | null {
-  const url = new URL(request.url);
-  if (`${url.origin}${url.pathname}` !== SECRET_EGRESS_SENTINEL) return null;
-  const target = url.searchParams.get("target");
-  if (target === null) return null;
-  return new Request(target, request);
-}
-
 type SecretErrorCode =
   | "secret_material_not_a_string"
   | "secret_not_allowed_for_origin"
   | "secret_not_found"
   | "secret_reference_field_not_found"
+  | "secret_reference_foreign"
   | "secret_reference_required";
 
 /** A substitution failure carrying a stable code so the egress path can answer

@@ -131,7 +131,8 @@ export const AppConfig = z.object({
         .optional(),
       /** The dummy third-party used to prove the integrations model end to end
        * (apps/dummy-petshop). Its client credentials back the FIRST-PARTY
-       * petshop lane's `/secrets/platform/integrations/petshop` reference. */
+       * petshop lane's `{ platform: "integrations.petshop" }` clientCreds ref
+       * (resolved by the Secret DO's oauth-refresh-token strategy). */
       petshop: z
         .object({
           oauthClientId: publicValue(z.string().trim().min(1)),

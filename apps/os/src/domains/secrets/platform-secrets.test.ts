@@ -1,15 +1,13 @@
-// Unit tests for the virtual platform-secret resolver (design §4). No DO, no
-// storage: it reads first-party OAuth client credentials straight out of
-// AppConfig so a first-party integration's refresh worker can ride the app
-// credential in a header placeholder (ADR 0005).
+// Unit tests for the known platform-credential registry. No DO, no storage,
+// no synthetic paths: platform credentials are typed AppConfig values plus an
+// allowed-origin pin, resolved by ordinary trusted code.
 
 import { describe, expect, test } from "vitest";
 import type { AppConfig } from "../../config.ts";
 import {
-  assertPlatformApiSecretReferencesAllowed,
-  isPlatformSecretPath,
-  resolvePlatformSecretReference,
-  substitutePlatformSecretReferences,
+  resolvePlatformClientCreds,
+  resolvePlatformGithubAppKey,
+  substitutePlatformApiKeyReferences,
 } from "./platform-secrets.ts";
 import { SecretSubstitutionError } from "./utils.ts";
 
@@ -26,6 +24,10 @@ const config = {
       oauthClientId: "petshop-default",
       oauthClientSecret: { exposeSecret: () => "petshop-default-secret" },
     },
+    google: {
+      oauthClientId: "google-client",
+      oauthClientSecret: { exposeSecret: () => "google-secret" },
+    },
     github: {
       appId: "12345",
       oauthClientId: "gh-client",
@@ -37,106 +39,114 @@ const config = {
   },
 } as unknown as AppConfig;
 
-describe("isPlatformSecretPath", () => {
-  test("only /secrets/platform/** paths are virtual", () => {
-    expect(isPlatformSecretPath("/secrets/platform/integrations/petshop")).toBe(true);
-    expect(isPlatformSecretPath("/secrets/integrations/petshop/jonas")).toBe(false);
-  });
-});
-
-describe("resolvePlatformSecretReference", () => {
-  test("basicAuth is base64(clientId:clientSecret); clientId is readable", () => {
-    const resolved = resolvePlatformSecretReference({
-      config,
-      fields: ["basicAuth", "clientId"],
-      path: "/secrets/platform/integrations/petshop",
-    });
-    expect(resolved.basicAuth).toBe(btoa("petshop-default:petshop-default-secret"));
-    expect(resolved.clientId).toBe("petshop-default");
-  });
-
-  test("API-key platform integrations expose apiKey and whole-material fields", () => {
-    const resolved = resolvePlatformSecretReference({
-      config,
-      fields: ["", "apiKey"],
-      path: "/secrets/platform/integrations/parallel",
-    });
-    expect(resolved[""]).toBe("parallel-platform-key");
-    expect(resolved.apiKey).toBe("parallel-platform-key");
-  });
-
-  test("OpenAI exposes the deployment API key", () => {
-    const resolved = resolvePlatformSecretReference({
-      config,
-      fields: ["apiKey"],
-      path: "/secrets/platform/openai",
-    });
-    expect(resolved.apiKey).toBe("openai-platform-key");
-  });
-
-  test("direct platform-key egress substitutes only for allowlisted provider origins", () => {
+describe("substitutePlatformApiKeyReferences", () => {
+  test("substitutes a known key toward its allowlisted provider origin", () => {
     const request = new Request("https://api.parallel.ai/v1/tasks/runs", {
-      headers: {
-        "x-api-key":
-          'getSecret({ path: "/secrets/platform/integrations/parallel", field: "apiKey" })',
-      },
+      headers: { "x-api-key": 'getSecret({ platform: "integrations.parallel.apiKey" })' },
     });
 
-    const substituted = substitutePlatformSecretReferences({ config, request });
+    const substituted = substitutePlatformApiKeyReferences({ config, request });
 
     expect(substituted.headers.get("x-api-key")).toBe("parallel-platform-key");
   });
 
-  test("direct platform-key egress rejects the wrong origin", () => {
+  test("rejects the wrong origin", () => {
     const request = new Request("https://example.com/v1/tasks/runs", {
-      headers: {
-        "x-api-key":
-          'getSecret({ path: "/secrets/platform/integrations/parallel", field: "apiKey" })',
-      },
+      headers: { "x-api-key": 'getSecret({ platform: "integrations.parallel.apiKey" })' },
     });
 
-    expect(() => substitutePlatformSecretReferences({ config, request })).toThrow(
+    expect(() => substitutePlatformApiKeyReferences({ config, request })).toThrow(
       SecretSubstitutionError,
     );
   });
 
-  test("chained platform API-key references keep their provider-origin pin", () => {
-    expect(() =>
-      assertPlatformApiSecretReferencesAllowed({
-        fields: ["apiKey"],
-        path: "/secrets/platform/integrations/parallel",
-        url: "https://example.com/v1/tasks/runs",
-      }),
-    ).toThrow(SecretSubstitutionError);
-
-    expect(() =>
-      assertPlatformApiSecretReferencesAllowed({
-        fields: ["clientSecret"],
-        path: "/secrets/platform/integrations/petshop",
-        url: "https://example.com/oauth/token",
-      }),
-    ).not.toThrow();
-  });
-
-  test("first-party GitHub App exposes privateKey (to sign with) + appId", () => {
-    // The installation-token worker calls env.APP.sign({ field: "privateKey" }),
-    // which resolves the PEM here — signed with, never revealed (ADR 0006).
-    const resolved = resolvePlatformSecretReference({
-      config,
-      fields: ["privateKey", "appId"],
-      path: "/secrets/platform/integrations/github",
+  test("rejects unknown config paths — the registry is a closed allowlist", () => {
+    const request = new Request("https://api.parallel.ai/v1/tasks/runs", {
+      headers: { "x-api-key": 'getSecret({ platform: "authForge.masterKey" })' },
     });
-    expect(resolved.privateKey).toContain("BEGIN PRIVATE KEY");
-    expect(resolved.appId).toBe("12345");
+
+    expect(() => substitutePlatformApiKeyReferences({ config, request })).toThrow(
+      SecretSubstitutionError,
+    );
   });
 
-  test("unknown slug throws secret_not_found", () => {
+  test("openAiApiKey resolves toward the OpenAI origin", () => {
+    const request = new Request("https://api.openai.com/v1/responses", {
+      headers: { authorization: 'Bearer getSecret({ platform: "openAiApiKey" })' },
+    });
+
+    const substituted = substitutePlatformApiKeyReferences({ config, request });
+
+    expect(substituted.headers.get("authorization")).toBe("Bearer openai-platform-key");
+  });
+});
+
+describe("resolvePlatformClientCreds", () => {
+  test("google creds resolve only toward Google's token endpoint", () => {
+    const creds = resolvePlatformClientCreds(
+      config,
+      { platform: "integrations.google" },
+      "https://oauth2.googleapis.com/token",
+    );
+    expect(creds).toEqual({ clientId: "google-client", clientSecret: "google-secret" });
+
     expect(() =>
-      resolvePlatformSecretReference({
+      resolvePlatformClientCreds(
         config,
-        fields: ["basicAuth"],
-        path: "/secrets/platform/integrations/unconfigured",
-      }),
+        { platform: "integrations.google" },
+        "https://attacker.example/token",
+      ),
+    ).toThrow(SecretSubstitutionError);
+  });
+
+  test("petshop creds have no registry origin pin (the secret's own egress pin is the boundary)", () => {
+    const creds = resolvePlatformClientCreds(
+      config,
+      { platform: "integrations.petshop" },
+      "https://dummy-petshop.iterate-preview-3.com/oauth/token",
+    );
+    expect(creds).toEqual({
+      clientId: "petshop-default",
+      clientSecret: "petshop-default-secret",
+    });
+  });
+
+  test("unknown or unconfigured refs throw secret_not_found", () => {
+    expect(() =>
+      resolvePlatformClientCreds(
+        config,
+        { platform: "integrations.unconfigured" },
+        "https://example.com/token",
+      ),
+    ).toThrow(SecretSubstitutionError);
+  });
+});
+
+describe("resolvePlatformGithubAppKey", () => {
+  test("the first-party App key resolves only toward the real GitHub API", () => {
+    const resolved = resolvePlatformGithubAppKey(
+      config,
+      { platform: "integrations.github" },
+      "https://api.github.com",
+    );
+    expect(resolved.privateKey).toContain("BEGIN PRIVATE KEY");
+
+    expect(() =>
+      resolvePlatformGithubAppKey(
+        config,
+        { platform: "integrations.github" },
+        "https://dummy-petshop.example.com",
+      ),
+    ).toThrow(SecretSubstitutionError);
+  });
+
+  test("only the github config path resolves an App key", () => {
+    expect(() =>
+      resolvePlatformGithubAppKey(
+        config,
+        { platform: "integrations.google" },
+        "https://api.github.com",
+      ),
     ).toThrow(SecretSubstitutionError);
   });
 });

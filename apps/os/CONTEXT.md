@@ -235,27 +235,34 @@ select into structured material (`getSecret({ path, field: "field" })`), which i
 read addressing, not a storage concept.
 _Avoid_: material fields, store(), partial secret writes, per-field expiry
 
-**Secret Worker**:
-The stateless dynamic Worker a Secret optionally hosts, loaded on demand by
-the Secret Durable Object, that overrides the Secret's `fetch()`. Its entire
-interface is fetch; refresh behavior is private code inside its fetch wrap.
-It may read its own Secret Material inside the Secret Jail.
-_Avoid_: secret program, DO facet, refresh convention, RPC method surface
+**Secret Cell Invariant**:
+The one property of a Secret: material goes in; nothing comes out except a
+request to a pinned host. No read lane, no reveal lane, no compute methods,
+no cross-secret chaining — the Secret Durable Object's only material-touching
+verb is `fetch()` (substitute header placeholders, dispatch under the egress
+pin). See ADR 0005.
+_Avoid_: revealForPlatformUse, secret read API, hmac/sign/matches on secrets
 
-**Secret Jail**:
-The confinement for a Secret Worker: `globalOutbound` pinned to the Secret's
-hosts with header substitution, `connect()` rejected, env limited to what the
-installing Integration hands. Platform Secret material never enters a Secret
-Jail.
-_Avoid_: sandbox policy layer, program lanes, output scanning as defense
+**Secret Refresh Strategy**:
+The named credential-refresh behavior a Secret optionally runs in its own
+trusted DO code on a 401 or a missing field — `oauth-refresh-token` (RFC 6749
+refresh grant) or `github-app-installation` (App-JWT mint). One shared
+implementation per protocol, parameterized per secret; exchange endpoints
+must fall within the Secret's own egress pin. Configuring it is the trust
+event.
+_Avoid_: secret worker, refresh worker, per-secret refresh code, refresh
+convention
 
-**Platform Secret**:
-A read-only deployment-env-backed secret at `/secrets/platform/**`, resolved
-virtually with no Durable Object. Participates only as a header-substitution
-hop under its own host pin; never readable, never updatable, never handed
-into a jail.
-_Avoid_: revealable platform credential, env binding in a jail, per-project
-provisioned secret
+**Platform Credential**:
+A deployment-owned credential (OAuth client, GitHub App key, first-party API
+key) resolved from typed AppConfig by ordinary trusted code against the
+closed registry in `platform-secrets.ts`, each entry pinned to its provider
+origins. Referenced from untrusted-composed requests as
+`getSecret({ platform: "<configPath>" })` (API keys, resolved at the project
+egress door) or from refresh strategies as `{ platform: "<configPath>" }`.
+Never a Durable Object, never project material, never readable.
+_Avoid_: platform secret path, /secrets/platform/\*\*, virtual secret,
+revealable platform credential
 
 **OS MCP Handler**:
 The app worker's stateless `/api/mcp` handler that exposes the inbound MCP

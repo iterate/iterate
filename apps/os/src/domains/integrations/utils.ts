@@ -94,11 +94,12 @@ export const GOOGLE_CONNECTION_EGRESS_URLS = [
   "https://gmail.googleapis.com",
 ];
 
-/** The v6 GitHub connection secret: holds `{ installationId, accessToken }` and
- * hosts the installation-token worker (github-install.worker.js). The worker
- * signs an App JWT in-jail to mint the installation token and refreshes it on a
- * 401; Octokit rides this secret's `fetch()` with an `accessToken` placeholder
- * (github-api.ts), same connection-root shape as Google. */
+/** The GitHub connection secret: material is just `{ accessToken }` (minted on
+ * first use), and the secret carries the github-app-installation refresh
+ * strategy — trusted DO code signs an App JWT to mint the installation token
+ * and re-mints on 401. Octokit rides this secret's `fetch()` with an
+ * `accessToken` placeholder (github-api.ts), same connection-root shape as
+ * Google. */
 export function githubConnectionSecretPath(connection: string): string {
   return `/secrets/integrations/github/${connection}`;
 }

@@ -8,9 +8,11 @@
 //   - Connect state:  stateless HMAC-signed token (oauth-state.ts), no D1.
 //   - Credentials:    a Secret DO per connection at
 //                     `/secrets/integrations/<slug>/<connection>` — a bot token
-//                     (slack), `{ accessToken, refreshToken }` + a jailed refresh
-//                     worker (google), or `{ installationId }` + a jailed
-//                     install worker (github). Material is never read back.
+//                     (slack), `{ accessToken, refreshToken }` + the shared
+//                     oauth-refresh-token strategy (google), or an empty
+//                     material + the github-app-installation mint strategy
+//                     (github). Material is never read back: refresh runs in
+//                     the Secret DO's own trusted code.
 //   - Facts:          `/integrations/<slug>/<connection>` project stream
 //                     (connected/disconnected + inbound webhook events).
 //   - Routing:        the deployment-wide `(slug, externalId)` directory
@@ -24,7 +26,7 @@ import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
-  StatelessDynamicWorkerRef,
+  SecretRefresh,
 } from "../../types.ts";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -42,8 +44,6 @@ import {
   streamEventsNewestFirst,
 } from "./integration-streams.ts";
 import { readGoogleConnectionState } from "./google-connection.ts";
-import { oauthRefreshWorkerRef } from "./workers/oauth-refresh.ts";
-import { githubInstallWorkerRef } from "./workers/github-install.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
@@ -240,14 +240,14 @@ async function recordConnection(input: {
   slug: string;
   /** Credential material, each written to its own Secret DO with an egress
    * allowlist. `material` is any serializable value (a bare token string for
-   * Slack; `{ accessToken, refreshToken }` for Google). An optional `worker`
-   * installs a secret worker on that secret (Google's refresh worker) — the
-   * v6 model, so no provider stores tokens on the journal (design §2.2/§3). */
+   * Slack; `{ accessToken, refreshToken }` for Google). An optional `refresh`
+   * configures the secret's named refresh strategy (run by the Secret DO's own
+   * trusted code) — no provider stores tokens on the journal. */
   secrets: readonly {
     egressUrls: readonly string[];
     material: unknown;
     path: string;
-    worker?: StatelessDynamicWorkerRef;
+    refresh?: SecretRefresh;
   }[];
   /** The connected fact, appended to /integrations/{slug}/{connection}. */
   connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
@@ -267,7 +267,7 @@ async function recordConnection(input: {
     ).update({
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
-      ...(secret.worker ? { worker: secret.worker } : {}),
+      ...(secret.refresh ? { refresh: secret.refresh } : {}),
     });
   }
   await integrationStreamStub(input.projectId, streamPath).append(
@@ -441,10 +441,11 @@ async function completeGithubConnect(input: {
 
   // App installation (D5), not OAuth-user: no code exchange, no user lookup. The
   // installation id is the stable handle (it names the connection AND is the
-  // directory external id the webhook door routes on). The connection secret
-  // holds only `{ installationId }`; the in-jail install worker mints the
-  // installation token on first use by signing an App JWT with the first-party
-  // App key from the platform secret (ADR 0006) — the key never enters OS code.
+  // directory external id the webhook door routes on). It is public, so it
+  // lives in the refresh strategy config, not in material: the Secret DO's
+  // github-app-installation strategy mints the installation token on first use
+  // (and re-mints on 401) by signing an App JWT with the first-party App key
+  // resolved from deployment config — trusted DO code, no worker, no jail.
   const connection = `install-${sanitizeConnectionName(input.installationId)}`;
   await recordConnection({
     connection,
@@ -453,13 +454,15 @@ async function completeGithubConnect(input: {
     secrets: [
       {
         egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
-        material: { installationId: input.installationId },
+        material: {},
         path: githubConnectionSecretPath(connection),
-        worker: githubInstallWorkerRef({
+        refresh: {
+          kind: "github-app-installation",
           apiBase: "https://api.github.com",
           appId: github.appId,
-          appSecretPath: "/secrets/platform/integrations/github",
-        }),
+          installationId: input.installationId,
+          privateKey: { platform: "integrations.github" },
+        },
       },
     ],
     connectedEvent: {
@@ -544,9 +547,11 @@ async function completeGoogleConnect(input: {
   const connection =
     sanitizeConnectionName(userInfo.email ?? "") || `google-${sanitizeConnectionName(userInfo.id)}`;
   const scopes = tokenData.scope?.split(" ") ?? google.scopes;
-  // v6: tokens live in a connection secret (write-only), refreshed by the shared
-  // OAuth refresh worker against the platform Google client (§3, §4). No tokens
-  // on the journal — the connected fact carries only display metadata.
+  // Tokens live in a connection secret (write-only), refreshed on 401 by the
+  // shared oauth-refresh-token strategy in the Secret DO's own trusted code,
+  // with the platform Google client credential resolved from deployment
+  // config. No tokens on the journal — the connected fact carries only
+  // display metadata.
   await recordConnection({
     connection,
     projectId: input.projectId,
@@ -559,10 +564,11 @@ async function completeGoogleConnect(input: {
           ...(tokenData.refresh_token ? { refreshToken: tokenData.refresh_token } : {}),
         },
         path: googleConnectionSecretPath(connection),
-        worker: oauthRefreshWorkerRef({
-          appSecretPath: "/secrets/platform/integrations/google",
-          tokenUrl: GOOGLE_OAUTH_TOKEN_URL,
-        }),
+        refresh: {
+          kind: "oauth-refresh-token",
+          tokenEndpoint: GOOGLE_OAUTH_TOKEN_URL,
+          clientCreds: { platform: "integrations.google" },
+        },
       },
     ],
     connectedEvent: {

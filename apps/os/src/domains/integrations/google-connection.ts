@@ -1,9 +1,9 @@
 // Google connection metadata — a newest-first fold over the connection journal
-// for display/status (email, name, picture, googleUserId, scopes). v6 keeps the
-// tokens in the connection secret (write-only, refreshed by the shared OAuth
-// refresh worker — google-worker via oauth-refresh.worker.js), so there is NO
-// token state here: this file replaced the old google-tokens.ts, which stored
-// tokens as ciphertext journal events and refreshed in-process.
+// for display/status (email, name, picture, googleUserId, scopes). Tokens live
+// in the connection secret (write-only, refreshed on 401 by the Secret DO's
+// shared oauth-refresh-token strategy), so there is NO token state here: this
+// file replaced the old google-tokens.ts, which stored tokens as ciphertext
+// journal events and refreshed in-process.
 
 import { streamEventsNewestFirst } from "./integration-streams.ts";
 import {

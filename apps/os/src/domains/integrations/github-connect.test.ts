@@ -1,9 +1,9 @@
-// Unit tests for the GitHub half of completeConnect — now a GitHub App
+// Unit tests for the GitHub half of completeConnect — a GitHub App
 // installation (D5), not an OAuth-user code exchange. There is NO network: the
 // callback carries an `installation_id`, and completeConnect records the
-// connection secret (`{ installationId }` + the in-jail install worker), the
-// connected fact, and the directory claim the webhook door routes on. The seam
-// is the same in-memory itxEnv the google tests use.
+// connection secret (empty material + the github-app-installation mint
+// strategy), the connected fact, and the directory claim the webhook door
+// routes on. The seam is the same in-memory itxEnv the google tests use.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -20,13 +20,17 @@ const network = vi.hoisted(() => {
   const streams = new Map<string, Array<{ payload: unknown; type: string }>>();
   const secrets = new Map<
     string,
-    { egress: { urls: string[] }; material: unknown; worker?: unknown }
+    { egress: { urls: string[] }; material: unknown; refresh?: unknown }
   >();
   return {
     SECRET: {
       getByName(name: string) {
         return {
-          async update(input: { egress: { urls: string[] }; material: unknown; worker?: unknown }) {
+          async update(input: {
+            egress: { urls: string[] };
+            material: unknown;
+            refresh?: unknown;
+          }) {
             secrets.set(name, input);
           },
         };
@@ -79,7 +83,7 @@ describe("completeConnect (github App installation)", () => {
     network.reset();
   });
 
-  test("claims the installation: stores { installationId } + install worker, records fact + directory claim", async () => {
+  test("claims the installation: configures the mint strategy, records fact + directory claim", async () => {
     const state = await createOAuthState(
       { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
       SECRET_ENCRYPTION_KEY,
@@ -95,16 +99,24 @@ describe("completeConnect (github App installation)", () => {
     });
     expect(result).toEqual({ callbackUrl: null, ok: true });
 
-    // The installation id names the connection (install-<id>) and is the secret
-    // material; the connection secret hosts the in-jail install worker.
+    // The installation id names the connection (install-<id>) and — being
+    // public — lives in the strategy config, not in material. Material starts
+    // empty: the Secret DO's strategy mints the token on first use, signing
+    // with the first-party App key resolved from deployment config.
     const secretName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
       path: githubConnectionSecretPath("install-789"),
     });
     const stored = network.secrets.get(secretName);
-    expect(stored?.material).toEqual({ installationId: "789" });
+    expect(stored?.material).toEqual({});
     expect(stored?.egress.urls).toContain("https://api.github.com");
-    expect(stored?.worker).toBeDefined();
+    expect(stored?.refresh).toEqual({
+      kind: "github-app-installation",
+      apiBase: "https://api.github.com",
+      appId: "123456",
+      installationId: "789",
+      privateKey: { platform: "integrations.github" },
+    });
 
     // Connected fact on the connection stream.
     const journalName = DurableObjectNameCodec.stringify({

@@ -1,161 +1,151 @@
 import { type AppConfig } from "../../config.ts";
+import { type PlatformCredsRef } from "../../types.ts";
 import {
-  type ResolvedFields,
-  secretReferencesFromHeaders,
+  platformReferencesFromHeaders,
   SecretSubstitutionError,
-  substituteSecretHeaders,
+  substitutePlatformHeaders,
 } from "./utils.ts";
 
 /**
- * Virtual, env-backed platform secrets (design §4). A `/secrets/platform/**`
- * reference resolves from deployment AppConfig — no Durable Object, no storage,
- * no per-project provisioning: adding one is adding a config key. They
- * participate ONLY as header-substitution hops in a chain (never the entry
- * secret, never readable/updatable, never handed into a jail), which is how a
- * first-party integration's app-tier OAuth client credentials reach a secret
- * worker's refresh request without any project ever holding platform bytes
- * (ADR 0005). A small allowlist below also exposes first-party API keys for
- * direct project egress, pinned to their provider API origins.
+ * Known platform credentials: deployment-owned secrets resolved from typed
+ * AppConfig by ordinary trusted code. There is no Durable Object and no
+ * synthetic path namespace behind these (the old virtual `/secrets/platform/**`
+ * model is gone) — a platform credential is a config value plus, where
+ * untrusted code can cause it to be sent somewhere, an allowed-origin pin.
+ *
+ * Three consumers:
+ * - `substitutePlatformApiKeyReferences` — the project egress door substitutes
+ *   `getSecret({ platform: "<configPath>" })` header references for
+ *   Iterate-owned API keys, each pinned to its provider origins.
+ * - `resolvePlatformClientCreds` — the Secret DO's `oauth-refresh-token`
+ *   strategy resolves a built-in integration's OAuth client credential.
+ * - `resolvePlatformGithubAppKey` — the Secret DO's `github-app-installation`
+ *   strategy resolves the first-party GitHub App private key.
+ *
+ * Platform credential bytes are handled ONLY by trusted platform code (this
+ * module, the door, the Secret DO's strategies); they are never stored in
+ * project material and there is no lane that reveals them to a caller.
  */
 
-const PLATFORM_PREFIX = "/secrets/platform/";
-const PLATFORM_API_SECRET_EGRESS_ORIGINS: Record<string, readonly string[]> = {
-  "/secrets/platform/integrations/exa": ["https://api.exa.ai"],
-  "/secrets/platform/integrations/parallel": ["https://api.parallel.ai"],
-  "/secrets/platform/openai": ["https://api.openai.com"],
+/** Iterate-owned API keys substitutable into project egress. Adding one is
+ * adding a config key + a row here. The `origins` pin is enforced against the
+ * request's terminal destination no matter who composed the request. */
+const PLATFORM_API_KEYS: Record<
+  string,
+  { origins: readonly string[]; value: (config: AppConfig) => string | undefined }
+> = {
+  "integrations.exa.apiKey": {
+    origins: ["https://api.exa.ai"],
+    value: (config) => config.integrations.exa?.apiKey.exposeSecret(),
+  },
+  "integrations.parallel.apiKey": {
+    origins: ["https://api.parallel.ai"],
+    value: (config) => config.integrations.parallel?.apiKey.exposeSecret(),
+  },
+  openAiApiKey: {
+    origins: ["https://api.openai.com"],
+    value: (config) => config.openAiApiKey.exposeSecret(),
+  },
 };
 
-export function isPlatformSecretPath(path: string): boolean {
-  return path.startsWith(PLATFORM_PREFIX);
-}
+/**
+ * OAuth client credentials resolvable by the `oauth-refresh-token` strategy.
+ * `origins` (when present) pins which token endpoints the credential may be
+ * sent to, ON TOP of the secret's own egress pin — so even a hostile
+ * `secret.update` configuring a platform ref can only make the DO run a normal
+ * refresh against the provider's real token endpoint.
+ */
+const PLATFORM_CLIENT_CREDS: Record<
+  string,
+  {
+    creds: (config: AppConfig) => { clientId: string; clientSecret: string } | undefined;
+    origins?: readonly string[];
+  }
+> = {
+  "integrations.google": {
+    creds: (config) =>
+      config.integrations.google && {
+        clientId: config.integrations.google.oauthClientId,
+        clientSecret: config.integrations.google.oauthClientSecret.exposeSecret(),
+      },
+    origins: ["https://oauth2.googleapis.com"],
+  },
+  // The e2e third party (apps/dummy-petshop). Its base URL varies per
+  // deployment, so there is no registry origin pin here — the secret's own
+  // egress pin (which the tokenEndpoint must fall within) is the boundary.
+  "integrations.petshop": {
+    creds: (config) =>
+      config.integrations.petshop && {
+        clientId: config.integrations.petshop.oauthClientId,
+        clientSecret: config.integrations.petshop.oauthClientSecret.exposeSecret(),
+      },
+  },
+};
+
+/** Which API origins the first-party GitHub App key may sign JWTs for. A
+ * bring-your-own-App connection keeps its key in material instead. */
+const GITHUB_APP_KEY_ORIGINS: readonly string[] = ["https://api.github.com"];
 
 /**
- * Resolve the requested fields of a platform secret reference from AppConfig.
- *
- * `/secrets/platform/integrations/<slug>` can expose OAuth app credentials
- * (`clientId`, `clientSecret`, `basicAuth`) and/or an API key (`apiKey`, plus
- * whole-material `getSecret(path)` when the integration is API-key-only).
- * `/secrets/platform/openai` exposes the deployment OpenAI API key.
+ * Substitute `getSecret({ platform: ... })` API-key references into a request.
+ * Called by the project egress door for requests that reference no project
+ * secret. Throws SecretSubstitutionError on unknown paths, unconfigured keys,
+ * or a destination outside the credential's origin pin.
  */
-export function resolvePlatformSecretReference(input: {
-  config: AppConfig;
-  fields: string[];
-  path: string;
-}): ResolvedFields {
-  const table = platformSecretFields(input.config, input.path);
-  if (table === null) throw new SecretSubstitutionError("secret_not_found");
-  const resolved: ResolvedFields = {};
-  for (const field of input.fields) {
-    const value = table[field];
-    if (value === undefined) throw new SecretSubstitutionError("secret_reference_field_not_found");
-    resolved[field] = value;
-  }
-  return resolved;
-}
-
-export function substitutePlatformSecretReferences(input: {
+export function substitutePlatformApiKeyReferences(input: {
   config: AppConfig;
   request: Request;
 }): Request {
-  const references = secretReferencesFromHeaders(input.request.headers);
+  const references = platformReferencesFromHeaders(input.request.headers);
   const origin = new URL(input.request.url).origin;
-  const fieldsByPath = new Map<string, string[]>();
-
+  const values = new Map<string, string>();
   for (const reference of references) {
-    if (!isPlatformSecretPath(reference.path)) {
-      throw new SecretSubstitutionError("secret_reference_required");
-    }
-    const allowedOrigins = PLATFORM_API_SECRET_EGRESS_ORIGINS[reference.path];
-    if (allowedOrigins === undefined || !allowedOrigins.includes(origin)) {
+    const entry = PLATFORM_API_KEYS[reference.platform];
+    if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
+    if (!entry.origins.includes(origin)) {
       throw new SecretSubstitutionError("secret_not_allowed_for_origin");
     }
-    const fields = fieldsByPath.get(reference.path) ?? [];
-    fields.push(reference.field ?? "");
-    fieldsByPath.set(reference.path, fields);
+    const value = entry.value(input.config);
+    if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
+    values.set(reference.platform, value);
   }
-
-  const values = new Map<string, string>();
-  for (const [path, fields] of fieldsByPath) {
-    const resolved = resolvePlatformSecretReference({ config: input.config, fields, path });
-    for (const [field, value] of Object.entries(resolved)) values.set(`${path} ${field}`, value);
-  }
-
-  return substituteSecretHeaders(input.request, (reference) => {
-    const value = values.get(`${reference.path} ${reference.field ?? ""}`);
-    if (value === undefined) throw new SecretSubstitutionError("secret_reference_field_not_found");
+  return substitutePlatformHeaders(input.request, (reference) => {
+    const value = values.get(reference.platform);
+    if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
     return value;
   });
 }
 
-export function assertPlatformApiSecretReferencesAllowed(input: {
-  fields: string[];
-  path: string;
-  url: string;
-}) {
-  if (!input.fields.some((field) => field === "" || field === "apiKey")) return;
-
-  const origin = new URL(input.url).origin;
-  const allowedOrigins = PLATFORM_API_SECRET_EGRESS_ORIGINS[input.path];
-  if (allowedOrigins === undefined || !allowedOrigins.includes(origin)) {
+/** Resolve a built-in integration's OAuth client credential for a refresh
+ * grant against `tokenEndpoint`. Enforces the credential's own origin pin. */
+export function resolvePlatformClientCreds(
+  config: AppConfig,
+  ref: PlatformCredsRef,
+  tokenEndpoint: string,
+): { clientId: string; clientSecret: string } {
+  const entry = PLATFORM_CLIENT_CREDS[ref.platform];
+  const creds = entry?.creds(config);
+  if (creds === undefined) throw new SecretSubstitutionError("secret_not_found");
+  if (entry!.origins && !entry!.origins.includes(new URL(tokenEndpoint).origin)) {
     throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
+  return creds;
 }
 
-/**
- * One field's raw material string from a platform secret, for the compute-only
- * `env.APP` binding (which runs `hmac`/`sign`/`matches` over it — ADR 0006).
- * `undefined` field selects the whole-material value (the API-key-only case).
- * Throws SecretSubstitutionError when the secret or field is absent.
- */
-export function platformSecretMaterialField(
+/** Resolve the first-party GitHub App private key for an installation-token
+ * mint against `apiBase`. Only the real GitHub API origin is allowed. */
+export function resolvePlatformGithubAppKey(
   config: AppConfig,
-  path: string,
-  field?: string,
-): string {
-  const fields = platformSecretFields(config, path);
-  if (fields === null) throw new SecretSubstitutionError("secret_not_found");
-  const value = fields[field ?? ""];
-  if (value === undefined) throw new SecretSubstitutionError("secret_reference_field_not_found");
-  return value;
-}
-
-function platformSecretFields(config: AppConfig, path: string): Record<string, string> | null {
-  if (path === "/secrets/platform/openai") {
-    const apiKey = config.openAiApiKey.exposeSecret();
-    return { "": apiKey, apiKey };
+  ref: PlatformCredsRef,
+  apiBase: string,
+): { privateKey: string } {
+  if (ref.platform !== "integrations.github") {
+    throw new SecretSubstitutionError("secret_not_found");
   }
-
-  const match = /^\/secrets\/platform\/integrations\/([a-z0-9-]+)$/.exec(path);
-  if (match === null) return null;
-  // integrations is a fixed-key object in config; index dynamically by slug.
-  const creds = (config.integrations as Record<string, unknown>)[match[1]!] as
-    | {
-        apiKey?: { exposeSecret(): string };
-        appId?: string;
-        oauthClientId?: string;
-        oauthClientSecret?: { exposeSecret(): string };
-        privateKey?: { exposeSecret(): string };
-      }
-    | undefined;
-  if (creds === undefined) return null;
-
-  const fields: Record<string, string> = {};
-  if (creds.oauthClientId !== undefined && creds.oauthClientSecret !== undefined) {
-    const clientSecret = creds.oauthClientSecret.exposeSecret();
-    fields.basicAuth = btoa(`${creds.oauthClientId}:${clientSecret}`);
-    fields.clientId = creds.oauthClientId;
-    fields.clientSecret = clientSecret;
+  const privateKey = config.integrations.github?.privateKey?.exposeSecret();
+  if (privateKey === undefined) throw new SecretSubstitutionError("secret_not_found");
+  if (!GITHUB_APP_KEY_ORIGINS.includes(new URL(apiBase).origin)) {
+    throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
-  if (creds.apiKey !== undefined) {
-    const apiKey = creds.apiKey.exposeSecret();
-    fields[""] = apiKey;
-    fields.apiKey = apiKey;
-  }
-  // First-party GitHub App: `privateKey` is signed with (never revealed) via
-  // env.APP.sign in the installation-token worker (ADR 0006); `appId` is the
-  // public JWT issuer.
-  if (creds.privateKey !== undefined) fields.privateKey = creds.privateKey.exposeSecret();
-  if (creds.appId !== undefined) fields.appId = creds.appId;
-
-  return Object.keys(fields).length > 0 ? fields : null;
+  return { privateKey };
 }

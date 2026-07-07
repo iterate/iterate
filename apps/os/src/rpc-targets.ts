@@ -149,7 +149,6 @@ type FetchOnly = Pick<Fetcher, "fetch">;
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
-const PARALLEL_PLATFORM_SECRET_PATH = "/secrets/platform/integrations/parallel";
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -160,7 +159,9 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
     {
       baseUrl: PARALLEL_API_BASE_URL,
       headers: {
-        "x-api-key": `getSecret({ path: "${PARALLEL_PLATFORM_SECRET_PATH}", field: "apiKey" })`,
+        // A platform API-key reference: resolved by the project egress door
+        // from typed deployment config, origin-pinned (platform-secrets.ts).
+        "x-api-key": 'getSecret({ platform: "integrations.parallel.apiKey" })',
       },
       specUrl: PARALLEL_OPENAPI_SPEC_URL,
     },
@@ -603,18 +604,6 @@ class SecretRpcTarget extends RpcTarget implements Secret {
     return this.durableObjectStub.fetch(request);
   }
 
-  hmac(input: Parameters<Secret["hmac"]>[0]) {
-    return this.durableObjectStub.hmac(input);
-  }
-
-  matches(input: Parameters<Secret["matches"]>[0]) {
-    return this.durableObjectStub.matches(input);
-  }
-
-  sign(input: Parameters<Secret["sign"]>[0]) {
-    return this.durableObjectStub.sign(input);
-  }
-
   update(input: Parameters<Secret["update"]>[0]) {
     return this.durableObjectStub.update(input);
   }
@@ -879,12 +868,12 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     if (slug === "github") {
       if (!connection || method.length === 0) {
         throw new Error(
-          'itx.integrations.github expected `<connection>.<octokit path>` (e.g. itx.integrations.github["jonas"].rest.repos.listForAuthenticatedUser() or .request("GET /user/repos")); use itx.integrations.list() to see connections. For shell/git work, use a sandbox with ensureGithubAuth.',
+          'itx.integrations.github expected `<connection>.<octokit path>` (e.g. itx.integrations.github["jonas"].rest.repos.listForAuthenticatedUser() or .request("GET /user/repos")); use itx.integrations.list() to see connections.',
         );
       }
       // The connection's wrapped Octokit: replay the caller's dotted path onto
       // it (rest.*, request(...), graphql(...)) — a real Octokit whose transport
-      // rides the connection secret's jailed egress (github-api.ts).
+      // rides the connection secret's substituting egress (github-api.ts).
       const octokit = connectionOctokit({ connection, projectId: this.props.projectId });
       try {
         return await replayPathCall(octokit, { args, path: method });
@@ -944,7 +933,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit — await itx.integrations.github["<connection>"].rest.repos.listForAuthenticatedUser(), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). For shell/git work, use a sandbox with ensureGithubAuth.',
+        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit — await itx.integrations.github["<connection>"].rest.repos.listForAuthenticatedUser(), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }).',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape — copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
