@@ -1401,23 +1401,43 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       filename: attachment.filename,
       contentType: attachment.type,
     }));
-    await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
-      type: EMAIL_SENT_EVENT_TYPE,
-      idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
-      // Recipients + subject for audit; bodies stay out of the stream. The
-      // threadId (reply path) lets the email router index the outbound
-      // messageId so replies route back to the thread.
-      payload: {
-        from,
-        messageId,
-        projectId: this.props.projectId,
-        subject: input.audit.subject,
-        to: input.audit.to,
-        ...(input.audit.threadId === undefined ? {} : { threadId: input.audit.threadId }),
-        ...(input.audit.inReplyTo === undefined ? {} : { inReplyTo: input.audit.inReplyTo }),
-        ...(attachments.length === 0 ? {} : { attachments }),
-      },
-    });
+    const appendAudit = () =>
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+        type: EMAIL_SENT_EVENT_TYPE,
+        idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
+        // Recipients + subject for audit; bodies stay out of the stream. The
+        // threadId (reply path) lets the email router index the outbound
+        // messageId so replies route back to the thread.
+        payload: {
+          from,
+          messageId,
+          projectId: this.props.projectId,
+          subject: input.audit.subject,
+          to: input.audit.to,
+          ...(input.audit.threadId === undefined ? {} : { threadId: input.audit.threadId }),
+          ...(input.audit.inReplyTo === undefined ? {} : { inReplyTo: input.audit.inReplyTo }),
+          ...(attachments.length === 0 ? {} : { attachments }),
+        },
+      });
+    // The mail is already on the wire once send() resolved — an audit-append
+    // failure must NOT surface as a send failure, or the caller (an agent)
+    // retries and the recipient gets the message twice. Retry the append
+    // once, then degrade loudly: the thread's +t Reply-To token still routes
+    // replies, so losing this outbound messageId from the index only weakens
+    // the header-only fallback for this one message.
+    try {
+      await appendAudit();
+    } catch {
+      try {
+        await appendAudit();
+      } catch (error) {
+        console.error("[email] sent-audit append failed after successful send", {
+          error,
+          messageId,
+          projectId: this.props.projectId,
+        });
+      }
+    }
     return { from, messageId };
   }
 
