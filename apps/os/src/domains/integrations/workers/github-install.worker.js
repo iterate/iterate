@@ -20,6 +20,9 @@ function base64Url(input) {
 }
 
 export default class GithubInstallWorker extends WorkerEntrypoint {
+  // In-flight mint, shared across concurrent callers (single-flight).
+  #minting;
+
   async fetch(request) {
     // No token yet (first use after connect) → mint before the first call.
     const material = await this.env.SECRET.read();
@@ -31,15 +34,30 @@ export default class GithubInstallWorker extends WorkerEntrypoint {
     return await this.env.SECRET.fetch(request);
   }
 
+  // Single-flight: concurrent first-use calls (and concurrent 401 retries) share
+  // ONE mint, so we don't POST /access_tokens N times — duplicate mints trip
+  // GitHub's secondary rate limits and race last-write-wins on the stored token.
+  // The `#refreshing`-style guard from design §3 (the OAuth refresh worker is a
+  // candidate for the same treatment).
   async #mint() {
+    if (!this.#minting) {
+      this.#minting = this.#doMint().finally(() => {
+        this.#minting = undefined;
+      });
+    }
+    await this.#minting;
+  }
+
+  async #doMint() {
     const { apiBase, appId } = this.ctx.props;
     const material = await this.env.SECRET.read();
-    // GitHub App JWT: RS256 over header.payload, iss = appId, <=10min TTL.
+    // GitHub App JWT: RS256 over header.payload, iss = appId, <=10min TTL. iat is
+    // set 60s in the past per GitHub's guidance, to tolerate clock drift.
     const now = Math.floor(Date.now() / 1000);
     const signingInput =
       base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" })) +
       "." +
-      base64Url(JSON.stringify({ iat: now - 30, exp: now + 540, iss: appId }));
+      base64Url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }));
     // env.APP.sign signs with the App private key WITHOUT returning it.
     const signature = await this.env.APP.sign({
       algo: "RS256",
