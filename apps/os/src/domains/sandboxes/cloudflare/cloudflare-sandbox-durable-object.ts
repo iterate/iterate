@@ -81,6 +81,8 @@ const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
  */
 const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
 
+const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as const;
+
 /**
  * The sandbox env-var map shape, shared by durable storage,
  * {@link CloudflareSandboxDurableObject.configureEnvVars}, and
@@ -599,8 +601,8 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // conventional provider secrets gets a code-ready sandbox with no setup,
     // while configureEnvVars still wins for anything it sets.
     const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
-    // Redial-once like every command: setEnvVars is idempotent, and during a
-    // cold boot its session dial is as exposed to client churn as any exec.
+    // Redial like every command: setEnvVars is idempotent, and during a cold
+    // boot its session dial is as exposed to client churn as any exec.
     await this.#redialOnInterruptedSessionSetup(() =>
       super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored }),
     );
@@ -684,7 +686,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Re-dial ONCE when the SDK's per-command session SETUP was interrupted.
+   * Re-dial when the SDK's per-command session SETUP was interrupted.
    *
    * Every command runner first dials `utils.createSession` on the container;
    * a container-client replacement mid-dial — boot churn on a cold container,
@@ -693,19 +695,27 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * repeatedly in preview e2e and CI). The SDK marks it `retryable: false`
    * because it can't know whether the COMMAND ran — but when the interrupted
    * operation is the session setup itself, the command was never admitted, so
-   * one re-dial is provably safe. Scoped to exactly that case: a
+   * a bounded re-dial is provably safe. Scoped to exactly that case: a
    * `commands.execute` interruption still throws (the command may have run).
    * Done here at dispatch so every caller — agents, the REPL, e2e — inherits
    * the resilience instead of each inventing its own retry.
    */
   async #redialOnInterruptedSessionSetup<T>(call: () => Promise<T>): Promise<T> {
-    try {
-      return await call();
-    } catch (error) {
-      if (!isInterruptedSessionSetup(error)) throw error;
-      console.warn("sandbox session dial interrupted mid-setup; re-dialing once", error);
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      return call();
+    let attempt = 0;
+    while (true) {
+      try {
+        return await call();
+      } catch (error) {
+        const delayMs = SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS[attempt];
+        if (!isInterruptedSessionSetup(error) || delayMs === undefined) throw error;
+        attempt += 1;
+        console.warn(
+          "sandbox session dial interrupted mid-setup; re-dialing",
+          { attempt, delayMs },
+          error,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
     }
   }
 
