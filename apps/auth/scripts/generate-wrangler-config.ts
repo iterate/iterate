@@ -162,9 +162,7 @@ export default function generateWranglerConfig() {
 
 // The CLI runs only when invoked directly — deploy.ts and vite.config.ts
 // import from this module without triggering a write.
-if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
-  void createCli({ ...import.meta, name: "generate-wrangler-config" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "generate-wrangler-config" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

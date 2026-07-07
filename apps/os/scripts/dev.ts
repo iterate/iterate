@@ -60,6 +60,11 @@ export default async function start(options: StartOptions = {}) {
   }
 
   const port = requestedPort ?? (await pickFreePort(recordedPort()));
+  // Thread the picked port through the environment too: vite.config.ts writes
+  // wrangler.jsonc at import time, and the local-dev vars bake
+  // APP_CONFIG_BASE_URL from PORT so the worker knows its own origin (signed
+  // file URLs and other absolute-URL minting need it).
+  process.env.PORT = String(port);
   const env = { ...process.env, ...(await forgeTrustedJwksEnv(options)) };
   const viteArgs = ["exec", "vite", "dev", "--port", String(port), "--strictPort"];
   const [command, args] = options.skipDoppler
@@ -304,15 +309,13 @@ function formatStatus(info: DevServerInfo | null) {
   };
 }
 
-// Run the CLI only when invoked directly (playwright.config.ts imports this
-// module for localOsDevServer without wanting a CLI).
-if (process.argv[1]?.endsWith("dev.ts")) {
-  void createCli({
-    ...import.meta,
-    name: "dev",
-    jsonInput: "auto",
-  }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+// createCli({...import.meta}) runs the CLI only when this file is the process
+// entry (playwright.config.ts imports this module for localOsDevServer).
+void createCli({
+  ...import.meta,
+  name: "dev",
+  jsonInput: "auto",
+}).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

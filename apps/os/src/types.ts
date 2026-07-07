@@ -205,15 +205,28 @@ export interface ProjectRpcTarget {
   email: EmailCapability;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   examples: ItxExampleCatalog;
+  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
+  files: Files;
   /** Slack/Google connections + the connection-scoped API proxies (`integrations.gmail`, `integrations.slack`). */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
   processor: StreamProcessorRpc<ProjectProcessorState>;
+  /**
+   * This project's stable id (`prj_…`). Handy inside scripts: `await
+   * itx.projectId` answers "which project am I running in", and `await
+   * itx.capabilityHost.path` answers "at which scope" (`"/"` for the project
+   * root, `/agents/bla` for an agent — the agent's stream path).
+   */
+  projectId: string;
   repo: Repo;
   repos: ProjectRepoCollection;
   /** Path-addressed sandboxes (`itx.sandboxes.get(path)`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
+  /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
+  scheduler: Scheduler;
+  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
+  schedulers: SchedulerCollection;
   secrets: SecretCollection;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
@@ -239,8 +252,71 @@ export interface ProjectRpcTarget {
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat extends Describable {
-  sendMessage(input: { message: string }): Promise<StreamEvent>;
+  /**
+   * Say something to the user. `files` attaches project files to the message
+   * — THE way to hand the user something you generated (e.g. an `itx.ai.run`
+   * image: base64 straight into `data`, never pasted into message text).
+   * Attached images render inline in the chat and stay visible to the model
+   * on later turns.
+   */
+  sendMessage(input: {
+    message: string;
+    files?: Array<{ contentType: string; data: FileData; filename: string }>;
+  }): Promise<StreamEvent>;
 }
+
+/**
+ * Bytes accepted by file-writing APIs. Strings are ALWAYS decoded as base64
+ * (a full `data:` URL also works) — that is what Workers AI image models
+ * return, so `itx.ai.run` output pipes straight in.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
+/** A stored project file: its itx path plus wire facts. */
+export type ProjectFileMetadata = {
+  contentType: string;
+  path: string;
+  size: number;
+};
+
+/**
+ * Project file storage, R2-backed. Paths are project-scoped, mutable, and
+ * last-write-wins; files attached to agent conversations live under the
+ * agent's own path. Bytes are served to any HTTP client via signed URLs
+ * (`FileHandle.url()`).
+ */
+export interface Files extends Describable {
+  /** A handle for the file at `path` — a pure address, no I/O until called. */
+  get(path: string): FileHandle;
+}
+
+/** One project file, addressed by path. */
+export interface FileHandle extends Describable {
+  /** Store bytes at this path (creates or overwrites). */
+  put(input: { contentType?: string; data: FileData }): Promise<ProjectFileMetadata>;
+  /** The file's bytes. Throws when no file exists at this path. */
+  bytes(): Promise<Uint8Array>;
+  /**
+   * A signed public HTTPS URL for this file (default expiry 7 days). Anyone
+   * holding the URL can fetch the bytes — share it in chat, feed it to
+   * vision models, use it as an `<img src>`.
+   */
+  url(input?: { expiresInSeconds?: number }): Promise<string>;
+  delete(): Promise<void>;
+}
+
+/**
+ * A file reference attached to an agent input event: where the bytes live
+ * (`path`) plus a signed public `url` minted when the file was attached, so
+ * UIs and LLM providers can fetch it without another round trip.
+ */
+export type AgentFileAttachment = {
+  contentType: string;
+  filename: string;
+  path: string;
+  size: number;
+  url: string;
+};
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
 export interface Ai extends Describable {
@@ -491,6 +567,25 @@ export interface Agent {
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
   /**
+   * Store files AND make them part of this agent's conversation in one call.
+   * The bytes land in project file storage under the agent's own path
+   * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all
+   * attachments (each with a signed public `url`) is appended to the agent
+   * stream — so the files show up as a single conversation message, and
+   * images become visible to vision-capable models on following turns. Pass
+   * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files
+   * WITHOUT starting an LLM turn (the right choice for files the agent
+   * itself generated, e.g. `itx.ai.run` images).
+   */
+  addFiles(input: {
+    files: Array<{ contentType: string; data: FileData; filename: string }>;
+    /** Conversation text accompanying the files. Defaults to a short attachment note. */
+    message?: string;
+    llmRequestPolicy?: {
+      behaviour: "dont-trigger-request" | "after-current-request" | "interrupt-current-request";
+    };
+  }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
+  /**
    * Send-and-wait convenience: appends a user message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -513,6 +608,87 @@ export interface StreamCollection extends Describable {
 /** Project-scoped stream catalog with reduced-state listing. */
 export interface ProjectStreamCollection extends StreamCollection {
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * When a Schedule triggers. Exactly one canonical spelling per shape: a single
+ * ISO instant, a seconds interval (re-anchored on each trigger, so intervals
+ * drift by execution latency), or a cron expression with optional IANA
+ * timezone. Sub-minute rates belong to `every`; calendar points to `cron`.
+ */
+export type SchedulerRecurrence =
+  | { at: string }
+  | { every: number }
+  | { cron: string; timezone?: string };
+
+/**
+ * What a Schedule does when it triggers. A closed union so an `append` kind
+ * can be added later; the only kind today is running an itx script.
+ */
+export type SchedulerAction = {
+  kind: "itx-script";
+  /** A function-expression string, invoked as `fn(itx, schedule, trigger)`. */
+  script: string;
+};
+
+/**
+ * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
+ * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
+ * anything is appended — the event log has exactly one spelling of every
+ * schedule.
+ */
+export type SetScheduleInput = {
+  key: string;
+  metadata?: Record<string, unknown>;
+  recurrence: SchedulerRecurrence | { in: number };
+  /**
+   * itx script source: `async (itx, schedule, trigger) => { ... }`. A string,
+   * not a function — closures would silently not survive serialization.
+   * `schedule` is `{ key, path, recurrence, metadata?, setAt }` (`path` is the
+   * Scheduler stream this Schedule lives on); `trigger` is `{ executionId,
+   * scheduledFor, requestedAt, runCount }`. The itx is project-root scoped —
+   * `await itx.projectId` identifies the project.
+   */
+  script: string;
+};
+
+/** One Schedule as reduced from the Scheduler stream — the UI list row. */
+export type ScheduleView = {
+  action: SchedulerAction;
+  /** Offset of the `schedule-set` event that defined this version (audit provenance). */
+  definedAtOffset: number;
+  key: string;
+  metadata?: Record<string, unknown>;
+  /** ISO time of the next occurrence; null when exhausted or unparseable. */
+  nextTriggerAt: string | null;
+  recurrence: SchedulerRecurrence;
+  /** Triggers requested for this key since it was (re)set. */
+  runCount: number;
+  /** When this version of the Schedule was set. */
+  setAt: string;
+};
+
+/**
+ * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
+ * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
+ * append, `list` reads reduced state, and every Trigger's request and outcome
+ * are appended back, so the stream is the complete audit log. Scripts run
+ * with project-root itx authority, at least once per Trigger (derive append
+ * idempotency keys from `trigger.executionId`).
+ */
+export interface Scheduler extends Describable {
+  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
+  set(input: SetScheduleInput): Promise<ScheduleView>;
+  /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
+  cancel(key: string): Promise<void>;
+  list(): Promise<ScheduleView[]>;
+  /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */
+  trigger(key: string): Promise<{ executionId: string }>;
+}
+
+/** Path-addressed Scheduler catalog; `itx.scheduler` is `get("/scheduler/primary")`. */
+export interface SchedulerCollection extends Describable {
+  get(path: string): Scheduler;
 }
 
 /**
@@ -705,6 +881,12 @@ export type AgentProcessorState = {
   llmConfig: { model: string };
   llmProvider: "cloudflare-ai" | "openai-ws";
   pendingTriggerOffset: number | null;
+  inProgressScriptExecutions: Array<{
+    code: string;
+    executionId: string;
+    requestedOffset: number;
+    startedAt: string;
+  }>;
   scriptExecutionsCompleted: string[];
   systemPrompt: string;
 };

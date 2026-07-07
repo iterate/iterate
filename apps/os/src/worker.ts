@@ -29,6 +29,7 @@ import {
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
 import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
+import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
@@ -69,11 +70,13 @@ export { CapabilityHostDurableObject } from "./domains/capability-host/capabilit
 export { CloudflareSandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 export { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
+export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
+export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
 // The container-outbound gateway. The container runtime dials it through
 // `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every
 // sandbox container's outbound HTTP(S) reaches it before anything leaves the
@@ -170,6 +173,17 @@ async function apiFetch(
   const url = new URL(request.url);
 
   if (route.lane === "project") {
+    // The reserved `iterate-files` platform app never reaches the project
+    // worker: signed project-file URLs are served straight from R2 here.
+    if (route.resolved.appSlug === FILES_APP_SLUG) {
+      return await serveProjectFileRequest({
+        projectId: route.resolved.projectId,
+        request: new Request(route.fetch.url, {
+          headers: route.fetch.headers,
+          method: route.fetch.method,
+        }),
+      });
+    }
     const project = await new ProjectCollectionRpcTarget({
       auth: trustedInternalAuthContext(),
       ctx,

@@ -37,6 +37,7 @@ import {
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
+import { ensureR2Bucket } from "./ensure-resources.ts";
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
 export default async function deploy(
@@ -75,6 +76,12 @@ export default async function deploy(
       // account-level producer wiring, not a code deploy prerequisite.
       await ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName);
 
+      // Same rationale for R2: wrangler validates bucket bindings at upload,
+      // and the files bucket is new — existing envs (previews, prd) get it
+      // created here on their next deploy instead of a manual
+      // ensure-resources run per environment.
+      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
+
       // The builder sidecar deploys FIRST: the os worker's BUILDER service
       // binding is by name, and a binding to a not-yet-existing script fails
       // the deploy. The builder has no secrets and no vite build — wrangler
@@ -104,9 +111,7 @@ export default async function deploy(
   });
 }
 
-if (process.argv[1]?.endsWith("deploy.ts")) {
-  void createCli({ ...import.meta, name: "deploy" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "deploy" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

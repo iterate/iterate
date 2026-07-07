@@ -49,6 +49,22 @@ function ProjectAgentDetailContent() {
     await itx.agents.get(streamPath).sendMessage(message);
   }
 
+  async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
+    const itx = await connectItxBrowser({ projectId: project.id });
+    // One addFiles call → ONE input event carrying every attachment, so the
+    // feed shows a single message and the agent gets one turn trigger.
+    await itx.agents.get(streamPath).addFiles({
+      files: await Promise.all(
+        files.map(async (file) => ({
+          contentType: file.type || "application/octet-stream",
+          data: new Uint8Array(await file.arrayBuffer()),
+          filename: file.name,
+        })),
+      ),
+      ...(message ? { message } : {}),
+    });
+  }
+
   async function interruptAgentMessage(llmRequestId: number) {
     const itx = await connectItxBrowser({ projectId: project.id });
     await itx.streams.get(streamPath).append({
@@ -68,6 +84,7 @@ function ProjectAgentDetailContent() {
       messageComposer={{
         onInterrupt: interruptAgentMessage,
         onSubmit: submitAgentMessage,
+        onSubmitFiles: submitAgentFiles,
         placeholder: "Message this agent",
       }}
       projectId={project.id}

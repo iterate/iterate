@@ -15,7 +15,13 @@ import { z } from "zod";
 import type { ResponseInput, ResponsesClientEvent } from "openai/resources/responses/responses";
 import type { StreamEvent } from "../../types.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import { buildAgentLlmRequestBody, reduceAgentEvents } from "./agent-processor-implementation.ts";
+import {
+  buildAgentLlmRequestBody,
+  flattenMessageToText,
+  reduceAgentEvents,
+  renderFileHintLine,
+  type AgentChatMessage,
+} from "./agent-processor-implementation.ts";
 import { OpenAiWsProcessorContract } from "./openai-ws-processor-contract.ts";
 
 type LlmRequestRequestedEvent = Extract<
@@ -359,7 +365,7 @@ function supportsReasoningSummaries(model: string) {
 }
 
 function buildResponsesClientEvent(args: {
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  messages: AgentChatMessage[];
   model: string;
   previousResponseId: string | null;
 }): ResponsesClientEvent {
@@ -386,27 +392,50 @@ function buildResponsesClientEvent(args: {
   };
 }
 
-function toResponsesInput(messages: Array<{ role: "user" | "assistant"; content: string }>) {
-  return messages.map((message) => ({
-    type: "message" as const,
-    role: message.role,
-    content: message.content,
-  })) satisfies ResponseInput;
+type ResponsesInputMessage = AgentChatMessage & { role: "user" | "assistant" };
+
+function toResponsesInput(messages: ResponsesInputMessage[]) {
+  return messages.map((message) => {
+    // Image attachments become real vision inputs (fetched by OpenAI via the
+    // signed URL); everything else flattens to a hint line the agent can act
+    // on. Image parts are only valid on user-role messages — all attachment
+    // inputs are user-role, so that is the only case built here. Loopback
+    // (local-dev http) URLs are unreachable from OpenAI's fetcher and fail
+    // the whole request, so only https URLs ride as image parts.
+    const images = (message.files ?? []).filter(
+      (file) => file.contentType.startsWith("image/") && file.url.startsWith("https://"),
+    );
+    if (message.role !== "user" || images.length === 0) {
+      return {
+        type: "message" as const,
+        role: message.role,
+        content: flattenMessageToText(message),
+      };
+    }
+    const otherFiles = (message.files ?? []).filter((file) => !images.includes(file));
+    return {
+      type: "message" as const,
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text: [message.content, ...otherFiles.map(renderFileHintLine)].join("\n"),
+        },
+        ...images.map((file) => ({
+          type: "input_image" as const,
+          detail: "auto" as const,
+          image_url: file.url,
+        })),
+      ],
+    };
+  }) satisfies ResponseInput;
 }
 
-function isResponsesInputMessage(message: {
-  role: "system" | "user" | "assistant";
-  content: string;
-}): message is {
-  role: "user" | "assistant";
-  content: string;
-} {
+function isResponsesInputMessage(message: AgentChatMessage): message is ResponsesInputMessage {
   return message.role !== "system";
 }
 
-function newInputMessagesForContinuation(
-  messages: Array<{ role: "user" | "assistant"; content: string }>,
-) {
+function newInputMessagesForContinuation(messages: ResponsesInputMessage[]) {
   const lastAssistantIndex = messages.findLastIndex((message) => message.role === "assistant");
   return lastAssistantIndex === -1 ? messages : messages.slice(lastAssistantIndex + 1);
 }

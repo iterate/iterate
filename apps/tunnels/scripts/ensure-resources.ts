@@ -44,9 +44,7 @@ export default async function ensureResources(
   console.log(`✅ ${ctx.name} DNS all present`);
 }
 
-if (process.argv[1]?.endsWith("ensure-resources.ts")) {
-  void createCli({ ...import.meta, name: "ensure-resources" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "ensure-resources" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

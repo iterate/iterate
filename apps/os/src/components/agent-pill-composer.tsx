@@ -3,6 +3,7 @@ import {
   ArrowUpIcon,
   FileCode2Icon,
   MessageSquareIcon,
+  PaperclipIcon,
   PlusIcon,
   SparklesIcon,
   SquareIcon,
@@ -25,6 +26,9 @@ type AgentComposerMessageConfig = {
   value: string;
   onValueChange: (value: string) => void;
   onSubmit: () => Promise<void> | void;
+  attachments?: ReactNode;
+  canSubmit?: boolean;
+  onAttach?: () => void;
   placeholder?: string;
 };
 
@@ -70,7 +74,9 @@ export function AgentPillComposer({
   const canSubmit =
     !isSubmitting &&
     !isExamples &&
-    (activeMode === "message" ? (message?.value.trim() ?? "") !== "" : raw.value.trim() !== "");
+    (activeMode === "message"
+      ? (message?.canSubmit ?? (message?.value.trim() ?? "") !== "")
+      : raw.value.trim() !== "");
   const showInterrupt = activeMode === "message" && onInterrupt != null;
 
   useEffect(() => {
@@ -156,21 +162,41 @@ export function AgentPillComposer({
             className="min-w-0 flex-1 px-2 py-1.5"
           />
         ) : (
-          <textarea
-            ref={messageRef}
-            value={message?.value ?? ""}
-            onChange={(event) => message?.onValueChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                submit();
-              }
-            }}
-            rows={1}
-            aria-label={message?.placeholder ?? "Message this stream"}
-            placeholder={message?.placeholder ?? "Message this stream"}
-            className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
-          />
+          <div className="flex min-w-0 flex-1 flex-col">
+            {message?.attachments == null ? null : (
+              <div className="px-1 pb-1">{message.attachments}</div>
+            )}
+            <div className="flex min-w-0 items-end gap-1">
+              {message?.onAttach == null ? null : (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  type="button"
+                  title="Attach files"
+                  onClick={message.onAttach}
+                  disabled={isSubmitting}
+                  className="mb-0.5 rounded-full text-muted-foreground"
+                >
+                  <PaperclipIcon className="size-4" />
+                </Button>
+              )}
+              <textarea
+                ref={messageRef}
+                value={message?.value ?? ""}
+                onChange={(event) => message?.onValueChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    submit();
+                  }
+                }}
+                rows={1}
+                aria-label={message?.placeholder ?? "Message this stream"}
+                placeholder={message?.placeholder ?? "Message this stream"}
+                className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
+              />
+            </div>
+          </div>
         )}
 
         {isExamples ? null : (

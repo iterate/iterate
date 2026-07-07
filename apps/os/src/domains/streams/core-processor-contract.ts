@@ -60,6 +60,7 @@ export const ConfiguredSubscriberDurableObjectType = z.enum([
   "capability-host",
   "project",
   "repo",
+  "scheduler",
   "secret",
 ]);
 export type ConfiguredSubscriberDurableObjectType = z.infer<
