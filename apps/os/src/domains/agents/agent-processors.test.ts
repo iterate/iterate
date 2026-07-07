@@ -4,6 +4,7 @@ import {
   AgentProcessor,
   buildAgentLlmRequestBody,
   flattenMessageToText,
+  reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
 import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
@@ -253,6 +254,33 @@ describe("minimal web-chat agent processors", () => {
         (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
       ),
     ).toBe(true);
+  });
+
+  it("tracks in-progress script executions in reduced state", async () => {
+    const stream = new MemoryStream();
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-requested",
+      payload: { executionId: "agent-output:7", code: "async (itx) => 7" },
+    });
+
+    const runningState = reduceAgentEvents(stream.events);
+    expect(runningState.inProgressScriptExecutions).toEqual([
+      {
+        code: "async (itx) => 7",
+        executionId: "agent-output:7",
+        requestedOffset: 1,
+        startedAt: stream.events[0]!.createdAt,
+      },
+    ]);
+
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: 7 },
+    });
+
+    const completedState = reduceAgentEvents(stream.events);
+    expect(completedState.inProgressScriptExecutions).toEqual([]);
+    expect(completedState.scriptExecutionsCompleted).toEqual(["agent-output:7"]);
   });
 
   it("feeds a thrown script error back as input", async () => {

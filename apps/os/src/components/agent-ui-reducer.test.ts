@@ -1,7 +1,7 @@
 // Reducer coverage for the browser-side agent UI processor: a full simulated
 // turn — user message, LLM request with streamed thinking + response deltas,
-// code execution, completion, assistant reply — must reduce into the clean
-// chat shape the agent feed renders (items + live tail).
+// code execution, completion, assistant reply — must reduce into the chat
+// items and live active-work tail the agent feed renders.
 
 import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/ui/components/events/types";
@@ -82,7 +82,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("settles the activity into items when the assistant responds", () => {
+  it("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/user-message-received",
@@ -137,6 +137,85 @@ describe("agent-ui reducer", () => {
       result: 12,
       success: true,
       durationMs: 400,
+    });
+  });
+
+  it("keeps running script source and start time in the live activity", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: { executionId: "x1", code: "await itx.repo.readFile({ path: 'README.md' })" },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.live?.steps).toHaveLength(1);
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "code",
+      executionId: "x1",
+      status: "running",
+      code: "await itx.repo.readFile({ path: 'README.md' })",
+      startedAtMs: Date.parse("2026-06-11T00:00:01.000Z"),
+    });
+  });
+
+  it("keeps the live indicator while a running script emits chat messages", () => {
+    const countdownEvents: Array<Partial<Event> & { type: string; payload?: unknown }> = [
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/output-added",
+        payload: {
+          llmRequestId: 10,
+          content:
+            "```js\nasync (itx) => {\n  await itx.chat.sendMessage({ message: '20' });\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: {
+          executionId: "agent-output:11",
+          code: "async (itx) => {\n  await itx.chat.sendMessage({ message: '20' });\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: { llmRequestId: 10, result: { status: "success" } },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "20" },
+      },
+    ];
+    const running = reduceAll(countdownEvents);
+
+    expect(running.items).toMatchObject([{ kind: "assistant", text: "20" }]);
+    expect(running.live?.steps.at(-1)).toMatchObject({
+      kind: "code",
+      executionId: "agent-output:11",
+      status: "running",
+    });
+
+    const completed = reduceAll([
+      ...countdownEvents,
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        payload: { executionId: "agent-output:11", ok: true, logs: [] },
+      },
+    ]);
+
+    expect(completed.live).toBeNull();
+    expect(completed.items.map((item) => item.kind)).toEqual(["assistant", "activity"]);
+    expect(completed.items[1]).toMatchObject({
+      kind: "activity",
+      status: "done",
+      steps: [
+        { kind: "llm", status: "done" },
+        { kind: "code", executionId: "agent-output:11", status: "done" },
+      ],
     });
   });
 
@@ -261,7 +340,7 @@ describe("agent-ui reducer", () => {
     expect(state.presence[1]).toMatchObject({ subscriptionKey: "browser:tab-1", connected: false });
   });
 
-  it("rolls multiple rounds into one activity; only chat messages settle it", () => {
+  it("settles a completed LLM request even without an assistant message", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -269,42 +348,26 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
-        payload: { executionId: "exec-1", code: "1+1" },
-      },
-      {
-        type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "exec-1", outcome: { status: "success" } },
-      },
-      // The agent goes idle between rounds — the activity waits, not settles.
-      {
-        type: "events.iterate.com/agent/status-updated",
-        payload: { status: "idle", reason: "round complete" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        offset: 20,
-        payload: { model: "gpt-test" },
-      },
-      {
-        type: "events.iterate.com/capability-host/script-execution-requested",
-        payload: { executionId: "exec-2", code: "2+2" },
-      },
-      {
-        type: "events.iterate.com/agents/web-message-sent",
-        payload: { message: "all done" },
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          llmRequestId: 7,
+          provider: "openai-ws",
+          durationMs: 250,
+          result: { status: "success" },
+        },
       },
     ]);
 
-    // One settled activity carrying every round's steps, then the reply.
     expect(state.live).toBeNull();
-    expect(state.items.map((item) => item.kind)).toEqual(["activity", "assistant"]);
+    expect(state.items.map((item) => item.kind)).toEqual(["activity"]);
     const activity = state.items[0];
     expect(activity).toMatchObject({ kind: "activity", status: "done" });
-    expect(activity?.kind === "activity" ? activity.steps : []).toHaveLength(4);
+    expect(activity?.kind === "activity" ? activity.steps : []).toMatchObject([
+      { kind: "llm", llmRequestId: 7, status: "done", outcome: "completed" },
+    ]);
   });
 
-  it("marks the live activity waiting on idle and resumes it on the next round", () => {
+  it("does not clear running work from idle status alone", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -318,7 +381,8 @@ describe("agent-ui reducer", () => {
     ]);
 
     expect(state.items).toHaveLength(0);
-    expect(state.live).toMatchObject({ kind: "activity", status: "waiting" });
+    expect(state.live).toMatchObject({ kind: "activity", status: "running" });
+    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
   });
 
   it("queues a user message that arrives mid-turn", () => {
@@ -464,8 +528,11 @@ describe("agent-ui reducer", () => {
       },
     ]);
 
-    expect(state.items).toHaveLength(0);
-    expect(state.live?.steps[0]).toMatchObject({
+    expect(state.live).toBeNull();
+    expect(state.items).toHaveLength(1);
+    const activity = state.items[0];
+    if (activity?.kind !== "activity") throw new Error("expected activity item");
+    expect(activity.steps[0]).toMatchObject({
       kind: "llm",
       status: "done",
       outcome: "cancelled",
