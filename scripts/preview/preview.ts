@@ -24,6 +24,35 @@ type PullRequestCommandOptions = {
   pullRequestNumber?: number;
 };
 
+/** Label a draft PR can wear to get previews despite the draft policy below. */
+const previewOptInLabel = "preview";
+
+const draftPreviewNotice = [
+  "This PR is a draft, so it doesn't claim a preview slot.",
+  `To get previews: add the \`${previewOptInLabel}\` label, mark the PR ready for review, or dispatch the Cloudflare Previews workflow for a one-off run.`,
+].join(" ");
+
+/**
+ * Draft PRs don't hold preview slots unless they ask: there are only nine
+ * slots and drafts are the default for agent-opened PRs, so a busy night of
+ * drafts was exhausting the fleet before any human asked for a preview.
+ * "Asking" = the `preview` label, marking ready for review, or an explicit
+ * `--allow-draft` run (the workflow_dispatch path). A draft that still holds
+ * a lease (it was ready once, or opted out again) gives its slot back.
+ */
+function decideDraftPreviewPolicy(input: {
+  allowDraft: boolean;
+  hasRecordedLease: boolean;
+  isDraft: boolean;
+  labels: string[];
+}): "deploy" | "skip" | "teardown" {
+  if (!input.isDraft || input.allowDraft || input.labels.includes(previewOptInLabel)) {
+    return "deploy";
+  }
+
+  return input.hasRecordedLease ? "teardown" : "skip";
+}
+
 /**
  * Deploy affected preview apps for a pull request without running preview e2e.
  */
@@ -39,6 +68,13 @@ export async function deploy(
      * of relying on the commit happening to touch a fleet-shared path.
      */
     allApps?: boolean;
+    /**
+     * Deploy even when the PR is a draft without the `preview` label. Draft
+     * PRs otherwise skip previews (or give their slot back); an explicit
+     * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
+     * terminal — is an ask, so those callers pass this.
+     */
+    allowDraft?: boolean;
   } = {},
 ) {
   const runtime = createPreviewRuntime();
@@ -57,6 +93,54 @@ export async function deploy(
       ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
       : "PR body records no lease — this PR has no slot yet",
   );
+
+  const draftPolicy = decideDraftPreviewPolicy({
+    allowDraft: options.allowDraft === true,
+    hasRecordedLease: current.state.environmentConfigLease != null,
+    isDraft: context.pullRequestIsDraft,
+    labels: context.pullRequestLabels,
+  });
+  if (draftPolicy === "skip") {
+    logPreview(
+      `draft PR without the ${previewOptInLabel} label — not claiming a preview slot (mark ready, add the label, or pass --allow-draft)`,
+    );
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      notice: draftPreviewNotice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "draft",
+      state: update.state,
+    };
+  }
+  if (draftPolicy === "teardown") {
+    logPreview(
+      `draft PR without the ${previewOptInLabel} label holds ${current.state.environmentConfigLease?.slug} — tearing down and releasing the slot (mark ready, add the label, or pass --allow-draft to keep previews)`,
+    );
+    const cleanupResult = await cleanupPreviewForPullRequest({ ...runtime, context });
+    if (!cleanupResult.ok) {
+      throw new Error("Failed to tear down previews for a draft PR.");
+    }
+    // Pin the post-teardown state in this write: the GitHub read inside
+    // updatePreviewState can be stale (read-after-write lag) and would
+    // otherwise resurrect the released lease and app rows — and this run's
+    // test step would then re-acquire the slot the draft just gave up.
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      ...cleanupResult.state,
+      notice: draftPreviewNotice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "draft",
+      releasedLease: cleanupResult.released,
+      state: update.state,
+    };
+  }
+
   const selectedApps = options.allApps
     ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
       Object.values(cloudflarePreviewApps))
@@ -1412,6 +1496,8 @@ type PullRequestPreviewContext = {
   githubToken: string;
   pullRequestBaseSha: string;
   pullRequestHeadSha: string;
+  pullRequestIsDraft: boolean;
+  pullRequestLabels: string[];
   pullRequestNumber: number;
   repositoryFullName: string;
   workflowRunUrl: string | null;
@@ -3732,6 +3818,8 @@ async function resolvePullRequestPreviewContext(params: {
     githubToken: params.githubToken,
     pullRequestBaseSha: pullRequest.data.base.sha,
     pullRequestHeadSha: pullRequest.data.head.sha,
+    pullRequestIsDraft: pullRequest.data.draft === true,
+    pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName,
     workflowRunUrl:
@@ -3756,6 +3844,7 @@ export const previewInternals = {
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
+  decideDraftPreviewPolicy,
   describeEnvironmentConfigLeases,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
