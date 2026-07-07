@@ -202,16 +202,29 @@ type InboundMailIdentitySlice = {
 /**
  * THE reply-target chain for one inbound mail: Reply-To when set, else the
  * header From, else the SMTP envelope from (the address ingress
- * authenticated). Every consumer — the router's route event, the email-agent
- * processor's state, email.reply's target — derives the counterpart from this
- * one function so they can never disagree.
+ * authenticated). Candidates owned by the receiving project itself (the
+ * project inbox or a `+`-tagged variant) are skipped — a Reply-To pointing
+ * back at us must never make the agent mail itself instead of the human.
+ * Every consumer — the router's route event, the email-agent processor's
+ * state, email.reply's target — derives the counterpart from this one
+ * function so they can never disagree.
  */
 export function emailCounterpart(payload: InboundMailIdentitySlice): string | null {
-  return (
-    normalizeBareAddress(payload.message.replyToAddress ?? undefined) ??
-    normalizeBareAddress(payload.message.from.address) ??
-    normalizeBareAddress(payload.envelope.from)
-  );
+  const recipient = parseInboundRecipient(payload.envelope.to);
+  const slug = payload.recipient.slug.toLowerCase();
+  const isProjectOwned = (address: string) =>
+    recipient !== null &&
+    (address === `${slug}@${recipient.domain}` ||
+      (address.startsWith(`${slug}+`) && address.endsWith(`@${recipient.domain}`)));
+  for (const candidate of [
+    payload.message.replyToAddress ?? undefined,
+    payload.message.from.address,
+    payload.envelope.from,
+  ]) {
+    const normalized = normalizeBareAddress(candidate);
+    if (normalized !== null && !isProjectOwned(normalized)) return normalized;
+  }
+  return null;
 }
 
 export function isOwnProjectMail(payload: InboundMailIdentitySlice): boolean {

@@ -481,6 +481,18 @@ describe("EmailAgentProcessor", () => {
     expect(processor.state.counterpart).toBe("jonas@example.com");
   });
 
+  it("skips a Reply-To pointing back at the project itself (never mail ourselves)", async () => {
+    const { cursors, processor, stream } = setup();
+
+    const payload = receivedPayload({});
+    payload.message.replyToAddress = "acme+t1@iterate.app";
+    await stream.append({ type: "events.iterate.com/email/received", payload });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    // The project-owned Reply-To is skipped; the human From wins.
+    expect(processor.state.counterpart).toBe("jonas@example.com");
+  });
+
   it("prefers Reply-To over From as the thread counterpart", async () => {
     const { cursors, processor, stream } = setup();
 
