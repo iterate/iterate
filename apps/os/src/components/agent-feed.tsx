@@ -239,6 +239,10 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
   expandedIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
+  if (item.kind === "stream-woken") {
+    return <StreamWakeRow item={item} />;
+  }
+
   if (item.kind !== "activity") {
     if (item.kind === "user") {
       return (
@@ -279,6 +283,28 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     />
   );
 });
+
+function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-woken" }> }) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+
+  return (
+    <div
+      className="flex items-center gap-3 py-3"
+      data-testid="agent-feed-stream-woken"
+      data-kind="stream-woken"
+    >
+      <div className="h-px flex-1 bg-purple-500/45" />
+      <time
+        className="font-mono text-xs font-medium text-purple-700 dark:text-purple-300"
+        dateTime={dateTime}
+        title={formatDateTime(item.timestampMs)}
+      >
+        {item.text}
+      </time>
+      <div className="h-px flex-1 bg-purple-500/45" />
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Settled activity: the quiet "Ran code 2× · 3 requests · 7.4 s" row

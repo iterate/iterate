@@ -340,6 +340,37 @@ describe("agent-ui reducer", () => {
     expect(state.presence[1]).toMatchObject({ subscriptionKey: "browser:tab-1", connected: false });
   });
 
+  it("does not show the bootstrap stream wake in the agent feed", () => {
+    const state = reduceAll([
+      { type: "events.iterate.com/stream/created" },
+      { type: "events.iterate.com/stream/woken" },
+    ]);
+
+    expect(state.items).toEqual([]);
+  });
+
+  it("shows later stream wakes in the agent feed and clears presence", () => {
+    const state = reduceAll([
+      { type: "events.iterate.com/stream/created" },
+      { type: "events.iterate.com/stream/woken" },
+      {
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: { subscriptionKey: "agent:agent", direction: "outbound" },
+      },
+      { type: "events.iterate.com/stream/woken" },
+    ]);
+
+    expect(state.items).toEqual([
+      {
+        kind: "stream-woken",
+        id: "stream-woken-4",
+        text: "Stream durable object woke",
+        timestampMs: Date.parse("2026-06-11T00:00:04.000Z"),
+      },
+    ]);
+    expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
+  });
+
   it("settles a completed LLM request even without an assistant message", () => {
     const state = reduceAll([
       {

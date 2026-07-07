@@ -24,7 +24,7 @@ import type { SqlClient, SqlValue } from "../browser/stream-browser-db.ts";
 export const AGENT_UI_FEED_TABLE = "agent_feed_items";
 
 /** Bumped into the writer-lock name so a schema change lets a fresh tab take over. */
-export const AGENT_UI_SCHEMA_VERSION = 5;
+export const AGENT_UI_SCHEMA_VERSION = 6;
 
 // planAgentUiOps still types its events against packages/ui's shared Event
 // type; deriving the parameter type here keeps this file free of
@@ -102,8 +102,8 @@ const ensureAgentUiSchema = createSchemaEnsurer({
         {
           sql: `
             -- One row per settled agent feed item (user message, assistant
-            -- message, or a completed activity with its steps). local_index is
-            -- the dense, zero-based list position TanStack Virtual indexes.
+            -- message, completed activity, or stream wake marker). local_index
+            -- is the dense, zero-based list position TanStack Virtual indexes.
             CREATE TABLE IF NOT EXISTS agent_feed_items (
               local_index INTEGER PRIMARY KEY,
               kind TEXT NOT NULL,
