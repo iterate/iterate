@@ -112,16 +112,17 @@ jobs:
           doppler run --project _shared --config prd -- pnpm preview test \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+      - name: Collect OS preview test artifacts
+        if: always()
+        run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload OS preview test artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: preview-os-test-artifacts
-          path: |-
-            test-results
-            apps/os/test-results
-            /tmp/os-e2e-*
+          path: test-results
+          include-hidden-files: true
           if-no-files-found: ignore
   cleanup:
     if: github.event.action == 'closed'
