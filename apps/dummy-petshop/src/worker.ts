@@ -30,6 +30,11 @@ import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
 import { hmacSha256Hex, nowSeconds, seal, unseal } from "./seal.ts";
 import {
+  handleWaitroseGraphql,
+  WAITROSE_PASSWORD,
+  WAITROSE_SESSION_TTL_SECONDS,
+} from "./waitrose.ts";
+import {
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_APP_ID,
   DEFAULT_CLIENT_ID,
@@ -164,6 +169,9 @@ const INDEX = dedent`
   POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
   POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
+  POST /graphql             Waitrose-shaped GraphQL (also served at the app's live path, /api/graphql-prod/graph/live):
+                            NewSession (any username, password "${WAITROSE_PASSWORD}") → sealed ~${WAITROSE_SESSION_TTL_SECONDS}s session token;
+                            GetShoppingContext + GetTrolley want it as Authorization: Bearer; expired/revoked → 401
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
   GET  /api/pets            the account's (entirely fictional) pets
 
@@ -834,6 +842,16 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     }
   }
   if (key === "POST /api/legacy-login") return legacyLogin(request, deps);
+  // The Waitrose-shaped GraphQL fixture (waitrose.ts). /graphql is the
+  // canonical spec-facing path; the real app's live path is an alias so the
+  // vendored template client's URL derivation (`${baseUrl}` + the real path)
+  // works against petshop unchanged.
+  if (key === "POST /graphql" || key === "POST /api/graphql-prod/graph/live") {
+    return handleWaitroseGraphql(request, {
+      sealKey: deps.sealKey,
+      getAccessTokenEpoch: () => deps.state.getState().then((state) => state.accessTokenEpoch),
+    });
+  }
   if (key === "GET /api/me" || key === "GET /api/pets") {
     const grant = await accessGrant(request, deps);
     if (!grant) return json({ error: "invalid_token" }, 401);

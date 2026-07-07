@@ -11,7 +11,8 @@ allowlist. Substitution is header-only, everywhere; one request references one
 secret.
 
 Credential refresh does not weaken the invariant, because it runs INSIDE the
-cell: a **named strategy** (`oauth-refresh-token`, `github-app-installation`)
+cell: a **named strategy** (`oauth-refresh-token`, `github-app-installation`,
+`waitrose-session`)
 executed by the Secret DO's own trusted code, whose exchange endpoint must
 itself fall within the pin. One shared implementation per protocol replaces
 the per-secret dynamic worker that used to do the same job — configuring the
@@ -39,9 +40,11 @@ structure. Platform bytes still never sit in project material.
 Sandbox containers looked like they needed token bytes (`GH_TOKEN`), but ALL
 container egress — including MITM'd HTTPS — routes through the project egress
 door (`CloudflareSandboxDurableObject`, `interceptHttps`). So a sandbox holds
-only a placeholder; substitution fires en route under the same pin, and
-refresh-on-401 works transparently for container traffic too. The audited
-`revealForPlatformUse` lane this replaced had zero callers.
+only a placeholder — the sandbox DO plants `GH_TOKEN` this way per container
+start when the project has a GitHub connection; substitution fires en route
+under the same pin, and refresh-on-401 works transparently for container
+traffic too. The audited `revealForPlatformUse` lane this replaced had zero
+callers.
 
 ## The rejected alternative
 
@@ -60,8 +63,8 @@ call traversed ~12 hops; it now traverses the dispatch, the DO, and GitHub.
 
 The jail itself is not rejected — it returns with the userspace-integrations
 lane, where a project-authored worker (in-jail `read()`, arbitrary
-credential-exchange bodies — the username/password-login shape no strategy
-can express) extends the cell to DO + jail with the same boundary: bytes only
+credential-exchange bodies for providers the platform carries no named
+strategy for) extends the cell to DO + jail with the same boundary: bytes only
 leave toward pinned hosts, and installing the worker is gated like a material
 write. WebSocket egress is likewise deferred, not foreclosed: an Upgrade is
 just a fetch through the same `fetch()` surface, and the relay returns as a

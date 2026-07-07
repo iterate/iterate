@@ -23,6 +23,10 @@ const SecretRefresh = z.discriminatedUnion("kind", [
     installationId: z.string().trim().min(1),
     privateKey: z.union([PlatformCredsRef, z.literal("material")]),
   }),
+  z.strictObject({
+    kind: z.literal("waitrose-session"),
+    graphqlUrl: z.string().trim().min(1),
+  }),
 ]);
 
 /** The encrypted-at-rest material blob, exactly as crypto.ts produces it. */
@@ -37,7 +41,7 @@ const Egress = z.object({ urls: z.array(z.string()) });
 
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
-  version: "0.3.0",
+  version: "0.4.0",
   description: "Folds one path-addressed secret without exposing material.",
   stateSchema: z.object({
     audit: z

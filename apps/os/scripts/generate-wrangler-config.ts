@@ -49,8 +49,13 @@ export const REQUIRED_SECRETS = [
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
+  // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
+  // entries) — collectSecrets ships only names listed here, so a key absent
+  // from this list never reaches a deployed worker even when Doppler has it.
+  "APP_CONFIG_INTEGRATIONS__EXA",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
+  "APP_CONFIG_INTEGRATIONS__PARALLEL",
   // The first-party dummy-petshop client credentials (integration proofs);
   // backs /secrets/platform/integrations/petshop. Optional — only preview/dev
   // envs running the petshop e2e carry it.

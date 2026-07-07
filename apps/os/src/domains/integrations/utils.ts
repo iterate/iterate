@@ -121,6 +121,17 @@ export function githubConnectionSecretPath(connection: string): string {
   return `/secrets/integrations/github/${connection}`;
 }
 
+/**
+ * The `getSecret` header placeholder for one GitHub connection's installation
+ * token: the connection secret's `accessToken` field, substituted (and minted
+ * on first use / re-minted on 401) only at the project egress door. One
+ * builder so the wrapped Octokit's Authorization header (github-api.ts) and
+ * the sandbox `GH_TOKEN` env var can't drift from the material's field name.
+ */
+export function githubAccessTokenPlaceholder(connection: string): string {
+  return `getSecret({ path: "${githubConnectionSecretPath(connection)}", field: "accessToken" })`;
+}
+
 /** Hosts a GitHub connection secret's egress is pinned to: the API (REST +
  * installation-token mint), plus github.com/uploads/objects as deliberate
  * headroom for release assets and upload/redirect hosts Octokit may follow. */

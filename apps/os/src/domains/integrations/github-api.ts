@@ -13,7 +13,7 @@
 import { Octokit } from "@octokit/rest";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { githubConnectionSecretPath } from "./utils.ts";
+import { githubAccessTokenPlaceholder, githubConnectionSecretPath } from "./utils.ts";
 
 /**
  * A connection-scoped Octokit whose every request is routed through the GitHub
@@ -29,7 +29,7 @@ export function connectionOctokit(input: {
   projectId: string;
 }): Octokit {
   const secretPath = githubConnectionSecretPath(input.connection);
-  const placeholder = `Bearer getSecret({ path: "${secretPath}", field: "accessToken" })`;
+  const placeholder = `Bearer ${githubAccessTokenPlaceholder(input.connection)}`;
   const stub = itxEnv.SECRET.getByName(
     DurableObjectNameCodec.stringify({ path: secretPath, projectId: input.projectId }),
   );

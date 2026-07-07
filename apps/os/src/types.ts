@@ -755,6 +755,16 @@ export type SecretRefresh =
       /** Where the App's RS256 private key comes from: `"material"` reads the
        * privateKey field of this secret's own material (bring-your-own-App). */
       privateKey: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "waitrose-session";
+      /** The Waitrose GraphQL endpoint (or a stand-in in e2e) the `NewSession`
+       * mutation is POSTed to. Its origin must be within the secret's pinned
+       * egress hosts. Waitrose has no token-refresh grant — re-login IS the
+       * refresh — so this strategy re-runs the login with `username`/`password`
+       * from this secret's own material and stores the returned `accessToken`.
+       * Material-only by nature: a Waitrose account is always the user's own. */
+      graphqlUrl: string;
     };
 
 export type SecretDescription = {

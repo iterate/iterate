@@ -202,8 +202,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     const record = asMaterialRecord(material);
     if (refresh.kind === "oauth-refresh-token") {
       await this.#refreshOAuthToken(refresh, state, record);
-    } else {
+    } else if (refresh.kind === "github-app-installation") {
       await this.#mintGithubInstallationToken(refresh, state, record);
+    } else {
+      await this.#mintWaitroseSession(refresh, state, record);
     }
   }
 
@@ -301,6 +303,53 @@ export class SecretDurableObject extends DurableObject<Env> {
     await this.update({ material: { ...material, accessToken: data.token } });
   }
 
+  /**
+   * Waitrose session mint: POST the `NewSession` GraphQL mutation (the login
+   * the reverse-engineered Android app performs) to the pinned graphqlUrl with
+   * `username`/`password` from this secret's own material, store the returned
+   * accessToken. Waitrose has no refresh grant — re-login IS the refresh — so
+   * this one strategy covers both the first-use mint and the 401 re-mint. The
+   * password never leaves this method except inside the mutation body toward
+   * the pinned host, and never appears in an error or a log.
+   */
+  async #mintWaitroseSession(
+    refresh: Extract<SecretRefresh, { kind: "waitrose-session" }>,
+    state: SecretState,
+    material: Record<string, unknown>,
+  ): Promise<void> {
+    assertOriginPinned(refresh.graphqlUrl, state);
+    const username = readStringField(material, "username");
+    const password = readStringField(material, "password");
+    const response = await fetch(refresh.graphqlUrl, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({
+        query: WAITROSE_NEW_SESSION_MUTATION,
+        variables: { input: { clientId: "ANDROID_APP", password, username } },
+      }),
+    });
+    if (!response.ok) throw new Error(`waitrose session mint failed with HTTP ${response.status}`);
+    const data = (await response.json()) as {
+      data?: {
+        generateSession?: {
+          accessToken?: string | null;
+          failures?: Array<{ message?: string; type?: string }> | null;
+        };
+      };
+    };
+    const session = data.data?.generateSession;
+    if (session?.failures?.length) {
+      // The provider's failure types/messages name the problem (e.g. a wrong
+      // password) without carrying the credential itself.
+      const reasons = session.failures.map((f) => f.type ?? f.message ?? "unknown").join(", ");
+      throw new Error(`waitrose session mint refused: ${reasons}`);
+    }
+    if (typeof session?.accessToken !== "string") {
+      throw new Error("waitrose session mint returned no accessToken");
+    }
+    await this.update({ material: { ...material, accessToken: session.accessToken } });
+  }
+
   async #snapshot(): Promise<SecretState> {
     await this.#processorHost.catchUp(SecretProcessorContract.slug);
     return (await this.#secretProcessor.snapshot()).state;
@@ -317,6 +366,12 @@ export class SecretDurableObject extends DurableObject<Env> {
     });
   }
 }
+
+/** The Waitrose Android app's login mutation, verbatim (one operation, no
+ * variables beyond the credential input) — the same string the vendored
+ * template client carries for reference. */
+const WAITROSE_NEW_SESSION_MUTATION =
+  "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
 
 function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
   for (const url of egress.urls) new URL(url);

@@ -11,6 +11,7 @@
 import { describe, expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
+import { petshopBaseUrl, petshopExpireTokens } from "./petshop-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -212,5 +213,95 @@ describe("provided integrations", () => {
     } finally {
       await echo.close();
     }
+  });
+});
+
+// The SEEDED waitrose integration, live against the deployed dummy-petshop's
+// Waitrose-shaped GraphQL fixture — the username/password → session-token
+// archetype closed end to end. Every project repo carries
+// integrations/waitrose/** (the vendored client + entrypoint from
+// apps/os/project-repo-template); the connection secret holds ONLY the
+// account credential plus the `waitrose-session` refresh strategy, so the
+// Secret DO logs in itself: mint on first use (no initial token anywhere),
+// re-mint on 401. Same opt-in gate as integrations-petshop.e2e.test.ts.
+describe.skipIf(!process.env.PETSHOP_BASE_URL)("seeded waitrose integration", () => {
+  test("username/password secret + waitrose-session strategy: mint on first use, re-mint on 401", async () => {
+    const petshop = petshopBaseUrl();
+    const username = `mum-${RUN_SUFFIX}@example.com`;
+
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `waitrose-live-${RUN_SUFFIX}` });
+    await project.__describe();
+    const integrations = project.integrations as any;
+
+    // The connection secret: the account credential and NOTHING token-shaped.
+    // "correct-horse" is the fixture's one accepted password (waitrose.ts).
+    using secret = project.secrets.get("/secrets/integrations/waitrose/mum/session");
+    await secret.update({
+      egress: { urls: [petshop] },
+      material: { username, password: "correct-horse" },
+      refresh: {
+        kind: "waitrose-session",
+        graphqlUrl: `${petshop}/api/graphql-prod/graph/live`,
+      },
+    });
+    await waitForCondition(async () => (await secret.describe()).refresh === "waitrose-session", {
+      description: "waitrose/mum refresh strategy to fold",
+    });
+
+    // ONE durable mount of the SEEDED worker — the exact recipe the template's
+    // integrations/waitrose/README.md documents, plus `props.baseUrl` to point
+    // the vendored client at the fixture instead of the real Waitrose.
+    using _provision = await project.provideCapability({
+      path: ["integrations", "waitrose"],
+      type: "itx-expression",
+      flattenNestedPaths: true,
+      instructions:
+        "Waitrose grocery integration. Address a connection first: itx.integrations.waitrose.<connection>.shoppingContext() / .trolley(orderId?).",
+      expression: [
+        "workers",
+        [
+          "get",
+          {
+            type: "stateless",
+            path: "/",
+            entrypoint: "WaitroseIntegration",
+            props: { baseUrl: petshop },
+            source: {
+              files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
+              options: { entryPoint: "integrations/waitrose/worker.ts" },
+            },
+          },
+        ],
+      ],
+    });
+
+    // First use: the material has no accessToken, so substitution misses, the
+    // strategy runs the NewSession login inside the Secret DO, and the retried
+    // request lands — the fixture's ids derive from the login username.
+    const context = await integrations.waitrose.mum.shoppingContext();
+    expect(context).toEqual({
+      customerId: `customer-${username}`,
+      customerOrderId: `order-${username}`,
+      customerOrderState: "PENDING",
+      defaultBranchId: "branch-petshop",
+    });
+
+    // Force a real 401 (epoch bump kills the stored session) and call again:
+    // re-login IS the refresh — the same strategy re-mints and the retry wins.
+    await petshopExpireTokens();
+    const trolley = await integrations.waitrose.mum.trolley();
+    expect(trolley.trolley.orderId).toBe(`order-${username}`);
+    expect(trolley.trolley.trolleyItems).toHaveLength(1);
+
+    // Confinement: describe() leaks neither the password nor a session token
+    // (hasMaterial is the only material-shaped fact), and uses are audited.
+    const described = await secret.describe();
+    expect(JSON.stringify(described)).not.toContain("correct-horse");
+    expect(described.hasMaterial).toBe(true);
+    await waitForCondition(async () => (await secret.describe()).audit.usedCount >= 2, {
+      description: "waitrose/mum usage audit to fold",
+    });
   });
 });

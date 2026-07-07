@@ -115,14 +115,17 @@ exactly one confined home, never onto journals.
 ## Provided integrations (the waitrose case)
 
 A project implements a whole integration as code in its own repo and mounts it
-once:
+once. Every seeded repo carries a real one — `integrations/waitrose/`
+(`apps/os/project-repo-template`): a vendored Waitrose GraphQL client
+(`client.ts`, the reverse-engineered Android app's operations) plus the
+entrypoint:
 
 ```js
-// integrations/waitrose.js in the project repo
+// integrations/waitrose/worker.ts in the project repo
 export class WaitroseIntegration extends WorkerEntrypoint {
   invokeCapability({ path, args }) {
     const [connection, ...rest] = path; // /integrations/waitrose/<connection>/...
-    // walk `rest` on waitroseSdk(connection), apply args
+    // walk `rest` on waitroseClient(connection), apply args
   }
 }
 ```
@@ -141,23 +144,31 @@ await itx.provideCapability({
         type: "stateless",
         path: "/",
         entrypoint: "WaitroseIntegration",
-        source: { type: "repo", repoPath: "/", sourcePath: "integrations/waitrose.js" },
+        source: {
+          files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
+          options: { entryPoint: "integrations/waitrose/worker.ts" },
+        },
       },
     ],
   ],
 });
 
-await itx.integrations.waitrose.family.searchProducts("milk");
-await itx.integrations.waitrose.mum.basket.add(itemId);
+await itx.integrations.waitrose.mum.shoppingContext();
+await itx.integrations.waitrose.family.trolley(orderId);
 ```
 
 The mount is a `capability-provided` event on the ITX journal — durable,
-replayable, revocable, enumerable. The worker's SDK addresses its session
-secrets at `/secrets/integrations/waitrose/<connection>/session` with
-`getSecret` placeholders and bare `fetch()`; dynamic-worker egress routes
-through the project egress door, so **even the project's own integration code
-never holds its tokens**. Exercised end-to-end (two connections, substitution
-proof, negative controls) in `e2e/vitest/integrations-userspace.e2e.test.ts`.
+replayable, revocable, enumerable. The client addresses its session secrets at
+`/secrets/integrations/waitrose/<connection>/session` with `getSecret`
+placeholders and bare `fetch()`; dynamic-worker egress routes through the
+project egress door, so **even the project's own integration code never holds
+its tokens**. The connection secret holds only `{ username, password }` plus
+the `waitrose-session` refresh strategy — Waitrose has no refresh grant, so
+the Secret DO re-runs the login itself: mint on first use, re-mint on 401.
+Exercised end-to-end in `e2e/vitest/integrations-userspace.e2e.test.ts`: the
+echo lane (two connections, substitution proof, negative controls) plus the
+seeded-template lane live against petshop's Waitrose-shaped GraphQL fixture
+(`apps/dummy-petshop/src/waitrose.ts`).
 
 The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at
@@ -183,13 +194,18 @@ GitHub connects as a **GitHub App installation** (deep-link to
   DO code signing the App JWT, no worker, no jail.
 - **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
   with plain WebCrypto, and route on `installation_id`.
-- **`gh` in sandboxes** is the deferred follow-up, and it needs no byte
-  handoff: ALL container egress (HTTPS included, MITM'd with the container
-  CA) routes through the project egress door, so a sandbox holds only a
-  placeholder `GH_TOKEN` and substitution + re-mint happen en route. The one
-  wrinkle to solve when it lands: git sends Basic auth (base64), so configure
-  `git http.<url>.extraheader` with a Bearer placeholder instead of a
-  credential helper.
+- **`gh` in sandboxes** works automatically, with no byte handoff: ALL
+  container egress (HTTPS included, MITM'd with the container CA) routes
+  through the project egress door, so a sandbox holds only a placeholder
+  `GH_TOKEN` and substitution + re-mint happen en route. The sandbox DO plants
+  `GH_TOKEN` per container start when the project has a GitHub connection (the
+  connection secret's `accessToken` as a `getSecret` placeholder;
+  lexicographically first connection when several exist), and `gh` reads it
+  from the env natively. `git` gets a
+  `git http."https://github.com/".extraheader` with a raw Bearer placeholder
+  (set by the warm-up script) — deliberately not a credential helper or
+  `gh auth setup-git`, which send Basic auth (base64) and would hide the
+  placeholder from header substitution.
 
 The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 (GitHub's MCP server mounted under the `github-mcp` slug — built-in slugs
@@ -216,8 +232,9 @@ on the project host's own worker).
   hold the HMAC secret (substitution is egress-header-only); capability-URL
   tokens are the workaround. The userspace verification story returns with the
   jail lane (ADR 0005), not as a compute method on the public secret.
-- **A generic refresh framework.** Refresh is two named strategies in the
-  Secret DO (`oauth-refresh-token`, `github-app-installation`) — one shared
-  implementation per protocol, parameterized per secret. Providers whose
-  credential dance fits neither wait for the userspace jail lane rather than
-  growing a strategy interpreter.
+- **A generic refresh framework.** Refresh is named strategies in the
+  Secret DO (`oauth-refresh-token`, `github-app-installation`,
+  `waitrose-session`) — one shared imperative implementation per protocol,
+  parameterized per secret. A provider whose dance fits none of them gets its
+  own small strategy (that is how `waitrose-session` landed), not a strategy
+  interpreter.

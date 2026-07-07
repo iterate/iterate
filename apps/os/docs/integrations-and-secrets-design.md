@@ -52,6 +52,13 @@ missing (the first-use mint):
   `{ platform: "integrations.github" }` (the first-party App, pinned to
   api.github.com). The installation id is public and lives in the strategy
   config, not in material.
+- `waitrose-session` — the username/password → session-token archetype's
+  first instance: POST the vendor's `NewSession` login mutation to
+  `graphqlUrl` (must be within the pin) with `username`/`password` from this
+  secret's own material, store the returned `accessToken`. Waitrose has no
+  refresh grant — re-login IS the refresh — so one strategy covers the
+  first-use mint and the 401 re-mint. Material-only by nature: a Waitrose
+  account is always the user's own.
 
 Exchange endpoints falling within the secret's own pin is what keeps refresh
 inside the cell: refresh moves bytes only toward pinned hosts, like any use.
@@ -130,17 +137,24 @@ What ships now:
   code never holds bytes.
 - **Provided integrations**: `provideCapability({ path: ["integrations",
 "<name>"] })` mounts project-authored integrations into the same collection
-  and address shape as built-ins (the waitrose e2e).
+  and address shape as built-ins (the waitrose e2e). Every seeded project
+  repo carries a real one: `integrations/waitrose/` (vendored GraphQL client
+  plus entrypoint, from `apps/os/project-repo-template`).
 - **Shared refresh strategies**: a standards-shaped userspace provider
   configures `oauth-refresh-token` with `clientCreds: "material"` — no worker
-  needed (the petshop userspace e2e).
+  needed (the petshop userspace e2e). A provider-specific dance is another
+  small named strategy, not a framework: `waitrose-session` closes the
+  username/password → session archetype for the seeded waitrose integration
+  (mint on first use, re-login on 401), proven live against petshop's
+  Waitrose-shaped GraphQL fixture in the seeded-waitrose e2e lane.
 
 Deferred to the userspace-integrations PR (see ADR 0005):
 
 - **The jail**: per-secret project-authored workers with in-jail
-  `read()`/`update()` for providers no named strategy can express (the
-  username/password → session-token exchange archetype; petshop's
-  `legacy-login` is the fixture for it). Extends the cell to DO + jail; the
+  `read()`/`update()` for bespoke exchanges the platform carries no named
+  strategy for (the username/password → session archetype itself is now the
+  `waitrose-session` strategy above; petshop's `legacy-login` stays the
+  fixture for the jailed variant). Extends the cell to DO + jail; the
   boundary stays "bytes only leave toward pinned hosts"; worker install gated
   like a material write.
 - **WebSocket egress + relay** (the three gateway credential shapes petshop
@@ -153,17 +167,22 @@ Deferred to the userspace-integrations PR (see ADR 0005):
 
 ALL container egress — including HTTPS, MITM'd with the Cloudflare container
 CA (`interceptHttps`) — routes through the project egress door. So sandboxes
-need no token bytes: plant a placeholder (e.g. as `GH_TOKEN` +
-`git http.extraheader`), and substitution + refresh-on-401 happen en route
-under the pin, exactly as for any other caller. There is no reveal lane, and
-none is needed.
+need no token bytes: the sandbox DO plants a placeholder `GH_TOKEN` per
+container start when the project has a GitHub connection, and the warm-up
+script sets a `git http.extraheader` with a raw Bearer placeholder (git's
+credential helpers send Basic auth — base64 — which would hide the placeholder
+from header substitution). Substitution + refresh-on-401 happen en route under
+the pin, exactly as for any other caller. There is no reveal lane, and none is
+needed.
 
 ## 6. The proof (apps/dummy-petshop)
 
 A real deployed third party — OAuth 2.0 (Basic at token, sealed tokens,
 refresh, legacy login), bearer API, HMAC webhooks, a GitHub-App-installation
-stand-in, three WebSocket credential shapes, MCP, oRPC/OpenAPI, and a
-`/__backdoor` console for deterministic failure injection. The e2e lanes
+stand-in, a Waitrose-shaped GraphQL login/session surface (short-TTL sessions
+so re-mint-on-401 proves fast), three WebSocket credential shapes, MCP,
+oRPC/OpenAPI, and a `/__backdoor` console for deterministic failure
+injection. The e2e lanes
 (`integrations-petshop`, `integrations-github`, `integrations-userspace`)
 prove connect → authed call → forced-expiry refresh against it live; the
 gateway shapes wait for the userspace-lane PR.
