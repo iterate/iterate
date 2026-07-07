@@ -400,7 +400,7 @@ function cloudflareErrorMessage(path: string, status: number, errors: Cloudflare
   return `Cloudflare ${path} failed with ${status}${message ? `: ${message}` : ""}`;
 }
 
-export function toProjectCustomDomainCloudflareSnapshot(
+function toProjectCustomDomainCloudflareSnapshot(
   customHostname: CloudflareCustomHostname,
   fallbackHostname: string,
 ): ProjectCustomDomainCloudflareSnapshot {
