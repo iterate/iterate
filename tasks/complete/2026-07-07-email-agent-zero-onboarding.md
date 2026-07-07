@@ -1,5 +1,5 @@
 ---
-status: implemented, awaiting review
+status: done (pending PR review/merge)
 pr: https://github.com/iterate/iterate/pull/1717
 size: medium
 branch: email-zero-onboarding-v2
