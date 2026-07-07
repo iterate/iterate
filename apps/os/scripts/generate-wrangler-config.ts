@@ -155,9 +155,8 @@ function workerBindings(input: {
   accountId: string;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Sandbox container instance cap. Preview slots get extra headroom: e2e
-   * churn spins sandboxes faster than they idle out, and a saturated cap
-   * 503s every sandbox exec (observed live at 10/10 on preview-3). */
+  /** Sandbox container instance cap. standard-1 reserves quota per slot, so
+   * preview headroom is bounded by the preview account's memory allocation. */
   maxContainerInstances?: number;
 }) {
   return {
@@ -317,26 +316,17 @@ function routes(env: DeployedEnv) {
 }
 
 function envBlock(env: DeployedEnv) {
+  const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // Sandbox containers are `lite` and bill on usage, not reservation, so a
-    // high cap is free headroom. Idle containers are destroyed (not just
-    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
-    // which releases their instance slot — but under sustained churn the
-    // platform backfills released slots into an "assigned" warm pool that
-    // rides at max_instances, and sandbox start latency grows as the pool
-    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
-    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
-    // `wrangler containers info` reached the cap;
-    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
-    // comfortably exceed a whole marathon's cumulative sandbox creations
-    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
-    // prd churns far less (real agent sandboxes, no fixture storms) and
-    // destroy-on-idle bounds its growth.
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
+    // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
+    // against account memory quota at deploy time. The old preview cap of 500
+    // was only viable for lite instances; keep previews deployable until the
+    // preview account has enough quota for larger sandbox-e2e marathons.
+    maxContainerInstances: isProduction ? 50 : 40,
   });
   return {
     name: env.osWorkerName,
