@@ -36,6 +36,7 @@ import {
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
 import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
+import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
@@ -100,8 +101,6 @@ import type {
   SandboxCollection,
   Scheduler,
   SchedulerCollection,
-  SchedulerRecurrence,
-  SetScheduleInput,
   Secret,
   SecretCollection,
   SecretDescription,
@@ -304,7 +303,7 @@ export class SchedulerRpcTarget extends RpcTarget implements Scheduler {
       action: { kind: "itx-script", script: input.script },
       key: input.key,
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
-      recurrence: canonicalRecurrence(input.recurrence),
+      recurrence: canonicalRecurrence(input.recurrence, Date.now()),
     });
   }
 
@@ -319,19 +318,6 @@ export class SchedulerRpcTarget extends RpcTarget implements Scheduler {
   trigger(key: Parameters<Scheduler["trigger"]>[0]) {
     return this.#durableObjectStub.triggerSchedule(key);
   }
-}
-
-// `{ in: seconds }` is API sugar only — the event log has exactly one
-// spelling of every schedule, so it lowers to `{ at }` before anything is
-// appended.
-function canonicalRecurrence(recurrence: SetScheduleInput["recurrence"]): SchedulerRecurrence {
-  if ("in" in recurrence) {
-    if (!Number.isInteger(recurrence.in) || recurrence.in <= 0) {
-      throw new Error(`recurrence.in must be a positive integer of seconds, got ${recurrence.in}`);
-    }
-    return { at: new Date(Date.now() + recurrence.in * 1000).toISOString() };
-  }
-  return recurrence;
 }
 
 class SchedulerCollectionRpcTarget extends RpcTarget implements SchedulerCollection {

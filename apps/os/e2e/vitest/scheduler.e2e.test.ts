@@ -66,16 +66,15 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
     result: { marker },
   });
 
-  // The cross-stream side effect the script performed.
+  // The cross-stream side effect the script performed — exactly once per
+  // occurrence (the whole idempotency design exists for this line).
   const markerEvents = await project.streams.get(targetPath).getEvents({ afterOffset: 0 });
-  expect(markerEvents).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        payload: { key, marker, runCount: 1 },
-        type: MARKER_TYPE,
-      }),
-    ]),
-  );
+  expect(markerEvents.filter((event) => event.type === MARKER_TYPE)).toEqual([
+    expect.objectContaining({
+      payload: { key, marker, runCount: 1 },
+      type: MARKER_TYPE,
+    }),
+  ]);
 
   // A one-shot leaves the list once its trigger settles.
   await waitFor(

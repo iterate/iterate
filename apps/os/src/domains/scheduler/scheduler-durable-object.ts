@@ -32,12 +32,12 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * everything due, then catch up again so the requested events ingest and their
  * executions launch before the DO goes back to sleep. The processor re-arms
  * the alarm at the end of every batch and every triggerDue, capped by its
- * heartbeat, so the DO is never alarm-less once it has run.
+ * heartbeat, so a scheduler holding any state is never alarm-less; an emptied
+ * scheduler deletes its alarm and sleeps for good until the next set.
  *
  * The command methods (set/cancel/trigger/list) are the itx write path: they
  * append, pull the event through ingestion, and only then return — so a
- * successful set is read-your-writes visible AND provably alarm-armed (Q5
- * layer 2 of the design discussion).
+ * successful set is read-your-writes visible AND provably alarm-armed.
  */
 export class SchedulerDurableObject extends DurableObject<Env> {
   readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);
@@ -64,20 +64,28 @@ export class SchedulerDurableObject extends DurableObject<Env> {
         }),
         now: () => Date.now(),
         readAlarm: () => this.ctx.storage.getAlarm(),
-        repointAlarm: (atMs) => this.ctx.storage.setAlarm(atMs),
+        repointAlarm: (atMs) =>
+          atMs === null ? this.ctx.storage.deleteAlarm() : this.ctx.storage.setAlarm(atMs),
       }),
   );
 
   async alarm(): Promise<void> {
-    await this.#processorHost.catchUp(PROCESSOR_SLUG);
-    await this.#schedulerProcessor.triggerDue();
-    await this.#processorHost.catchUp(PROCESSOR_SLUG);
+    try {
+      await this.#processorHost.catchUp(PROCESSOR_SLUG);
+      await this.#schedulerProcessor.triggerDue();
+      await this.#processorHost.catchUp(PROCESSOR_SLUG);
+    } catch (error) {
+      // Cloudflare retries a throwing alarm handler only a bounded number of
+      // times; a prolonged Stream DO outage must not end with due schedules
+      // and no armed alarm. Arm a coarse fallback, then rethrow for the
+      // platform's own retry/observability.
+      await this.ctx.storage.setAlarm(Date.now() + 60_000);
+      throw error;
+    }
   }
 
   async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
-    // Fail loudly at set time: a cron expression or timezone croner rejects
-    // must never park silently until 3am. Raw stream appends can still bypass
-    // this — the reducer handles those totally (nextTriggerAt: null).
+    // Fail loudly at set time; raw appends bypass this and park via the reducer.
     assertValidRecurrence(input.recurrence);
     const [event] = await this.#stream.append(
       this.#schedulerProcessor.buildScheduleSetEvent(input),

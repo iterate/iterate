@@ -1,4 +1,4 @@
-import type { StatelessDynamicWorkerRef, ScheduleView } from "../../types.ts";
+import type { JsonValue, StatelessDynamicWorkerRef, ScheduleView } from "../../types.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import {
@@ -6,7 +6,13 @@ import {
   type ScheduleSetPayload,
   type SchedulerProcessorState,
 } from "./scheduler-processor-contract.ts";
-import { dueSchedules, initialTriggerAtMs, nextTriggerAtMs, nextWakeAtMs } from "./recurrence.ts";
+import {
+  barrenWakeAtMs,
+  dueSchedules,
+  initialTriggerAtMs,
+  nextTriggerAtMs,
+  nextWakeAtMs,
+} from "./recurrence.ts";
 
 /**
  * Runtime dependencies the hosting Durable Object injects. Everything
@@ -18,10 +24,14 @@ export type SchedulerProcessorDeps = {
   dynamicWorkers: Pick<DynamicWorkerRunner, "invokeCapability">;
   /** Injectable clock. Only Trigger emission reads it — reduce never does. */
   now: () => number;
-  /** Repoint the platform alarm. Called after every checkpointed batch and every triggerDue(). */
-  repointAlarm: (atMs: number) => void | Promise<void>;
+  /**
+   * Repoint (or, with null, delete) the platform alarm. Called after every
+   * checkpointed batch and every triggerDue(). The batch-path await is
+   * load-bearing: a failed repoint must fail the batch so it replays.
+   */
+  repointAlarm: (atMs: number | null) => void | Promise<void>;
   /** Next armed alarm time, for runtime-state inspection only. */
-  readAlarm?: () => Promise<number | null>;
+  readAlarm: () => Promise<number | null>;
 };
 
 /**
@@ -34,7 +44,9 @@ export type SchedulerProcessorDeps = {
  * - At-least-once per Trigger. `trigger-requested` marks the executionId
  *   pending in reduced state; a Durable Object restart mid-run clears the
  *   in-memory in-flight set, so the next wake's sweep (triggerDue) re-launches
- *   anything still pending. Actions must be idempotent per executionId.
+ *   anything still pending. Before invoking, an execution checks the stream
+ *   for its completion's idempotency key, so a checkpoint-loss replay cannot
+ *   re-run history. Actions must be idempotent per executionId.
  * - Latest-code-wins. The script is resolved from reduced state at execution
  *   time, never snapshotted into the request: a re-set between request and
  *   execution runs the new code, and a cancelled Schedule's in-flight Trigger
@@ -54,6 +66,10 @@ export class SchedulerProcessor extends StreamProcessor<
    * still-pending Trigger needs re-launching.
    */
   readonly #inflightExecutions = new Set<string>();
+  /** Consecutive alarm wakes that made no progress; drives the barren-wake backoff. */
+  #consecutiveBarrenWakes = 0;
+  /** Checkpoint seen by the previous triggerDue — the progress signal for the backoff. */
+  #lastWakeCheckpointOffset: number | null = null;
 
   protected override reduce({
     event,
@@ -130,14 +146,13 @@ export class SchedulerProcessor extends StreamProcessor<
 
   protected override processEvent({
     event,
-    state,
   }: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
-    // Replay past a completed Trigger reduces it straight out of
-    // pendingTriggers, so this gate is what makes redelivery harmless.
-    if (state.pendingTriggers[event.payload.executionId] === undefined) return;
-    // The execution reads `this.state` (latest-code-wins), which only advances
-    // once this batch checkpoints — the barrier offset makes it wait for that.
+    // No gate here — #execute does all the gating after its barrier: pending
+    // recheck against checkpointed state, plus a completion-existence read so
+    // a checkpoint-loss replay cannot re-run history. The barrier offset makes
+    // the execution wait for this batch's checkpoint (latest-code-wins reads
+    // `this.state`).
     this.#launchExecution(event.payload.executionId, event.offset);
   }
 
@@ -155,7 +170,7 @@ export class SchedulerProcessor extends StreamProcessor<
       snapshot: await this.snapshot(),
       runtime: {
         inflightExecutions: [...this.#inflightExecutions],
-        nextAlarmAt: (await this.deps.readAlarm?.()) ?? null,
+        nextAlarmAt: await this.deps.readAlarm(),
       },
     };
   }
@@ -177,9 +192,11 @@ export class SchedulerProcessor extends StreamProcessor<
         ...due.map(([key, entry]) =>
           this.contract.buildEvent({
             type: "events.iterate.com/scheduler/trigger-requested",
-            // One request per (key, occurrence): a wake that crashed after
-            // appending and re-runs cannot double-trigger.
-            idempotencyKey: `scheduler/trigger-requested:${key}:${entry.nextTriggerAt}`,
+            // One request per (schedule incarnation, occurrence): a wake that
+            // crashed after appending and re-runs cannot double-trigger, and a
+            // later re-set of the same key/occurrence (definedAtOffset differs)
+            // can never dedupe against a spent request from a past life.
+            idempotencyKey: `scheduler/trigger-requested:${key}:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
             payload: {
               executionId: crypto.randomUUID(),
               key,
@@ -196,7 +213,19 @@ export class SchedulerProcessor extends StreamProcessor<
     for (const executionId of Object.keys(this.state.pendingTriggers)) {
       this.#launchExecution(executionId);
     }
-    await this.deps.repointAlarm(nextWakeAtMs(this.state, now));
+    // A wake that finds schedules due while the fold has not advanced since
+    // the previous wake is making no progress (wedged ingest, poison batch):
+    // back off toward the heartbeat instead of re-arming at the minimum delay
+    // forever. Any checkpoint movement resets the backoff.
+    const barren = due.length > 0 && this.#lastWakeCheckpointOffset === this.checkpointOffset;
+    this.#lastWakeCheckpointOffset = this.checkpointOffset;
+    if (barren) {
+      this.#consecutiveBarrenWakes += 1;
+      await this.deps.repointAlarm(barrenWakeAtMs(now, this.#consecutiveBarrenWakes));
+    } else {
+      this.#consecutiveBarrenWakes = 0;
+      await this.deps.repointAlarm(nextWakeAtMs(this.state, now));
+    }
     return { requested: due.length };
   }
 
@@ -281,57 +310,70 @@ export class SchedulerProcessor extends StreamProcessor<
     await this.waitUntilEvent({ offset: barrierOffset, timeoutMs: 30_000 });
     const pending = this.state.pendingTriggers[executionId];
     if (pending === undefined) return; // already completed (e.g. by a raced sweep)
-    const complete = (outcome: {
+    const completionIdempotencyKey = `scheduler/trigger-completed:${executionId}`;
+    // A checkpoint-loss replay redelivers historical requests whose completions
+    // sit in LATER catch-up pages — still pending as far as the fold knows.
+    // The stream itself always has the truth: one indexed read prevents
+    // re-running history.
+    const alreadyCompleted = await this.stream.getEvent({
+      idempotencyKey: completionIdempotencyKey,
+    });
+    if (alreadyCompleted !== undefined) return;
+
+    // Latest-code-wins: resolve the Action NOW, not at request time.
+    const entry = this.state.schedules[pending.key];
+    let outcome: {
       definedAtOffset?: number;
       error?: string;
       outcome: "succeeded" | "failed" | "skipped";
       result?: unknown;
-    }) =>
-      this.stream.append(
-        this.contract.buildEvent({
-          type: "events.iterate.com/scheduler/trigger-completed",
-          idempotencyKey: `scheduler/trigger-completed:${executionId}`,
-          payload: { ...outcome, executionId, key: pending.key },
-        }),
-      );
-
-    // Latest-code-wins: resolve the Action NOW, not at request time.
-    const entry = this.state.schedules[pending.key];
+    };
     if (entry === undefined) {
-      await complete({ outcome: "skipped" });
-      return;
+      outcome = { outcome: "skipped" };
+    } else {
+      try {
+        const result = await this.deps.dynamicWorkers.invokeCapability({
+          args: [
+            {
+              key: pending.key,
+              ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+              recurrence: entry.recurrence,
+              setAt: entry.setAt,
+            },
+            {
+              executionId,
+              requestedAt: pending.requestedAt,
+              runCount: pending.runCount,
+              scheduledFor: pending.scheduledFor,
+            },
+          ],
+          path: ["run"],
+          ref: scheduleActionWorkerRef(entry.action.script),
+        });
+        outcome = {
+          definedAtOffset: entry.definedAtOffset,
+          outcome: "succeeded",
+          ...(result === undefined ? {} : { result: json(result) }),
+        };
+      } catch (error) {
+        outcome = {
+          definedAtOffset: entry.definedAtOffset,
+          error: error instanceof Error ? error.message : String(error),
+          outcome: "failed",
+        };
+      }
     }
-    try {
-      const result = await this.deps.dynamicWorkers.invokeCapability({
-        args: [
-          {
-            key: pending.key,
-            ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-            recurrence: entry.recurrence,
-            setAt: entry.setAt,
-          },
-          {
-            executionId,
-            requestedAt: pending.requestedAt,
-            runCount: pending.runCount,
-            scheduledFor: pending.scheduledFor,
-          },
-        ],
-        path: ["run"],
-        ref: scheduleActionWorkerRef(entry.action.script),
-      });
-      await complete({
-        definedAtOffset: entry.definedAtOffset,
-        outcome: "succeeded",
-        ...(result === undefined ? {} : { result: json(result) }),
-      });
-    } catch (error) {
-      await complete({
-        definedAtOffset: entry.definedAtOffset,
-        error: error instanceof Error ? error.message : String(error),
-        outcome: "failed",
-      });
-    }
+    // The completion append sits OUTSIDE the try: an append failure is a
+    // transport problem, not a script outcome — let it propagate so the
+    // trigger stays pending and the next wake's sweep retries, instead of
+    // durably recording a succeeded script as failed.
+    await this.stream.append(
+      this.contract.buildEvent({
+        type: "events.iterate.com/scheduler/trigger-completed",
+        idempotencyKey: completionIdempotencyKey,
+        payload: { ...outcome, executionId, key: pending.key },
+      }),
+    );
   }
 }
 
@@ -362,7 +404,7 @@ function scheduleActionWorkerRef(script: string): StatelessDynamicWorkerRef {
   };
 }
 
-function json(value: unknown): unknown {
+function json(value: unknown): JsonValue {
   if (value === undefined) return null;
-  return JSON.parse(JSON.stringify(value));
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }

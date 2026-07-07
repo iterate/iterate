@@ -572,8 +572,8 @@ export type ScheduleView = {
 };
 
 /**
- * One Scheduler: keyed Schedules on one `/scheduler/**` stream, fired by a
- * durable alarm. Everything it does is events on that stream — `set`/`cancel`
+ * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
+ * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
  * append, `list` reads reduced state, and every Trigger's request and outcome
  * are appended back, so the stream is the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append

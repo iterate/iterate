@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   assertValidRecurrence,
+  barrenWakeAtMs,
+  canonicalRecurrence,
   dueSchedules,
   initialTriggerAtMs,
   nextTriggerAtMs,
@@ -88,10 +90,26 @@ describe("dueSchedules", () => {
 });
 
 describe("nextWakeAtMs", () => {
-  it("falls back to the heartbeat with nothing scheduled — the alarm is never deleted", () => {
-    expect(nextWakeAtMs({ pendingTriggers: {}, schedules: {} }, BASE)).toBe(
+  it("deletes the alarm (null) only when the scheduler holds no state at all", () => {
+    expect(nextWakeAtMs({ pendingTriggers: {}, schedules: {} }, BASE)).toBeNull();
+  });
+
+  it("keeps the heartbeat while anything remains: pending executions or parked schedules", () => {
+    const pending = {
+      key: "report",
+      requestedAt: new Date(BASE).toISOString(),
+      runCount: 1,
+      scheduledFor: new Date(BASE).toISOString(),
+    };
+    expect(nextWakeAtMs({ pendingTriggers: { x: pending }, schedules: {} }, BASE)).toBe(
       BASE + SCHEDULER_HEARTBEAT_MS,
     );
+    expect(
+      nextWakeAtMs(
+        { pendingTriggers: {}, schedules: { parked: entry({ nextTriggerAt: null }) } },
+        BASE,
+      ),
+    ).toBe(BASE + SCHEDULER_HEARTBEAT_MS);
   });
 
   it("wakes for the earliest upcoming trigger", () => {
@@ -134,5 +152,42 @@ describe("assertValidRecurrence", () => {
 
   it("rejects a bad timezone at set time", () => {
     expect(() => assertValidRecurrence({ cron: "0 9 * * *", timezone: "Mars/Olympus" })).toThrow();
+  });
+
+  it("rejects a cron with no future occurrence (it would park silently)", () => {
+    expect(() => assertValidRecurrence({ cron: "0 0 30 2 *" })).toThrow(/no future occurrence/);
+  });
+
+  it("rejects ambiguous shapes carrying more than one recurrence key", () => {
+    expect(() => assertValidRecurrence({ at: "2026-01-15T09:00:00Z", every: 60 } as never)).toThrow(
+      /exactly one/,
+    );
+  });
+});
+
+describe("canonicalRecurrence", () => {
+  it("lowers { in } sugar to a canonical { at } so the log has one spelling", () => {
+    expect(canonicalRecurrence({ in: 120 }, BASE)).toEqual({
+      at: new Date(BASE + 120_000).toISOString(),
+    });
+  });
+
+  it("passes canonical shapes through untouched", () => {
+    expect(canonicalRecurrence({ every: 60 }, BASE)).toEqual({ every: 60 });
+    expect(canonicalRecurrence({ cron: "0 9 * * *" }, BASE)).toEqual({ cron: "0 9 * * *" });
+  });
+
+  it("rejects non-positive and fractional { in } values", () => {
+    for (const bad of [0, -5, 1.5, Number.NaN]) {
+      expect(() => canonicalRecurrence({ in: bad }, BASE)).toThrow(/positive integer/);
+    }
+  });
+});
+
+describe("barrenWakeAtMs", () => {
+  it("doubles from the minimum delay and caps at the heartbeat", () => {
+    expect(barrenWakeAtMs(BASE, 1)).toBe(BASE + 2_000);
+    expect(barrenWakeAtMs(BASE, 3)).toBe(BASE + 8_000);
+    expect(barrenWakeAtMs(BASE, 30)).toBe(BASE + SCHEDULER_HEARTBEAT_MS);
   });
 });
