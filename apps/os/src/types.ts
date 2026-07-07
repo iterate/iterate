@@ -214,6 +214,10 @@ export interface ProjectRpcTarget {
   repos: ProjectRepoCollection;
   /** Path-addressed sandboxes (`itx.sandboxes.get(path)`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
+  /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
+  scheduler: Scheduler;
+  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
+  schedulers: SchedulerCollection;
   secrets: SecretCollection;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
@@ -513,6 +517,81 @@ export interface StreamCollection extends Describable {
 /** Project-scoped stream catalog with reduced-state listing. */
 export interface ProjectStreamCollection extends StreamCollection {
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * When a Schedule triggers. Exactly one canonical spelling per shape: a single
+ * ISO instant, a seconds interval (re-anchored on each trigger, so intervals
+ * drift by execution latency), or a cron expression with optional IANA
+ * timezone. Sub-minute rates belong to `every`; calendar points to `cron`.
+ */
+export type SchedulerRecurrence =
+  | { at: string }
+  | { every: number }
+  | { cron: string; timezone?: string };
+
+/**
+ * What a Schedule does when it triggers. A closed union so an `append` kind
+ * can be added later; the only kind today is running an itx script.
+ */
+export type SchedulerAction = {
+  kind: "itx-script";
+  /** A function-expression string, invoked as `fn(itx, schedule, trigger)`. */
+  script: string;
+};
+
+/**
+ * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
+ * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
+ * anything is appended — the event log has exactly one spelling of every
+ * schedule.
+ */
+export type SetScheduleInput = {
+  key: string;
+  metadata?: Record<string, unknown>;
+  recurrence: SchedulerRecurrence | { in: number };
+  /** itx script source: `async (itx, schedule, trigger) => { ... }`. A string,
+   * not a function — closures would silently not survive serialization. */
+  script: string;
+};
+
+/** One Schedule as reduced from the Scheduler stream — the UI list row. */
+export type ScheduleView = {
+  action: SchedulerAction;
+  /** Offset of the `schedule-set` event that defined this version (audit provenance). */
+  definedAtOffset: number;
+  key: string;
+  metadata?: Record<string, unknown>;
+  /** ISO time of the next occurrence; null when exhausted or unparseable. */
+  nextTriggerAt: string | null;
+  recurrence: SchedulerRecurrence;
+  /** Triggers requested for this key since it was (re)set. */
+  runCount: number;
+  /** When this version of the Schedule was set. */
+  setAt: string;
+};
+
+/**
+ * One Scheduler: keyed Schedules on one `/scheduler/**` stream, fired by a
+ * durable alarm. Everything it does is events on that stream — `set`/`cancel`
+ * append, `list` reads reduced state, and every Trigger's request and outcome
+ * are appended back, so the stream is the complete audit log. Scripts run
+ * with project-root itx authority, at least once per Trigger (derive append
+ * idempotency keys from `trigger.executionId`).
+ */
+export interface Scheduler extends Describable {
+  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
+  set(input: SetScheduleInput): Promise<ScheduleView>;
+  /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
+  cancel(key: string): Promise<void>;
+  list(): Promise<ScheduleView[]>;
+  /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */
+  trigger(key: string): Promise<{ executionId: string }>;
+}
+
+/** Path-addressed Scheduler catalog; `itx.scheduler` is `get("/scheduler/primary")`. */
+export interface SchedulerCollection extends Describable {
+  get(path: string): Scheduler;
 }
 
 /**

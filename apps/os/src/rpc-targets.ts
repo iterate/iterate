@@ -36,6 +36,7 @@ import {
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
 import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
+import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -97,6 +98,10 @@ import type {
   Repo,
   RepoCollection,
   SandboxCollection,
+  Scheduler,
+  SchedulerCollection,
+  SchedulerRecurrence,
+  SetScheduleInput,
   Secret,
   SecretCollection,
   SecretDescription,
@@ -251,6 +256,105 @@ class ProjectStreamCollectionRpcTarget
 
   list() {
     return projectProcessorState(this.projectProps.projectId).then((state) => state.streams);
+  }
+}
+
+/**
+ * One Scheduler handle: a thin forwarder to the SchedulerDurableObject for a
+ * `/scheduler/**` stream. The command surface (set/cancel/trigger/list) runs
+ * on the DO so every write returns read-your-writes visible and alarm-armed;
+ * this target only normalizes input sugar before dialing.
+ */
+export class SchedulerRpcTarget extends RpcTarget implements Scheduler {
+  async __describe() {
+    return describeNode({
+      instructions:
+        `The Scheduler at "${this.props.path}": keyed Schedules that run itx scripts on a ` +
+        "recurrence ({ at } | { every: seconds } | { cron, timezone? }; set() also accepts " +
+        "{ in: seconds }). Scripts are function-expression STRINGS `async (itx, schedule, trigger) " +
+        "=> { ... }` running with project-root authority, at least once per Trigger — derive " +
+        "append idempotency keys from trigger.executionId. Every Schedule change and Trigger " +
+        "outcome is an event on this stream.",
+      children: {
+        cancel: "Remove a Schedule by key (idempotent).",
+        list: "Every Schedule, reduced from the stream.",
+        set: "Upsert a Schedule: { key, recurrence, script, metadata? }.",
+        trigger: "Run a Schedule now (advances a recurring clock, consumes a one-shot).",
+      },
+      parent: "schedulers.get(path)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string; path: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get #durableObjectStub() {
+    return env.SCHEDULER.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: this.props.path,
+      }),
+    );
+  }
+
+  set(input: Parameters<Scheduler["set"]>[0]) {
+    return this.#durableObjectStub.setSchedule({
+      action: { kind: "itx-script", script: input.script },
+      key: input.key,
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      recurrence: canonicalRecurrence(input.recurrence),
+    });
+  }
+
+  cancel(key: Parameters<Scheduler["cancel"]>[0]) {
+    return this.#durableObjectStub.cancelSchedule(key);
+  }
+
+  list() {
+    return this.#durableObjectStub.listSchedules();
+  }
+
+  trigger(key: Parameters<Scheduler["trigger"]>[0]) {
+    return this.#durableObjectStub.triggerSchedule(key);
+  }
+}
+
+// `{ in: seconds }` is API sugar only — the event log has exactly one
+// spelling of every schedule, so it lowers to `{ at }` before anything is
+// appended.
+function canonicalRecurrence(recurrence: SetScheduleInput["recurrence"]): SchedulerRecurrence {
+  if ("in" in recurrence) {
+    if (!Number.isInteger(recurrence.in) || recurrence.in <= 0) {
+      throw new Error(`recurrence.in must be a positive integer of seconds, got ${recurrence.in}`);
+    }
+    return { at: new Date(Date.now() + recurrence.in * 1000).toISOString() };
+  }
+  return recurrence;
+}
+
+class SchedulerCollectionRpcTarget extends RpcTarget implements SchedulerCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Scheduler catalog: get(path) returns the Scheduler at a /scheduler/** path. The default is itx.scheduler (= get("/scheduler/primary")); extra Schedulers are for isolating noisy workloads.',
+      children: { get: "The Scheduler at a path." },
+      parent: "a project itx (itx.schedulers)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get(path: string) {
+    return new SchedulerRpcTarget({
+      auth: this.props.auth,
+      path: normalizeSchedulerPath(path),
+      projectId: this.props.projectId,
+    });
   }
 }
 
@@ -1704,6 +1808,9 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes: "Path-addressed Cloudflare sandboxes.",
+  scheduler:
+    'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
+  schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
   worker: "The default repo-backed project worker.",
@@ -1935,6 +2042,17 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   get sandboxes() {
     return new SandboxCollectionRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
+  }
+
+  get scheduler(): Scheduler {
+    return this.schedulers.get(SCHEDULER_PRIMARY_PATH);
+  }
+
+  get schedulers(): SchedulerCollection {
+    return new SchedulerCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });

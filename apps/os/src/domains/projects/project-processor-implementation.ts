@@ -20,6 +20,7 @@ import {
 } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { agentSandboxPath } from "../sandboxes/utils.ts";
+import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
@@ -211,12 +212,32 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/stream/child-stream-created": {
         const childPath = event.payload.childPath;
-        if (!childPath.startsWith("/agents/") && !childPath.startsWith("/secrets/")) return;
+        if (
+          !childPath.startsWith("/agents/") &&
+          !childPath.startsWith("/secrets/") &&
+          !childPath.startsWith("/scheduler/")
+        ) {
+          return;
+        }
         blockProcessorWhile(async () => {
           const durableObjectName = DurableObjectNameCodec.stringify({
             projectId: this.deps.itx.projectId,
             path: childPath,
           });
+          if (childPath.startsWith("/scheduler/")) {
+            // A scheduler stream's birth certificate is just its processor
+            // subscription: the Scheduler Durable Object reduces schedules and
+            // owns the alarm from the first delivered batch onward.
+            await this.deps.itx.streams.get(childPath).append(
+              buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                durableObjectName,
+                idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
+                processorSlug: SchedulerProcessorContract.slug,
+                subscriberType: "scheduler",
+              }),
+            );
+            return;
+          }
           if (childPath.startsWith("/agents/")) {
             // The agent path picks the prompt (agentSystemPromptForPath);
             // Slack agents additionally get the slack-agent processor

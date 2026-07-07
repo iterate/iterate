@@ -699,6 +699,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       "capability-host": this.env.CAPABILITY_HOST,
       project: this.env.PROJECT,
       repo: this.env.REPO,
+      scheduler: this.env.SCHEDULER,
       secret: this.env.SECRET,
     }[type];
     return namespace.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;

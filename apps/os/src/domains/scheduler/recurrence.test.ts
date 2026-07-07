@@ -1,0 +1,138 @@
+import { describe, expect, it } from "vitest";
+import {
+  assertValidRecurrence,
+  dueSchedules,
+  initialTriggerAtMs,
+  nextTriggerAtMs,
+  nextWakeAtMs,
+  SCHEDULER_HEARTBEAT_MS,
+} from "./recurrence.ts";
+import type { SchedulerProcessorState } from "./scheduler-processor-contract.ts";
+
+const BASE = Date.parse("2026-01-15T12:00:00Z");
+
+function entry(
+  overrides: Partial<SchedulerProcessorState["schedules"][string]> = {},
+): SchedulerProcessorState["schedules"][string] {
+  return {
+    action: { kind: "itx-script", script: "async () => {}" },
+    definedAtOffset: 1,
+    nextTriggerAt: null,
+    recurrence: { every: 60 },
+    runCount: 0,
+    setAt: new Date(BASE).toISOString(),
+    ...overrides,
+  };
+}
+
+describe("initialTriggerAtMs", () => {
+  it("uses the instant itself for { at }, even in the past", () => {
+    const at = "2026-01-15T09:00:00Z";
+    expect(initialTriggerAtMs({ at }, BASE)).toBe(Date.parse(at));
+  });
+
+  it("anchors { every } on the defining event", () => {
+    expect(initialTriggerAtMs({ every: 90 }, BASE)).toBe(BASE + 90_000);
+  });
+
+  it("finds the next cron occurrence in UTC by default", () => {
+    expect(initialTriggerAtMs({ cron: "0 9 * * *" }, BASE)).toBe(
+      Date.parse("2026-01-16T09:00:00Z"),
+    );
+  });
+
+  it("respects an IANA timezone (base is 7am New York, so 9am NY that same day = 14:00 UTC)", () => {
+    expect(initialTriggerAtMs({ cron: "0 9 * * *", timezone: "America/New_York" }, BASE)).toBe(
+      Date.parse("2026-01-15T14:00:00Z"),
+    );
+  });
+
+  it("returns null instead of throwing for an unparseable cron (raw appends must not poison the fold)", () => {
+    expect(initialTriggerAtMs({ cron: "not a cron" }, BASE)).toBeNull();
+    expect(initialTriggerAtMs({ at: "not a date" }, BASE)).toBeNull();
+  });
+});
+
+describe("nextTriggerAtMs", () => {
+  it("exhausts one-shots", () => {
+    expect(nextTriggerAtMs({ at: "2026-01-15T09:00:00Z" }, BASE)).toBeNull();
+  });
+
+  it("re-anchors { every } on the request time (missed occurrences coalesce)", () => {
+    const requestedAt = BASE + 3 * 3_600_000; // three hours of downtime
+    expect(nextTriggerAtMs({ every: 600 }, requestedAt)).toBe(requestedAt + 600_000);
+  });
+
+  it("advances cron from the request time", () => {
+    expect(nextTriggerAtMs({ cron: "0 9 * * *" }, Date.parse("2026-01-16T09:00:00Z"))).toBe(
+      Date.parse("2026-01-17T09:00:00Z"),
+    );
+  });
+});
+
+describe("dueSchedules", () => {
+  it("returns due entries ordered by due time then key, skipping parked and future ones", () => {
+    const schedules: SchedulerProcessorState["schedules"] = {
+      future: entry({ nextTriggerAt: BASE + 60_000 }),
+      "late-b": entry({ nextTriggerAt: BASE - 1_000 }),
+      "late-a": entry({ nextTriggerAt: BASE - 1_000 }),
+      earliest: entry({ nextTriggerAt: BASE - 60_000 }),
+      parked: entry({ nextTriggerAt: null }),
+    };
+    expect(dueSchedules(schedules, BASE).map(([key]) => key)).toEqual([
+      "earliest",
+      "late-a",
+      "late-b",
+    ]);
+  });
+});
+
+describe("nextWakeAtMs", () => {
+  it("falls back to the heartbeat with nothing scheduled — the alarm is never deleted", () => {
+    expect(nextWakeAtMs({ pendingTriggers: {}, schedules: {} }, BASE)).toBe(
+      BASE + SCHEDULER_HEARTBEAT_MS,
+    );
+  });
+
+  it("wakes for the earliest upcoming trigger", () => {
+    const state = {
+      pendingTriggers: {},
+      schedules: { soon: entry({ nextTriggerAt: BASE + 5_000 }) },
+    };
+    expect(nextWakeAtMs(state, BASE)).toBe(BASE + 5_000);
+  });
+
+  it("clamps due-now entries a second out so a racing wake cannot hot-loop", () => {
+    const state = {
+      pendingTriggers: {},
+      schedules: { overdue: entry({ nextTriggerAt: BASE - 60_000 }) },
+    };
+    expect(nextWakeAtMs(state, BASE)).toBe(BASE + 1_000);
+  });
+
+  it("caps far-future triggers at the heartbeat", () => {
+    const state = {
+      pendingTriggers: {},
+      schedules: { distant: entry({ nextTriggerAt: BASE + 10 * SCHEDULER_HEARTBEAT_MS }) },
+    };
+    expect(nextWakeAtMs(state, BASE)).toBe(BASE + SCHEDULER_HEARTBEAT_MS);
+  });
+});
+
+describe("assertValidRecurrence", () => {
+  it("accepts valid shapes", () => {
+    expect(() => assertValidRecurrence({ at: "2026-01-15T09:00:00Z" })).not.toThrow();
+    expect(() => assertValidRecurrence({ every: 1 })).not.toThrow();
+    expect(() =>
+      assertValidRecurrence({ cron: "*/5 * * * *", timezone: "Europe/London" }),
+    ).not.toThrow();
+  });
+
+  it("rejects a bad cron expression at set time, not at 3am", () => {
+    expect(() => assertValidRecurrence({ cron: "not a cron" })).toThrow();
+  });
+
+  it("rejects a bad timezone at set time", () => {
+    expect(() => assertValidRecurrence({ cron: "0 9 * * *", timezone: "Mars/Olympus" })).toThrow();
+  });
+});

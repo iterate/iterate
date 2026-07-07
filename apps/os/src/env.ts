@@ -94,6 +94,9 @@ export interface Env {
   R2_ACCESS_KEY_ID?: string;
   /** See {@link Env.R2_ACCESS_KEY_ID}. */
   R2_SECRET_ACCESS_KEY?: string;
+  SCHEDULER: DurableObjectNamespace<
+    import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
+  >;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;

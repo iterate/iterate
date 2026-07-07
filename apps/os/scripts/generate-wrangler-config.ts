@@ -144,6 +144,7 @@ const DO_CLASSES = {
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SANDBOX: "CloudflareSandboxDurableObject",
+  SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
