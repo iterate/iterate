@@ -1665,8 +1665,13 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
     // Live agents have conversation history full of the legacy
     // `sendMessage({ message, files? })` object form, and models imitate
     // history, so it stays accepted here. The documented form is a plain
-    // string with an optional options second argument.
-    const input = typeof message === "string" ? { message, files: options?.files } : message;
+    // string with an optional options second argument. A mixed call (legacy
+    // object + options) still honors the options rather than silently
+    // dropping an attachment; the object's own files win if both are given.
+    const input =
+      typeof message === "string"
+        ? { message, files: options?.files }
+        : { ...message, files: message.files || options?.files };
     const trimmed = input.message.trim();
     if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
