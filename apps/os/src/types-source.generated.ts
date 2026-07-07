@@ -407,17 +407,6 @@ export interface EmailCapability extends Describable {
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
 export type BuiltinIntegrationSlug = "github" | "google" | "slack";
 
-/** Input to \`itx.integrations.github["<connection>"].api.request(...)\` — a
- * GitHub REST call relative to https://api.github.com; the response is
- * \`{ data, headers, status, statusText }\`. For shell/git work, prefer a
- * sandbox with \`ensureGithubAuth\` (the \`gh\` CLI just works there). */
-export type GithubRequestInput = {
-  body?: unknown;
-  method?: string;
-  path: string;
-  query?: Record<string, boolean | number | string | null | undefined>;
-};
-
 /** Input to \`itx.integrations.google["<connection>"].gmail.request(...)\` — a
  * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
  * response is \`{ data, headers, status, statusText }\`. */
@@ -496,7 +485,10 @@ export interface ProjectIntegrations extends Describable {
   /** Called by the app worker's OAuth callback route; authority is the
    * HMAC-signed OAuth state minted by startOAuthFlow. */
   completeConnect(input: {
-    code: string;
+    /** OAuth authorization code (slack/google). */
+    code?: string;
+    /** GitHub App installation id — github's callback carries this, not a code. */
+    installationId?: string;
     provider: BuiltinIntegrationSlug;
     state: string;
     userId: string | null;

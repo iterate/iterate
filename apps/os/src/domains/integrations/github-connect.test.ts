@@ -1,23 +1,32 @@
-// Unit tests for the GitHub exchange half of completeConnect: code exchange,
-// connection naming from the GitHub login, and the recorded storage facts
-// (token secret + connected journal event). Network and DOs are mocked; the
-// seam is the same in-memory itxEnv the google-tokens tests use.
+// Unit tests for the GitHub half of completeConnect — now a GitHub App
+// installation (D5), not an OAuth-user code exchange. There is NO network: the
+// callback carries an `installation_id`, and completeConnect records the
+// connection secret (`{ installationId }` + the in-jail install worker), the
+// connected fact, and the directory claim the webhook door routes on. The seam
+// is the same in-memory itxEnv the google tests use.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { completeConnect } from "./connect-flows.ts";
 import { createOAuthState } from "./oauth-state.ts";
-import { GITHUB_CONNECTED_EVENT_TYPE, githubTokenSecretPath } from "./utils.ts";
+import {
+  CONNECTION_CLAIMED_EVENT_TYPE,
+  GITHUB_CONNECTED_EVENT_TYPE,
+  githubConnectionSecretPath,
+} from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
 const network = vi.hoisted(() => {
   const streams = new Map<string, Array<{ payload: unknown; type: string }>>();
-  const secrets = new Map<string, { egress: { urls: string[] }; material: string }>();
+  const secrets = new Map<
+    string,
+    { egress: { urls: string[] }; material: unknown; worker?: unknown }
+  >();
   return {
     SECRET: {
       getByName(name: string) {
         return {
-          async update(input: { egress: { urls: string[] }; material: string }) {
+          async update(input: { egress: { urls: string[] }; material: unknown; worker?: unknown }) {
             secrets.set(name, input);
           },
         };
@@ -65,34 +74,20 @@ vi.mock("../../env.ts", () => ({
 
 const PROJECT_ID = "prj_test";
 
-describe("completeConnect (github)", () => {
+describe("completeConnect (github App installation)", () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
     network.reset();
   });
 
-  test("exchanges the code, names the connection from the login, and records token + fact", async () => {
+  test("claims the installation: stores { installationId } + install worker, records fact + directory claim", async () => {
     const state = await createOAuthState(
       { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
       SECRET_ENCRYPTION_KEY,
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url === "https://github.com/login/oauth/access_token") {
-          return Response.json({ access_token: "ghu_test_token" });
-        }
-        if (url === "https://api.github.com/user") {
-          return Response.json({ id: 12345, login: "Jonas-T" });
-        }
-        throw new Error(`unexpected fetch ${url}`);
-      }),
-    );
 
     const result = await completeConnect({
-      code: "code-1",
       config: testConfig(),
+      installationId: "789",
       projectId: PROJECT_ID,
       provider: "github",
       state,
@@ -100,55 +95,100 @@ describe("completeConnect (github)", () => {
     });
     expect(result).toEqual({ callbackUrl: null, ok: true });
 
-    // The login sanitizes into the connection name.
+    // The installation id names the connection (install-<id>) and is the secret
+    // material; the connection secret hosts the in-jail install worker.
     const secretName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: githubTokenSecretPath("jonas-t"),
+      path: githubConnectionSecretPath("install-789"),
     });
-    expect(network.secrets.get(secretName)).toMatchObject({
-      material: "ghu_test_token",
-      egress: { urls: expect.arrayContaining(["https://api.github.com", "https://github.com"]) },
-    });
+    const stored = network.secrets.get(secretName);
+    expect(stored?.material).toEqual({ installationId: "789" });
+    expect(stored?.egress.urls).toContain("https://api.github.com");
+    expect(stored?.worker).toBeDefined();
 
+    // Connected fact on the connection stream.
     const journalName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: "/integrations/github/jonas-t",
+      path: "/integrations/github/install-789",
     });
     const connected = network.streams
       .get(journalName)
       ?.find((event) => event.type === GITHUB_CONNECTED_EVENT_TYPE);
     expect(connected?.payload).toMatchObject({
-      connection: "jonas-t",
-      externalId: "12345",
-      login: "Jonas-T",
+      connection: "install-789",
+      externalId: "789",
+      installationId: "789",
+    });
+
+    // Directory claim (installation_id → project + connection) so the generic
+    // webhook door can route inbound App webhooks.
+    const claim = [...network.streams.values()]
+      .flat()
+      .find((event) => event.type === CONNECTION_CLAIMED_EVENT_TYPE);
+    expect(claim?.payload).toMatchObject({
+      connection: "install-789",
+      externalId: "789",
+      slug: "github",
     });
   });
 
-  test("a failed code exchange reports the provider error without touching storage", async () => {
+  test("no App configured → github_app_not_configured, storage untouched", async () => {
     const state = await createOAuthState(
       { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
       SECRET_ENCRYPTION_KEY,
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ error: "bad_verification_code" })),
-    );
-
     const result = await completeConnect({
-      code: "expired",
+      config: testConfigWithoutApp(),
+      installationId: "789",
+      projectId: PROJECT_ID,
+      provider: "github",
+      state,
+      userId: "user_1",
+    });
+    expect(result).toEqual({ callbackUrl: null, error: "github_app_not_configured", ok: false });
+    expect(network.secrets.size).toBe(0);
+    expect(network.streams.size).toBe(0);
+  });
+
+  test("missing installation id → github_missing_installation_id", async () => {
+    const state = await createOAuthState(
+      { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
+      SECRET_ENCRYPTION_KEY,
+    );
+    const result = await completeConnect({
       config: testConfig(),
       projectId: PROJECT_ID,
       provider: "github",
       state,
       userId: "user_1",
     });
-    expect(result).toEqual({ callbackUrl: null, error: "bad_verification_code", ok: false });
+    expect(result).toEqual({
+      callbackUrl: null,
+      error: "github_missing_installation_id",
+      ok: false,
+    });
     expect(network.secrets.size).toBe(0);
-    expect(network.streams.size).toBe(0);
   });
 });
 
 function testConfig() {
+  return parseConfig({
+    APP_CONFIG: JSON.stringify({
+      baseUrl: "https://os.example.test",
+      integrations: {
+        github: {
+          appId: "123456",
+          appSlug: "iterate-os",
+          oauthClientId: "github-client-id",
+          oauthClientSecret: "github-client-secret",
+        },
+      },
+      openAiApiKey: "openai-test-key",
+    }),
+  });
+}
+
+function testConfigWithoutApp() {
   return parseConfig({
     APP_CONFIG: JSON.stringify({
       baseUrl: "https://os.example.test",

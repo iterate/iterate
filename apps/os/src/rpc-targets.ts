@@ -48,7 +48,8 @@ import {
   BUILTIN_INTEGRATION_SLUGS,
   googleConnectionSecretPath,
 } from "./domains/integrations/utils.ts";
-import { callGithubApi } from "./domains/integrations/github-api.ts";
+import { connectionOctokit, normalizeGithubError } from "./domains/integrations/github-api.ts";
+import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
 import {
@@ -127,7 +128,6 @@ import type {
   DynamicWorkerCollection,
   DynamicWorkerRef,
   EmailCapability,
-  GithubRequestInput,
   GmailRequestInput,
   IntegrationConnectionListEntry,
   ProjectIntegrations,
@@ -878,21 +878,20 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     }
 
     if (slug === "github") {
-      if (!connection || method.length < 2) {
+      if (!connection || method.length === 0) {
         throw new Error(
-          'itx.integrations.github expected `<connection>.api.request({...})` (e.g. itx.integrations.github["jonas"].api.request({ path: "/user/repos" })); use itx.integrations.list() to see connections.',
+          'itx.integrations.github expected `<connection>.<octokit path>` (e.g. itx.integrations.github["jonas"].rest.repos.listForAuthenticatedUser() or .request("GET /user/repos")); use itx.integrations.list() to see connections. For shell/git work, use a sandbox with ensureGithubAuth.',
         );
       }
-      if (method[0] !== "api" || method[1] !== "request" || method.length !== 2) {
-        throw new Error(
-          `itx.integrations.github["${connection}"] exposes api.request(...); got "${method.join(".")}". For shell/git work, use a sandbox with ensureGithubAuth.`,
-        );
+      // The connection's wrapped Octokit: replay the caller's dotted path onto
+      // it (rest.*, request(...), graphql(...)) — a real Octokit whose transport
+      // rides the connection secret's jailed egress (github-api.ts).
+      const octokit = connectionOctokit({ connection, projectId: this.props.projectId });
+      try {
+        return await replayPathCall(octokit, { args, path: method });
+      } catch (error) {
+        throw normalizeGithubError(error, connection);
       }
-      return await callGithubApi({
-        connection,
-        projectId: this.props.projectId,
-        request: args[0] as GithubRequestInput,
-      });
     }
 
     if (slug === "parallel") {
@@ -946,7 +945,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: await itx.integrations.github["<connection>"].api.request({ path: "/user/repos" }) — paths relative to https://api.github.com; for shell/git work, use a sandbox with ensureGithubAuth.',
+        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit — await itx.integrations.github["<connection>"].rest.repos.listForAuthenticatedUser(), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). For shell/git work, use a sandbox with ensureGithubAuth.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape — copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
@@ -962,9 +961,13 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "interface GoogleConnection {",
         "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
         "}",
-        '// itx.integrations.github["<connection>"] exposes:',
+        '// itx.integrations.github["<connection>"] IS a wrapped Octokit (@octokit/rest):',
+        "// its whole surface works — rest.<namespace>.<method>(params), the",
+        "// request(route, params) escape hatch, and graphql(query, variables).",
         "interface GithubConnection {",
-        "  api: { request(input: GithubRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
+        "  rest: RestEndpointMethods; // e.g. rest.repos.get({ owner, repo }) -> { data, status, headers, url }",
+        "  request(route: string, params?: Record<string, unknown>): Promise<{ data: unknown; headers: Record<string, string>; status: number; url: string }>;",
+        "  graphql(query: string, variables?: Record<string, unknown>): Promise<unknown>;",
         "}",
         '// itx.integrations.slack["<connection>"] takes any Slack Web API method as a',
         "// dotted path with ONE body argument; there is no request() wrapper:",
@@ -1011,6 +1014,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     return completeConnect({
       code: input.code,
       config: parseConfig(env),
+      installationId: input.installationId,
       projectId: this.props.projectId,
       provider: input.provider,
       state: input.state,
@@ -1821,7 +1825,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     "First-party outbound email: send({ to, subject, text, html }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it.",
   examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
   integrations:
-    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].api.request({ path }); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
+    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",

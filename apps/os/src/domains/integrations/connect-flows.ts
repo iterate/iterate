@@ -43,10 +43,12 @@ import {
 } from "./integration-streams.ts";
 import { readGoogleConnectionState } from "./google-connection.ts";
 import { oauthRefreshWorkerRef } from "./workers/oauth-refresh.ts";
+import { githubInstallWorkerRef } from "./workers/github-install.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
   GITHUB_CONNECTED_EVENT_TYPE,
+  GITHUB_CONNECTION_EGRESS_URLS,
   GITHUB_DISCONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTION_EGRESS_URLS,
@@ -55,13 +57,13 @@ import {
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
   SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
+  githubConnectionSecretPath,
   googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
   readRecord,
   readString,
   integrationConnectionStreamPath,
   sanitizeConnectionName,
-  githubTokenSecretPath,
   slackBotTokenSecretPath,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
@@ -131,6 +133,15 @@ export async function startOAuthFlow(input: {
 
   if (input.provider === "github") {
     const github = requireGithubConfig(input.config);
+    // GitHub App installation (D5), not OAuth-user: the user installs the App on
+    // their org/repos and GitHub redirects back with an `installation_id` (not a
+    // code). Our signed `state` round-trips the project + user so the callback
+    // can bind the installation to them.
+    if (!github.appSlug) {
+      throw new Error(
+        "GitHub App is not configured (integrations.github.appSlug); cannot start an installation.",
+      );
+    }
     const state = await createOAuthState(
       {
         callbackUrl: input.callbackUrl,
@@ -140,12 +151,7 @@ export async function startOAuthFlow(input: {
       },
       itxEnv.SECRET_ENCRYPTION_KEY,
     );
-    const authorizationUrl = new URL("https://github.com/login/oauth/authorize");
-    authorizationUrl.searchParams.set("client_id", github.oauthClientId);
-    authorizationUrl.searchParams.set(
-      "redirect_uri",
-      oauthRedirectUri({ baseUrl, provider: "github" }),
-    );
+    const authorizationUrl = new URL(`https://github.com/apps/${github.appSlug}/installations/new`);
     authorizationUrl.searchParams.set("state", state);
     return { authorizationUrl: authorizationUrl.toString() };
   }
@@ -189,8 +195,11 @@ export async function startOAuthFlow(input: {
  * storage half is the shared {@link recordConnection}.
  */
 export async function completeConnect(input: {
-  code: string;
+  /** OAuth authorization code (slack/google). */
+  code?: string;
   config: AppConfig;
+  /** GitHub App installation id — github's callback carries this, not a code. */
+  installationId?: string;
   projectId: string;
   provider: BuiltinIntegrationSlug;
   state: string;
@@ -198,11 +207,26 @@ export async function completeConnect(input: {
 }): Promise<CompleteConnectResult> {
   switch (input.provider) {
     case "slack":
-      return await completeSlackConnect(input);
+      if (input.code === undefined) {
+        return { callbackUrl: null, error: "slack_oauth_missing_code", ok: false };
+      }
+      return await completeSlackConnect({ ...input, code: input.code });
     case "google":
-      return await completeGoogleConnect(input);
+      if (input.code === undefined) {
+        return { callbackUrl: null, error: "google_oauth_missing_code", ok: false };
+      }
+      return await completeGoogleConnect({ ...input, code: input.code });
     case "github":
-      return await completeGithubConnect(input);
+      if (input.installationId === undefined) {
+        return { callbackUrl: null, error: "github_missing_installation_id", ok: false };
+      }
+      return await completeGithubConnect({
+        config: input.config,
+        installationId: input.installationId,
+        projectId: input.projectId,
+        state: input.state,
+        userId: input.userId,
+      });
   }
 }
 
@@ -393,8 +417,8 @@ async function recordSlackConnection(input: {
 }
 
 async function completeGithubConnect(input: {
-  code: string;
   config: AppConfig;
+  installationId: string;
   projectId: string;
   state: string;
   userId: string | null;
@@ -412,75 +436,43 @@ async function completeGithubConnect(input: {
   }
 
   const github = requireGithubConfig(input.config);
-  const baseUrl = requestBaseUrl(input);
-  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
-    body: new URLSearchParams({
-      client_id: github.oauthClientId,
-      client_secret: github.oauthClientSecret.exposeSecret(),
-      code: input.code,
-      redirect_uri: oauthRedirectUri({ baseUrl, provider: "github" }),
-    }),
-    headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-    method: "POST",
-  });
-  const tokenData = (await tokenResponse.json()) as {
-    access_token?: string;
-    error?: string;
-    expires_in?: number;
-  };
-  if (!tokenResponse.ok || !tokenData.access_token) {
-    return { callbackUrl, error: tokenData.error ?? "github_oauth_failed", ok: false };
+  if (!github.appId) {
+    return { callbackUrl, error: "github_app_not_configured", ok: false };
   }
 
-  const userResponse = await fetch("https://api.github.com/user", {
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${tokenData.access_token}`,
-      "user-agent": "iterate-os",
-    },
-  });
-  const user = (await userResponse.json()) as { id?: number; login?: string };
-  if (!userResponse.ok || user.id === undefined) {
-    return { callbackUrl, error: "github_user_lookup_failed", ok: false };
-  }
-
-  // The GitHub login names the connection; the opaque numeric id is the
-  // fallback when the login sanitizes away.
-  const connection =
-    sanitizeConnectionName(user.login ?? "") || `github-${sanitizeConnectionName(String(user.id))}`;
+  // App installation (D5), not OAuth-user: no code exchange, no user lookup. The
+  // installation id is the stable handle (it names the connection AND is the
+  // directory external id the webhook door routes on). The connection secret
+  // holds only `{ installationId }`; the in-jail install worker mints the
+  // installation token on first use by signing an App JWT with the first-party
+  // App key from the platform secret (ADR 0006) — the key never enters OS code.
+  const connection = `install-${sanitizeConnectionName(input.installationId)}`;
   await recordConnection({
     connection,
     projectId: input.projectId,
     slug: "github",
     secrets: [
       {
-        // api.github.com for gh/REST; github.com + uploads/objects hosts so
-        // git-over-https and release/LFS traffic substitute too.
-        egressUrls: [
-          "https://api.github.com",
-          "https://github.com",
-          "https://uploads.github.com",
-          "https://objects.githubusercontent.com",
-        ],
-        material: tokenData.access_token,
-        path: githubTokenSecretPath(connection),
+        egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
+        material: { installationId: input.installationId },
+        path: githubConnectionSecretPath(connection),
+        worker: githubInstallWorkerRef({
+          apiBase: "https://api.github.com",
+          appId: github.appId,
+          appSecretPath: "/secrets/platform/integrations/github",
+        }),
       },
     ],
     connectedEvent: {
       type: GITHUB_CONNECTED_EVENT_TYPE,
       payload: {
         connection,
-        externalId: String(user.id),
-        login: user.login,
+        externalId: input.installationId,
+        installationId: input.installationId,
         projectId: input.projectId,
-        // GitHub Apps can be configured to issue expiring user tokens; when
-        // expires_in is present the token dies after ~8h and refresh is the
-        // (deferred) derived-secrets follow-up — recorded so status can say so.
-        ...(tokenData.expires_in
-          ? { expiresAt: new Date(Date.now() + tokenData.expires_in * 1000).toISOString() }
-          : {}),
       },
     },
+    directoryClaim: { externalId: input.installationId },
   });
 
   return { callbackUrl, ok: true };
@@ -717,14 +709,16 @@ export async function disconnectProvider(input: {
   }
 
   if (input.provider === "github") {
-    // No provider-side revocation: it would require reading the raw token
-    // back (Basic-auth DELETE /applications/{client_id}/token), and
-    // disconnect never touches material. Emptying the egress allowlist makes
-    // the stored token unusable for API calls and sandbox reveals alike.
+    const status = await getConnectionStatus(input);
+    // No provider-side revocation: installation tokens are short-lived and
+    // uninstalling the App is a GitHub-side action. Emptying the egress
+    // allowlist makes the connection secret unusable (the install worker can no
+    // longer reach GitHub), and unclaiming the installation stops webhook
+    // routing — disconnect never reads material.
     await itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: input.projectId,
-        path: githubTokenSecretPath(input.connection),
+        path: githubConnectionSecretPath(input.connection),
       }),
     )
       .update({ egress: { urls: [] } })
@@ -736,6 +730,17 @@ export async function disconnectProvider(input: {
       type: GITHUB_DISCONNECTED_EVENT_TYPE,
       payload: { connection: input.connection, projectId: input.projectId },
     });
+    if (status.externalId) {
+      // The unclaim names the connection: the fold clears the claim only when
+      // BOTH match, so tearing down a stale connection can't unroute a live one.
+      await appendConnectionDirectoryEvent({
+        claimed: false,
+        connection: input.connection,
+        externalId: status.externalId,
+        projectId: input.projectId,
+        slug: "github",
+      });
+    }
     return { success: true };
   }
 

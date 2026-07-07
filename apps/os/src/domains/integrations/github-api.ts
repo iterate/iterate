@@ -1,82 +1,70 @@
-// GitHub REST proxy for one named connection. The token never leaves its
-// Secret Durable Object: the request carries a getSecret placeholder and
-// traverses project egress, which substitutes it inside the DO and lands the
-// use on the audit trail — the same shape as slack-api.ts.
+// GitHub Web API access for itx — a real Octokit, wrapped so its transport
+// rides one named connection's secret. The installation token never leaves its
+// Secret Durable Object: every request Octokit makes carries a
+// `getSecret(path, "accessToken")` placeholder Authorization header and is
+// dispatched through the connection secret's own `fetch()`, which mints the
+// installation token on first use, refreshes it on a 401 (the in-jail
+// github-install worker), substitutes the placeholder, and pins the host. The
+// caller (itx.integrations.github["<conn>"]) replays its dotted path straight
+// onto this instance (rpc-targets.ts), so it IS Octokit — `rest.repos.get(...)`,
+// `request("GET /...")`, `graphql(...)` — never a hand-mapped surface. Mirrors
+// the Slack WebClient wrapping in slack-api.ts.
 
+import { Octokit } from "@octokit/rest";
 import { itxEnv } from "../../env.ts";
-import type { GithubRequestInput } from "../../types.ts";
-import { projectStub } from "../projects/egress.ts";
-import { githubTokenSecretPath } from "./utils.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { githubConnectionSecretPath } from "./utils.ts";
 
-export async function callGithubApi(input: {
+/**
+ * A connection-scoped Octokit whose every request is routed through the GitHub
+ * connection secret's `fetch()` with the access-token placeholder — so the token
+ * stays in the jail and every call lands on the secret's audit trail.
+ *
+ * `baseUrl` overrides the GitHub API origin (a petshop stand-in in e2e);
+ * omitted, Octokit uses `https://api.github.com`.
+ */
+export function connectionOctokit(input: {
+  baseUrl?: string;
   connection: string;
   projectId: string;
-  request: GithubRequestInput;
-}) {
-  const method = (input.request.method ?? "GET").trim().toUpperCase();
-  const url = githubUrl(input.request);
-  const placeholder = `getSecret("${githubTokenSecretPath(input.connection)}")`;
-  const request = new Request(url, {
-    method,
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${placeholder}`,
-      "user-agent": "iterate-os",
-      ...(input.request.body === undefined ? {} : { "content-type": "application/json" }),
+}): Octokit {
+  const secretPath = githubConnectionSecretPath(input.connection);
+  const placeholder = `Bearer getSecret("${secretPath}", "accessToken")`;
+  const stub = itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({ path: secretPath, projectId: input.projectId }),
+  );
+  return new Octokit({
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    userAgent: "iterate-os",
+    // No `auth`: Octokit emits no Authorization of its own; our fetch sets the
+    // placeholder, which the secret pipeline substitutes and pins.
+    request: {
+      fetch: (url: string, init: RequestInit = {}) => {
+        const headers = new Headers(init.headers);
+        headers.set("authorization", placeholder);
+        return stub.fetch(new Request(url, { ...init, headers }));
+      },
     },
-    ...(input.request.body === undefined || method === "GET" || method === "HEAD"
-      ? {}
-      : { body: JSON.stringify(input.request.body) }),
   });
-  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(request);
-  if (response.status === 404 || response.status === 400) {
-    const errorBody = (await response
-      .clone()
-      .json()
-      .catch(() => null)) as { error?: string } | null;
-    if (errorBody?.error?.startsWith("secret_")) {
-      throw new Error(
-        `GitHub API ${method} ${url.pathname} failed: connection "${input.connection}" has no usable token secret (${errorBody.error}). Use itx.integrations.list() to see connections.`,
-      );
-    }
-  }
+}
 
-  const contentType = response.headers.get("content-type") ?? "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `GitHub API ${method} ${url.pathname} failed with HTTP ${response.status}: ${formatErrorData(data)}`,
+/**
+ * Turn an Octokit failure into a caller-facing Error whose message survives the
+ * capnweb boundary (which drops `error.name`). A secret-pipeline error (the
+ * connection has no usable token) is named so the caller can fix the connection;
+ * anything else keeps the HTTP status and Octokit's message.
+ */
+export function normalizeGithubError(error: unknown, connection: string): Error {
+  const e = error as {
+    status?: number;
+    response?: { data?: { error?: string } };
+    message?: string;
+  };
+  const pipeline = e.response?.data?.error;
+  if (typeof pipeline === "string" && pipeline.startsWith("secret_")) {
+    return new Error(
+      `GitHub connection "${connection}" has no usable installation token (${pipeline}). Use itx.integrations.list() to see connections.`,
     );
   }
-  return {
-    data,
-    headers: Object.fromEntries(response.headers.entries()),
-    status: response.status,
-    statusText: response.statusText,
-  };
-}
-
-function githubUrl(input: GithubRequestInput) {
-  const path = input.path.trim();
-  if (!path) throw new Error("github api.request requires a non-empty path.");
-  const base = "https://api.github.com";
-  const url = path.startsWith("https://api.github.com/")
-    ? new URL(path)
-    : new URL(path.startsWith("/") ? `${base}${path}` : `${base}/${path}`);
-  for (const [key, value] of Object.entries(input.query ?? {})) {
-    if (value == null) continue;
-    url.searchParams.set(key, String(value));
-  }
-  return url;
-}
-
-function formatErrorData(value: unknown) {
-  if (typeof value === "string") return value.slice(0, 1000);
-  try {
-    return JSON.stringify(value).slice(0, 1000);
-  } catch {
-    return String(value);
-  }
+  return new Error(`GitHub API failed with HTTP ${e.status ?? "?"}: ${e.message ?? String(error)}`);
 }

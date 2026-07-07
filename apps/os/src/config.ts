@@ -114,12 +114,15 @@ export const AppConfig = z.object({
         .object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
-          // First-party GitHub App fields (optional): `appId` is the JWT issuer
-          // (public); `privateKey` (PKCS#8 PEM) signs App JWTs — never revealed,
-          // only signed with via the platform secret's sign() (ADR 0006);
-          // `webhookSecret` verifies inbound App webhooks. The installation-token
-          // minting mechanism is proven via a userspace App; these wire the
-          // first-party App once one is registered.
+          // First-party GitHub App fields (optional): `appSlug` is the App's URL
+          // handle (public) — the connect flow deep-links to
+          // github.com/apps/<appSlug>/installations/new; `appId` is the JWT
+          // issuer (public); `privateKey` (PKCS#8 PEM) signs App JWTs — never
+          // revealed, only signed with via the platform secret's sign() (ADR
+          // 0006); `webhookSecret` verifies inbound App webhooks at the door.
+          // The installation-token minting mechanism is proven via a userspace
+          // App; these wire the first-party App once one is registered.
+          appSlug: publicValue(z.string().trim().min(1)).optional(),
           appId: publicValue(z.string().trim().min(1)).optional(),
           privateKey: redacted(z.string().trim().min(1)).optional(),
           webhookSecret: redacted(z.string().trim().min(1)).optional(),

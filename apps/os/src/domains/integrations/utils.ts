@@ -93,13 +93,24 @@ export const GOOGLE_CONNECTION_EGRESS_URLS = [
   "https://gmail.googleapis.com",
 ];
 
-/** Itx secret Durable Object path holding one GitHub connection's user token.
- * Consumed two ways: `getSecret` placeholder substitution for API calls
- * through project egress, and the audited platform reveal that hands `gh`
- * inside a sandbox its GH_TOKEN. */
-export function githubTokenSecretPath(connection: string): string {
-  return `/secrets/integrations/github/${connection}/token`;
+/** The v6 GitHub connection secret: holds `{ installationId, accessToken }` and
+ * hosts the installation-token worker (github-install.worker.js). The worker
+ * signs an App JWT in-jail to mint the installation token and refreshes it on a
+ * 401; Octokit rides this secret's `fetch()` with an `accessToken` placeholder
+ * (github-api.ts), same connection-root shape as Google. */
+export function githubConnectionSecretPath(connection: string): string {
+  return `/secrets/integrations/github/${connection}`;
 }
+
+/** Hosts a GitHub connection secret's egress is pinned to: the API (REST +
+ * installation-token mint) and github.com/uploads/objects for git-over-https,
+ * releases, and LFS. */
+export const GITHUB_CONNECTION_EGRESS_URLS = [
+  "https://api.github.com",
+  "https://github.com",
+  "https://uploads.github.com",
+  "https://objects.githubusercontent.com",
+];
 
 /**
  * The routed agent stream path for one Slack thread of one named connection.

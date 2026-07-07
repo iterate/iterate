@@ -60,7 +60,6 @@ async function handleOAuthCallback(input: {
 }): Promise<Response> {
   const url = new URL(input.request.url);
   const error = url.searchParams.get("error");
-  const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
 
   if (!state) return Response.json({ error: "Missing OAuth state." }, { status: 400 });
@@ -70,7 +69,16 @@ async function handleOAuthCallback(input: {
   }
   const callbackUrl = unverified.callbackUrl ?? null;
   if (error) return redirectWithError(callbackUrl, `${input.provider}_oauth_denied`);
-  if (!code) return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
+
+  // GitHub connects via App installation: the callback carries `installation_id`
+  // (+ setup_action), not an OAuth `code`. slack/google carry a code.
+  const code = url.searchParams.get("code") ?? undefined;
+  const installationId = url.searchParams.get("installation_id") ?? undefined;
+  if (input.provider === "github") {
+    if (!installationId) return redirectWithError(callbackUrl, "github_missing_installation_id");
+  } else if (!code) {
+    return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
+  }
 
   // The signed-state userId binding: the user completing the flow must be the
   // user who started it. The state signature itself is verified itx-side;
@@ -86,6 +94,7 @@ async function handleOAuthCallback(input: {
   const project = root.projects.get(unverified.projectId);
   const result = await project.integrations.completeConnect({
     code,
+    installationId,
     provider: input.provider,
     state,
     userId,
