@@ -587,9 +587,11 @@ export type CompleteConnectResult =
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
  * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
- * Octokit — `.rest.repos.listForAuthenticatedUser()`, the
+ * Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
- * there is NO generic `.api.request({ method, path })` shape — and every
+ * there is NO generic `.api.request({ method, path })` shape, and the
+ * connection acts as a GitHub App INSTALLATION, so user-scoped
+ * `...ForAuthenticatedUser` endpoints answer 403 — and every
  * other slug resolves through the ITX
  * capability table under the `integrations` prefix. The exception is
  * `itx.integrations.parallel`: a first-party API-key RPC target, not a
