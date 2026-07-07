@@ -1,23 +1,34 @@
 ---
-status: implemented — awaiting native-build verification on a machine with Xcode, and review
+status: parked — implementation complete on this branch; PRs #1591/#1605 closed unmerged ("close and misha keeps branch"); needs rebasing onto the post-alchemy platform before revival
 size: large
-base: mmkal/26/07/02/voice-itx-bridge (PR #1591 — merge it in regularly, another agent is active there)
-pr: https://github.com/iterate/iterate/pull/1605
+base: mmkal/26/07/02/voice-itx-bridge (PR #1591, closed)
+pr: https://github.com/iterate/iterate/pull/1605 (closed, work preserved on this branch)
 ---
 
 # voice-ios-app
 
 ## Status summary
 
-Implementation complete and pushed; PR #1605. All root gates green
-(typecheck/lint/test incl. the new `apps/mobile` vitest suite); the OS-side
-mint capability has a passing itx e2e test; the ported session core passed a
-LIVE end-to-end run (real dev server, real OpenAI Realtime, real worker agent
-round-trip) from Node. **Not verified: the native iOS build** — this machine
-has no Xcode, so the first `npx expo run:ios` happens on Misha's machine
-(`expo prebuild` + full Metro export both pass, which catches config and JS
-errors but not native compile issues). Preview deploy couldn't run: the
-preview slot pool was exhausted — re-run the Preview workflow when back.
+Implementation complete on this branch. All root gates were green
+(typecheck/lint/test incl. the `apps/mobile` vitest suite); the OS-side mint
+capability had a passing itx e2e test; the ported session core passed LIVE
+end-to-end runs against both a local dev server and a deployed preview
+(`os.iterate-preview-3.com`) — real OpenAI Realtime, real worker agent round
+trips. **Not verified: the native iOS build** (no Xcode on the implementing
+machine; `expo prebuild` + full Metro export pass).
+
+**Parked 2026-07-03**: Jonas closed both PRs with "close and misha keeps
+branch". Platform drift to account for when reviving on the new main:
+
+- `/api/itx` was renamed to `/api` — `apps/mobile/src/lib/itx.ts` dials the
+  old path, and the RFC 9728 discovery path (`/api/mcp/.well-known/...`) may
+  have moved too.
+- alchemy is gone (root `envs.ts` + per-app wrangler deploys); the mint
+  helper's `AppConfig`/`parseConfig` surface and preview-slot mechanics
+  (leases, hostnames baked in `apps/mobile/src/lib/servers.ts`) should be
+  re-checked against the new world.
+- CI moved to Depot (`docs/depot-ci.md`); the preview workflow is no longer
+  a GitHub Actions run.
 
 ## What this is
 
