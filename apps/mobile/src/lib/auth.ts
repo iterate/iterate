@@ -19,7 +19,13 @@
 // to callers.
 
 import * as AuthSession from "expo-auth-session";
+import * as WebBrowser from "expo-web-browser";
 import { clearStoredAuth, getStoredAuth, setStoredAuth } from "./storage.ts";
+
+// Required for promptAsync to resolve when the OAuth redirect deep-links back
+// into the app (otherwise the flow silently dangles and the user just lands
+// back where they were). Must run at module scope, before any prompt.
+WebBrowser.maybeCompleteAuthSession();
 
 const SCOPES = ["openid", "profile", "email", "offline_access", "project"];
 // In Expo Go this resolves to an exp:// deep link back into Expo Go; in a
@@ -115,11 +121,22 @@ export async function signIn(baseUrl: string): Promise<void> {
     usePKCE: true,
     extraParams: { resource },
   });
+  console.log(`[auth] prompting: redirectUri=${REDIRECT_URI} clientId=${clientId}`);
   const result = await request.promptAsync({
     authorizationEndpoint: config.authorization_endpoint,
   });
+  console.log(
+    `[auth] prompt result: type=${result.type}` +
+      (result.type === "success" ? ` params=${JSON.stringify(Object.keys(result.params))}` : "") +
+      (result.type === "error"
+        ? ` error=${String(result.error)} params=${JSON.stringify(result.params)}`
+        : ""),
+  );
   if (result.type !== "success") {
     throw new Error(result.type === "error" ? String(result.error) : `sign-in ${result.type}`);
+  }
+  if (!result.params.code) {
+    throw new Error(`Auth redirect carried no code: ${JSON.stringify(result.params)}`);
   }
 
   const tokens = await AuthSession.exchangeCodeAsync(
@@ -130,7 +147,11 @@ export async function signIn(baseUrl: string): Promise<void> {
       extraParams: { code_verifier: request.codeVerifier || "", resource },
     },
     { tokenEndpoint: config.token_endpoint },
-  );
+  ).catch((error) => {
+    console.log(`[auth] code exchange failed: ${String(error)}`);
+    throw error;
+  });
+  console.log(`[auth] exchange ok: refreshToken=${tokens.refreshToken ? "yes" : "MISSING"}`);
   if (!tokens.refreshToken) {
     throw new Error("The auth server didn't return a refresh token (offline_access missing?).");
   }
