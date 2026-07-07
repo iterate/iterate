@@ -144,6 +144,40 @@ export default async function ensureResources(
     );
   }
 
+  // ---- Email Routing: inbound project email -------------------------------
+  // Inbound mail for every project hostname base (<slug>@<base>, thread tags
+  // <slug>+t<id>@<base>) is delivered to the OS worker's email() handler
+  // through a zone catch-all rule. Enabling Email Routing adds and locks the
+  // zone's MX + SPF records; both calls are idempotent. NOTE: Email SENDING
+  // (the itx.email outbound half) is onboarded separately in the dashboard —
+  // there is no public API for sending onboarding yet.
+  for (const base of env.projectHostnameBases) {
+    const zone = zones.find((candidate) => candidate.name === base);
+    if (!zone) {
+      console.warn(`no zone named ${base} in account ${env.cloudflareAccountId}; skipping email`);
+      continue;
+    }
+    const routing = await cfV4<{ enabled?: boolean }>(`/zones/${zone.id}/email/routing`).catch(
+      () => null,
+    );
+    if (routing?.enabled !== true) {
+      await cfV4(`/zones/${zone.id}/email/routing/enable`, { method: "POST", body: "{}" });
+      console.log(`enabled Email Routing on ${zone.name}`);
+    } else {
+      console.log(`Email Routing on ${zone.name} already enabled`);
+    }
+    await cfV4(`/zones/${zone.id}/email/routing/rules/catch_all`, {
+      method: "PUT",
+      body: JSON.stringify({
+        matchers: [{ type: "all" }],
+        actions: [{ type: "worker", value: [env.osWorkerName] }],
+        enabled: true,
+        name: `${ctx.name} inbound project email (ensure-resources.ts)`,
+      }),
+    });
+    console.log(`Email Routing catch-all on ${zone.name} -> worker ${env.osWorkerName}`);
+  }
+
   // ---- Reconcile against envs.ts -----------------------------------------------
   reconcileResources(ctx.name, env.resources, {
     projectDirectoryKvId: kv.id,

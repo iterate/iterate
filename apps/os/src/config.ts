@@ -88,6 +88,24 @@ export const AppConfig = z.object({
     })
     .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
+  /** First-party project email (itx.email + the inbound email() door). */
+  email: z
+    .object({
+      /**
+       * Sender allowlist for inbound project mail: exact addresses
+       * (`jonas@example.com`) or whole domains (`*@example.com`). Empty means
+       * inbound email is closed — every delivery is rejected at the door.
+       * Doppler: `APP_CONFIG_EMAIL__ALLOWED_SENDERS='["*@example.com"]'`.
+       */
+      allowedSenders: z.array(z.string().trim().min(1)).default([]),
+      /**
+       * Require a DMARC pass from Cloudflare's inbound MX before an allowlist
+       * match counts. Without it the allowlist is spoofable by anyone who can
+       * write a From header. Only disable for local dev/synthetic tests.
+       */
+      requireDmarc: z.boolean().default(true),
+    })
+    .prefault({}),
   integrations: z
     .object({
       slack: z

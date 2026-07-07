@@ -12,9 +12,23 @@ tags: [os, agents, email, cloudflare, integrations]
 (rpc-targets.ts `EmailRpcTarget`, `domains/email/utils.ts`, `EMAIL`
 send_email binding on all itx workers, `email/sent` audit events, the
 `email-send` catalogue example). Sends from `<slug>@<first project hostname
-base>`, enforced in OS. Remaining: everything inbound below, plus onboarding
-`iterate.app` for Email Sending in the prd Cloudflare account and miniflare
-send_email simulation for local dev (the binding is deploy-only for now).
+base>`, enforced in OS.
+
+The inbound + threading slice is in review (branch dour-clavicle): the
+worker `email()` handler (`domains/email/email-ingress.ts`), the `email`
+thread-router processor on `/integrations/email`, per-thread agents at
+`/agents/email/t<threadId>`, the `email-agent` processor, `itx.email.reply`
+with derived threading headers + `Reply-To: <slug>+t<id>@<base>`, outbound
+attachments from itx.files, a deployment-wide DMARC-gated sender allowlist
+(`APP_CONFIG_EMAIL__ALLOWED_SENDERS`), and Email Routing enable + catch-all
+in ensure-resources.ts. NOTE: it uses an offset-keyed thread id + Reply-To
+token + Message-ID directory instead of the `p_<base32(agentPath)>` codec
+proposed below — real agent paths overflow the 64-char local-part limit and
+the router needs the Message-ID index anyway. Remaining: Email Sending
+onboarding in the Cloudflare dashboard per env, per-project sender policy in
+router state (deployment-wide config today), inbound attachment storage into
+itx.files (metadata-only today), miniflare send_email simulation for local
+dev.
 
 ## Goal
 

@@ -127,6 +127,7 @@ import type {
   DynamicWorkerCapability,
   DynamicWorkerCollection,
   DynamicWorkerRef,
+  EmailAttachmentInput,
   EmailCapability,
   FileHandle,
   Files,
@@ -138,10 +139,18 @@ import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
 import {
   buildProjectEmailMessage,
+  decodeBase64Attachment,
   emailAddressForProject,
+  emailThreadIdFromAgentPath,
+  emailThreadReplyAddress,
   EMAIL_INTEGRATION_STREAM_PATH,
+  EMAIL_RECEIVED_EVENT_TYPE,
   EMAIL_SENT_EVENT_TYPE,
+  replySubject,
+  type OutboundEmailAttachment,
+  type SendEmailBinding,
 } from "./domains/email/utils.ts";
+import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -889,14 +898,16 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
 }
 
 /**
- * The `itx.email` built-in: first-party outbound email through the Cloudflare
- * Email Service `EMAIL` binding. Sender authorization is enforced here, not in
- * the binding: mail only leaves from the project's own address
+ * The `itx.email` built-in: first-party email through the Cloudflare Email
+ * Service `EMAIL` binding. Sender authorization is enforced here, not in the
+ * binding: mail only leaves from the project's own address
  * (`<slug>@<first project hostname base>`). Every send appends an
  * `email/sent` audit event to the project's /integrations/email stream.
+ * Inside an email thread agent scope (`/agents/email/t<id>`), `reply` derives
+ * the counterpart, subject, and threading headers from the thread stream.
  */
 class EmailRpcTarget extends RpcTarget implements EmailCapability {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -904,20 +915,137 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
   async __describe() {
     return describeNode({
       instructions:
-        "First-party outbound email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. Returns { from, messageId }.",
+        "First-party email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. Inside an email thread agent (/agents/email/t<id>), reply({ text }) answers the thread's counterpart with correct threading headers. Both take attachments: [{ path }] (project files via itx.files, any file type) or [{ filename, data }] (inline base64); limits 32 files / 5 MiB total. Both return { messageId }.",
       children: {
         send: "Send one email from the project's address; returns { from, messageId }.",
+        reply:
+          "Reply within this email thread (email agent scopes only); returns { from, to, messageId }.",
       },
       parent: "the project itx root",
     });
   }
 
   async send(input: Parameters<EmailCapability["send"]>[0]) {
+    const identity = await this.#senderIdentity();
+    const attachments = await this.#resolveAttachments(input.attachments);
+    const message = buildProjectEmailMessage({
+      projectAddress: identity.projectAddress,
+      projectName: identity.projectName,
+      request: { ...input, attachments },
+    });
+    const { from, messageId } = await this.#deliver({
+      message,
+      audit: {
+        subject: input.subject,
+        to: input.to,
+        ...(input.inReplyTo === undefined ? {} : { inReplyTo: input.inReplyTo }),
+        attachments,
+      },
+    });
+    return { from, messageId };
+  }
+
+  async reply(input: Parameters<EmailCapability["reply"]>[0]) {
+    const threadId = emailThreadIdFromAgentPath(this.props.scopePath);
+    if (threadId === null) {
+      throw new Error(
+        `email.reply is only available inside an email thread agent scope (/agents/email/t<id>); this scope is "${this.props.scopePath}". Use email.send for new mail.`,
+      );
+    }
+    if (!input.text && !input.html) {
+      throw new Error("email.reply requires a text and/or html body.");
+    }
+    const identity = await this.#senderIdentity();
+    const inbound = await this.#lastReceivedOnThread();
+    if (inbound === null) {
+      throw new Error("email.reply found no inbound email on this thread to reply to.");
+    }
+    const to = inbound.message.replyToAddress ?? inbound.message.from.address;
+    if (to === undefined) {
+      throw new Error("email.reply could not determine the thread counterpart address.");
+    }
+    const inReplyTo = inbound.message.messageId ?? undefined;
+    const attachments = await this.#resolveAttachments(input.attachments);
+    const message = buildProjectEmailMessage({
+      projectAddress: identity.projectAddress,
+      projectName: identity.projectName,
+      request: {
+        to,
+        subject: input.subject ?? replySubject(inbound.message.subject),
+        ...(input.text === undefined ? {} : { text: input.text }),
+        ...(input.html === undefined ? {} : { html: input.html }),
+        attachments,
+        // The thread's own reply address: replies to this mail route straight
+        // back to the thread stream, without depending on client headers.
+        replyTo: emailThreadReplyAddress({
+          slug: identity.slug,
+          domain: identity.domain,
+          threadId,
+        }),
+        ...(inReplyTo === undefined ? {} : { inReplyTo }),
+        references: [
+          ...inbound.message.references,
+          ...(inReplyTo === undefined ? [] : [inReplyTo]),
+        ],
+      },
+    });
+    const { from, messageId } = await this.#deliver({
+      message,
+      audit: {
+        subject: message.subject,
+        to,
+        threadId,
+        ...(inReplyTo === undefined ? {} : { inReplyTo }),
+        attachments,
+      },
+    });
+    return { from, to, messageId };
+  }
+
+  /**
+   * Resolve caller attachment inputs to Email Service attachments: `{ path }`
+   * reads the project file (bytes + stored contentType) from itx.files;
+   * `{ data }` decodes inline base64. Count/size limits are enforced by
+   * buildProjectEmailMessage against the resolved bytes.
+   */
+  async #resolveAttachments(
+    inputs: EmailAttachmentInput[] | undefined,
+  ): Promise<OutboundEmailAttachment[]> {
+    if (inputs === undefined || inputs.length === 0) return [];
+    return await Promise.all(
+      inputs.map(async (input): Promise<OutboundEmailAttachment> => {
+        if ("path" in input) {
+          const file = await readProjectFile({
+            path: input.path,
+            projectId: this.props.projectId,
+          });
+          if (file === null) {
+            throw new Error(`email attachment not found: no project file at "${input.path}".`);
+          }
+          return {
+            content: file.bytes,
+            filename: input.filename ?? input.path.split("/").pop() ?? "attachment",
+            type: input.contentType ?? file.contentType,
+            disposition: "attachment",
+          };
+        }
+        return {
+          content: decodeBase64Attachment(input.data),
+          filename: input.filename,
+          type: input.contentType ?? "application/octet-stream",
+          disposition: "attachment",
+        };
+      }),
+    );
+  }
+
+  /** The project's sending identity, resolved per call (slug/name can change). */
+  async #senderIdentity() {
     if (!env.EMAIL) {
       throw new Error("email.send requires the EMAIL send_email binding (see wrangler config).");
     }
-    const senderDomain = parseConfig(env).projectHostnameBases[0];
-    if (!senderDomain) {
+    const domain = parseConfig(env).projectHostnameBases[0];
+    if (!domain) {
       throw new Error(
         "email.send requires APP_CONFIG_PROJECT_HOSTNAME_BASES to derive the sender domain.",
       );
@@ -926,31 +1054,76 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
     if (!record) {
       throw new Error(`Project ${this.props.projectId} not found in the project directory.`);
     }
-    const projectAddress = emailAddressForProject({ slug: record.slug, domain: senderDomain });
-    const message = buildProjectEmailMessage({
-      projectAddress,
+    return {
+      domain,
+      slug: record.slug,
+      projectAddress: emailAddressForProject({ slug: record.slug, domain }),
       projectName: record.name || record.slug,
-      request: input,
-    });
+    };
+  }
 
-    const result = (await env.EMAIL.send(message)) as { messageId?: string } | null | undefined;
+  /** Send through the EMAIL binding and append the email/sent audit fact. */
+  async #deliver(input: {
+    message: Parameters<SendEmailBinding["send"]>[0];
+    audit: {
+      subject: string;
+      to: string | string[];
+      threadId?: string;
+      inReplyTo?: string;
+      attachments?: OutboundEmailAttachment[];
+    };
+  }) {
+    const result = (await env.EMAIL.send(input.message)) as
+      | { messageId?: string }
+      | null
+      | undefined;
     const messageId = result?.messageId ?? null;
-
-    const from = typeof message.from === "string" ? message.from : message.from.email;
+    const from =
+      typeof input.message.from === "string" ? input.message.from : input.message.from.email;
+    // Attachment metadata only — bytes never land in the stream.
+    const attachments = (input.audit.attachments ?? []).map((attachment) => ({
+      filename: attachment.filename,
+      contentType: attachment.type,
+    }));
     await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
       type: EMAIL_SENT_EVENT_TYPE,
       idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
-      // Recipients + subject for audit; bodies stay out of the stream.
+      // Recipients + subject for audit; bodies stay out of the stream. The
+      // threadId (reply path) lets the email router index the outbound
+      // messageId so replies route back to the thread.
       payload: {
         from,
         messageId,
         projectId: this.props.projectId,
-        subject: input.subject,
-        to: input.to,
+        subject: input.audit.subject,
+        to: input.audit.to,
+        ...(input.audit.threadId === undefined ? {} : { threadId: input.audit.threadId }),
+        ...(input.audit.inReplyTo === undefined ? {} : { inReplyTo: input.audit.inReplyTo }),
+        ...(attachments.length === 0 ? {} : { attachments }),
       },
     });
-
     return { from, messageId };
+  }
+
+  /** The latest email/received payload on this scope's thread stream. */
+  async #lastReceivedOnThread() {
+    const schema = EmailProcessorContract.events[EMAIL_RECEIVED_EVENT_TYPE].payloadSchema;
+    const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
+    let afterOffset = 0;
+    let last: ReturnType<(typeof schema)["parse"]> | null = null;
+    for (;;) {
+      const page = await stream.getEvents({
+        afterOffset,
+        eventTypes: [EMAIL_RECEIVED_EVENT_TYPE],
+        limit: 500,
+      });
+      for (const event of page) {
+        const parsed = schema.safeParse(event.payload);
+        if (parsed.success) last = parsed.data;
+      }
+      if (page.length < 500) return last;
+      afterOffset = page[page.length - 1]!.offset;
+    }
   }
 }
 
@@ -1817,7 +1990,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
-    "First-party outbound email: send({ to, subject, text, html }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it.",
+    "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
   examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
@@ -2028,6 +2201,9 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new EmailRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
+      // The scope path makes email.reply thread-aware inside email agent
+      // scopes; everywhere else reply throws with a pointer to send.
+      scopePath: this.#props.capabilityHost.path,
     });
   }
 

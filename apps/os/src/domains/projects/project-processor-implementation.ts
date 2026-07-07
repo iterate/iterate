@@ -24,6 +24,9 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -50,6 +53,26 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.integrations.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.request(...)]) — so the thread is never silent while you fetch.',
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
   "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
+
+/**
+ * Agents under `/agents/email/**` are email-thread agents: the email router
+ * forwards inbound mail to their stream, the `email-agent` processor
+ * transcribes it, and replies go out through itx.email.reply — which derives
+ * the counterpart, subject, and threading headers from the thread stream.
+ */
+export const EMAIL_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent handling one email conversation.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "Inbound emails on this thread arrive as your inputs (from, subject, body, attachment names).",
+  "To answer, use await itx.email.reply({ text }) (or { html }). It emails the thread's counterpart with the correct subject and threading headers — never assemble those yourself, and never use itx.chat.sendMessage or itx.email.send to answer this thread.",
+  'To attach files (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
+  "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
+  "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
 /**
@@ -196,6 +219,22 @@ export class ProjectProcessor extends StreamProcessor<
                 }),
               ),
             ),
+            // Same for the email thread router on `/integrations/email`; the
+            // email ingress door repeats this append (same idempotency key)
+            // for projects born before the router existed.
+            timedStep("create-timing", timing, "email-router-append", () =>
+              this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: EMAIL_INTEGRATION_STREAM_PATH,
+                  }),
+                  idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: EmailProcessorContract.slug,
+                  subscriberType: "project",
+                }),
+              ),
+            ),
             // The user can already be sitting on /agents/onboarding while repo
             // bootstrap and the project worker warm up. Birth the normal agent
             // stream immediately; the repo-created lane below repeats this with
@@ -219,17 +258,17 @@ export class ProjectProcessor extends StreamProcessor<
           });
           if (childPath.startsWith("/agents/")) {
             // The agent path picks the prompt (agentSystemPromptForPath);
-            // Slack agents additionally get the slack-agent processor
+            // Slack/email agents additionally get their domain processor
             // subscription.
-            const isSlack = isSlackAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
               ...agentBirthCertificateEvents({
                 childPath,
+                email: isEmailAgentPath(childPath),
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
-                slack: isSlack,
+                slack: isSlackAgentPath(childPath),
                 systemPrompt: agentSystemPromptForPath(childPath),
               }),
             );
@@ -305,6 +344,7 @@ export class ProjectProcessor extends StreamProcessor<
 function agentSystemPromptForPath(agentPath: string) {
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
+  if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
@@ -339,6 +379,7 @@ const DEFAULT_MODEL_BY_LLM_PROVIDER = {
 
 function agentBirthCertificateEvents(input: {
   childPath: string;
+  email?: boolean;
   llmProvider: AgentLlmProvider;
   projectId: string;
   slack?: boolean;
@@ -363,6 +404,7 @@ function agentBirthCertificateEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,

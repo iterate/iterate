@@ -65,6 +65,7 @@
     "comlink": "^4.4.2",
     "lucide-react": "^0.553.0",
     "minimatch": "^10.2.4",
+    "postal-mime": "^2.7.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18",
