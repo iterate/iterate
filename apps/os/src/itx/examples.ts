@@ -964,8 +964,9 @@ return receipt; // { from: "<slug>@<hostname base>", messageId }
 // Upsert by key: re-setting the same key replaces the schedule. Returns after
 // the scheduler has durably ingested it (read-your-writes), with the computed
 // next occurrence.
+const key = vars.schedulerKey ?? "examples/daily-report";
 const view = await itx.scheduler.set({
-  key: "examples/daily-report",
+  key,
   recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" },
   // The script runs later in its own isolate. schedule = { key, path,
   // recurrence, metadata?, setAt }; trigger = { executionId, scheduledFor,
@@ -988,8 +989,8 @@ const schedules = await itx.scheduler.list(); // every schedule, straight from r
 
 // Clean up so this example leaves nothing behind (an emptied scheduler
 // deletes its alarm and sleeps).
-await itx.scheduler.cancel("examples/daily-report");
-return { nextTriggerAt: view.nextTriggerAt, totalSchedules: schedules.length };
+await itx.scheduler.cancel(key);
+return { found: schedules.some((s) => s.key === key), nextTriggerAt: view.nextTriggerAt };
 `.trim(),
   },
   {
@@ -1000,8 +1001,9 @@ return { nextTriggerAt: view.nextTriggerAt, totalSchedules: schedules.length };
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
+const key = vars.schedulerKey ?? "examples/agent-checkin";
 const view = await itx.scheduler.set({
-  key: "examples/agent-checkin",
+  key,
   recurrence: { every: 3600 }, // seconds; re-anchors on each trigger
   script: \`async (itx, schedule, trigger) => {
     // A fixed path = one long-lived agent accumulating context. For a fresh
@@ -1014,10 +1016,10 @@ const view = await itx.scheduler.set({
 });
 
 // Run it once right now without waiting for the hour (advances the clock):
-// await itx.scheduler.trigger("examples/agent-checkin");
+// await itx.scheduler.trigger(key);
 
 // Keep this example inert:
-await itx.scheduler.cancel("examples/agent-checkin");
+await itx.scheduler.cancel(key);
 return view.nextTriggerAt;
 `.trim(),
   },
