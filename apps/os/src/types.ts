@@ -961,10 +961,39 @@ export type StreamListItem = {
   path: string;
 };
 
+export type ProjectCustomDomainStatus =
+  | "requested"
+  | "provisioning"
+  | "pending_validation"
+  | "active"
+  | "failed"
+  | "removing";
+
+export type ProjectCustomDomainValidationRecord = {
+  name: string;
+  status: string | null;
+  value: string;
+};
+
+export type ProjectCustomDomain = {
+  cloudflareHostnameId: string | null;
+  createdAt: string;
+  error: string | null;
+  hostname: string;
+  hostnameStatus: string | null;
+  ownershipVerification: { name: string; value: string } | null;
+  sslStatus: string | null;
+  status: ProjectCustomDomainStatus;
+  updatedAt: string;
+  validationRecords: ProjectCustomDomainValidationRecord[];
+  wildcard: boolean;
+};
+
 export type ProjectProcessorState = {
   agents: StreamListItem[];
   createRequest: { projectId: string; slug: string } | null;
   created: boolean;
+  customDomains: ProjectCustomDomain[];
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   repos: StreamListItem[];

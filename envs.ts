@@ -67,12 +67,17 @@ export interface DeployedEnv {
   /** Auth app origin, e.g. https://auth.iterate.com */
   authBaseUrl: string;
   /**
-   * Base domains for deployed project hosts (`<slug>.<base>`). Routes are
-   * generated as `base/*`, `*.base/*` and `*base/*` (the last because the
-   * preview zone only reliably invoked the worker once the broad catch-all
-   * existed).
+   * Base domains for deployed project hosts (`<slug>.<base>`). Worker routes are
+   * generated for the built-in project host patterns.
    */
   projectHostnameBases: string[];
+  /**
+   * Project hostname bases that are Cloudflare for SaaS enabled. These get the
+   * provider-zone catch-all route required for custom hostnames using the worker
+   * as origin. Keep this a subset of `projectHostnameBases`; preview zones have
+   * no SSL-for-SaaS quota unless Cloudflare explicitly provisions it.
+   */
+  cloudflareForSaasProjectHostnameBases: string[];
   /** IDs of the Cloudflare resources this env owns (created once by ensure-resources). */
   resources: {
     /** KV: slug -> project-id cache in front of the auth project directory. */
@@ -101,6 +106,7 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     eventDocsBaseUrl: `https://events.iterate-preview-${n}.com`,
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
+    cloudflareForSaasProjectHostnameBases: [],
     resources,
   };
 }
@@ -116,6 +122,7 @@ export const envs = {
     eventDocsBaseUrl: "https://events.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
+    cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     resources: {
       projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
       workerBuildCacheKvId: "43306c224d364c7aa804c3ff762c4d08",

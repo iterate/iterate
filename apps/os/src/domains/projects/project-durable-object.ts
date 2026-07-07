@@ -29,6 +29,7 @@ import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
+import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -48,6 +49,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
         // key configured; otherwise they fall back to Workers AI.
         defaultLlmProvider:
           readOpenAiApiKeyFromAppConfig(this.env) === null ? "cloudflare-ai" : "openai-ws",
+        customDomains: createCloudflareProjectCustomDomainDeps({
+          env: this.env,
+          projectId: this.#name.projectId,
+        }),
         itx: itxForScope({
           auth: trustedInternalAuthContext(),
           ctx: this.ctx,

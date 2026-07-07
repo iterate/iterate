@@ -8,6 +8,9 @@ import {
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
+// CI retry artifacts already include screenshots/traces; retaining videos can
+// leave ffmpeg workers alive after a retry and keep the job open.
+const videoArtifactsEnabled = videoMode || !process.env.CI;
 
 /** Note: we use APP_CONFIG_BASE_URL as the *os* base url, even though that same variable name is used for other services too */
 const configuredOsBaseUrl = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
@@ -42,7 +45,7 @@ export default defineConfig({
     baseURL: osBaseUrl,
     screenshot: "only-on-failure",
     trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
-    video: videoMode ? "on" : "retain-on-failure",
+    video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   projects: [
     {

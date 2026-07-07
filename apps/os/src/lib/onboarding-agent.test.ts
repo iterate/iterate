@@ -10,6 +10,7 @@ const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState
   agents: [],
   createRequest: null,
   created: true,
+  customDomains: [],
   onboardingActive: false,
   onboardingCompletedAt: null,
   repos: [],

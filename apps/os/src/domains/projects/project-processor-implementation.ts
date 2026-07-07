@@ -25,7 +25,9 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
+import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -101,6 +103,7 @@ export class ProjectProcessor extends StreamProcessor<
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
     itx: ProjectRpcTarget;
+    customDomains?: ProjectCustomDomainDeps;
   }
 > {
   readonly contract = ProjectProcessorContract;
@@ -131,7 +134,7 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/stream/child-stream-created":
         return recordStream(state, event.payload.childPath, event.createdAt);
       default:
-        return state;
+        return reduceCustomDomainEvent({ event, state }) ?? state;
     }
   }
 
@@ -308,6 +311,18 @@ export class ProjectProcessor extends StreamProcessor<
       }
 
       default:
+        if (
+          processCustomDomainEvent({
+            append,
+            blockProcessorWhile,
+            customDomains: this.deps.customDomains,
+            event,
+            projectId: this.deps.itx.projectId,
+            state,
+          })
+        ) {
+          return;
+        }
         return;
     }
   }
