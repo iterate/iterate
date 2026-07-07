@@ -463,6 +463,11 @@ export interface CloudflareIntegrations extends Describable {
  * thread's reply door — it derives the counterpart, \`Re:\` subject, threading
  * headers, and the thread's \`<slug>+t<threadId>@…\` Reply-To address from the
  * thread stream, so agents never assemble threading by hand.
+ *
+ * \`send\` from ANY agent scope (Slack, web chat, …) binds the conversation to
+ * the calling agent: the outgoing Reply-To carries a thread token routed to
+ * that agent's own stream, so the human's replies arrive as the agent's
+ * inputs and \`reply\` continues the conversation from there.
  */
 /**
  * One outbound email attachment: either a stored project file addressed by
@@ -506,9 +511,10 @@ export interface EmailCapability extends Describable {
     attachments?: EmailAttachmentInput[];
   }): Promise<{ from: string; messageId: string | null }>;
   /**
-   * Reply within this email thread (email agent scopes only). Sends to the
-   * thread counterpart with correct subject and threading headers derived
-   * from the thread stream. At least one of text/html is required.
+   * Reply within this agent's email conversation — an email thread agent, or
+   * any agent scope whose \`send\` bound a thread. Sends to the latest
+   * counterpart with correct subject and threading headers derived from the
+   * agent's stream. At least one of text/html is required.
    */
   reply(input: {
     text?: string;

@@ -310,6 +310,59 @@ describe("EmailProcessor (thread router)", () => {
     expect(processor.state.allowedSenders).toEqual(["jonas@example.com", "*@iterate.com"]);
   });
 
+  it("forwards replies to agent-initiated threads to the SENDING agent's stream", async () => {
+    // An agent-scoped itx.email.send binds its conversation to the calling
+    // agent: it appends this route event (streamPath = the agent's own path,
+    // NOT /agents/email/**) and a sent audit fact carrying the threadId.
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/integrations/email");
+    const processor = new EmailProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/email/thread-route-configured",
+        payload: {
+          threadId: "a1b2c3d4e5f6",
+          streamPath: "/agents/slack/conn/c123/ts-1",
+          counterpart: "jonas@example.com",
+        },
+      },
+      {
+        type: "events.iterate.com/email/sent",
+        payload: {
+          from: "acme@iterate.app",
+          messageId: "out-slack-1@iterate.app",
+          projectId: "prj_1",
+          subject: "Report you asked for",
+          to: "jonas@example.com",
+          threadId: "a1b2c3d4e5f6",
+        },
+      },
+    );
+    // Reply via the +t token…
+    await stream.append({
+      type: "events.iterate.com/email/received",
+      payload: receivedPayload({ threadTag: "a1b2c3d4e5f6", messageId: "reply-1@mail.example" }),
+    });
+    // …and a header-only reply to the bare address (In-Reply-To = OUR id).
+    await stream.append({
+      type: "events.iterate.com/email/received",
+      payload: receivedPayload({
+        messageId: "reply-2@mail.example",
+        inReplyTo: "out-slack-1@iterate.app",
+      }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const forwarded = network
+      .eventsAt("/agents/slack/conn/c123/ts-1")
+      .filter((event) => event.type === "events.iterate.com/email/received");
+    expect(forwarded).toHaveLength(2);
+    // No stray /agents/email/t<n> threads were minted for either reply.
+    expect([...network.streams.keys()].filter((p) => p.startsWith("/agents/email/"))).toEqual([]);
+  });
+
   it("starts a new thread when an unknown +t tag arrives (no attacker-minted ids)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");

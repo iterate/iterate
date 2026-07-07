@@ -169,11 +169,13 @@ import {
   EMAIL_RECEIVED_EVENT_TYPE,
   EMAIL_SENT_EVENT_TYPE,
   isOwnProjectMail,
+  mintOutboundEmailThreadId,
   replySubject,
   type OutboundEmailAttachment,
   type SendEmailBinding,
 } from "./domains/email/utils.ts";
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
+import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 
 type FetchOnly = Pick<Fetcher, "fetch">;
 
@@ -1289,11 +1291,11 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
   async __describe() {
     return describeNode({
       instructions:
-        "First-party email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. Inside an email thread agent (/agents/email/t<id>), reply({ text }) answers the thread's counterpart with correct threading headers. Both take attachments: [{ path }] (project files via itx.files, any file type) or [{ filename, data }] (inline base64); limits 32 files / 5 MiB total. Both return { messageId }.",
+        "First-party email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. From ANY agent scope, send binds the conversation to the calling agent: replies to that mail arrive as this agent's inputs, and reply({ text }) answers the latest counterpart with correct threading headers. Both take attachments: [{ path }] (project files via itx.files, any file type) or [{ filename, data }] (inline base64); limits 32 files / 5 MiB total. Both return { messageId }.",
       children: {
-        send: "Send one email from the project's address; returns { from, messageId }.",
+        send: "Send one email from the project's address; agent scopes get replies routed back to them. Returns { from, messageId }.",
         reply:
-          "Reply within this email thread (email agent scopes only); returns { from, to, messageId }.",
+          "Reply within this agent's email conversation (email thread agents, or any agent that has sent/received project email); returns { from, to, messageId }.",
       },
       parent: "the project itx root",
     });
@@ -1302,10 +1304,19 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
   async send(input: Parameters<EmailCapability["send"]>[0]) {
     const identity = await this.#senderIdentity();
     const attachments = await this.#resolveAttachments(input.attachments);
+    // Agent-scoped sends bind the conversation to the CALLING agent: the
+    // Reply-To carries a thread token routed to this agent's own stream, so
+    // the human's reply comes back as this agent's input — whether it is an
+    // email thread agent, a Slack agent, or any other agent scope.
+    const thread = await this.#bindOutboundThreadToAgent({ identity, request: input });
     const message = buildProjectEmailMessage({
       projectAddress: identity.projectAddress,
       projectName: identity.projectName,
-      request: { ...input, attachments },
+      request: {
+        ...input,
+        attachments,
+        ...(thread !== null && input.replyTo === undefined ? { replyTo: thread.replyTo } : {}),
+      },
     });
     const { from, messageId } = await this.#deliver({
       message,
@@ -1313,6 +1324,7 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
         subject: input.subject,
         to: input.to,
         ...(input.inReplyTo === undefined ? {} : { inReplyTo: input.inReplyTo }),
+        ...(thread === null ? {} : { threadId: thread.threadId }),
         attachments,
       },
     });
@@ -1320,10 +1332,11 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
   }
 
   async reply(input: Parameters<EmailCapability["reply"]>[0]) {
-    const threadId = emailThreadIdFromAgentPath(this.props.scopePath);
+    const threadId =
+      emailThreadIdFromAgentPath(this.props.scopePath) ?? (await this.#threadIdFromOwnRoute());
     if (threadId === null) {
       throw new Error(
-        `email.reply is only available inside an email thread agent scope (/agents/email/t<id>); this scope is "${this.props.scopePath}". Use email.send for new mail.`,
+        `email.reply needs an agent scope with a bound email thread (an email thread agent, or any agent that has sent/received project email); this scope is "${this.props.scopePath}". Use email.send for new mail.`,
       );
     }
     if (!input.text && !input.html) {
@@ -1376,6 +1389,95 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       },
     });
     return { from, to, messageId };
+  }
+
+  /**
+   * For an agent-scoped send: durably bind an email thread to the calling
+   * agent BEFORE the mail leaves, so a reply can never race the routing
+   * table. Establishes three facts, all idempotent:
+   * 1. `thread-route-configured` on `/integrations/email` — the router
+   *    forwards replies (token or header match) to this agent's stream.
+   * 2. The same route event on the agent's own stream — thread context for
+   *    the email-agent processor and `reply`'s thread lookup.
+   * 3. The email-agent processor subscription on the agent's stream — a
+   *    non-email agent (Slack, web chat, …) gains the transcriber that turns
+   *    forwarded replies into its input. Email thread agents had it at birth;
+   *    the identical idempotency key dedupes.
+   * Project-scoped sends return null and stay plain one-way mail.
+   */
+  async #bindOutboundThreadToAgent(input: {
+    identity: { slug: string; domain: string };
+    request: { to: string | string[]; subject: string };
+  }) {
+    const scopePath = this.props.scopePath;
+    if (!scopePath.startsWith("/agents/")) return null;
+    const threadId =
+      emailThreadIdFromAgentPath(scopePath) ??
+      (await this.#threadIdFromOwnRoute()) ??
+      mintOutboundEmailThreadId();
+    const firstRecipient = Array.isArray(input.request.to) ? input.request.to[0] : input.request.to;
+    const routeEvent = {
+      type: "events.iterate.com/email/thread-route-configured",
+      idempotencyKey: `email-route:${threadId}`,
+      payload: {
+        threadId,
+        streamPath: scopePath,
+        ...(firstRecipient === undefined ? {} : { counterpart: firstRecipient }),
+        subject: input.request.subject,
+      },
+    };
+    const durableObjectName = DurableObjectNameCodec.stringify({
+      projectId: this.props.projectId,
+      path: scopePath,
+    });
+    await Promise.all([
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(routeEvent),
+      integrationStreamStub(this.props.projectId, scopePath).append(
+        routeEvent,
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName,
+          idempotencyKey: `stream/subscription-configured:${durableObjectName}#${EmailAgentProcessorContract.slug}`,
+          processorSlug: EmailAgentProcessorContract.slug,
+          subscriberType: "agent",
+        }),
+      ),
+    ]);
+    return {
+      threadId,
+      replyTo: emailThreadReplyAddress({
+        slug: input.identity.slug,
+        domain: input.identity.domain,
+        threadId,
+      }),
+    };
+  }
+
+  /**
+   * The thread already bound to this agent scope, if any: the latest
+   * `thread-route-configured` on the agent's own stream that names this
+   * stream. Lets repeated sends reuse one conversation and lets `reply` work
+   * from non-email agent scopes.
+   */
+  async #threadIdFromOwnRoute(): Promise<string | null> {
+    if (!this.props.scopePath.startsWith("/agents/")) return null;
+    const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
+    let afterOffset = 0;
+    let threadId: string | null = null;
+    for (;;) {
+      const page = await stream.getEvents({
+        afterOffset,
+        eventTypes: ["events.iterate.com/email/thread-route-configured"],
+        limit: 500,
+      });
+      for (const event of page) {
+        const payload = event.payload as { streamPath?: string; threadId?: string };
+        if (payload.streamPath === this.props.scopePath && typeof payload.threadId === "string") {
+          threadId = payload.threadId;
+        }
+      }
+      if (page.length < 500) return threadId;
+      afterOffset = page[page.length - 1]!.offset;
+    }
   }
 
   /**

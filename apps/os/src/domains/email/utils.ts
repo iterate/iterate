@@ -104,6 +104,17 @@ export function emailAgentPath(threadId: string): string {
   return `/agents/email/t${threadId}`;
 }
 
+/**
+ * Thread id for an agent-INITIATED email conversation (an agent-scoped
+ * `itx.email.send`): random where inbound thread ids are stream offsets,
+ * because a send happens in an RPC action with no offset to key on. The `a`
+ * prefix marks agent-initiated threads in logs and Reply-To tags; the
+ * alphabet stays inside the `+t<threadId>` tag grammar (`[a-z0-9-]+`).
+ */
+export function mintOutboundEmailThreadId(): string {
+  return `a${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+}
+
 export function isEmailAgentPath(agentPath: string): boolean {
   const normalized = agentPath.toLowerCase();
   return normalized === "/agents/email" || normalized.startsWith("/agents/email/");
