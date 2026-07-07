@@ -191,7 +191,7 @@ async function assertHostnameAvailable(input: {
   if (exact) return;
 
   const covered = await readProjectByHostname(input.directory, input.hostname);
-  if (covered) {
+  if (covered && covered.record.id !== input.projectId) {
     throw new Error(
       `"${input.hostname}" is already covered by ${
         covered.appSlug === null ? "a custom domain" : "a custom-domain app route"

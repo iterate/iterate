@@ -1265,6 +1265,8 @@ class DynamicWorkerRpcTarget extends RpcTarget {
   }
 }
 
+type ProjectListEntryBase = Omit<ProjectListEntry, "customDomains" | "deploymentStatus">;
+
 export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
   async __describe() {
     return describeNode({
@@ -1453,18 +1455,24 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     const bases = await this.#listEntryBases(input?.scope);
     const outcomes = await Promise.allSettled(
       bases.map(async (base) => {
-        const state = await projectProcessorState(base.id);
-        return state.created === true;
+        return await projectProcessorState(base.id);
       }),
     );
     const statuses = deploymentStatusesFromProbes(
       bases.map((base) => base.id),
-      outcomes,
+      outcomes.map((outcome): PromiseSettledResult<boolean> => {
+        if (outcome.status === "rejected") return outcome;
+        return { status: "fulfilled", value: outcome.value.created === true };
+      }),
     );
-    return bases.map((base) => ({
-      ...base,
-      deploymentStatus: statuses.get(base.id) ?? "unknown",
-    }));
+    return bases.map((base, index) => {
+      const outcome = outcomes[index];
+      return {
+        ...base,
+        customDomains: outcome?.status === "fulfilled" ? outcome.value.customDomains : [],
+        deploymentStatus: statuses.get(base.id) ?? "unknown",
+      };
+    });
   }
 
   /**
@@ -1477,9 +1485,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
    * "deployment"; impersonated users (test lane) list their scopes,
    * directory-read.
    */
-  async #listEntryBases(
-    requestedScope?: "mine" | "deployment",
-  ): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
+  async #listEntryBases(requestedScope?: "mine" | "deployment"): Promise<ProjectListEntryBase[]> {
     const userPrincipal = userPrincipalOf(this.props.auth);
     // Default to the caller's own projects for EVERY principal shape (user,
     // impersonated, admin) — only pure admin principals, which have no
@@ -1539,9 +1545,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     );
   }
 
-  async #directoryEntryBase(
-    projectId: string,
-  ): Promise<Omit<ProjectListEntry, "deploymentStatus">> {
+  async #directoryEntryBase(projectId: string): Promise<ProjectListEntryBase> {
     const record = await readProjectById(env.PROJECT_DIRECTORY, projectId);
     return {
       id: projectId,

@@ -65,6 +65,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
+import { primaryActiveCustomDomainHostname } from "~/lib/project-custom-domains.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   fetchProjectsList,
@@ -103,7 +104,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
         <AppSidebarHeader projects={projects} />
       </SidebarHeader>
       <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} />
+        <AppSidebarNav projects={projects} routeConfig={routeConfig} />
       </SidebarContent>
       <SidebarFooter>
         <AppSidebarCollapseButton />
@@ -381,10 +382,17 @@ function authWorkerOrigin(config: PublicConfig) {
   return "https://auth.iterate.com";
 }
 
-function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
+function AppSidebarNav({
+  projects,
+  routeConfig,
+}: {
+  projects: ProjectListEntry[];
+  routeConfig: PublicRouteConfig;
+}) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
   const activeProjectSlug = getActiveProjectSlug(matches);
+  const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
   // project that isn't in the cached list still shows its nav.
@@ -394,6 +402,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
+        customHostname={primaryActiveCustomDomainHostname(activeProject?.customDomains)}
       />
     );
   }
@@ -462,10 +471,12 @@ function ProjectSidebarGroup({
   projectHostnameBases,
   projectSlug,
   appBaseUrl,
+  customHostname,
 }: {
   projectHostnameBases: readonly string[];
   projectSlug: string;
   appBaseUrl?: string;
+  customHostname?: string | null;
 }) {
   const matchRoute = useMatchRoute();
   const isNewChatActive = Boolean(
@@ -479,6 +490,7 @@ function ProjectSidebarGroup({
     projectSlug,
     projectHostnameBases,
     appBaseUrl,
+    customHostname,
   });
 
   return (

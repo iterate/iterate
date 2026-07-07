@@ -320,7 +320,7 @@ describe("ProjectProcessor custom domains", () => {
           value: "ownership-token",
         },
         sslStatus: "active",
-        status: "failed",
+        status: "active",
         validationRecords: [
           {
             name: "_acme-challenge.garple.com",

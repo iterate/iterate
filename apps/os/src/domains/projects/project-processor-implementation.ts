@@ -167,7 +167,7 @@ export class ProjectProcessor extends StreamProcessor<
         return upsertCustomDomain(state, {
           ...failedDomain,
           error: event.payload.error,
-          status: "failed",
+          status: failedDomain.status === "active" ? "active" : "failed",
           updatedAt: event.createdAt,
         });
       }

@@ -14,6 +14,7 @@ import {
   removeProjectCustomDomainServerFn,
   type Project,
 } from "~/lib/project-server-fns.ts";
+import { primaryActiveCustomDomainHostname } from "~/lib/project-custom-domains.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   buildProjectWorkerUrl,
@@ -33,12 +34,19 @@ export function ProjectSettingsPanel({
 }) {
   const base = normalizeProjectHostnameBase(routeConfig.projectHostnameBases[0] ?? "");
   const projectHostname = base ? `${project.slug}.${base}` : project.slug;
+  const customDomains = projectState?.customDomains;
+  const primaryCustomHostname = primaryActiveCustomDomainHostname(customDomains);
   const projectWorkerUrl = buildProjectWorkerUrl({
     appBaseUrl: routeConfig.baseUrl,
     projectHostnameBases: routeConfig.projectHostnameBases,
     projectSlug: project.slug,
   });
-  const customDomains = projectState?.customDomains;
+  const customDomainWorkerUrl = buildProjectWorkerUrl({
+    appBaseUrl: routeConfig.baseUrl,
+    customHostname: primaryCustomHostname,
+    projectHostnameBases: routeConfig.projectHostnameBases,
+    projectSlug: project.slug,
+  });
 
   return (
     <section className="flex flex-col gap-6" data-testid="project-settings-panel">
@@ -58,6 +66,16 @@ export function ProjectSettingsPanel({
         <SettingsField label="Project slug hostname">
           <ProjectSlugHostname hostname={projectHostname} url={projectWorkerUrl} />
         </SettingsField>
+        {primaryCustomHostname ? (
+          <SettingsField label="Project homepage">
+            <ProjectSlugHostname
+              description="Active custom-domain homepage"
+              hostname={primaryCustomHostname}
+              openLabel="Open project homepage"
+              url={customDomainWorkerUrl}
+            />
+          </SettingsField>
+        ) : null}
         <SettingsField label="Custom domains">
           <CustomDomainsEditor
             domains={customDomains}
@@ -79,7 +97,17 @@ export function ProjectSettingsPanel({
   );
 }
 
-function ProjectSlugHostname({ hostname, url }: { hostname: string; url: string | null }) {
+function ProjectSlugHostname({
+  description = "Built-in project hostname",
+  hostname,
+  openLabel = "Open project hostname",
+  url,
+}: {
+  description?: string;
+  hostname: string;
+  openLabel?: string;
+  url: string | null;
+}) {
   const displayHost = hostFromUrl(url) ?? hostname;
   const appHostPattern = `<app>.${displayHost}`;
 
@@ -88,7 +116,7 @@ function ProjectSlugHostname({ hostname, url }: { hostname: string; url: string 
       <div className="flex min-w-0 items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-medium">{displayHost}</p>
-          <p className="text-xs text-muted-foreground">Built-in project homepage</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
@@ -102,10 +130,10 @@ function ProjectSlugHostname({ hostname, url }: { hostname: string; url: string 
           </Button>
           {url ? (
             <Button
-              aria-label={`Open project homepage ${displayHost}`}
+              aria-label={`${openLabel} ${displayHost}`}
               render={
                 <a href={url} target="_blank" rel="noreferrer">
-                  <span className="sr-only">Open project homepage</span>
+                  <span className="sr-only">{openLabel}</span>
                 </a>
               }
               size="icon-xs"
