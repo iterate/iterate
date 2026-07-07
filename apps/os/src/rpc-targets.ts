@@ -50,6 +50,13 @@ import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import { getFreshGoogleAccessToken } from "./domains/integrations/google-tokens.ts";
 import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
 import {
+  deleteProjectFile,
+  mintProjectFileUrl,
+  putProjectFile,
+  readProjectFile,
+  sanitizeFileFilename,
+} from "./domains/files/project-files.ts";
+import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
@@ -125,6 +132,8 @@ import type {
   DynamicWorkerCollection,
   DynamicWorkerRef,
   EmailCapability,
+  FileHandle,
+  Files,
   GmailCapability,
   ProjectIntegrations,
   SlackCapability,
@@ -662,6 +671,78 @@ class SecretRpcTarget extends RpcTarget implements Secret {
 
 type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
 
+class FileHandleRpcTarget extends RpcTarget implements FileHandle {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe() {
+    return describeNode({
+      instructions:
+        `The project file at "${this.props.path}": put({ data, contentType }) stores bytes ` +
+        "(base64 strings, Uint8Array, Blob, or a stream), bytes() reads them back, " +
+        "url() mints a signed public link (default 7 days), delete() removes the file.",
+      parent: `files.get(${JSON.stringify(this.props.path)})`,
+    });
+  }
+
+  put(input: Parameters<FileHandle["put"]>[0]) {
+    return putProjectFile({
+      contentType: input.contentType,
+      data: input.data,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async bytes() {
+    const file = await readProjectFile({ path: this.props.path, projectId: this.props.projectId });
+    if (file === null) throw new Error(`No file at ${this.props.path}.`);
+    return file.bytes;
+  }
+
+  url(input?: Parameters<FileHandle["url"]>[0]) {
+    return mintProjectFileUrl({
+      config: parseConfig(env),
+      expiresInSeconds: input?.expiresInSeconds,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async delete() {
+    await deleteProjectFile({ path: this.props.path, projectId: this.props.projectId });
+  }
+}
+
+class FilesRpcTarget extends RpcTarget implements Files {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Project file storage (R2-backed). get(path) returns the file handle at a " +
+        "project-scoped path (mutable, last-write-wins). Files attached to agent " +
+        "conversations live under the agent's own path; `itx.agent.addFiles` is the " +
+        "one-call helper that stores AND attaches.",
+      children: { get: "The file handle at a path." },
+      parent: "project itx",
+    });
+  }
+
+  get(path: string) {
+    return new FileHandleRpcTarget({
+      auth: this.props.auth,
+      path: normalizePath(path),
+      projectId: this.props.projectId,
+    });
+  }
+}
+
 class AiRpcTarget extends RpcTarget implements Ai {
   async __describe() {
     return describeNode({
@@ -1179,11 +1260,56 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     });
   }
 
+  async addFiles(input: Parameters<Agent["addFiles"]>[0]) {
+    if (input.files.length === 0) throw new Error("agent.addFiles requires at least one file.");
+    const config = parseConfig(env);
+    const files = await Promise.all(
+      input.files.map(async (file) => {
+        const filename = sanitizeFileFilename(file.filename);
+        // A short random prefix keeps two same-named uploads in one
+        // conversation from overwriting each other under last-write-wins paths.
+        const path = `${this.#path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
+        const metadata = await putProjectFile({
+          contentType: file.contentType,
+          data: file.data,
+          path,
+          projectId: this.#props.projectId,
+        });
+        const url = await mintProjectFileUrl({
+          config,
+          path,
+          projectId: this.#props.projectId,
+        });
+        return {
+          contentType: metadata.contentType,
+          filename,
+          path: metadata.path,
+          size: metadata.size,
+          url,
+        };
+      }),
+    );
+    const [event] = await this.stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content:
+          input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
+        files,
+        ...(input.llmRequestPolicy === undefined
+          ? {}
+          : { llmRequestPolicy: input.llmRequestPolicy }),
+      },
+    });
+    return { event, files };
+  }
+
   async __describe() {
     return describeNode({
       instructions:
         "One agent: the narrow control surface for the agent stream at this path. Dotted calls on unknown members resolve against the agent scope's capability host.",
       children: {
+        addFiles:
+          "Store files in project storage AND attach them to this conversation (one call, one message).",
         ask: "Send a message and wait for the agent's next chat reply.",
         capabilityHost: "This agent scope's durable capability table.",
         chat: "The agent's web-chat door (sendMessage).",
@@ -1783,6 +1909,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   email:
     "First-party outbound email: send({ to, subject, text, html }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it.",
   examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
+  files:
+    "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
     "Slack/Google connections plus connection-scoped API proxies: itx.integrations.gmail.request({ path, query }) and itx.integrations.slack.chat.postMessage({ channel, text }); Cloudflare bindings at itx.integrations.cf.{ai,browser,images,videos}. Check itx.integrations.getConnection({ provider }) before Gmail/Slack.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
@@ -1998,6 +2126,13 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   get examples(): ItxExampleCatalog {
     return new ItxExampleCatalogRpcTarget();
+  }
+
+  get files(): Files {
+    return new FilesRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
   }
 
   get integrations(): ProjectIntegrations {

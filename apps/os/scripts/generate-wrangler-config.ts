@@ -269,7 +269,12 @@ function workerBindings(input: {
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
     // the env by that exact name. Addressed by name, so — unlike KV/D1 — no
     // per-env id in envs.ts. In local dev miniflare provides it automatically.
-    r2_buckets: [{ binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` }],
+    // FILES_BUCKET: project file storage for itx.files / agent attachments
+    // (domains/files/project-files.ts). Same create-if-missing story.
+    r2_buckets: [
+      { binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` },
+      { binding: "FILES_BUCKET", bucket_name: `${input.workerName}-files` },
+    ],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see
     // rpc-targets.ts EmailRpcTarget) — allowed_sender_addresses can't hold a
@@ -375,6 +380,27 @@ function envBlock(env: DeployedEnv) {
   };
 }
 
+/**
+ * Local dev's bindings: the shared worker bindings plus, when `pnpm dev`
+ * threads its picked port through PORT, the dev server's own origin as
+ * APP_CONFIG_BASE_URL — absolute-URL minting (e.g. signed project-file URLs
+ * on `iterate-files--<slug>.localhost:<port>`) needs the worker to know it.
+ * Deploy-time generation runs without PORT, so deployed envs are unaffected
+ * (they get baseUrl from envShapedVars).
+ */
+function localDevBindings() {
+  const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  return {
+    ...bindings,
+    vars: {
+      ...bindings.vars,
+      ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+    },
+  };
+}
+
+const LOCAL_DEV_BINDINGS = localDevBindings();
+
 export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
   // The top-level name is BOTH the local dev worker name and the service
@@ -407,10 +433,18 @@ export const config = {
   // domain builds raw git remotes as https://<account>.artifacts.cloudflare.net/…
   // — an empty account makes every local repo seed/clone fail instantly on an
   // invalid host, which breaks project creation and sandbox provisioning.
-  ...workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID }),
+  ...LOCAL_DEV_BINDINGS,
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
-  secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },
+  // Keys already emitted as local-dev vars (APP_CONFIG_BASE_URL under `pnpm
+  // dev`) are excluded: wrangler rejects a name bound as both var and secret.
+  secrets: {
+    required: [
+      ...REQUIRED_SECRETS,
+      ...OPTIONAL_SECRETS,
+      ...ENV_SHAPED_KEYS.filter((key) => !(key in LOCAL_DEV_BINDINGS.vars)),
+    ],
+  },
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
 };
 
@@ -466,9 +500,7 @@ export default function generateWranglerConfig() {
 
 // The CLI runs only when invoked directly — deploy.ts and vite.config.ts
 // import from this module without triggering a write.
-if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
-  void createCli({ ...import.meta, name: "generate-wrangler-config" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "generate-wrangler-config" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

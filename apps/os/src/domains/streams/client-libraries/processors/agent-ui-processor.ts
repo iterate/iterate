@@ -24,7 +24,7 @@ import type { SqlClient, SqlValue } from "../browser/stream-browser-db.ts";
 export const AGENT_UI_FEED_TABLE = "agent_feed_items";
 
 /** Bumped into the writer-lock name so a schema change lets a fresh tab take over. */
-export const AGENT_UI_SCHEMA_VERSION = 4;
+export const AGENT_UI_SCHEMA_VERSION = 5;
 
 // planAgentUiOps still types its events against packages/ui's shared Event
 // type; deriving the parameter type here keeps this file free of

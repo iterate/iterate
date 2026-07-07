@@ -8,10 +8,11 @@ import {
   type ReactNode,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BanIcon, ChevronRightIcon, CodeIcon } from "lucide-react";
+import { BanIcon, ChevronRightIcon, CodeIcon, PaperclipIcon } from "lucide-react";
 import type {
   AgentUiActivity,
   AgentUiCodeStep,
+  AgentUiFileAttachment,
   AgentUiItem,
   AgentUiLlmStep,
   AgentUiMessageItem,
@@ -35,15 +36,14 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 const TAIL_PREFETCH_ROWS = 32;
 
 /**
- * The clean agent chat feed: user message → activity ("Ran code 2× · 3
- * requests · 7.4 s") → assistant message.
+ * The clean agent chat feed: user and assistant messages plus archived
+ * activity rows ("Ran code 2× · 3 requests · 7.4 s").
  *
  * Settled items are `agent_feed_items` rows written by the agent-ui
  * processor; the TanStack virtual list windows over them with reactive
- * SQLite queries. The in-flight activity — with live-streaming thinking and
- * response text — is the list's trailing virtual item, rendered straight from
- * the processor's reduced state, so the virtualizer's end anchoring tracks its
- * growth natively.
+ * SQLite queries. Active LLM/script work is the list's trailing virtual item,
+ * rendered straight from the processor's reduced state, so the virtualizer's
+ * end anchoring tracks its growth natively.
  *
  * Callers must remount this component when pointing it at a different
  * database (key it by the database identity): the virtualizer's measurement
@@ -250,7 +250,7 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
           data-kind="user"
         >
           <MessageContent className="group-[.is-user]:rounded-2xl">
-            <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+            <UserMessageBody item={item} />
           </MessageContent>
         </Message>
       );
@@ -358,7 +358,7 @@ function QueuedMessagesPanel({
       {messages.map((message) => (
         <Message key={message.id} from="user" className="py-1">
           <MessageContent className="group-[.is-user]:rounded-2xl">
-            <div className="whitespace-pre-wrap leading-6">{message.text}</div>
+            <UserMessageBody item={message} />
           </MessageContent>
         </Message>
       ))}
@@ -379,6 +379,59 @@ function QueuedMessagesPanel({
         </Button>
       )}
     </div>
+  );
+}
+
+function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
+  return (
+    <>
+      {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
+      <UserMessageAttachments files={item.files} hasText={item.text !== ""} />
+    </>
+  );
+}
+
+function UserMessageAttachments({
+  files,
+  hasText,
+}: {
+  files: AgentUiMessageItem["files"];
+  hasText: boolean;
+}) {
+  if (files == null || files.length === 0) return null;
+  return (
+    <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
+      {files.map((file) => (
+        <UserMessageAttachment key={file.path} file={file} />
+      ))}
+    </div>
+  );
+}
+
+function UserMessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+  if (file.contentType.startsWith("image/")) {
+    return (
+      <a href={file.url} target="_blank" rel="noreferrer" className="block max-w-full">
+        <img
+          src={file.url}
+          alt={file.filename}
+          className="max-h-64 max-w-full rounded-lg border border-border/60 bg-background object-contain"
+        />
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={file.url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex max-w-full items-center gap-1.5 self-start rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <PaperclipIcon className="size-3 shrink-0" />
+      <span className="min-w-0 truncate text-foreground/80">{file.filename}</span>
+      <span className="shrink-0 font-mono">{formatFileSize(file.size)}</span>
+    </a>
   );
 }
 
@@ -456,13 +509,15 @@ function AgentActivityStep({
 }
 
 function stepLabel(step: AgentUiStep): string {
-  if (step.kind === "code") return "Ran code";
+  if (step.kind === "code") return step.status === "running" ? "Running code" : "Ran code";
   return step.model ?? step.provider ?? "LLM request";
 }
 
 function stepMeta(step: AgentUiStep): string {
   if (step.kind === "code") {
-    return step.durationMs == null ? "" : formatSeconds(step.durationMs);
+    const parts = [`Started ${formatClockTime(step.startedAtMs)}`];
+    if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
+    return parts.join(" · ");
   }
   const parts: string[] = [];
   if (step.inputTokens != null || step.outputTokens != null) {
@@ -511,8 +566,16 @@ function llmStepRawSummary(step: AgentUiLlmStep) {
 }
 
 function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
+  const startedAtDateTime = formatDateTimeAttribute(step.startedAtMs);
+
   return (
     <>
+      <time
+        className="block px-1.5 font-mono text-xs text-muted-foreground"
+        dateTime={startedAtDateTime}
+      >
+        Started {formatDateTime(step.startedAtMs)}
+      </time>
       {step.code === "" ? null : (
         <SourceCodeBlock
           code={step.code}
@@ -555,13 +618,13 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
 }
 
 // ---------------------------------------------------------------------------
-// The live element: streaming thinking and code with a blinking cursor
+// The live element: active requests and running code with expandable detail
 // ---------------------------------------------------------------------------
 
 /**
- * Rendered below the virtual list whenever an activity is in flight. Receives
- * the live reduced state on every chunk: finished steps collapse upward into
- * quiet rows while the current step streams its thinking or code.
+ * Rendered below the virtual list whenever work is in flight. Receives the
+ * live reduced state on every chunk: finished steps collapse upward into quiet
+ * rows while current requests or scripts keep the busy indicator visible.
  */
 function AgentLiveActivity({
   live,
@@ -572,13 +635,13 @@ function AgentLiveActivity({
   expandedIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
-  const liveStep = live.steps.findLast((step) => step.status === "running");
+  const runningSteps = live.steps.filter((step) => step.status === "running");
+  const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
-  // A waiting activity (agent idle, no chat message yet) keeps its steps on
-  // screen — the next round rolls into it — but parks the spinner.
-  const working = liveStep != null || live.status === "running";
+  const working = runningSteps.length > 0;
   const showStepRail =
-    doneSteps.length > 0 || (liveStep != null && liveStepHasVisibleContent(liveStep));
+    doneSteps.length > 0 ||
+    runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
 
   if (!working && activityWasInterrupted(live)) {
     return (
@@ -597,7 +660,7 @@ function AgentLiveActivity({
         <div className="flex h-7 items-center gap-2 self-start px-0.5">
           <Spinner className="size-3 shrink-0 text-amber-600" />
           <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
-            {liveActivityLabel(live, liveStep)}
+            {liveActivityLabel(runningSteps)}
           </span>
         </div>
       ) : null}
@@ -611,7 +674,18 @@ function AgentLiveActivity({
               onToggle={onToggle}
             />
           ))}
-          {liveStep == null ? null : <LiveStepStream step={liveStep} />}
+          {runningSteps.map((step) =>
+            step.kind === "code" ? (
+              <AgentActivityStep
+                key={step.id}
+                step={step}
+                expanded={expandedIds.has(step.id)}
+                onToggle={onToggle}
+              />
+            ) : step === liveStep && liveStepHasVisibleContent(step) ? (
+              <LiveStepStream key={step.id} step={step} />
+            ) : null,
+          )}
         </div>
       ) : null}
     </div>
@@ -627,15 +701,17 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
   return step.thinkingText !== "" || step.responseText !== "";
 }
 
-function liveActivityLabel(live: AgentUiActivity, liveStep: AgentUiStep | undefined): string {
-  // Steps exist but none is running: the turn is between steps (or waiting to
-  // settle) — "Working…", not "Thinking…".
-  if (liveStep == null) return live.steps.length > 0 ? "Working…" : "Thinking…";
-  if (liveStep.kind === "code") return "Running code…";
-  if (liveStep.responseText !== "") {
-    return looksLikeCode(liveStep.responseText) ? "Writing code…" : "Responding…";
+function liveActivityLabel(runningSteps: AgentUiStep[]): string {
+  const scriptCount = runningSteps.filter((step) => step.kind === "code").length;
+  const llmCount = runningSteps.length - scriptCount;
+  const parts: string[] = [];
+  if (scriptCount > 0) {
+    parts.push(`Running ${scriptCount} script${scriptCount === 1 ? "" : "s"}`);
   }
-  return "Thinking…";
+  if (llmCount > 0) {
+    parts.push(`Making ${llmCount} LLM request${llmCount === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ") || "Working…";
 }
 
 /** Code-mode agents stream itx code as their response; chat agents stream prose. */
@@ -722,6 +798,34 @@ function formatSeconds(durationMs: number): string {
   if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const kilobytes = size / 1024;
+  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
+  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
+}
+
+function formatClockTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatDateTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function formatDateTimeAttribute(timestampMs: number): string | undefined {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
 }
 
 function stringifyResult(result: unknown): string {

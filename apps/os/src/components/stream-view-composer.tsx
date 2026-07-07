@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { parse as parseYaml } from "yaml";
+import { XIcon } from "lucide-react";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { Button } from "@iterate-com/ui/components/button";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { StreamEventInput } from "~/domains/streams/schemas.ts";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
@@ -8,12 +10,14 @@ import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
+const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /** How a domain page lets its stream view send chat messages (agents only). */
 export type StreamMessageComposer = {
   placeholder?: string;
   onInterrupt?: (llmRequestId: number) => Promise<void>;
   onSubmit: (message: string) => Promise<void>;
+  onSubmitFiles?: (input: { files: File[]; message: string }) => Promise<void>;
 };
 
 /**
@@ -59,9 +63,12 @@ export function StreamViewComposer({
     defaultMode ?? (messageComposer ? "message" : "raw"),
   );
   const [messageText, setMessageText] = useState("");
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
+  const [fileError, setFileError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function runSubmit(action: () => Promise<void>) {
     setIsSubmitting(true);
@@ -77,12 +84,45 @@ export function StreamViewComposer({
 
   async function submitMessage() {
     const trimmed = messageText.trim();
-    if (!trimmed || messageComposer == null) return;
+    if (messageComposer == null) return;
+    const { onSubmit, onSubmitFiles } = messageComposer;
+    if (selectedFiles.length > 0 && onSubmitFiles != null) {
+      await runSubmit(async () => {
+        await onSubmitFiles({ files: selectedFiles, message: trimmed });
+        setMessageText("");
+        setSelectedFiles([]);
+        setFileError(undefined);
+        onNudgeDeliveries();
+      });
+      return;
+    }
+    if (!trimmed) return;
     await runSubmit(async () => {
-      await messageComposer.onSubmit(trimmed);
+      await onSubmit(trimmed);
       setMessageText("");
       onNudgeDeliveries();
     });
+  }
+
+  function addSelectedFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) return;
+    const accepted = files.filter((file) => file.size <= MAX_MESSAGE_FILE_SIZE_BYTES);
+    const rejected = files.filter((file) => file.size > MAX_MESSAGE_FILE_SIZE_BYTES);
+    if (rejected.length > 0) {
+      const label = rejected.length === 1 ? rejected[0]!.name : `${rejected.length} files`;
+      setFileError(`${label} must be ${formatFileSize(MAX_MESSAGE_FILE_SIZE_BYTES)} or smaller.`);
+    } else {
+      setFileError(undefined);
+    }
+    if (accepted.length > 0) {
+      setSelectedFiles((previous) => [...previous, ...accepted]);
+    }
+  }
+
+  function removeSelectedFile(index: number) {
+    setSelectedFiles((previous) => previous.filter((_, candidate) => candidate !== index));
+    setFileError(undefined);
   }
 
   async function submitRawEvents() {
@@ -104,39 +144,92 @@ export function StreamViewComposer({
     setMode("raw");
   }
 
-  // Submit and interrupt failures have independent lifecycles (a submit error
-  // clears on the next submit; an interrupt error is scoped to its turn), so
-  // neither may mask the other — show both.
-  const error = [submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
+  // File validation, submit, and interrupt failures have independent
+  // lifecycles, so none may mask the others — show all active messages.
+  const error = [fileError, submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
+  const attachmentChips =
+    selectedFiles.length === 0 ? undefined : (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {selectedFiles.map((file, index) => (
+          <span
+            key={`${file.name}-${file.lastModified}-${index}`}
+            className="inline-flex max-w-52 items-center gap-1.5 rounded-full border bg-muted/50 py-1 pl-2 pr-1 text-xs"
+          >
+            <span className="min-w-0 truncate">{file.name}</span>
+            <span className="shrink-0 font-mono text-muted-foreground">
+              {formatFileSize(file.size)}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              title={`Remove ${file.name}`}
+              onClick={() => removeSelectedFile(index)}
+              className="size-5 rounded-full text-muted-foreground"
+            >
+              <XIcon className="size-3" />
+            </Button>
+          </span>
+        ))}
+      </div>
+    );
 
   return (
-    <AgentPillComposer
-      mode={mode}
-      onModeChange={setMode}
-      autoFocusMessage={autoFocusMessage}
-      examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
-      {...(messageComposer == null
-        ? {}
-        : {
-            message: {
-              value: messageText,
-              onValueChange: setMessageText,
-              onSubmit: submitMessage,
-              ...(messageComposer.placeholder == null
+    <>
+      {messageComposer?.onSubmitFiles == null ? null : (
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            addSelectedFiles(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+      )}
+      <AgentPillComposer
+        mode={mode}
+        onModeChange={setMode}
+        autoFocusMessage={autoFocusMessage}
+        examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
+        {...(messageComposer == null
+          ? {}
+          : {
+              message: {
+                value: messageText,
+                onValueChange: setMessageText,
+                onSubmit: submitMessage,
+                canSubmit:
+                  messageText.trim() !== "" ||
+                  (selectedFiles.length > 0 && messageComposer.onSubmitFiles != null),
+                ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
+                ...(messageComposer.onSubmitFiles == null
+                  ? {}
+                  : { onAttach: () => fileInputRef.current?.click() }),
+                ...(messageComposer.placeholder == null
+                  ? {}
+                  : { placeholder: messageComposer.placeholder }),
+              },
+              ...(interrupt == null
                 ? {}
-                : { placeholder: messageComposer.placeholder }),
-            },
-            ...(interrupt == null
-              ? {}
-              : { onInterrupt: interrupt.run, isInterrupting: interrupt.isInterrupting }),
-          })}
-      raw={{
-        value: rawText,
-        onValueChange: setRawText,
-        onSubmit: submitRawEvents,
-      }}
-      isSubmitting={isSubmitting}
-      {...(error == null ? {} : { error })}
-    />
+                : { onInterrupt: interrupt.run, isInterrupting: interrupt.isInterrupting }),
+            })}
+        raw={{
+          value: rawText,
+          onValueChange: setRawText,
+          onSubmit: submitRawEvents,
+        }}
+        isSubmitting={isSubmitting}
+        {...(error == null ? {} : { error })}
+      />
+    </>
   );
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const kilobytes = size / 1024;
+  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
+  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }

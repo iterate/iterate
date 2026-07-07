@@ -210,6 +210,8 @@ export interface ProjectRpcTarget {
   email: EmailCapability;
   /** Read-only catalogue of known-good itx script snippets (\`list()\`, \`get({ id })\`). */
   examples: ItxExampleCatalog;
+  /** Project file storage (R2-backed): \`files.get(path)\` → put/bytes/url/delete. */
+  files: Files;
   /** Slack/Google connections + the connection-scoped API proxies (\`integrations.gmail\`, \`integrations.slack\`). */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
@@ -250,6 +252,59 @@ export interface ProjectRpcTarget {
 export interface AgentChat extends Describable {
   sendMessage(input: { message: string }): Promise<StreamEvent>;
 }
+
+/**
+ * Bytes accepted by file-writing APIs. Strings are ALWAYS decoded as base64
+ * (a full \`data:\` URL also works) — that is what Workers AI image models
+ * return, so \`itx.ai.run\` output pipes straight in.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
+/** A stored project file: its itx path plus wire facts. */
+export type ProjectFileMetadata = {
+  contentType: string;
+  path: string;
+  size: number;
+};
+
+/**
+ * Project file storage, R2-backed. Paths are project-scoped, mutable, and
+ * last-write-wins; files attached to agent conversations live under the
+ * agent's own path. Bytes are served to any HTTP client via signed URLs
+ * (\`FileHandle.url()\`).
+ */
+export interface Files extends Describable {
+  /** A handle for the file at \`path\` — a pure address, no I/O until called. */
+  get(path: string): FileHandle;
+}
+
+/** One project file, addressed by path. */
+export interface FileHandle extends Describable {
+  /** Store bytes at this path (creates or overwrites). */
+  put(input: { contentType?: string; data: FileData }): Promise<ProjectFileMetadata>;
+  /** The file's bytes. Throws when no file exists at this path. */
+  bytes(): Promise<Uint8Array>;
+  /**
+   * A signed public HTTPS URL for this file (default expiry 7 days). Anyone
+   * holding the URL can fetch the bytes — share it in chat, feed it to
+   * vision models, use it as an \`<img src>\`.
+   */
+  url(input?: { expiresInSeconds?: number }): Promise<string>;
+  delete(): Promise<void>;
+}
+
+/**
+ * A file reference attached to an agent input event: where the bytes live
+ * (\`path\`) plus a signed public \`url\` minted when the file was attached, so
+ * UIs and LLM providers can fetch it without another round trip.
+ */
+export type AgentFileAttachment = {
+  contentType: string;
+  filename: string;
+  path: string;
+  size: number;
+  url: string;
+};
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
 export interface Ai extends Describable {
@@ -499,6 +554,25 @@ export interface Agent {
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
+  /**
+   * Store files AND make them part of this agent's conversation in one call.
+   * The bytes land in project file storage under the agent's own path
+   * (\`<agent path>/<short id>-<filename>\`), and ONE input event carrying all
+   * attachments (each with a signed public \`url\`) is appended to the agent
+   * stream — so the files show up as a single conversation message, and
+   * images become visible to vision-capable models on following turns. Pass
+   * \`llmRequestPolicy: { behaviour: "dont-trigger-request" }\` to record files
+   * WITHOUT starting an LLM turn (the right choice for files the agent
+   * itself generated, e.g. \`itx.ai.run\` images).
+   */
+  addFiles(input: {
+    files: Array<{ contentType: string; data: FileData; filename: string }>;
+    /** Conversation text accompanying the files. Defaults to a short attachment note. */
+    message?: string;
+    llmRequestPolicy?: {
+      behaviour: "dont-trigger-request" | "after-current-request" | "interrupt-current-request";
+    };
+  }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /**
    * Send-and-wait convenience: appends a user message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -789,6 +863,12 @@ export type AgentProcessorState = {
   llmConfig: { model: string };
   llmProvider: "cloudflare-ai" | "openai-ws";
   pendingTriggerOffset: number | null;
+  inProgressScriptExecutions: Array<{
+    code: string;
+    executionId: string;
+    requestedOffset: number;
+    startedAt: string;
+  }>;
   scriptExecutionsCompleted: string[];
   systemPrompt: string;
 };

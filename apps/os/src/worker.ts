@@ -29,6 +29,7 @@ import {
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
 import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
+import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
@@ -171,6 +172,17 @@ async function apiFetch(
   const url = new URL(request.url);
 
   if (route.lane === "project") {
+    // The reserved `iterate-files` platform app never reaches the project
+    // worker: signed project-file URLs are served straight from R2 here.
+    if (route.resolved.appSlug === FILES_APP_SLUG) {
+      return await serveProjectFileRequest({
+        projectId: route.resolved.projectId,
+        request: new Request(route.fetch.url, {
+          headers: route.fetch.headers,
+          method: route.fetch.method,
+        }),
+      });
+    }
     const project = await new ProjectCollectionRpcTarget({
       auth: trustedInternalAuthContext(),
       ctx,
