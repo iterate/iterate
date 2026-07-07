@@ -149,6 +149,7 @@ async function appFetch(
 
       const context: RequestContext = {
         config: requestConfig,
+        executionCtx: ctx,
         isEventDocsHost: host.isEventDocsHost,
         log,
         rawRequest: request,
