@@ -21,15 +21,28 @@
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
 import { readRecord, readString } from "./utils.ts";
 import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
 } from "./slack-agent-processor-contract.ts";
 
+/** One file shared on a Slack message, as the webhook carries it. */
+export type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
+
 export class SlackAgentProcessor extends StreamProcessor<
   typeof SlackAgentProcessorContract,
-  { callSlackApi?(method: string, body: Record<string, unknown>): Promise<void> }
+  {
+    callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+    /** Downloads Slack-shared files into project file storage (see
+     * storeSlackFilesForAgent in slack-api.ts). `storageKey` is stable per
+     * webhook event so replays overwrite instead of duplicating. */
+    storeSlackFiles?(input: {
+      files: SlackSharedFile[];
+      storageKey: string;
+    }): Promise<AgentFileAttachment[]>;
+  }
 > {
   readonly contract = SlackAgentProcessorContract;
 
@@ -80,13 +93,17 @@ export class SlackAgentProcessor extends StreamProcessor<
         return;
       case "events.iterate.com/slack/webhook-received": {
         const appendAgentInput = async (
-          input: { llmRequestPolicy?: { behaviour: "dont-trigger-request" } } = {},
+          input: {
+            files?: AgentFileAttachment[];
+            llmRequestPolicy?: { behaviour: "dont-trigger-request" };
+          } = {},
         ) => {
           await append({
             type: "events.iterate.com/agent/input-added",
             idempotencyKey: `slack-agent:webhook-to-agent-input:${event.offset}`,
             payload: {
               content: slackWebhookAgentInput(event.payload),
+              ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
                 ? {}
                 : { llmRequestPolicy: input.llmRequestPolicy }),
@@ -152,9 +169,28 @@ export class SlackAgentProcessor extends StreamProcessor<
         }
 
         // Same ordering requirement: the agent input append commits before the
-        // eyes reaction tells the user their message was picked up.
+        // eyes reaction tells the user their message was picked up. Files
+        // shared on the message are materialized into project file storage
+        // first so the input event carries the attachments; a failed download
+        // degrades to the plain webhook input (the YAML already names the
+        // files) rather than wedging the processor.
         blockProcessorWhile(async () => {
-          await appendAgentInput();
+          const sharedFiles = readSlackMessageFiles(slackEvent);
+          let files: AgentFileAttachment[] | undefined;
+          if (sharedFiles.length > 0 && this.deps.storeSlackFiles != null) {
+            try {
+              files = await this.deps.storeSlackFiles({
+                files: sharedFiles,
+                storageKey: `slack-${event.offset}`,
+              });
+            } catch (error) {
+              console.error("[slack-agent] failed to store shared files", {
+                count: sharedFiles.length,
+                error,
+              });
+            }
+          }
+          await appendAgentInput(files == null ? {} : { files });
           await this.#addEyesReactionForMessageTarget(target);
         });
         return;
@@ -271,6 +307,26 @@ function isOwnBotMessage(
 function isBotAction(slackEvent: Record<string, unknown>, botUserId: string | undefined): boolean {
   if (botUserId == null) return false;
   return readStringField(slackEvent, "user") === botUserId;
+}
+
+/** The `files` array on a Slack message event, reduced to what storage needs. */
+function readSlackMessageFiles(slackEvent: Record<string, unknown>): SlackSharedFile[] {
+  const files = slackEvent.files;
+  if (!Array.isArray(files)) return [];
+  const shared: SlackSharedFile[] = [];
+  for (const file of files) {
+    const record = readRecord(file);
+    const urlPrivate = readString(record?.url_private);
+    if (record == null || urlPrivate == null) continue;
+    const mimetype = readString(record.mimetype);
+    const name = readString(record.name);
+    shared.push({
+      ...(mimetype == null ? {} : { mimetype }),
+      ...(name == null ? {} : { name }),
+      urlPrivate,
+    });
+  }
+  return shared;
 }
 
 function readStringField(value: unknown, key: string): string | undefined {

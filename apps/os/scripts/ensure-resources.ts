@@ -66,12 +66,18 @@ export default async function ensureResources(
   // sandbox's data is erase-data's job, never this create-only script's.
   const r2BucketName = `${env.osWorkerName}-sandboxes`;
   const r2 = await cf<{ buckets: { name: string }[] }>(`/r2/buckets?per_page=1000`);
-  if (r2.buckets.some((bucket) => bucket.name === r2BucketName)) {
-    console.log(`R2 bucket ${r2BucketName} exists`);
-  } else {
-    await cf(`/r2/buckets`, { method: "POST", body: JSON.stringify({ name: r2BucketName }) });
-    console.log(`created R2 bucket ${r2BucketName}`);
-  }
+  const ensureBucket = async (name: string) => {
+    if (r2.buckets.some((bucket) => bucket.name === name)) {
+      console.log(`R2 bucket ${name} exists`);
+      return;
+    }
+    await cf(`/r2/buckets`, { method: "POST", body: JSON.stringify({ name }) });
+    console.log(`created R2 bucket ${name}`);
+  };
+  await ensureBucket(r2BucketName);
+  // Project file storage (FILES_BUCKET, domains/files/project-files.ts). No
+  // lifecycle rule: files live until deleted.
+  await ensureBucket(`${env.osWorkerName}-files`);
   // The Sandbox SDK checks its backup ttl only at RESTORE time and never
   // deletes expired objects from R2 — without a lifecycle rule the bucket
   // grows forever under e2e churn (a fresh sandbox per test). Expire the

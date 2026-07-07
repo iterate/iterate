@@ -66,11 +66,21 @@ export type AgentUiActivity = {
   endedAtMs?: number;
 };
 
+/** A file attachment shown alongside a user message in the agent UI. */
+export type AgentUiFileAttachment = {
+  contentType: string;
+  filename: string;
+  path: string;
+  size: number;
+  url: string;
+};
+
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
   text: string;
   timestampMs: number;
+  files?: AgentUiFileAttachment[];
 };
 
 export type AgentUiItem = AgentUiMessageItem | AgentUiActivity;
@@ -140,6 +150,7 @@ const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-reques
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
 const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
+const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
 // The openai-ws processor journals every raw Responses-WS frame as
@@ -174,22 +185,25 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case "events.iterate.com/agents/user-message-received": {
       const text = readString(event, "content");
       if (text == null) return state;
-      // A user message while steps are still running must not archive those
-      // steps as finished — the agent is still working. Only a quiescent live
-      // activity settles here; an active one keeps streaming and settles on
-      // its own terminal event.
-      const hasRunningStep = state.live?.steps.some((step) => step.status === "running") ?? false;
-      const item: AgentUiMessageItem = {
+      return emitUserMessageItem(state, ops, timestampMs, {
         kind: "user",
         id: `user-${event.offset}`,
         text,
         timestampMs,
-      };
-      if (hasRunningStep) {
-        return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
-      }
-      const base = hasRunningStep ? state : settleLive(state, timestampMs, ops);
-      return emitItem(base, ops, item);
+      });
+    }
+
+    case AGENT_INPUT_ADDED: {
+      const text = readString(event, "content");
+      const files = readFileAttachments(event);
+      if (text == null || files.length === 0) return state;
+      return emitUserMessageItem(state, ops, timestampMs, {
+        kind: "user",
+        id: `user-file-${event.offset}`,
+        text,
+        files,
+        timestampMs,
+      });
     }
 
     case "events.iterate.com/agents/web-message-sent":
@@ -475,6 +489,23 @@ function flushQueuedUserMessages(state: AgentUiState, ops: AgentUiOp[]): AgentUi
   return next;
 }
 
+function emitUserMessageItem(
+  state: AgentUiState,
+  ops: AgentUiOp[],
+  timestampMs: number,
+  item: AgentUiMessageItem,
+): AgentUiState {
+  // A user message while steps are still running must not archive those
+  // steps as finished — the agent is still working. Only a quiescent live
+  // activity settles here; an active one keeps streaming and settles on
+  // its own terminal event.
+  const hasRunningStep = state.live?.steps.some((step) => step.status === "running") ?? false;
+  if (hasRunningStep) {
+    return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
+  }
+  return emitItem(settleLive(state, timestampMs, ops), ops, item);
+}
+
 function updateLlmStep(
   state: AgentUiState,
   llmRequestId: number,
@@ -579,6 +610,23 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function readFileAttachments(event: Event): AgentUiFileAttachment[] {
+  const value = readPayloadRecord(event)?.files;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): AgentUiFileAttachment[] => {
+    if (!isRecord(item)) return [];
+    const contentType = typeof item.contentType === "string" ? item.contentType : null;
+    const filename = typeof item.filename === "string" ? item.filename : null;
+    const path = typeof item.path === "string" ? item.path : null;
+    const size = typeof item.size === "number" && Number.isFinite(item.size) ? item.size : null;
+    const url = typeof item.url === "string" ? item.url : null;
+    if (contentType == null || filename == null || path == null || size == null || url == null) {
+      return [];
+    }
+    return [{ contentType, filename, path, size, url }];
+  });
 }
 
 function readString(event: Event, key: string): string | null {

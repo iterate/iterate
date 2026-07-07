@@ -49,6 +49,20 @@ function ProjectAgentDetailContent() {
     await itx.agents.get(streamPath).sendMessage(message);
   }
 
+  async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
+    const itx = await connectItxBrowser({ projectId: project.id });
+    const agent = itx.agents.get(streamPath);
+    for (const [index, file] of files.entries()) {
+      await agent.addFile({
+        contentType: file.type || "application/octet-stream",
+        data: new Uint8Array(await file.arrayBuffer()),
+        filename: file.name,
+        // Attach the typed text to the first file only, so one message isn't repeated per file.
+        ...(index === 0 && message ? { message } : {}),
+      });
+    }
+  }
+
   async function interruptAgentMessage(llmRequestId: number) {
     const itx = await connectItxBrowser({ projectId: project.id });
     await itx.streams.get(streamPath).append({
@@ -68,6 +82,7 @@ function ProjectAgentDetailContent() {
       messageComposer={{
         onInterrupt: interruptAgentMessage,
         onSubmit: submitAgentMessage,
+        onSubmitFiles: submitAgentFiles,
         placeholder: "Message this agent",
       }}
       projectId={project.id}

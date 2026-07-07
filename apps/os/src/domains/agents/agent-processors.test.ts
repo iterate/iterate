@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
-import { AgentProcessor } from "./agent-processor-implementation.ts";
+import {
+  AgentProcessor,
+  buildAgentLlmRequestBody,
+  flattenMessageToText,
+} from "./agent-processor-implementation.ts";
 import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import {
@@ -835,5 +839,61 @@ describe("minimal web-chat agent processors", () => {
     expect(stream.events.map((event) => event.type)).not.toEqual(
       expect.arrayContaining(["events.iterate.com/agent/output-added"]),
     );
+  });
+});
+
+describe("file attachments in the LLM request", () => {
+  const attachment = {
+    contentType: "image/png",
+    filename: "cat.png",
+    path: "/agents/web/demo/abc-cat.png",
+    size: 12345,
+    url: "https://iterate-files--demo.iterate.app/agents/web/demo/abc-cat.png?exp=1&sig=x",
+  };
+
+  it("carries input-added files through to the provider-facing history", async () => {
+    const stream = new MemoryStream();
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "[File attached: cat.png (image/png)]",
+          files: [attachment],
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: {
+          debounceMs: 0,
+          model: "gpt-5.5",
+          provider: "openai-ws",
+          requestId: "llm-request:1",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-5.5", provider: "openai-ws", requestId: "llm-request:1" },
+      },
+    );
+
+    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestId: 3 });
+    const userMessage = body.messages.find((message) => message.role === "user");
+    expect(userMessage).toMatchObject({
+      content: "[File attached: cat.png (image/png)]",
+      files: [attachment],
+    });
+  });
+
+  it("flattens attachments to actionable hint lines for text-only models", () => {
+    const flattened = flattenMessageToText({
+      role: "user",
+      content: "look at this",
+      files: [attachment],
+    });
+    expect(flattened).toContain("look at this");
+    expect(flattened).toContain('itx.files.get("/agents/web/demo/abc-cat.png").bytes()');
+    expect(flattened).toContain(attachment.url);
+    expect(flattenMessageToText({ role: "user", content: "no files" })).toBe("no files");
   });
 });

@@ -4,6 +4,7 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+  type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
@@ -236,10 +237,42 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
   return state;
 }
 
-function buildLlmChatRequest(state: AgentState) {
+/** One agent-history message as providers receive it. */
+export type AgentChatMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+  files?: AgentFileAttachment[];
+};
+
+function buildLlmChatRequest(state: AgentState): { messages: AgentChatMessage[] } {
   return {
     messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
   };
+}
+
+/**
+ * The model-visible text for a file the current model cannot ingest natively:
+ * never fail the turn — tell the agent where the bytes live and how to read
+ * or convert them, and let it act (fetch via itx.files, convert via
+ * itx.ai.toMarkdown) on its next script.
+ */
+export function renderFileHintLine(file: AgentFileAttachment): string {
+  return (
+    `[Attached file: ${file.filename} (${file.contentType}, ${file.size} bytes) — ` +
+    `bytes: await itx.files.get(${JSON.stringify(file.path)}).bytes(); ` +
+    `convert: itx.ai.toMarkdown; public url: ${file.url}]`
+  );
+}
+
+/**
+ * Flattens one history message to plain text: content plus a hint line per
+ * attachment. Providers without native file support (or for non-image files)
+ * render attachments this way.
+ */
+export function flattenMessageToText(message: AgentChatMessage): string {
+  const files = message.files ?? [];
+  if (files.length === 0) return message.content;
+  return [message.content, ...files.map(renderFileHintLine)].join("\n");
 }
 
 export function buildAgentLlmRequestBody(input: {
@@ -260,9 +293,17 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       return { ...state, systemPrompt: event.payload.systemPrompt };
     case "events.iterate.com/agent/input-added": {
       const shouldTrigger = event.payload.llmRequestPolicy.behaviour !== "dont-trigger-request";
+      const files = event.payload.files;
       return {
         ...state,
-        history: [...state.history, { role: "user", content: event.payload.content }],
+        history: [
+          ...state.history,
+          {
+            role: "user",
+            content: event.payload.content,
+            ...(files === undefined || files.length === 0 ? {} : { files }),
+          },
+        ],
         pendingTriggerOffset: shouldTrigger ? event.offset : state.pendingTriggerOffset,
       };
     }

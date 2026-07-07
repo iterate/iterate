@@ -60,6 +60,11 @@ export default async function start(options: StartOptions = {}) {
   }
 
   const port = requestedPort ?? (await pickFreePort(recordedPort()));
+  // Thread the picked port through the environment too: vite.config.ts writes
+  // wrangler.jsonc at import time, and the local-dev vars bake
+  // APP_CONFIG_BASE_URL from PORT so the worker knows its own origin (signed
+  // file URLs and other absolute-URL minting need it).
+  process.env.PORT = String(port);
   const viteArgs = ["exec", "vite", "dev", "--port", String(port), "--strictPort"];
   const [command, args] = options.skipDoppler
     ? ["pnpm", viteArgs]
