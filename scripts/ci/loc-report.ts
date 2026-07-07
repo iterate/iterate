@@ -39,8 +39,12 @@ const bodySectionLabel = "loc-report";
 export type ChangedFile = {
   path: string;
   previousPath: string;
+  /** Raw diff counts, straight from `git diff --numstat`. */
   added: number;
   removed: number;
+  /** Counts after dropping blank lines and (for JS-ish files) comments. */
+  significantAdded: number;
+  significantRemoved: number;
   binary: boolean;
   generated: boolean;
 };
@@ -62,8 +66,11 @@ export function parseNumstat(raw: string): ChangedFile[] {
       previousPath,
       added: binary ? 0 : Number(added),
       removed: binary ? 0 : Number(removed),
+      // both filled in by getChangedFiles, which can ask git
+      significantAdded: 0,
+      significantRemoved: 0,
       binary,
-      generated: false, // filled in by getChangedFiles, which can ask git
+      generated: false,
     });
   }
   return files;
@@ -72,11 +79,11 @@ export function parseNumstat(raw: string): ChangedFile[] {
 const gitMaxBuffer = 64 * 1024 * 1024;
 
 /**
- * Changed files between merge-base(base, head) and head, with added/removed
- * counted as SLOC: blank lines never count, and for JS-ish files line and
- * block comments are stripped first. Counts come from diffing the
- * stripped before/after contents, so multiline comment blocks and
- * comment-only changes fall out naturally.
+ * Changed files between merge-base(base, head) and head. Raw added/removed come
+ * from numstat; significant counts additionally drop blank lines and (for
+ * JS-ish files) line/block comments, computed by diffing the stripped
+ * before/after contents so multiline comment blocks and comment-only changes
+ * fall out naturally.
  */
 export function getChangedFiles(baseRef: string, headRef: string): ChangedFile[] {
   const raw = execFileSync("git", ["diff", "--numstat", "-z", "-M", `${baseRef}...${headRef}`], {
@@ -93,7 +100,8 @@ export function getChangedFiles(baseRef: string, headRef: string): ChangedFile[]
     if (marked.binary) return marked;
     const before = significantLines(gitShow(mergeBase, file.previousPath), file.previousPath);
     const after = significantLines(gitShow(headRef, file.path), file.path);
-    return { ...marked, ...slocDiffCounts(before, after) };
+    const counts = slocDiffCounts(before, after);
+    return { ...marked, significantAdded: counts.added, significantRemoved: counts.removed };
   });
 }
 
@@ -221,6 +229,8 @@ export type GroupRow = {
   files: number;
   added: number;
   removed: number;
+  significantAdded: number;
+  significantRemoved: number;
 };
 
 export function computeReport(files: ChangedFile[]) {
@@ -230,6 +240,8 @@ export function computeReport(files: ChangedFile[]) {
     files: 0,
     added: 0,
     removed: 0,
+    significantAdded: 0,
+    significantRemoved: 0,
   }));
   for (const file of files) {
     const index = file.generated
@@ -239,6 +251,8 @@ export function computeReport(files: ChangedFile[]) {
     row.files += 1;
     row.added += file.added;
     row.removed += file.removed;
+    row.significantAdded += file.significantAdded;
+    row.significantRemoved += file.significantRemoved;
   }
   const total: GroupRow = {
     name: "Total",
@@ -246,6 +260,8 @@ export function computeReport(files: ChangedFile[]) {
     files: files.length,
     added: rows.reduce((sum, row) => sum + row.added, 0),
     removed: rows.reduce((sum, row) => sum + row.removed, 0),
+    significantAdded: rows.reduce((sum, row) => sum + row.significantAdded, 0),
+    significantRemoved: rows.reduce((sum, row) => sum + row.significantRemoved, 0),
   };
   const populated = rows.filter((row) => row.files > 0);
   populated.sort((a, b) => a.priority - b.priority);
@@ -253,30 +269,37 @@ export function computeReport(files: ChangedFile[]) {
 }
 
 /**
- * Renders the report as a markdown table mimicking GitHub's own diffstat: +added,
- * -removed, and a five-square bar. Squares fill proportionally to the group's
- * share of the largest group's churn, split green/red by its add/remove ratio.
+ * Renders the report as a markdown table mimicking GitHub's own diffstat.
+ * Two diff columns per group: raw line counts, then significant counts (blank
+ * lines and JS comments excluded) so comment-heavy churn is visible at a
+ * glance. The five-square bar rides the Significant column - it's the primary
+ * signal - filling proportionally to the group's share of the largest group's
+ * significant churn, split green/red by its add/remove ratio.
  */
 export function renderTable(report: ReturnType<typeof computeReport>) {
   // Always signed, even +0/-0, matching GitHub's own diffstat.
   const count = (n: number, sign: "+" | "-") => `${sign}${Math.abs(n).toLocaleString("en-US")}`;
-  const maxChurn = Math.max(...report.rows.map((row) => row.added + row.removed), 1);
+  const maxChurn = Math.max(
+    ...report.rows.map((row) => row.significantAdded + row.significantRemoved),
+    1,
+  );
   const bar = (row: GroupRow) => {
-    const churn = row.added + row.removed;
+    const churn = row.significantAdded + row.significantRemoved;
     if (churn === 0) return "⬜⬜⬜⬜⬜";
     const filled = row.name === "Total" ? 5 : Math.max(1, Math.round((5 * churn) / maxChurn));
-    const green = Math.round((filled * row.added) / churn);
+    const green = Math.round((filled * row.significantAdded) / churn);
     return "🟩".repeat(green) + "🟥".repeat(filled - green) + "⬜".repeat(5 - filled);
   };
   const line = (row: GroupRow, wrap: (text: string) => string) => {
-    const changes = `${count(row.added, "+")} ${count(row.removed, "-")}`;
-    return `| ${wrap(row.name)} | ${wrap(changes)} ${bar(row)} |`;
+    const lines = `${count(row.added, "+")} ${count(row.removed, "-")}`;
+    const significant = `${count(row.significantAdded, "+")} ${count(row.significantRemoved, "-")}`;
+    return `| ${wrap(row.name)} | ${wrap(lines)} | ${wrap(significant)} ${bar(row)} |`;
   };
   return [
-    "| Group | Changes |",
+    "| Group | Lines | Significant |",
     // Right-align: bars are a constant five squares, so they stack flush right
     // and the numbers right-justify against them instead of leaving them ragged.
-    "| --- | ---: |",
+    "| --- | ---: | ---: |",
     ...report.rows.map((row) => line(row, (text) => text)),
     line(report.total, (text) => `**${text}**`),
   ].join("\n");
@@ -290,7 +313,7 @@ export function renderBodySection(
   return [
     renderTable(report),
     "",
-    `<sub>Source lines changed (blank lines and JS comments ignored) between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
+    `<sub>Lines counts every changed line; Significant ignores blank lines and JS comments. Between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
   ].join("\n");
 }
 
