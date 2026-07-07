@@ -24,7 +24,6 @@ import type {
 } from "../../types.ts";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
 import {
   createOAuthState,
@@ -40,7 +39,6 @@ import {
 } from "./integration-streams.ts";
 import { readGoogleTokenState } from "./google-tokens.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
-import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
@@ -234,31 +232,20 @@ async function recordSlackConnection(input: {
     material: input.accessToken,
   });
 
-  await integrationStreamStub(input.projectId, SLACK_INTEGRATION_STREAM_PATH).append(
-    // Arm the webhook router processor on this stream (idempotent; also armed
-    // at project create by the project processor).
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: DurableObjectNameCodec.stringify({
-        projectId: input.projectId,
-        path: SLACK_INTEGRATION_STREAM_PATH,
-      }),
-      idempotencyKey: `slack-router-subscription:${input.projectId}`,
-      processorSlug: SlackProcessorContract.slug,
-      subscriberType: "project",
-    }),
-    {
-      type: SLACK_CONNECTED_EVENT_TYPE,
-      idempotencyKey: `slack:connected:${input.teamId}:${input.projectId}`,
-      payload: {
-        externalId: input.teamId,
-        projectId: input.projectId,
-        scopes: [...input.scopes],
-        teamDomain: input.teamDomain,
-        teamId: input.teamId,
-        teamName: input.teamName,
-      },
+  // The webhook router processor is the `/integrations/slack` stream's path
+  // resident — this append (like any other) wakes it; no subscription setup.
+  await integrationStreamStub(input.projectId, SLACK_INTEGRATION_STREAM_PATH).append({
+    type: SLACK_CONNECTED_EVENT_TYPE,
+    idempotencyKey: `slack:connected:${input.teamId}:${input.projectId}`,
+    payload: {
+      externalId: input.teamId,
+      projectId: input.projectId,
+      scopes: [...input.scopes],
+      teamDomain: input.teamDomain,
+      teamId: input.teamId,
+      teamName: input.teamName,
     },
-  );
+  });
 
   await integrationStreamStub(null, SLACK_TEAM_DIRECTORY_STREAM_PATH).append({
     type: SLACK_TEAM_CLAIMED_EVENT_TYPE,

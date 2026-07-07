@@ -20,12 +20,16 @@ import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
-  type ConfiguredSubscriberDurableObjectType,
+  SubscriptionConfiguredPayload,
   type CoreProcessorState,
-  type ConfiguredStreamSubscriber,
   type LiveStreamSubscriberDescriptor,
   type StreamSubscriptionType,
 } from "./core-processor-contract.ts";
+import {
+  derivedStreamProcessors,
+  wakeableEventNamespace,
+  type WakeableDurableObjectKind,
+} from "./stream-wake-targets.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
@@ -300,14 +304,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       // validation must happen here, before offset assignment and storage — not
       // inside the later fire-and-forget wake path, where the invalid target
       // would already be durable state that every future append re-reconciles.
-      // The lifecycle e2e tests ("configured durable object subscribers must
-      // target the stream project" and friends) assert both the rejection and
-      // that no event was committed.
-      const event = CoreProcessorContract.parseEventInput(
+      // Only userspace `worker` subscribers are configurable (the schema
+      // enforces it); first-party processors are derived, never configured.
+      CoreProcessorContract.parseEventInput(
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
-      this.#validateConfiguredSubscriberTarget(event.payload.subscriber);
+      // Worker subscribers carry no target project: the wake path builds an
+      // itx scope from this stream's own projectId, which is why they are safe
+      // for project streams and impossible for global ones.
+      if (this.name.projectId === null) {
+        throw new Error("configured worker subscribers require a project-scoped stream");
+      }
     }
 
     if (args.event.type === "events.iterate.com/stream/rule-configured") {
@@ -351,6 +359,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       eventCount: args.state.eventCount + 1,
       maxOffset: args.event.offset,
     };
+
+    // An event owned by a derivable actor processor makes that processor one
+    // of this stream's wake targets, forever. This fold IS the first-party
+    // subscription mechanism (see stream-wake-targets.ts).
+    const namespace = wakeableEventNamespace(args.event.type);
+    if (namespace !== undefined && !next.wakeableNamespaces.includes(namespace)) {
+      next = { ...next, wakeableNamespaces: [...next.wakeableNamespaces, namespace] };
+    }
 
     switch (args.event.type) {
       case "events.iterate.com/stream/created": {
@@ -428,12 +444,22 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-configured": {
-        const event = parse("events.iterate.com/stream/subscription-configured", args.event);
+        // safeParse, not parse: journals from the pre-derivation era hold
+        // Durable-Object-typed subscription events. Their processors are
+        // covered by the derived wake set now, so they reduce to no-ops
+        // instead of wedging replay.
+        const parsed = SubscriptionConfiguredPayload.safeParse(args.event.payload);
+        if (!parsed.success) return next;
         return {
           ...next,
           configuredSubscribersByKey: {
             ...next.configuredSubscribersByKey,
-            [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+            [parsed.data.subscriptionKey]: latestConfiguredEvent({
+              createdAt: args.event.createdAt,
+              offset: args.event.offset,
+              payload: parsed.data,
+              type: "events.iterate.com/stream/subscription-configured" as const,
+            }),
           },
         };
       }
@@ -575,20 +601,52 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Makes runtime configured connections match the persisted subscription config:
-   * closes connections whose config disappeared, wakes a subscriber for each
-   * configured subscription that has none. Triggered by woken/config changes and
-   * by configured connection loss, never per append.
+   * Every wakeable subscription this stream currently has, keyed by
+   * subscriptionKey. First-party processors are DERIVED — path residents plus
+   * the journal's wakeable namespaces, each hosted by the Durable Object of
+   * its kind at this stream's own name — and userspace worker subscribers come
+   * from the configured desired state. Nothing else is ever woken.
+   */
+  #wakeTargetsByKey(): Map<string, StreamWakeTarget> {
+    const targets = new Map<string, StreamWakeTarget>();
+    const streamName = DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true });
+    for (const processor of derivedStreamProcessors({
+      path: this.name.path,
+      projectId: this.name.projectId,
+      wakeableNamespaces: this.#coreProcessorState.wakeableNamespaces,
+    })) {
+      targets.set(`${streamName}#${processor.slug}`, {
+        type: "durable-object",
+        kind: processor.kind,
+        durableObjectName: streamName,
+      });
+    }
+    for (const [subscriptionKey, entry] of Object.entries(
+      this.#coreProcessorState.configuredSubscribersByKey,
+    )) {
+      targets.set(subscriptionKey, {
+        type: "worker",
+        workerRef: entry.latestConfiguredEvent.payload.subscriber.workerRef,
+      });
+    }
+    return targets;
+  }
+
+  /**
+   * Makes runtime configured connections match the wake-target set: closes
+   * connections whose target disappeared (a removed worker subscription),
+   * wakes a subscriber for each target that has none. Triggered by woken/config
+   * changes and by configured connection loss, never per append.
    */
   #reconcileConfiguredConnections(): void {
-    const configured = this.#coreProcessorState.configuredSubscribersByKey;
+    const targets = this.#wakeTargetsByKey();
     for (const subscriptionKey of this.#connections.configuredKeys()) {
-      if (configured[subscriptionKey] === undefined) {
+      if (!targets.has(subscriptionKey)) {
         this.#connections.close(subscriptionKey, "subscription-removed");
       }
     }
 
-    for (const [subscriptionKey, entry] of Object.entries(configured)) {
+    for (const [subscriptionKey, target] of targets) {
       if (
         this.#connections.hasConfigured(subscriptionKey) ||
         this.#connecting.has(subscriptionKey)
@@ -600,9 +658,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#connecting.add(subscriptionKey);
       this.#runInBackground(async () => {
         try {
-          await this.#wakeConfiguredSubscriber({ configured: entry, subscriptionKey });
+          await this.#wakeSubscriber({ subscriptionKey, target });
         } catch (error) {
-          console.error("Stream configured subscriber wakeup failed", { error, subscriptionKey });
+          console.error("Stream subscriber wakeup failed", { error, subscriptionKey });
           this.#scheduleConfiguredWakeRetry(subscriptionKey);
         } finally {
           this.#connecting.delete(subscriptionKey);
@@ -612,11 +670,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * True if a configured subscription currently has no live or in-flight
-   * connection and needs re-waking.
+   * True if a wake target currently has no live or in-flight connection and
+   * needs re-waking.
    */
   #needsConfiguredReconcile(): boolean {
-    return Object.keys(this.#coreProcessorState.configuredSubscribersByKey).some(
+    return [...this.#wakeTargetsByKey().keys()].some(
       (subscriptionKey) =>
         !this.#connections.hasConfigured(subscriptionKey) && !this.#connecting.has(subscriptionKey),
     );
@@ -648,60 +706,40 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Ask a configured subscriber to subscribe back. This is the offer side of a
+   * Ask a wake target to subscribe back. This is the offer side of a
    * live-capability handshake: the wake carries only serializable coordinates,
    * and the woken subscriber responds with `subscribe({ configured: true })`,
    * handing this stream a live `processEventBatch` callback capability (see
    * `stream-processor-host.ts` for the subscriber side and
    * `domains/capability-host/live-capability.ts` for the same pattern in itx).
    */
-  async #wakeConfiguredSubscriber(args: {
-    configured: CoreProcessorState["configuredSubscribersByKey"][string];
+  async #wakeSubscriber(args: {
     subscriptionKey: string;
+    target: StreamWakeTarget;
   }): Promise<void> {
     const { maxOffset, path, projectId } = this.#coreProcessorState;
     if (projectId === undefined || path === undefined) {
-      throw new Error(
-        "Cannot wake configured subscriber before stream coordinates are initialized.",
-      );
+      throw new Error("Cannot wake a stream subscriber before coordinates are initialized.");
     }
-    const subscriber = args.configured.latestConfiguredEvent.payload.subscriber;
     const request: StreamSubscriberWakeRequest = {
       stream: { projectId, path, streamMaxOffset: maxOffset },
       subscriptionKey: args.subscriptionKey,
     };
 
-    // Belt-and-braces: normal writes are rejected in `validateAppend` before
-    // they become durable state. Keeping the same validation on the wake path
-    // protects older/broken persisted state and any future internal caller that
-    // reaches this method without going through append first.
-    this.#validateConfiguredSubscriberTarget(subscriber);
-
-    if (subscriber.type === "worker") {
-      await this.#wakeWorkerSubscriber(subscriber.workerRef, request);
+    if (args.target.type === "worker") {
+      await this.#wakeWorkerSubscriber(args.target.workerRef, request);
       return;
     }
-    const durableObjectName = DurableObjectNameCodec.stringify(subscriber.address, {
-      allowNullProjectId: true,
-    });
-    await this.#configuredSubscriberDurableObject(
-      subscriber.type,
-      durableObjectName,
-    ).wakeStreamSubscriber(request);
-  }
-
-  #configuredSubscriberDurableObject(
-    type: ConfiguredSubscriberDurableObjectType,
-    durableObjectName: string,
-  ): ConfiguredSubscriberTarget {
     const namespace = {
       agent: this.env.AGENT,
       "capability-host": this.env.CAPABILITY_HOST,
       project: this.env.PROJECT,
       repo: this.env.REPO,
       secret: this.env.SECRET,
-    }[type];
-    return namespace.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
+    }[args.target.kind];
+    await (
+      namespace.getByName(args.target.durableObjectName) as unknown as ConfiguredSubscriberTarget
+    ).wakeStreamSubscriber(request);
   }
 
   async #wakeWorkerSubscriber(
@@ -723,34 +761,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: ["wakeStreamSubscriber"],
       ref: workerRef,
     });
-  }
-
-  #validateConfiguredSubscriberTarget(subscriber: ConfiguredStreamSubscriber): void {
-    if (subscriber.type === "worker") {
-      // Worker subscribers carry no Durable Object address: the wake path builds
-      // an itx/project scope from this stream's own projectId and invokes the
-      // DynamicWorkerRef inside it. That is why workers are safe for project
-      // streams without a separate target projectId field, and why global
-      // streams must reject them — there is no project boundary to supply.
-      if (this.name.projectId === null) {
-        throw new Error("configured worker subscribers require a project-scoped stream");
-      }
-      return;
-    }
-    // Durable Object subscribers do carry an address. Its projectId must equal
-    // the stream's projectId exactly; a global stream (`projectId: null`) may
-    // only target a global address, a project stream only Durable Objects in
-    // that same project. This is the configured-subscriber safety invariant:
-    // durable wakeup state must never encode cross-project authority.
-    const projectId = subscriber.address.projectId;
-    if (projectId !== this.name.projectId) {
-      throw new Error(
-        `configured ${subscriber.type} subscriber projectId ${projectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
-      );
-    }
-    if (projectId === null && subscriber.type !== "repo") {
-      throw new Error(`configured ${subscriber.type} subscribers must be project-scoped`);
-    }
   }
 
   #validateStreamRuleTarget(rule: { projectId?: string | null }): void {
@@ -895,21 +905,22 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
     if (args.configured === true) {
-      // The configured-subscriber handshake response: a woken subscriber calls
-      // the same public verb with its durable subscriptionKey to hand the
-      // stream its live `processEventBatch` callback (see
-      // `#wakeConfiguredSubscriber`). `StreamRpcTarget` restricts
+      // The wake-handshake response: a woken subscriber calls the same public
+      // verb with its durable subscriptionKey to hand the stream its live
+      // `processEventBatch` callback (see `#wakeSubscriber`). Admission is
+      // derived, exactly like the wake itself: the key must name one of the
+      // stream's current wake targets. `StreamRpcTarget` restricts
       // `configured: true` to trusted-internal callers.
       const subscriptionKey = args.subscriptionKey?.trim() ?? "";
       if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
-      if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] === undefined) {
-        throw new Error(`configured subscriber "${subscriptionKey}" is not configured`);
+      if (!this.#wakeTargetsByKey().has(subscriptionKey)) {
+        throw new Error(`configured subscriber "${subscriptionKey}" is not a stream wake target`);
       }
       return this.#openSubscription({ ...args, subscriptionKey, subscriptionType: "configured" });
     }
 
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
-    if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
+    if (this.#wakeTargetsByKey().has(subscriptionKey)) {
       throw new Error(
         `subscriptionKey "${subscriptionKey}" is reserved for a configured subscriber`,
       );
@@ -1123,6 +1134,15 @@ function latestConfiguredEvent<
 type ConfiguredSubscriberTarget = {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<void>;
 };
+
+/**
+ * One resolved wake target: a derived first-party processor host (the Durable
+ * Object of its kind at the stream's own name) or a configured userspace
+ * worker subscriber.
+ */
+type StreamWakeTarget =
+  | { type: "durable-object"; kind: WakeableDurableObjectKind; durableObjectName: string }
+  | { type: "worker"; workerRef: DynamicWorkerRef };
 
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {

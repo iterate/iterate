@@ -27,9 +27,7 @@ import {
 } from "./domains/itx/utils.ts";
 import { ITX_TYPES_SOURCE } from "./types-source.generated.ts";
 import { projectStub } from "./domains/projects/egress.ts";
-import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
-import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
   PROJECT_REPO_PATH,
   PROJECT_WORKER_ENTRY_POINT,
@@ -47,10 +45,7 @@ import {
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import { getFreshGoogleAccessToken } from "./domains/integrations/google-tokens.ts";
 import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
-import {
-  buildDurableObjectProcessorSubscriptionConfiguredEvent,
-  resolveStreamPath,
-} from "./domains/streams/utils.ts";
+import { resolveStreamPath } from "./domains/streams/utils.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import {
   isObjectSchema,
@@ -262,10 +257,6 @@ function rootStream(props: { auth: ItxAuth; projectId: string | null }) {
   });
 }
 
-function streamDurableObjectName(props: { projectId: string | null; path: string }) {
-  return DurableObjectNameCodec.stringify(props, { allowNullProjectId: true });
-}
-
 async function requestRepoCreate(input: {
   auth: ItxAuth;
   path: string;
@@ -278,19 +269,15 @@ async function requestRepoCreate(input: {
     projectId: input.projectId,
   });
   const timing = { projectId: input.projectId, path };
-  const [, createRequested] = await timedStep("create-timing", timing, "repo-append", () =>
-    stream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-        processorSlug: RepoProcessorContract.slug,
-        subscriberType: "repo",
-      }),
-      {
-        type: "events.iterate.com/repo/create-requested",
-        idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
-        payload: { projectId: input.projectId, path },
-      },
-    ),
+  // The repo/create-requested event is itself what subscribes the repo
+  // processor: appending a repo-owned event makes the repo Durable Object at
+  // this stream's path a wake target (stream-wake-targets.ts).
+  const [createRequested] = await timedStep("create-timing", timing, "repo-append", () =>
+    stream.append({
+      type: "events.iterate.com/repo/create-requested",
+      idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+      payload: { projectId: input.projectId, path },
+    }),
   );
 
   await timedStep("create-timing", timing, "wait-repo-created", () =>
@@ -1333,35 +1320,20 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       projectId: args.projectId,
     });
 
+    // One event births the whole project: the project processor is the root
+    // stream's path resident and the repo processor wakes on its own
+    // repo/create-requested event, so no subscription setup exists.
     const appendRootEvents = () =>
-      stream.append(
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
-          processorSlug: ProjectProcessorContract.slug,
-          subscriberType: "project",
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: PROJECT_REPO_PATH,
-          }),
-          processorSlug: RepoProcessorContract.slug,
-          subscriberType: "repo",
-        }),
-        {
-          type: "events.iterate.com/project/create-requested",
-          idempotencyKey: `project-create-requested:${registered.projectId}`,
-          payload: {
-            onboardingActive: true,
-            projectId: registered.projectId,
-            slug: registered.slug,
-          },
+      stream.append({
+        type: "events.iterate.com/project/create-requested",
+        idempotencyKey: `project-create-requested:${registered.projectId}`,
+        payload: {
+          onboardingActive: true,
+          projectId: registered.projectId,
+          slug: registered.slug,
         },
-      );
-    const [, , createRequested] = await timedStep(
+      });
+    const [createRequested] = await timedStep(
       "create-timing",
       timing,
       "root-append",

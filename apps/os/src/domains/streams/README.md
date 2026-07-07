@@ -50,10 +50,23 @@ Two kinds of connection:
 
 - **Ephemeral** (`subscribe`) — browsers, `waitForEvent`, operators. Dies with
   the caller; nothing re-establishes it.
-- **Configured** (`subscribe({ configured: true })`) — durable desired state, created by
-  appending an `events.iterate.com/stream/subscription-configured` event. The
-  stream re-wakes these subscribers forever: on DO wake, on config change, and
-  on any append that finds a configured subscription without a live connection.
+- **Configured** (`subscribe({ configured: true })`) — durable wake targets.
+  The stream re-wakes these subscribers forever: on DO wake, on config change,
+  and on any append that finds a wake target without a live connection.
+
+Wake targets come from two sources (`stream-wake-targets.ts`):
+
+- **Derived first-party processors.** Never configured, never stored. Path
+  residents (the root stream's project processor, the agent family on
+  `/agents/**`, the Slack router on `/integrations/slack`) plus the journal's
+  _wakeable namespaces_: appending an event owned by a derivable actor
+  processor (`repo`, `capability-host`, `secret`) makes the Durable Object of
+  that kind at the stream's own coordinates a wake target, forever. The fold
+  IS the subscription — there is no setup step to forget, drift, or wedge.
+- **Configured userspace `worker` subscribers** — the one genuinely
+  non-derivable kind (user intent is real information), created by appending
+  an `events.iterate.com/stream/subscription-configured` event carrying a
+  `DynamicWorkerRef`.
 
 Presence is event-sourced: the stream appends `subscriber-connected` /
 `subscriber-disconnected` facts once per actual open/close, and the core fold
@@ -127,8 +140,9 @@ announcements and checkpoints.
 | `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                    |
 | `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                           |
 | `stream-processor-host.ts`   | Hosts processors in a DO; subscriber half of the wake handshake                                                 |
+| `stream-wake-targets.ts`     | Derived first-party subscriptions: path residents + wakeable event namespaces                                   |
 | `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas                                                                  |
-| `utils.ts`                   | Stream path resolution + subscription-configured event builder                                                  |
+| `utils.ts`                   | Stream path resolution                                                                                          |
 | `client-libraries/`          | Browser mirror host and browser-side processors                                                                 |
 
 Public capability surface (`Stream`, `StreamEventBatch`, `ProcessEventBatch`,

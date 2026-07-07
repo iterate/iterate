@@ -289,7 +289,6 @@ describe("itx", () => {
       expect.arrayContaining([
         "events.iterate.com/stream/created",
         "events.iterate.com/stream/woken",
-        "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/project/create-requested",
         "events.iterate.com/repo/create-requested",
         "events.iterate.com/repo/created",
@@ -1926,27 +1925,15 @@ describe("itx", () => {
     const outputOffset = events.find(
       (event) => event.type === AGENT_OUTPUT_ADDED_TYPE && event.payload?.content === content,
     )?.offset;
-    const agentSubscriptionOffset = events.find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
-          ?.type === "agent" &&
-        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith("#agent"),
+    // The birth certificate no longer contains subscription events (the agent
+    // family is derived from the /agents/** path); the project processor's
+    // config events are what mark the birth lane landing after the
+    // pre-existing child event.
+    const configUpdatedOffset = events.find(
+      (event) => event.type === "events.iterate.com/agent/config-updated",
     )?.offset;
-    const cloudflareAiSubscriptionOffset = events.find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
-          ?.type === "agent" &&
-        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith(
-          "#cloudflare-ai",
-        ),
-    )?.offset;
-    const itxSubscriptionOffset = events.find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriber?: { type?: string } }).subscriber?.type ===
-          "capability-host",
+    const sandboxProvidedOffset = events.find(
+      (event) => event.type === "events.iterate.com/capability-host/capability-provided",
     )?.offset;
     const scriptRequestedOffset = events.find(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -1956,11 +1943,13 @@ describe("itx", () => {
     )?.offset;
 
     expect(outputOffset).toBe(historicalOutput.offset);
-    expect(agentSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
-    expect(cloudflareAiSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
-    expect(itxSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
+    expect(configUpdatedOffset).toBeGreaterThan(historicalOutput.offset);
+    expect(sandboxProvidedOffset).toBeGreaterThan(historicalOutput.offset);
     expect(modelSelectionOffset).toBeGreaterThan(historicalOutput.offset);
-    expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);
+    // The agent wakes on the first append (path resident), so the script run
+    // races the birth-certificate lane; only its ordering against the
+    // triggering output is guaranteed.
+    expect(scriptRequestedOffset).toBeGreaterThan(outputOffset!);
   });
 
   test("Agent-only dynamic worker and durable object capabilities run from LLM scripts", async () => {

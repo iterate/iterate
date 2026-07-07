@@ -550,10 +550,11 @@ export interface Stream extends Describable {
   subscribe(input: {
     subscriptionKey?: string;
     /**
-     * Open the durable configured subscription registered under
-     * `subscriptionKey` (the wake-handshake response) instead of an ephemeral
-     * one. Requires trusted-internal auth and an existing
-     * subscription-configured fact for the key.
+     * Open the durable wakeable subscription named by `subscriptionKey` (the
+     * wake-handshake response) instead of an ephemeral one. Requires
+     * trusted-internal auth; the key must name one of the stream's wake
+     * targets — a derived first-party processor (path resident or wakeable
+     * event namespace) or a configured worker subscriber.
      */
     configured?: boolean;
     processEventBatch: ProcessEventBatch;

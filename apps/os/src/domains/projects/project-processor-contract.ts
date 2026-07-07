@@ -68,6 +68,5 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/project/created",
     "events.iterate.com/repo/create-requested",
-    "events.iterate.com/stream/subscription-configured",
   ],
 });

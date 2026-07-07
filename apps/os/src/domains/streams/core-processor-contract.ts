@@ -1,9 +1,9 @@
 // Defines the built-in "core" processor contract.
 // This processor owns stream runtime state such as max offset, stream config,
-// configured subscriber desired state, the subscriber presence roster, and the
-// paused/resumed door. The Stream Durable Object runs it inline during append
-// instead of through a subscription runner. Token-bucket rate limiting lives in
-// the circuit-breaker processor.
+// wakeable event namespaces, configured worker-subscriber desired state, the
+// subscriber presence roster, and the paused/resumed door. The Stream Durable
+// Object runs it inline during append instead of through a subscription
+// runner. Token-bucket rate limiting lives in the circuit-breaker processor.
 //
 // Contract files are the schema/type layer: plumbing modules (types.ts, the
 // processor host) import payload schemas from here, and processors that
@@ -11,8 +11,6 @@
 
 import { z } from "zod";
 import type { GetProcessorRuntimeState } from "../../types.ts";
-import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
-import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRef } from "../workers/schemas.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 
@@ -36,46 +34,22 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 // - 7: core's empty state is expressed directly by this schema's optional and
 //      defaulted fields instead of a separate initial state object.
 // - 8: cross-post stream rules are reduced into core state.
-export const CORE_STATE_VERSION = 8;
+// - 9: first-party processor subscriptions became derived (path residents +
+//      wakeableNamespaces folded from event types; see stream-wake-targets.ts).
+//      Configured subscribers narrowed to `worker` targets only; legacy
+//      Durable-Object subscription-configured events reduce to no-ops.
+export const CORE_STATE_VERSION = 9;
 
 /**
- * Persisted configured subscriber target. The stream resolves these narrow
- * targets itself, so subscription config cannot smuggle an arbitrary RPC method
- * or cross-project Durable Object name into the wake path.
+ * Configured subscriber target. Only userspace `worker` subscribers are
+ * configuration: a user's interest in a stream is genuine information nobody
+ * can derive. First-party processors are never configured — the stream derives
+ * them from its own path and journal (`stream-wake-targets.ts`).
  */
-const DurableObjectAddress = z.strictObject({
-  projectId: z.string().trim().min(1).nullable(),
-  path: z.string().transform(normalizePath),
-  props: z.record(z.string(), z.string()).default({}),
-}) satisfies z.ZodType<DurableObjectAddressType, unknown>;
-
-/**
- * The Durable Object kinds a stream may wake as a configured subscriber. Every
- * one is addressed the same way (a validated `DurableObjectAddress`); only the
- * binding they resolve to differs, so they share one union member rather than
- * five identical ones.
- */
-export const ConfiguredSubscriberDurableObjectType = z.enum([
-  "agent",
-  "capability-host",
-  "project",
-  "repo",
-  "secret",
-]);
-export type ConfiguredSubscriberDurableObjectType = z.infer<
-  typeof ConfiguredSubscriberDurableObjectType
->;
-
-export const ConfiguredStreamSubscriber = z.union([
-  z.strictObject({
-    type: ConfiguredSubscriberDurableObjectType,
-    address: DurableObjectAddress,
-  }),
-  z.strictObject({
-    type: z.literal("worker"),
-    workerRef: DynamicWorkerRef,
-  }),
-]);
+export const ConfiguredStreamSubscriber = z.strictObject({
+  type: z.literal("worker"),
+  workerRef: DynamicWorkerRef,
+});
 
 export type ConfiguredStreamSubscriber = z.infer<typeof ConfiguredStreamSubscriber>;
 
@@ -84,8 +58,9 @@ export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
 
 // Payloads shared between the event catalog below and the reduced-state
 // records that store the latest committed configuration event, so the two can
-// never drift apart.
-const SubscriptionConfiguredPayload = z.object({
+// never drift apart. Exported so the core reducer can safeParse historical
+// subscription events (legacy Durable-Object-typed ones reduce to no-ops).
+export const SubscriptionConfiguredPayload = z.object({
   subscriptionKey: z.string().trim().min(1),
   subscriber: ConfiguredStreamSubscriber,
 });
@@ -227,6 +202,14 @@ export const CoreProcessorContract = defineProcessorContract({
         ),
       )
       .default({}),
+    /**
+     * Every wakeable event namespace this journal has seen (the
+     * `events.iterate.com/<slug>/…` segment, when `<slug>` is one of the
+     * derivable actor processors in `stream-wake-targets.ts`). Appending an
+     * event owned by such a processor makes it one of this stream's wake
+     * targets forever — this fold IS the subscription.
+     */
+    wakeableNamespaces: z.array(z.string().trim().min(1)).default([]),
     rulesById: z
       .record(
         z.string(),
@@ -278,11 +261,12 @@ export const CoreProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/stream/subscription-configured": {
-      description: "Configures or replaces a wakeable subscriber for this stream.",
+      description:
+        "Configures or replaces a wakeable userspace `worker` subscriber for this stream. First-party processors are never configured: the stream derives them from its path and journal.",
       payloadSchema: SubscriptionConfiguredPayload,
     },
     "events.iterate.com/stream/subscription-removed": {
-      description: "Removes a previously configured wakeable subscriber for this stream.",
+      description: "Removes a previously configured wakeable worker subscriber for this stream.",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
       }),

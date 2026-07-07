@@ -30,9 +30,11 @@ const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 // These tests are intentionally about subscription lifecycle policy, not about
 // the old inbound/outbound transport direction. The current model has two
 // subscription types:
-// - configured: durable desired state in `configuredSubscribersByKey`; the
-//   stream may drop the live callback while idle because it can wake the target
-//   again from the stored configuration.
+// - configured: durable wake targets. First-party processors are DERIVED from
+//   the stream's path and journal (stream-wake-targets.ts) and userspace
+//   worker subscribers come from subscription-configured events; either way
+//   the stream may drop the live callback while idle because it can wake the
+//   target again.
 // - ephemeral: a direct caller supplied a live callback via `subscribe()`; the
 //   stream must keep it until unsubscribe, RPC break, or session end because
 //   there is no durable wakeup path.
@@ -41,7 +43,7 @@ const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 // Durable Objects alive through retained callback stubs. The now-active tests
 // prove the configured path is teardownable and re-wakeable, while direct
 // Cap'n Web subscriptions are cleaned up when their session is disposed.
-test("configured processor subscriptions are recorded as configured runtime connections", async () => {
+test("derived processor subscriptions are recorded as configured runtime connections", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -95,25 +97,25 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
   }).rejects.toThrow(/reserved for a configured subscriber/);
 });
 
-test("configured durable object subscribers must target the stream project", async () => {
-  // This pins the important pre-commit rule for project-scoped streams: a
-  // configured Durable Object subscriber may only name a Durable Object address
-  // with the same projectId as the stream. If append accepted this event and the
-  // wake side effect merely failed later, the stream would still retain a bad
-  // durable desired-state record and keep trying to wake it on future appends.
-  // The final `expectNoSubscriptionConfiguredEvent(...)` assertion is the
-  // critical part: it proves rejection happened before the event was committed.
+test("durable object subscribers cannot be configured — first-party wiring is derived", async () => {
+  // First-party processor subscriptions are a pure function of the stream's
+  // path and journal (stream-wake-targets.ts); the only configurable
+  // subscriber kind is a userspace `worker`. A caller with append authority
+  // must not be able to put a Durable-Object wake target into durable stream
+  // state — that was the old model's cross-project escalation surface. The
+  // final `expectNoSubscriptionConfiguredEvent(...)` assertion is the critical
+  // part: it proves rejection happened before the event was committed.
   const marker = crypto.randomUUID();
-  const subscriptionKey = `configured-cross-project-${marker}`;
+  const subscriptionKey = `configured-durable-object-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-cross-project-${marker}` });
+  using project = itx.projects.create({ slug: `configured-do-${marker}` });
   const { projectId } = await project.__describe();
-  using stream = project.streams.get(`/configured-cross-project-${marker}`);
+  using stream = project.streams.get(`/configured-durable-object-${marker}`);
 
   await expect(
     stream.append(
@@ -122,51 +124,42 @@ test("configured durable object subscribers must target the stream project", asy
         subscriber: {
           address: {
             path: "/",
-            projectId: `${projectId}-other`,
+            projectId,
             props: {},
           },
           type: "repo",
         },
       }),
     ),
-  ).rejects.toThrow(/does not match stream projectId/);
+  ).rejects.toThrow();
 
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
 
-test("global streams reject project-scoped configured durable object subscribers", async () => {
-  // The same invariant applies to deployment-wide/global streams. A stream with
-  // `projectId: null` may only configure subscribers whose Durable Object
-  // address also has `projectId: null`; it must not become a global registry that
-  // can wake arbitrary project Durable Objects. This covers the null-project
-  // branch of the same append-time validation as the previous test.
+test("appending a processor-owned event derives that processor as a wake target", async () => {
+  // The replacement for subscription setup: an event owned by a derivable
+  // actor processor (here: secret) makes the Durable Object of that kind at
+  // the stream's own path a wake target, and the woken processor subscribes
+  // back as a configured connection — no subscription-configured event exists
+  // anywhere on the stream.
   const marker = crypto.randomUUID();
-  const subscriptionKey = `configured-global-cross-project-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using stream = itx.streams.get(`/configured-global-cross-project-${marker}`);
+  using project = itx.projects.create({ slug: `lifecycle-derived-${marker}` });
+  using stream = project.streams.get(`/secrets/lifecycle-derived-${marker}`);
 
-  await expect(
-    stream.append(
-      subscriptionConfiguredEvent({
-        subscriptionKey,
-        subscriber: {
-          address: {
-            path: "/",
-            projectId: `prj_${marker}`,
-            props: {},
-          },
-          type: "repo",
-        },
-      }),
-    ),
-  ).rejects.toThrow(/does not match stream projectId/);
+  await stream.append({
+    type: "events.iterate.com/secret/used",
+    payload: { usedAt: new Date().toISOString() },
+  });
 
-  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+  const { keys, state } = await waitForConfiguredProcessorConnections(stream);
+  expect(keys.some((key) => key.endsWith("#secret"))).toBe(true);
+  expect(Object.keys(state.coreProcessorState.configuredSubscribersByKey ?? {})).toEqual([]);
 });
 
 test("global streams reject configured worker subscribers", async () => {
@@ -414,7 +407,7 @@ async function waitForConfiguredProcessorConnections(
     async () => {
       latest = asStreamRuntimeState(await stream.runtimeState());
       const keys =
-        opts.expectedKeys === undefined ? configuredSubscriptionKeys(latest) : opts.expectedKeys;
+        opts.expectedKeys === undefined ? configuredConnectionKeys(latest) : opts.expectedKeys;
       return (
         keys.length > 0 &&
         keys.every(
@@ -430,7 +423,7 @@ async function waitForConfiguredProcessorConnections(
   const state = latest!;
   return {
     keys:
-      opts.expectedKeys === undefined ? configuredSubscriptionKeys(state) : [...opts.expectedKeys],
+      opts.expectedKeys === undefined ? configuredConnectionKeys(state) : [...opts.expectedKeys],
     state,
   };
 }
@@ -478,8 +471,13 @@ async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
   ).durableObjectStub.runIdleTeardownNow();
 }
 
-function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {
-  return Object.keys(state.coreProcessorState.configuredSubscribersByKey ?? {});
+function configuredConnectionKeys(state: StreamRuntimeState): string[] {
+  // Wake targets are derived, not stored, so live configured connections are
+  // the observable roster: a key is "configured" when its runtime connection
+  // says so.
+  return Object.entries(state.runtime.connections)
+    .filter(([, connection]) => connection.subscriptionType === "configured")
+    .map(([key]) => key);
 }
 
 function asStreamRuntimeState(value: unknown): StreamRuntimeState {

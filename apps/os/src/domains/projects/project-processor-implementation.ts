@@ -1,29 +1,18 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { timedStep } from "../../lib/step-timing.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
-  AgentProcessorContract,
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_SYSTEM_PROMPT,
   type AgentLlmProvider,
 } from "../agents/agent-processor-contract.ts";
-import { CloudflareAiProcessorContract } from "../agents/cloudflare-ai-processor-contract.ts";
-import {
-  DEFAULT_OPENAI_WS_MODEL,
-  OpenAiWsProcessorContract,
-} from "../agents/openai-ws-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { DEFAULT_OPENAI_WS_MODEL } from "../agents/openai-ws-processor-contract.ts";
 import { agentSandboxPath } from "../sandboxes/utils.ts";
-import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
-import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
-import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { isSlackAgentPath } from "../integrations/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -153,48 +142,21 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // One atomic root append (itx subscription + repo kickoff, original
-          // relative order preserved) in parallel with the independent Slack
-          // stream append. The previous three sequential awaits were the
-          // slowest lane of the create saga (~1.2-2.6s measured on preview-7;
+          // The repo kickoff append in parallel with the independent onboarding
+          // agent birth. Sequential awaits here were the slowest lane of the
+          // create saga (~1.2-2.6s measured on preview-7;
           // tasks/os-cold-create-latency.md) — batching cuts it to one
           // round-trip apiece.
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
-              append(
-                buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: "/",
-                  }),
-                  processorSlug: CapabilityHostProcessorContract.slug,
-                  subscriberType: "capability-host",
-                }),
-                {
-                  type: "events.iterate.com/repo/create-requested",
-                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
-                  payload: {
-                    path: PROJECT_REPO_PATH,
-                    projectId: this.deps.itx.projectId,
-                  },
+              append({
+                type: "events.iterate.com/repo/create-requested",
+                idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
+                payload: {
+                  path: PROJECT_REPO_PATH,
+                  projectId: this.deps.itx.projectId,
                 },
-              ),
-            ),
-            // Arm the Slack webhook router on `/integrations/slack` from birth,
-            // so a claimed workspace's first webhook routes even if the connect
-            // flow's own belt-and-braces subscription append raced.
-            timedStep("create-timing", timing, "slack-router-append", () =>
-              this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
-                buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: SLACK_INTEGRATION_STREAM_PATH,
-                  }),
-                  idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
-                  processorSlug: SlackProcessorContract.slug,
-                  subscriberType: "project",
-                }),
-              ),
+              }),
             ),
             // The user can already be sitting on /agents/onboarding while repo
             // bootstrap and the project worker warm up. Birth the normal agent
@@ -211,52 +173,30 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/stream/child-stream-created": {
         const childPath = event.payload.childPath;
-        if (!childPath.startsWith("/agents/") && !childPath.startsWith("/secrets/")) return;
+        if (!childPath.startsWith("/agents/")) return;
         blockProcessorWhile(async () => {
-          const durableObjectName = DurableObjectNameCodec.stringify({
-            projectId: this.deps.itx.projectId,
-            path: childPath,
-          });
-          if (childPath.startsWith("/agents/")) {
-            // The agent path picks the prompt (agentSystemPromptForPath);
-            // Slack agents additionally get the slack-agent processor
-            // subscription.
-            const isSlack = isSlackAgentPath(childPath);
-            await this.deps.itx.streams.get(childPath).append(
-              // Identical idempotency keys to the create-time onboarding birth
-              // certificate, so whichever lane runs second dedupes cleanly.
-              ...agentBirthCertificateEvents({
-                childPath,
-                llmProvider: this.deps.defaultLlmProvider,
-                projectId: this.deps.itx.projectId,
-                slack: isSlack,
-                systemPrompt: agentSystemPromptForPath(childPath),
-              }),
-            );
-            // Every agent owns the sandbox at its own path under /sandboxes
-            // (`itx.sandbox` → agentSandboxPath). Awaiting the get mints the
-            // Durable Object and pins its identity durably — that IS creation;
-            // no container starts here (the first command boots it, idle puts
-            // it back to sleep), so agent birth stays cheap however many
-            // agents a project accumulates. Non-fatal on purpose:
-            // `itx.sandbox` re-ensures identity on every use, so this is eager
-            // minting only — and in container-less local dev the sandbox
-            // constructor throws, which must not wedge agent birth.
-            await this.deps.itx.sandboxes
-              .get(agentSandboxPath(childPath))
-              .catch((error: unknown) => {
-                console.error(`agent sandbox create failed for ${childPath}`, error);
-              });
-            return;
-          }
-
           await this.deps.itx.streams.get(childPath).append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName,
-              processorSlug: SecretProcessorContract.slug,
-              subscriberType: "secret",
+            // Identical idempotency keys to the create-time onboarding birth
+            // certificate, so whichever lane runs second dedupes cleanly.
+            ...agentBirthCertificateEvents({
+              childPath,
+              llmProvider: this.deps.defaultLlmProvider,
+              projectId: this.deps.itx.projectId,
+              systemPrompt: agentSystemPromptForPath(childPath),
             }),
           );
+          // Every agent owns the sandbox at its own path under /sandboxes
+          // (`itx.sandbox` → agentSandboxPath). Awaiting the get mints the
+          // Durable Object and pins its identity durably — that IS creation;
+          // no container starts here (the first command boots it, idle puts
+          // it back to sleep), so agent birth stays cheap however many
+          // agents a project accumulates. Non-fatal on purpose:
+          // `itx.sandbox` re-ensures identity on every use, so this is eager
+          // minting only — and in container-less local dev the sandbox
+          // constructor throws, which must not wedge agent birth.
+          await this.deps.itx.sandboxes.get(agentSandboxPath(childPath)).catch((error: unknown) => {
+            console.error(`agent sandbox create failed for ${childPath}`, error);
+          });
         });
         return;
       }
@@ -341,28 +281,12 @@ function agentBirthCertificateEvents(input: {
   childPath: string;
   llmProvider: AgentLlmProvider;
   projectId: string;
-  slack?: boolean;
   systemPrompt: string;
 }) {
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.childPath,
-  });
-  const subscription = (processorSlug: string, subscriberType: "agent" | "capability-host") =>
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
-      processorSlug,
-      subscriberType,
-    });
+  // No subscriptions here: the agent-family processors are path residents of
+  // every /agents/** stream and the capability-host processor wakes on its own
+  // capability-provided event below (stream-wake-targets.ts).
   return [
-    subscription(AgentProcessorContract.slug, "agent"),
-    // Both provider processors subscribe; only the one matching the agent's
-    // selected llmProvider answers llm-request-requested events.
-    subscription(CloudflareAiProcessorContract.slug, "agent"),
-    subscription(OpenAiWsProcessorContract.slug, "agent"),
-    subscription(CapabilityHostProcessorContract.slug, "capability-host"),
-    ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,
