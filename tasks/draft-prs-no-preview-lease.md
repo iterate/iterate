@@ -1,0 +1,81 @@
+---
+status: in-progress
+size: medium
+branch: draft-prs-no-preview-lease
+---
+
+# Draft PRs don't get a preview lease unless they ask
+
+## Status summary
+
+Spec written, implementation not started yet.
+
+## Problem
+
+There are nine preview slots (`preview-1..9`), leased one-per-PR via the
+semaphore. Every PR that touches preview paths claims a slot on open — 
+including draft PRs, which are the default for agent-generated work (bedtime
+runs can open half a dozen drafts in one night). Drafts hold scarce slots
+that ready-for-review PRs then queue behind ("All preview slots are leased —
+this PR is waiting in line").
+
+## Decision
+
+Draft PRs do not claim a preview lease. A draft opts back in by any of:
+
+1. **Adding the `preview` label** — the durable ask; previews then behave
+   exactly as for a ready PR (deploy on every synchronize).
+2. **Marking the PR ready for review** — previews start automatically.
+3. **Explicit dispatch** — `depot ci dispatch ... --workflow
+   cloudflare-previews.yml --input pull-request-number=N` or a manual
+   `pnpm preview deploy --allow-draft ...`. This is one-shot: the next
+   synchronize re-applies the draft policy, so use the label for a lasting
+   opt-in.
+
+When a leased PR is converted to draft (or the `preview` label is removed
+from a draft), the next lifecycle run tears its apps down and releases the
+slot.
+
+### Tradeoff (assumption, flagged for review)
+
+Draft PRs lose the preview e2e signal until they opt in or go ready. We
+think slot scarcity hurts more than early e2e helps — and marking ready
+kicks off deploy+e2e automatically — but if we'd rather keep e2e-by-default
+for drafts, invert the default and make this label opt-out instead.
+
+## Design
+
+The policy lives in `scripts/preview/preview.ts` (testable TypeScript), not
+in workflow `if:` expressions. `resolvePullRequestPreviewContext` already
+does `pulls.get`; it additionally records `draft` and label names. `deploy`
+consults a pure decision function:
+
+- ready PR, or draft with `preview` label, or `--allow-draft` → deploy as today
+- draft without label, no lease held → skip: log + PR body notice explaining
+  the three opt-in routes; claim nothing
+- draft without label, lease held → tear down recorded apps and release the
+  lease (same path as `cleanup`), with a notice saying why
+
+`preview test` needs no change: with no lease recorded it already skips.
+
+The workflow (`.depot/workflows/cloudflare-previews.yml`) grows trigger
+types `ready_for_review`, `converted_to_draft`, `labeled`, `unlabeled` — all
+routed to the existing preview job (the script decides what to do); `closed`
+stays routed to cleanup. The workflow_dispatch path passes `--allow-draft`
+since a dispatch is an explicit ask. Note: Depot only registers triggers
+from the default branch, so the new event types take effect after merge.
+
+## Checklist
+
+- [ ] pure decision function (draft/labels/allow-draft/lease-held → deploy | skip | teardown) with unit tests
+- [ ] context carries `draft` + labels from the existing `pulls.get`
+- [ ] `deploy` applies the decision: skip with PR-body notice, or teardown + lease release
+- [ ] `--allow-draft` flag on `preview deploy` (trpc-cli picks it up from the options type)
+- [ ] workflow: new trigger types; dispatch passes `--allow-draft`
+- [ ] `flake-hunt-loop.sh` passes `--allow-draft` (marathon dispatches against an arbitrary PR)
+- [ ] docs: lease model section in `docs/dev-environments.md` ("A PR keeps its slot from first deploy until the PR closes" needs the draft caveat)
+- [ ] create the `preview` label in the repo (one-time `gh label create`)
+
+## Implementation notes
+
+(log kept while implementing)
