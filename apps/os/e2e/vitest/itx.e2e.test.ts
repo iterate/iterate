@@ -400,17 +400,18 @@ describe("itx", () => {
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({ path: ["ai"], type: "builtin" }),
     );
-    // Gmail lives under the integrations built-in since the capability-host
-    // refactor; the connection-scoped proxy self-describes there.
+    // The inventory row carries the connections one-liner; the collection
+    // node itself self-describes with the full per-connection call shapes.
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({
-        instructions: expect.stringContaining("itx.integrations.gmail"),
+        instructions: expect.stringContaining("/integrations/<slug>/<connection>"),
         path: ["integrations"],
         type: "builtin",
       }),
     );
-    const gmail = await project.integrations.gmail.__describe();
-    expect(gmail.instructions).toContain("Gmail REST proxy");
+    const integrations = await project.integrations.__describe();
+    expect(integrations.instructions).toContain("gmail.request");
+    expect(integrations.instructions).toContain("itx.integrations.list()");
   });
 
   test("Trusted internal root can access global streams and repos", async () => {

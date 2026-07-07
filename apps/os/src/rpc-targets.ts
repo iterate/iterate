@@ -40,15 +40,29 @@ import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
-  completeGoogleConnect,
-  completeSlackConnect,
+  completeConnect,
   disconnectProvider,
   getConnectionStatus,
+  listIntegrationConnections,
   startOAuthFlow,
 } from "./domains/integrations/connect-flows.ts";
+import {
+  BUILTIN_INTEGRATION_SLUGS,
+  googleConnectionSecretPath,
+  isBuiltinIntegrationSlug,
+} from "./domains/integrations/utils.ts";
+import {
+  connectionOctokit,
+  GITHUB_CALL_GRAMMAR,
+  normalizeGithubError,
+} from "./domains/integrations/github-api.ts";
+import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
-import { getFreshGoogleAccessToken } from "./domains/integrations/google-tokens.ts";
-import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
+import {
+  connectionSlackClient,
+  normalizeSlackError,
+  SLACK_CALL_GRAMMAR,
+} from "./domains/integrations/slack-api.ts";
 import {
   deleteProjectFile,
   mintProjectFileUrl,
@@ -67,7 +81,7 @@ import {
   operationBodySchema,
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
-import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
+import { callMcpToolPath, listMcpTools } from "./domains/itx/mcp-client.ts";
 import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
@@ -85,6 +99,7 @@ import type {
   AgentCollection,
   Ai,
   CfExecutionContext,
+  Description,
   ItxAuth,
   ProjectRpcTarget as ProjectRpcTargetContract,
   ItxExampleCatalog,
@@ -95,6 +110,7 @@ import type {
   McpClientRpc,
   OpenApiCollection,
   OpenApiConnectInput,
+  OpenApiRpc,
   ProjectCollection,
   ProjectListEntry,
   ProjectRepoCollection,
@@ -135,9 +151,9 @@ import type {
   EmailCapability,
   FileHandle,
   Files,
-  GmailCapability,
+  GmailRequestInput,
+  IntegrationConnectionListEntry,
   ProjectIntegrations,
-  SlackCapability,
 } from "./types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
@@ -157,6 +173,38 @@ import {
   type SendEmailBinding,
 } from "./domains/email/utils.ts";
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
+
+type FetchOnly = Pick<Fetcher, "fetch">;
+
+const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
+const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
+
+function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
+  if (!parseConfig(env).integrations.parallel?.apiKey) {
+    throw new Error("Parallel is not configured for this OS deployment.");
+  }
+
+  return OpenApiRpcTarget.createLazyClient(
+    {
+      baseUrl: PARALLEL_API_BASE_URL,
+      headers: {
+        // A platform API-key reference: resolved by the project egress door
+        // from typed deployment config, origin-pinned (platform-secrets.ts).
+        "x-api-key": 'getSecret({ platform: "integrations.parallel.apiKey" })',
+      },
+      specUrl: PARALLEL_OPENAPI_SPEC_URL,
+    },
+    {
+      description: {
+        instructions:
+          "Parallel API using Iterate's platform API key. Methods are raw OpenAPI operationIds discovered lazily from Parallel's OpenAPI spec.",
+        parent: input.parent,
+        types: "export type Parallel = OpenApiRpc;",
+      },
+      egress: input.egress,
+    },
+  );
+}
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -913,79 +961,251 @@ class CloudflareIntegrationsRpcTarget extends RpcTarget implements CloudflareInt
 }
 
 /**
- * The `itx.integrations.slack` built-in: a Slack Web API proxy for the project's connected
- * workspace. Dotted Web API method paths (`itx.integrations.slack.chat.postMessage({...})`)
- * resolve through the dynamic path-call fallback onto `invokeCapability`;
- * authorization uses the project's stored bot token through the secret
- * substitution egress pipeline (domains/integrations/slack-api.ts).
+ * The `itx.integrations` collection. Built-in integrations (code shipped with
+ * the deployment) are dispatch branches on the dotted path-call fallback —
+ * plain imperative branches, not classes, because their only callers are
+ * untyped dotted scripts (`itx.integrations.slack["main-slack"].chat
+ * .postMessage(...)`); every other name forwards into the capability table
+ * under the `integrations` prefix, so a project extends the collection with
+ * ordinary `provideCapability({ path: ["integrations", ...] })` — data, not
+ * deployment. `completeConnect` is called by the app worker's OAuth callback
+ * routes (/api/integrations/<provider>/callback); its authority is the
+ * HMAC-signed OAuth state minted by startOAuthFlow, verified itx-side.
  */
-class SlackRpcTarget extends RpcTarget implements SlackCapability {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
   }
 
-  async __describe() {
-    return describeNode({
-      instructions:
-        'Slack Web API proxy for the project\'s connected workspace — a flattened dispatcher, not an object graph: any dotted method path compiles to one request (`slack.chat.postMessage({ channel, text })` calls the "chat.postMessage" Web API method). `request({ method, body })` is the explicit form. Sub-paths are Slack\'s method catalogue, not enumerable members. Check itx.integrations.getConnection({ provider: "slack" }) first.',
-      children: {
-        request: "Explicit form: request({ method, body }) for any Slack Web API method.",
-      },
-      parent: "itx.integrations (connection-scoped; authorized by the project's stored bot token)",
+  // The project-root capability table: unknown slugs resolve there, and
+  // list() reads its mounts.
+  get #capabilityHost() {
+    return env.CAPABILITY_HOST.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+    );
+  }
+
+  get parallel(): OpenApiRpc {
+    return parallelOpenApiTarget({
+      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      parent: "a project itx (itx.integrations.parallel)",
     });
   }
 
-  /** itx path-call surface: itx.integrations.slack.<Slack Web API method path>(body). */
-  async invokeCapability(call: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  // Cloudflare first-party platform bindings (Workers AI, Browser Run, Images,
+  // Media Transformations) grouped under `cf`. Like `parallel`, these ride the
+  // deployment's own Cloudflare account, not a per-project connection.
+  get cf(): CloudflareIntegrations {
+    return new CloudflareIntegrationsRpcTarget();
+  }
+
+  /** The dotted call surface: built-in slugs dispatch here; unknown slugs
+   * resolve through the project capability table (the provided lane). */
+  async invokeCapability(call: Parameters<ProjectIntegrations["invokeCapability"]>[0]) {
     const { args = [], path } = call;
-    const method = path.join(".");
-    if (!method) {
-      throw new Error("integrations.slack expected a Slack Web API method path.");
+    const [slug, connection, ...method] = path;
+
+    if (slug === "slack") {
+      if (!connection || method.length === 0) {
+        throw new Error(SLACK_CALL_GRAMMAR);
+      }
+      // The connection's wrapped Slack WebClient: replay the caller's dotted Web
+      // API path onto it (chat.postMessage, conversations.list, …) — the real
+      // SDK, its transport riding the connection secret's substituting egress
+      // (slack-api.ts).
+      const slack = connectionSlackClient({ connection, projectId: this.props.projectId });
+      try {
+        return await replayPathCall(slack, { args, path: method });
+      } catch (error) {
+        throw normalizeSlackError(error, connection);
+      }
     }
-    if (args.length > 1) {
-      throw new Error(`Slack calls are unary; ${method} received ${args.length} args.`);
+
+    if (slug === "google") {
+      // gmail.request is two segments; fewer after the connection means the
+      // caller skipped the connection (the pre-connections itx.gmail shape).
+      if (!connection || method.length < 2) {
+        throw new Error(
+          'itx.integrations.google expected `<connection>.gmail.request({...})` (e.g. itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" })); use itx.integrations.list() to see connections.',
+        );
+      }
+      if (method[0] !== "gmail" || method[1] !== "request" || method.length !== 2) {
+        throw new Error(
+          `itx.integrations.google["${connection}"] exposes gmail.request(...); got "${method.join(".")}".`,
+        );
+      }
+      // No in-process token fetch — the Gmail call goes through the connection
+      // secret's fetch with a placeholder Authorization header; the Secret DO
+      // substitutes the access token and its oauth-refresh-token strategy
+      // refreshes on 401.
+      const connectionPath = googleConnectionSecretPath(connection);
+      return await callGmailApi({
+        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+        request: args[0] as GmailRequestInput,
+        send: (request) =>
+          env.SECRET.getByName(
+            DurableObjectNameCodec.stringify({
+              path: connectionPath,
+              projectId: this.props.projectId,
+            }),
+          ).fetch(request),
+      });
     }
-    return await this.request({
-      body: args[0] as Record<string, unknown> | undefined,
-      method,
-    });
+
+    if (slug === "github") {
+      if (!connection || method.length === 0) {
+        throw new Error(GITHUB_CALL_GRAMMAR);
+      }
+      // The connection's wrapped Octokit: replay the caller's dotted path onto
+      // it (rest.*, request(...), graphql(...)) — a real Octokit whose transport
+      // rides the connection secret's substituting egress (github-api.ts).
+      const octokit = connectionOctokit({ connection, projectId: this.props.projectId });
+      try {
+        return await replayPathCall(octokit, { args, path: method });
+      } catch (error) {
+        throw normalizeGithubError(error, connection);
+      }
+    }
+
+    if (slug === "parallel") {
+      const [, ...operationPath] = path;
+      return await (
+        this.parallel as unknown as Pick<CapabilityHost, "invokeCapability">
+      ).invokeCapability({ args, path: operationPath });
+    }
+
+    if (BUILTIN_INTEGRATION_SLUGS.has(slug)) {
+      throw new Error(
+        `builtin integration "${slug}" has no dispatch branch — add one in IntegrationsRpcTarget.invokeCapability`,
+      );
+    }
+    return await this.#capabilityHost.invokeCapability({ args, path: ["integrations", ...path] });
   }
 
-  async request(input: Parameters<SlackCapability["request"]>[0]) {
-    return await callProjectSlackWebApi({
-      body: input.body ?? {},
-      method: input.method,
-      projectId: this.props.projectId,
-    });
-  }
-}
-
-/** The `itx.integrations.gmail` built-in: Gmail REST proxy for the project's Google account. */
-class GmailRpcTarget extends RpcTarget implements GmailCapability {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
+  async list() {
+    const [journalConnections, mounted] = await Promise.all([
+      listIntegrationConnections(this.props.projectId),
+      this.#capabilityHost.describeCapabilities(),
+    ]);
+    const entries: IntegrationConnectionListEntry[] = [
+      ...journalConnections.map((entry): IntegrationConnectionListEntry => {
+        const { integration } = entry;
+        return isBuiltinIntegrationSlug(integration)
+          ? { ...entry, integration, source: "builtin" }
+          : { ...entry, source: "provided" };
+      }),
+      ...mounted
+        .filter((capability) => capability.path[0] === "integrations" && capability.path[1])
+        .map((capability) => ({
+          // A depth-2 mount is integration-level: one recipe serving every
+          // connection name beneath it.
+          connection: capability.path[2] ?? null,
+          integration: capability.path[1]!,
+          path: `/${capability.path.join("/")}`,
+          source: "provided" as const,
+        })),
+    ];
+    // A provided integration can have both a mount and journals at the same
+    // path (e.g. webhooks landing on /integrations/github/main); one entry.
+    const byPath = new Map(entries.map((entry) => [entry.path, entry]));
+    return [...byPath.values()];
   }
 
   async __describe() {
     return describeNode({
-      instructions:
-        'Gmail REST proxy for the project\'s connected Google account: request({ path, query, method, body }) against paths relative to https://gmail.googleapis.com/gmail/v1 (e.g. { path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Check itx.integrations.getConnection({ provider: "google" }) first.',
+      instructions: [
+        "The project's integration connections, each at a fully qualified path /integrations/<slug>/<connection>.",
+        "await itx.integrations.list() enumerates every connection (built-in and provided).",
+        'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
+        'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
+        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit — await itx.integrations.github["<connection>"].rest.repos.listForAuthenticatedUser(), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }).',
+        "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
+        'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape — copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
+      ].join("\n"),
+      types: [
+        "type GmailRequestInput = {",
+        "  body?: unknown;",
+        "  headers?: Record<string, string>;",
+        "  method?: string;",
+        "  path: string;",
+        "  query?: Record<string, boolean | number | string | null | undefined>;",
+        "};",
+        '// itx.integrations.google["<connection>"] exposes:',
+        "interface GoogleConnection {",
+        "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
+        "}",
+        '// itx.integrations.github["<connection>"] IS a wrapped Octokit (@octokit/rest):',
+        "// its whole surface works — rest.<namespace>.<method>(params), the",
+        "// request(route, params) escape hatch, and graphql(query, variables).",
+        "interface GithubConnection {",
+        "  rest: RestEndpointMethods; // e.g. rest.repos.get({ owner, repo }) -> { data, status, headers, url }",
+        "  request(route: string, params?: Record<string, unknown>): Promise<{ data: unknown; headers: Record<string, string>; status: number; url: string }>;",
+        "  graphql(query: string, variables?: Record<string, unknown>): Promise<unknown>;",
+        "  // paginate(route, params) returns ALL pages as one array. Use it, not",
+        "  // paginate.iterator() (an async generator can't cross the itx RPC boundary).",
+        "  paginate(route: string, params?: Record<string, unknown>): Promise<unknown[]>;",
+        "}",
+        '// itx.integrations.slack["<connection>"] IS a wrapped Slack WebClient',
+        "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
+        "interface SlackConnection {",
+        "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
+        "  // ...every other Web API method, same dotted shape",
+        "}",
+        "// itx.integrations.parallel exposes a flat OpenAPI RPC target:",
+        "type Parallel = OpenApiRpc;",
+      ].join("\n"),
       children: {
-        request: "One Gmail REST call; returns { data, status, statusText, headers }.",
+        cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
+        completeConnect:
+          "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        disconnect: "Disconnect one connection: { provider, connection }.",
+        getConnection: "Connection status for { provider, connection }.",
+        list: "Every connection the project holds (built-in journals plus provided mounts).",
+        parallel: "Parallel API RPC target using Iterate's platform API key.",
+        startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
       },
-      parent: "itx.integrations (connection-scoped; authorized by the project's Google tokens)",
+      parent: "a project itx (itx.integrations)",
     });
   }
 
-  async request(request: Parameters<GmailCapability["request"]>[0]) {
-    const token = await getFreshGoogleAccessToken({
+  getConnection(input: Parameters<ProjectIntegrations["getConnection"]>[0]) {
+    return getConnectionStatus({
+      connection: input.connection,
+      projectId: this.props.projectId,
+      provider: input.provider,
+    });
+  }
+
+  startOAuthFlow(input: Parameters<ProjectIntegrations["startOAuthFlow"]>[0]) {
+    return startOAuthFlow({
+      callbackUrl: input.callbackUrl,
       config: parseConfig(env),
       projectId: this.props.projectId,
+      provider: input.provider,
+      userId: input.userId,
     });
-    return await callGmailApi({ request, token });
+  }
+
+  completeConnect(input: Parameters<ProjectIntegrations["completeConnect"]>[0]) {
+    return completeConnect({
+      code: input.code,
+      config: parseConfig(env),
+      installationId: input.installationId,
+      projectId: this.props.projectId,
+      provider: input.provider,
+      state: input.state,
+      userId: input.userId,
+    });
+  }
+
+  disconnect(input: Parameters<ProjectIntegrations["disconnect"]>[0]) {
+    return disconnectProvider({
+      connection: input.connection,
+      projectId: this.props.projectId,
+      provider: input.provider,
+    });
   }
 }
 
@@ -1052,8 +1272,12 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
     if (inbound === null) {
       throw new Error("email.reply found no inbound email on this thread to reply to.");
     }
-    const to = inbound.message.replyToAddress ?? inbound.message.from.address;
-    if (to === undefined) {
+    // Same fallback chain as the email-agent processor's counterpart: the
+    // envelope from is what ingress authenticated when MIME parsing yields no
+    // From mailbox.
+    const to =
+      inbound.message.replyToAddress ?? inbound.message.from.address ?? inbound.envelope.from;
+    if (!to) {
       throw new Error("email.reply could not determine the thread counterpart address.");
     }
     const inReplyTo = inbound.message.messageId ?? undefined;
@@ -1220,100 +1444,6 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       if (page.length < 500) return last;
       afterOffset = page[page.length - 1]!.offset;
     }
-  }
-}
-
-/**
- * The `itx.integrations` built-in: connection status, OAuth start/complete,
- * and disconnect for slack/google, PLUS the connection-scoped API proxies
- * (`integrations.gmail`, `integrations.slack`) — they live here because they
- * only work through the project's connected accounts. The complete* methods
- * are called by the dashboard's OAuth callback routes
- * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
- * OAuth state minted by startOAuthFlow, verified itx-side.
- */
-class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  async __describe() {
-    return describeNode({
-      instructions:
-        "Project integrations: Slack + Google connection lifecycle, connection-scoped API proxies, and Cloudflare first-party platform bindings under cf. Check getConnection({ provider }) before using a Slack/Gmail proxy. Cloudflare binding children include first-party docs in their own __describe().",
-      children: {
-        cf: "Cloudflare bindings: ai, browser, images, videos.",
-        disconnect: "Disconnect a provider.",
-        getConnection: 'Connection status for { provider: "slack" | "google" }.',
-        gmail:
-          'Gmail REST proxy for the connected Google account: gmail.request({ path: "/users/me/messages", query }).',
-        slack:
-          "Slack Web API proxy for the connected workspace: slack.chat.postMessage({ channel, text }).",
-        startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
-      },
-      parent: "a project itx (itx.integrations)",
-    });
-  }
-
-  get cf(): CloudflareIntegrations {
-    return new CloudflareIntegrationsRpcTarget();
-  }
-
-  get gmail(): GmailCapability {
-    return new GmailRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
-  }
-
-  get slack(): SlackCapability {
-    return new SlackRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
-  }
-
-  getConnection(input: Parameters<ProjectIntegrations["getConnection"]>[0]) {
-    return getConnectionStatus({ projectId: this.props.projectId, provider: input.provider });
-  }
-
-  startOAuthFlow(input: Parameters<ProjectIntegrations["startOAuthFlow"]>[0]) {
-    return startOAuthFlow({
-      callbackUrl: input.callbackUrl,
-      config: parseConfig(env),
-      projectId: this.props.projectId,
-      provider: input.provider,
-      userId: input.userId,
-    });
-  }
-
-  completeSlackConnect(input: Parameters<ProjectIntegrations["completeSlackConnect"]>[0]) {
-    return completeSlackConnect({
-      code: input.code,
-      config: parseConfig(env),
-      projectId: this.props.projectId,
-      state: input.state,
-      userId: input.userId,
-    });
-  }
-
-  completeGoogleConnect(input: Parameters<ProjectIntegrations["completeGoogleConnect"]>[0]) {
-    return completeGoogleConnect({
-      code: input.code,
-      config: parseConfig(env),
-      projectId: this.props.projectId,
-      state: input.state,
-      userId: input.userId,
-    });
-  }
-
-  disconnect(input: Parameters<ProjectIntegrations["disconnect"]>[0]) {
-    return disconnectProvider({
-      config: parseConfig(env),
-      projectId: this.props.projectId,
-      provider: input.provider,
-    });
   }
 }
 
@@ -1651,6 +1781,8 @@ class DynamicWorkerRpcTarget extends RpcTarget {
   }
 }
 
+type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
+
 export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
   async __describe() {
     return describeNode({
@@ -1843,15 +1975,13 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
    */
   async list(input?: Parameters<ProjectCollection["list"]>[0]) {
     const bases = await this.#listEntryBases(input?.scope);
-    const outcomes = await Promise.allSettled(
-      bases.map(async (base) => {
-        const state = await projectProcessorState(base.id);
-        return state.created === true;
-      }),
-    );
+    const outcomes = await Promise.allSettled(bases.map((base) => projectProcessorState(base.id)));
     const statuses = deploymentStatusesFromProbes(
       bases.map((base) => base.id),
-      outcomes,
+      outcomes.map((outcome): PromiseSettledResult<boolean> => {
+        if (outcome.status === "rejected") return outcome;
+        return { status: "fulfilled", value: outcome.value.created === true };
+      }),
     );
     return bases.map((base) => ({
       ...base,
@@ -1869,9 +1999,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
    * "deployment"; impersonated users (test lane) list their scopes,
    * directory-read.
    */
-  async #listEntryBases(
-    requestedScope?: "mine" | "deployment",
-  ): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
+  async #listEntryBases(requestedScope?: "mine" | "deployment"): Promise<ProjectListEntryBase[]> {
     const userPrincipal = userPrincipalOf(this.props.auth);
     // Default to the caller's own projects for EVERY principal shape (user,
     // impersonated, admin) — only pure admin principals, which have no
@@ -1931,9 +2059,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     );
   }
 
-  async #directoryEntryBase(
-    projectId: string,
-  ): Promise<Omit<ProjectListEntry, "deploymentStatus">> {
+  async #directoryEntryBase(projectId: string): Promise<ProjectListEntryBase> {
     const record = await readProjectById(env.PROJECT_DIRECTORY, projectId);
     return {
       id: projectId,
@@ -2088,9 +2214,10 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
-    "Slack/Google connections plus connection-scoped API proxies: itx.integrations.gmail.request({ path, query }) and itx.integrations.slack.chat.postMessage({ channel, text }); Cloudflare bindings at itx.integrations.cf.{ai,browser,images,videos}. Check itx.integrations.getConnection({ provider }) before Gmail/Slack.",
+    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
+  parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
@@ -2317,6 +2444,7 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   get integrations(): ProjectIntegrations {
     return new IntegrationsRpcTarget({
       auth: this.#props.auth,
+      ctx: this.#props.ctx,
       projectId: this.#props.projectId,
     });
   }
@@ -2330,6 +2458,13 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   get openapi(): OpenApiCollection {
     return new OpenApiCollectionRpcTarget({
       egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+    });
+  }
+
+  get parallel(): OpenApiRpc {
+    return parallelOpenApiTarget({
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+      parent: "a project itx (itx.parallel)",
     });
   }
 
@@ -3021,7 +3156,14 @@ class ProcessorStateSubscriptionRpcTarget
   }
 }
 
-type McpClientDeps = { egress: Fetcher };
+type LazyClientDescription = Pick<Partial<Description>, "instructions" | "parent" | "types">;
+
+function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
+}
+
+type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
 // Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
 // it gives every project web search with zero setup.
@@ -3049,18 +3191,33 @@ class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollect
   }
 
   get exa(): McpClientRpc {
-    return new McpClientRpcTarget({ config: { url: EXA_MCP_URL }, egress: this.props.egress });
+    return McpClientRpcTarget.createLazyClient(
+      { url: EXA_MCP_URL },
+      {
+        description: {
+          instructions:
+            "Public Exa MCP server: web search and page reading. Tool names are discovered from the MCP server.",
+          parent: "a project itx (itx.mcp.exa)",
+        },
+        egress: this.props.egress,
+      },
+    );
   }
 }
 
 class McpClientRpcTarget extends RpcTarget {
+  static createLazyClient(input: McpClientConnectInput, deps: McpClientDeps) {
+    return new McpClientRpcTarget({ config: input, ...deps });
+  }
+
   static async connect(input: McpClientConnectInput, deps: McpClientDeps) {
-    return new McpClientRpcTarget({ config: input, egress: deps.egress });
+    return McpClientRpcTarget.createLazyClient(input, deps);
   }
 
   constructor(
     readonly props: {
       config: McpClientConnectInput;
+      description?: LazyClientDescription;
       egress: Fetcher;
     },
   ) {
@@ -3069,9 +3226,20 @@ class McpClientRpcTarget extends RpcTarget {
   }
 
   async __describe() {
+    const tools = await listMcpTools({
+      config: this.props.config,
+      egress: this.props.egress,
+    });
+
     return describeNode({
-      instructions: `An ad-hoc MCP client for ${this.props.config.url} — a flattened dispatcher: any dotted call is one MCP tool invocation (\`client.someTool(input)\` calls the tool "someTool"). Tool names come from the server, not from this node; list them with the server's own discovery if it offers one.`,
-      parent: "itx.mcp (connect(url), or the built-in exa)",
+      instructions:
+        this.props.description?.instructions ??
+        `An ad-hoc MCP client for ${this.props.config.url}: a flattened dispatcher; client.someTool(input) calls the tool "someTool".`,
+      types: this.props.description?.types,
+      children: Object.fromEntries(
+        tools.map((tool) => [tool.name, tool.description ?? "MCP tool"]),
+      ),
+      parent: this.props.description?.parent ?? "itx.mcp.connect(url)",
     });
   }
 
@@ -3089,7 +3257,12 @@ class McpClientRpcTarget extends RpcTarget {
 // power it receives is project egress, which is also the path a user-provided
 // dynamic worker would use through env.ITX. That keeps the built-in and dynamic
 // implementations aligned: fetch spec, derive operations, then dispatch calls.
-type OpenApiDeps = { egress: Fetcher };
+type OpenApiDeps = { description?: LazyClientDescription; egress: FetchOnly };
+
+type OpenApiReadyState = {
+  operations: OpenApiOperation[];
+  spec: Record<string, unknown>;
+};
 
 class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
   async __describe() {
@@ -3111,51 +3284,57 @@ class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection 
 }
 
 class OpenApiRpcTarget extends RpcTarget {
+  readonly #ready: () => Promise<OpenApiReadyState>;
+
+  static createLazyClient(input: OpenApiConnectInput, deps: OpenApiDeps) {
+    return new OpenApiRpcTarget({ config: input, ...deps });
+  }
+
   static async connect(input: OpenApiConnectInput, deps: OpenApiDeps) {
-    const spec = await fetchSpec(input, deps.egress);
-    return new OpenApiRpcTarget({
-      config: input,
-      egress: deps.egress,
-      operations: listOpenApiOperations(spec),
-      spec,
-    });
+    return OpenApiRpcTarget.createLazyClient(input, deps);
   }
 
   constructor(
     readonly props: {
       config: OpenApiConnectInput;
-      egress: Fetcher;
-      operations: OpenApiOperation[];
-      spec: Record<string, unknown>;
+      description?: LazyClientDescription;
+      egress: FetchOnly;
     },
   ) {
     super();
+    this.#ready = lazyPromise(async () => {
+      const spec = await fetchSpec(props.config, props.egress);
+      return { operations: listOpenApiOperations(spec), spec };
+    });
     return withInvokeCapabilityFallback(this);
   }
 
   async __describe() {
+    const { operations } = await this.#ready();
+
     return describeNode({
       instructions:
-        "An ad-hoc OpenAPI client — a flat dispatcher: `client.someOperationId(input)` executes that operation against the spec's server. `children` lists the operations parsed from the spec.",
+        this.props.description?.instructions ??
+        "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
+      types: this.props.description?.types,
       children: Object.fromEntries(
-        this.props.operations.map((operation) => [
+        operations.map((operation) => [
           operation.operationId,
           `${operation.method.toUpperCase()} ${operation.path}`,
         ]),
       ),
-      parent: "itx.openapi.connect(spec)",
+      parent: this.props.description?.parent ?? "itx.openapi.connect(spec)",
     });
   }
 
   async invokeCapability({ args = [], path }: Parameters<CapabilityHost["invokeCapability"]>[0]) {
+    const { operations, spec } = await this.#ready();
     const operationId = path[0];
     if (!operationId) throw new Error("OpenAPI operation calls need an operationId path.");
     if (path.length > 1) {
       throw new Error(`OpenAPI operations are flat operationIds, got "${path.join(".")}".`);
     }
-    const operation = this.props.operations.find(
-      (candidate) => candidate.operationId === operationId,
-    );
+    const operation = operations.find((candidate) => candidate.operationId === operationId);
     if (!operation) {
       throw new Error(`Operation "${operationId}" is not in the OpenAPI spec.`);
     }
@@ -3164,14 +3343,14 @@ class OpenApiRpcTarget extends RpcTarget {
       input: args[0],
       operation,
       props: this.props.config,
-      spec: this.props.spec,
+      spec,
     });
   }
 }
 
 async function fetchSpec(
   props: OpenApiConnectInput,
-  egress: Fetcher,
+  egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
   const specHost = new URL(props.specUrl).host;
   const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
@@ -3192,7 +3371,7 @@ async function fetchSpec(
 }
 
 async function executeOperation(args: {
-  egress: Fetcher;
+  egress: FetchOnly;
   input: unknown;
   operation: OpenApiOperation;
   props: OpenApiConnectInput;

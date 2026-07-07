@@ -1,0 +1,18 @@
+# dummy-petshop local secrets — copy to `.dev.vars` for `wrangler dev`.
+#
+# Neither of these is required to run locally: the generated wrangler.jsonc
+# already pins a fixed PETSHOP_SEAL_KEY under `vars` (the shop holds only fake
+# data, so a stable dev key beats per-run plumbing), and the backdoor is open
+# when PETSHOP_BACKDOOR_SECRET is unset. Set them here only to mirror a
+# deployed env locally. Deployed envs get real values from Doppler at deploy
+# time (scripts/deploy.ts); see apps/os/docs/integrations-and-secrets-design.md §7 S0.
+
+# Seals every OAuth code and token (AES-256-GCM, src/seal.ts). 32 random bytes,
+# base64: `openssl rand -base64 32`. Rotating it only invalidates outstanding
+# fake tokens, which specs re-mint anyway.
+PETSHOP_SEAL_KEY="ZHVtbXktcGV0c2hvcC1sb2NhbC1kZXYtc2VhbC1rZXk="
+
+# When set, every /__backdoor/* route requires this exact value in the
+# `x-petshop-backdoor` request header (403 otherwise). Leave unset locally to
+# keep the backdoor open.
+# PETSHOP_BACKDOOR_SECRET="choose-a-shared-secret"

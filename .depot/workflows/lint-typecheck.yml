@@ -5,6 +5,11 @@ on:
       - main
   pull_request: {}
   workflow_dispatch: {}
+# Cancel a PR's in-flight run when a newer commit supersedes it (see test.yml).
+# head_ref is empty on main pushes, so run_id keeps those runs distinct.
+concurrency:
+  group: lint-typecheck-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 jobs:
   lint-typecheck:
     runs-on:

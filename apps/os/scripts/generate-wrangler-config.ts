@@ -49,8 +49,17 @@ export const REQUIRED_SECRETS = [
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
+  // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
+  // entries) — collectSecrets ships only names listed here, so a key absent
+  // from this list never reaches a deployed worker even when Doppler has it.
+  "APP_CONFIG_INTEGRATIONS__EXA",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
+  "APP_CONFIG_INTEGRATIONS__PARALLEL",
+  // The first-party dummy-petshop client credentials (integration proofs);
+  // backs /secrets/platform/integrations/petshop. Optional — only preview/dev
+  // envs running the petshop e2e carry it.
+  "APP_CONFIG_INTEGRATIONS__PETSHOP",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
   // Local dev must load the baked auth JWKS too; otherwise forge-minted
@@ -191,9 +200,8 @@ function workerBindings(input: {
   accountId: string;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Sandbox container instance cap. Preview slots get extra headroom: e2e
-   * churn spins sandboxes faster than they idle out, and a saturated cap
-   * 503s every sandbox exec (observed live at 10/10 on preview-3). */
+  /** Sandbox container instance cap. standard-1 reserves quota per slot, so
+   * preview headroom is bounded by the preview account's memory allocation. */
   maxContainerInstances?: number;
 }) {
   return {
@@ -323,44 +331,52 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, and the project-host patterns. The zone is the hostname minus
- * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
+ * catch-all routes. The zone is the hostname minus its first label for
+ * app/MCP/event-docs hosts; project bases are themselves zones.
  *
- * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
- * The catch-all `*base/*` should subsume the others, but the live preview
- * zone only reliably invoked the worker for project hosts once all three
- * existed (observed 2026-06) — kept verbatim; collapse only with an edge
- * experiment proving it.
+ * Project bases get three built-in project-host patterns: `base/*`,
+ * `*.base/*`, and `*base/*`.
+ * The `*base/*` pattern should subsume the first two, but the live preview zone
+ * only reliably invoked the worker for project hosts once all three existed
+ * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
+ * proving it.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
   const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
+  const cloudflareForSaasBases = new Set(env.cloudflareForSaasProjectHostnameBases);
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
     { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
-    ...env.projectHostnameBases.flatMap((base) => [
-      { pattern: `${base}/*`, zone_name: base },
-      { pattern: `*.${base}/*`, zone_name: base },
-      { pattern: `*${base}/*`, zone_name: base },
-    ]),
+    ...env.projectHostnameBases.flatMap((base) => {
+      const projectRoutes = [
+        { pattern: `${base}/*`, zone_name: base },
+        { pattern: `*.${base}/*`, zone_name: base },
+        { pattern: `*${base}/*`, zone_name: base },
+      ];
+      return cloudflareForSaasBases.has(base)
+        ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
+        : projectRoutes;
+    }),
   ];
 }
 
 function envBlock(env: DeployedEnv) {
+  const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // Preview e2e creates many short-lived sandboxes, and the platform keeps
-    // inactive/stopped instances counted against the container app long enough
-    // that too-small caps wedge tests. Keep preview caps high enough for churn
-    // but below the dev/preview account quota so several slots can coexist.
-    // prd churns far less (real agent sandboxes, no fixture storms).
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 200,
+    // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
+    // against account memory quota at deploy time. The old preview cap of 500
+    // was viable for lite instances because it reserved 128000 MiB; 31
+    // standard-1 instances reserve 126976 MiB and fit that same quota.
+    maxContainerInstances: isProduction ? 50 : 31,
   });
   return {
     name: env.osWorkerName,

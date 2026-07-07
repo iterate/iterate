@@ -183,12 +183,14 @@ export function dmarcPasses(authenticationResults: string | null): boolean {
  * callers hold.
  */
 export function isOwnProjectMail(payload: {
-  envelope: { to: string };
+  envelope: { from: string; to: string };
   recipient: { slug: string };
   message: { from: { address?: string } };
 }): boolean {
-  const from = payload.message.from.address?.toLowerCase();
-  if (from === undefined) return false;
+  // Header From when parsed, else the SMTP envelope from — mirrors the
+  // counterpart fallback chain so the loop filter sees the same identity.
+  const from = (payload.message.from.address ?? payload.envelope.from)?.toLowerCase();
+  if (!from) return false;
   const recipientDomain = payload.envelope.to.split("@").pop()?.toLowerCase();
   return from === `${payload.recipient.slug}@${recipientDomain}`;
 }

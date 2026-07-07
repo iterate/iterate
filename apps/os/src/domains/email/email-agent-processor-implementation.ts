@@ -81,9 +81,13 @@ export class EmailAgentProcessor extends StreamProcessor<typeof EmailAgentProces
   }
 }
 
-/** The address a reply should go to: the inbound Reply-To when set, else From. */
+/** The address a reply should go to: the inbound Reply-To when set, else the
+ * header From, else the SMTP envelope from — the same address ingress
+ * authenticated when MIME parsing yields no From mailbox. */
 function replyCounterpart(payload: InboundEmailPayload): string | null {
-  return payload.message.replyToAddress ?? payload.message.from.address ?? null;
+  return (
+    payload.message.replyToAddress ?? payload.message.from.address ?? payload.envelope.from ?? null
+  );
 }
 
 /** The model-visible transcription of one inbound email. Curated rather than

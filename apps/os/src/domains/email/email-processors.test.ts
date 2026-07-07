@@ -451,6 +451,19 @@ describe("EmailAgentProcessor", () => {
     expect(processor.state.counterpart).toBe("jonas@example.com");
   });
 
+  it("falls back to the envelope from when MIME parsing yields no From mailbox", async () => {
+    const { cursors, processor, stream } = setup();
+
+    const payload = receivedPayload({});
+    payload.message.from = { name: "Jonas" };
+    await stream.append({ type: "events.iterate.com/email/received", payload });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    // The envelope sender — the address ingress authenticated — becomes the
+    // counterpart, so email.reply still has a target.
+    expect(processor.state.counterpart).toBe("jonas@example.com");
+  });
+
   it("prefers Reply-To over From as the thread counterpart", async () => {
     const { cursors, processor, stream } = setup();
 
