@@ -246,11 +246,11 @@ VALUES (
   ?
 )
 RETURNING id,
-  organization_id AS organizationId,
+  organization_id,
   name,
   slug,
   metadata,
-  archived_at AS archivedAt;
+  archived_at;
 `.trim();
 const insertProjectReturningQuery = (params: insertProjectReturning.Params) => ({
   name: "insertProjectReturning",
@@ -267,17 +267,34 @@ const insertProjectReturningQuery = (params: insertProjectReturning.Params) => (
   ],
 });
 
+function insertProjectReturningMapResult(
+  row: insertProjectReturning.RawResult,
+): insertProjectReturning.Result {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    name: row.name,
+    slug: row.slug,
+    metadata: row.metadata,
+    archivedAt: row.archived_at,
+  };
+}
+
 export const insertProjectReturning = Object.assign(
   async function insertProjectReturning(
     client: Client,
     params: insertProjectReturning.Params,
   ): Promise<insertProjectReturning.Result> {
-    const rows = await client.all<insertProjectReturning.Result>(
+    const rows = await client.all<insertProjectReturning.RawResult>(
       insertProjectReturningQuery(params),
     );
-    return rows[0];
+    return insertProjectReturningMapResult(rows[0]!);
   },
-  { sql: insertProjectReturningSql, query: insertProjectReturningQuery },
+  {
+    sql: insertProjectReturningSql,
+    query: insertProjectReturningQuery,
+    mapResult: insertProjectReturningMapResult,
+  },
 );
 
 export namespace insertProjectReturning {
@@ -291,13 +308,21 @@ export namespace insertProjectReturning {
     createdAt: number;
     updatedAt: number;
   };
-  export type Result = {
+  export type RawResult = {
     id: string;
     organization_id: string;
     name: string;
     slug: string;
     metadata: string;
     archived_at?: number;
+  };
+  export type Result = {
+    id: string;
+    organizationId: string;
+    name: string;
+    slug: string;
+    metadata: string;
+    archivedAt?: number;
   };
 }
 
@@ -309,11 +334,11 @@ SET name = ?,
   updated_at = ?
 WHERE id = ?
 RETURNING id,
-  organization_id AS organizationId,
+  organization_id,
   name,
   slug,
   metadata,
-  archived_at AS archivedAt;
+  archived_at;
 `.trim();
 const updateProjectReturningQuery = (
   data: updateProjectReturning.Data,
@@ -324,18 +349,35 @@ const updateProjectReturningQuery = (
   args: [data.name, data.slug, data.metadata, data.updatedAt, params.id],
 });
 
+function updateProjectReturningMapResult(
+  row: updateProjectReturning.RawResult,
+): updateProjectReturning.Result {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    name: row.name,
+    slug: row.slug,
+    metadata: row.metadata,
+    archivedAt: row.archived_at,
+  };
+}
+
 export const updateProjectReturning = Object.assign(
   async function updateProjectReturning(
     client: Client,
     data: updateProjectReturning.Data,
     params: updateProjectReturning.Params,
   ): Promise<updateProjectReturning.Result> {
-    const rows = await client.all<updateProjectReturning.Result>(
+    const rows = await client.all<updateProjectReturning.RawResult>(
       updateProjectReturningQuery(data, params),
     );
-    return rows[0];
+    return updateProjectReturningMapResult(rows[0]!);
   },
-  { sql: updateProjectReturningSql, query: updateProjectReturningQuery },
+  {
+    sql: updateProjectReturningSql,
+    query: updateProjectReturningQuery,
+    mapResult: updateProjectReturningMapResult,
+  },
 );
 
 export namespace updateProjectReturning {
@@ -348,13 +390,21 @@ export namespace updateProjectReturning {
   export type Params = {
     id: string;
   };
-  export type Result = {
+  export type RawResult = {
     id: string;
     organization_id: string;
     name: string;
     slug: string;
     metadata: string;
     archived_at?: number;
+  };
+  export type Result = {
+    id: string;
+    organizationId: string;
+    name: string;
+    slug: string;
+    metadata: string;
+    archivedAt?: number;
   };
 }
 
