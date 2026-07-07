@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -7,9 +7,14 @@ size: medium
 
 ## Status summary
 
-Task fleshed out from a prompt; implementation not started yet. The diagnosis
-of the trial-run stream is done (see log below). Main remaining pieces: write
-the skill, write the failing repro test, fix, then the simplification pass.
+Done, pending PR review (https://github.com/iterate/iterate/pull/1716). The
+skill exists at `.agents/skills/fix-stream/SKILL.md` (updated with trial-run
+lessons: hop-by-hop delivery, the "SHOW ME" red-for-the-right-reason dump,
+minimal-fixture recipe), and the full trial-run cycle ran on misha2
+`/agents/1648`: red repro pushed, fix pushed (green), fixture minimised from
+338 events to 13 with a red-without-fix commit proving the minimal repro, then
+unreverted. Follow-up left open: the agent stays silent whenever an LLM
+request fails permanently (any cause, not just HEIC) — see Assumptions.
 
 ## Goal
 
@@ -41,10 +46,11 @@ Deliverables:
 - [x] `.agents/skills/fix-stream/SKILL.md` — the skill, written caveman-style
       (mattpocock's caveman compression: terse, no filler, technical substance
       intact). _Committed; may still be updated after the trial run._
-- [ ] Trial run of the skill against `/agents/1648` in project `misha2` (prd):
+- [x] Trial run of the skill against `/agents/1648` in project `misha2` (prd):
   - [x] Fixture: real events dumped from the stream (bulk payloads no
         processor consumes stripped at dump time; noted in the test).
-        _`stream-repros/misha2-1648.events.json`, 338 events, 340K._
+        _`stream-repros/misha2-1648.events.json`, 338 events, 340K; later
+        minimised to 13 events / 8K._
   - [x] Failing test committed + pushed (CI red) before the fix.
         _`stream-repros/misha2-1648-heic-image-silence.test.ts`; replay
         reproduces prod exactly, down to `llmRequestId: 3010` and the 400
@@ -52,9 +58,13 @@ Deliverables:
         `agent-processors.test.ts` into `test-helpers.ts` (with a fix:
         MemoryStream.append now assigns `last offset + 1`, not `length + 1`,
         so gap-y seeded histories don't collide)._
-  - [ ] Fix committed + pushed (CI green).
-  - [ ] Simplification pass: revert fix locally → minimise feed → confirm
-        still red → push → unrevert → push.
+  - [x] Fix committed + pushed (CI green). _`f3391eb50`: whitelist
+        jpeg/png/gif/webp as `input_image` in `toResponsesInput`; other image
+        types fall through to `renderFileHintLine`._
+  - [x] Simplification pass: revert fix locally → minimise feed → confirm
+        still red → push → unrevert → push. _`8a0243f32` (red, minimal
+        fixture, fix reverted) then `b3c836659` (unrevert, green). Minimal
+        recipe: provider-selected + the final quiescent turn (2940–3007)._
 
 ## Trial-run diagnosis (done during fleshing-out)
 
@@ -109,3 +119,14 @@ response). Before the fix the LLM request fails and no output ever arrives.
   `doppler run --project os --config prd -- pnpm --dir apps/os cli itx run
 --context prj_e44b80bc88414d309a5aa5fb808fd962 --file dump-all.ts` (paged
   `getEvents` loop). Diagnosed HEIC/vision failure at offsets 3008–3014.
+- 2026-07-07 (impl): extracted the in-memory harness to
+  `apps/os/src/domains/agents/test-helpers.ts` so stream-repro tests can share
+  it. First test attempt deadlocked: one `deliverNewEvents` then a long
+  `waitForEvent` never sees `llm-request-requested`, because each appended
+  event only reaches processors on the NEXT delivery — driving must be
+  hop-by-hop (deliver, wait scheduled, deliver, wait requested, deliver). The
+  replay matched prod byte-for-byte, including `llmRequestId: 3010`.
+- 2026-07-07 (skill retro): updated SKILL.md with hop-by-hop delivery, the
+  temporary `.toEqual("SHOW ME")` dump for confirming red-for-the-right-
+  reason, the minimal-fixture recipe, and the pendingTriggerOffset trap when
+  cutting a fixture mid-turn.
