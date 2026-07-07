@@ -9,7 +9,7 @@ import {
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
-import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
@@ -86,6 +86,21 @@ export class AgentDurableObject extends DurableObject<Env> {
               path: this.#name.path,
             });
           }
+        },
+        storeSlackFiles: (input) => {
+          // Downloads ride the named connection's bot-token secret, exactly
+          // like the side-effect calls above — same no-connection skip rule.
+          const connection = slackConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            throw new Error(`agent path carries no Slack connection: ${this.#name.path}`);
+          }
+          return storeSlackFilesForAgent({
+            agentPath: this.#name.path,
+            connection,
+            files: input.files,
+            projectId: this.#name.projectId,
+            storageKey: input.storageKey,
+          });
         },
       }),
   );

@@ -407,7 +407,9 @@ async function recordSlackConnection(input: {
     slug: "slack",
     secrets: [
       {
-        egressUrls: ["https://slack.com"],
+        // files.slack.com serves shared-file downloads (url_private); the Web
+        // API itself lives on slack.com.
+        egressUrls: ["https://slack.com", "https://files.slack.com"],
         material: input.accessToken,
         path: slackBotTokenSecretPath(input.connection),
       },

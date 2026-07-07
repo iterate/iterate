@@ -16,6 +16,7 @@ export interface CloudflareEnv extends OsEnv {}
 type WorkerMainModule = {
   ItxEntrypoint: (typeof import("../domains/itx/itx-entrypoint.ts"))["ItxEntrypoint"];
   ProjectEgressEntrypoint: (typeof import("../domains/projects/egress.ts"))["ProjectEgressEntrypoint"];
+  ScriptExecutionEntrypoint: (typeof import("../domains/capability-host/script-execution-entrypoint.ts"))["ScriptExecutionEntrypoint"];
 };
 
 declare global {

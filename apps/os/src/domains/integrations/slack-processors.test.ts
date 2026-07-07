@@ -455,7 +455,9 @@ describe("SlackProcessor (webhook router)", () => {
 });
 
 describe("SlackAgentProcessor", () => {
-  function setup() {
+  function setup(deps?: {
+    storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
+  }) {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/agents/slack/nustom/c123/ts-111-222");
     const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
@@ -464,6 +466,7 @@ describe("SlackAgentProcessor", () => {
       callSlackApi: async (method, body) => {
         slackCalls.push({ body, method });
       },
+      ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
     });
     const cursors = new Map<object, number>();
     return { cursors, network, processor, slackCalls, stream };
@@ -508,6 +511,70 @@ describe("SlackAgentProcessor", () => {
       latestMessageTs: "111.222",
       threadTs: "111.222",
     });
+  });
+
+  it("materializes shared files and attaches them to the agent input", async () => {
+    const stored: Array<{ files: unknown; storageKey: string }> = [];
+    const attachment = {
+      contentType: "image/png",
+      filename: "cat.png",
+      path: "/agents/slack/c123/ts-111-222/slack-1-0-cat.png",
+      size: 3,
+      url: "https://iterate-files--demo.iterate.app/x?sig=y",
+    };
+    const { cursors, processor, stream } = setup({
+      storeSlackFiles: async (input) => {
+        stored.push(input);
+        return [attachment];
+      },
+    });
+
+    const payload = humanMessageWebhookPayload({});
+    (payload.body.event as Record<string, unknown>).files = [
+      {
+        id: "F1",
+        mimetype: "image/png",
+        name: "cat.png",
+        url_private: "https://files.slack.com/f1",
+      },
+      { no_url: true }, // malformed entries are skipped, not fatal
+    ];
+    await stream.append({ type: "events.iterate.com/slack/webhook-received", payload });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.files).toEqual([
+      { mimetype: "image/png", name: "cat.png", urlPrivate: "https://files.slack.com/f1" },
+    ]);
+    expect(stored[0]!.storageKey).toMatch(/^slack-\d+$/);
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.payload).toMatchObject({ files: [attachment] });
+  });
+
+  it("degrades to a plain agent input when file storage fails", async () => {
+    const { cursors, processor, stream } = setup({
+      storeSlackFiles: async () => {
+        throw new Error("slack download exploded");
+      },
+    });
+
+    const payload = humanMessageWebhookPayload({});
+    (payload.body.event as Record<string, unknown>).files = [
+      { name: "cat.png", url_private: "https://files.slack.com/f1" },
+    ];
+    await stream.append({ type: "events.iterate.com/slack/webhook-received", payload });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.payload).not.toHaveProperty("files");
+    expect((inputs[0]!.payload as { content: string }).content).toContain("cat.png");
   });
 
   it("ignores our own bot's messages entirely", async () => {

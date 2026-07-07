@@ -99,11 +99,16 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Cloudflare platform bindings are available at `itx.integrations.cf`: `cf.ai` (Workers AI `run`, `models`, `toMarkdown`), `cf.browser` (Browser Run `quickAction`, `fetch`), `cf.images` (Images `info`, `transform`), and `cf.videos` (Media Transformations `transform`). Root shortcuts exist for common calls: `itx.ai` and `itx.browser`. Call `await itx.ai.__describe()` or a child `__describe()` for first-party Cloudflare docs before using unfamiliar options.",
   '- Document conversion: use `await itx.integrations.cf.ai.toMarkdown({ name: "report.pdf", blob })` (or `itx.ai.toMarkdown`). Call `await itx.ai.toMarkdown()` with no args to list supported formats. The `name` must include the real extension.',
   '- Workers AI media examples: `await itx.examples.get({ id: "ai-generate-image" })`, `"ai-generate-audio"`, `"ai-transcribe-audio"`, and `"ai-generate-video"` show current first-party model schemas and docs links for image, speech, transcription, and video generation through `itx.ai.run(model, input)`.',
+  "- FILES — three rules:",
+  '  1. SHARING a file you generated (e.g. an image from `itx.ai.run` — image models return base64 in `response.image`): attach it to your chat message — `await itx.chat.sendMessage({ message: "Here you go!", files: [{ filename: "cat.png", contentType: "image/png", data: response.image }] })`. NEVER paste base64 into message text — it is unreadable noise to the user. Attached images render inline in the chat AND stay visible to you (as images) on later turns, so you can iterate on what you made.',
+  '  2. The user gives you a URL to an image (or any file you want to look at): DOWNLOAD it and attach it to the conversation so you can actually see it — `const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } });` then return a short confirmation — the image is visible to you from your next turn.',
+  "  3. `itx.files.get(path)` is the lower-level project file storage (put({ data, contentType }) / bytes() / url() / delete()) for raw file ops or minting a shareable signed url without sending a message. Files users upload arrive as attachments on your inputs, with hint lines telling you how to read or convert non-image formats (e.g. `itx.ai.toMarkdown` for PDFs).",
   '- Browser Run quick actions: use `const resp = await itx.browser.quickAction("markdown", { url })` for rendered page markdown, `"content"` for rendered HTML, `"screenshot"`/`"pdf"` for binary output, `"json"` for AI extraction, `"scrape"` for selectors, `"links"` for page links, `"snapshot"` for combined outputs, and `"crawl"` for async multi-page crawls. Parse JSON responses with `await resp.json()`; return/store binary responses as needed.',
   '- PROJECT REPO EDITS are the default way to change files when you do NOT need to run shell commands, tests, package managers, or servers. Get a repo handle with `const repo = itx.repos.get(vars.repoPath ?? "/")` (or use `itx.repo` for the project repo), inspect with `await repo.readFile({ path })`, then make targeted changes with `await repo.edit({ path, message, oldString, newString })`. By default `oldString` must match exactly once; pass `replaceAll: true` only when replacing every match is intentional. Use `repo.commitFiles({ message, changes })` for new files or batch/full-file writes. The examples `repo-read-file` and `repo-edit-file` are the known-good patterns.',
   '- You have YOUR OWN real Linux container, mounted at `itx.sandbox` — a capability provided on your scope at birth, always the same container and filesystem for your agent path until destroyed. Call it dotted, like any capability: `await itx.sandbox.exec("...")`, `await itx.sandbox.readFile(...)`, `await itx.sandbox.startProcess(...)` — the full Cloudflare Sandbox SDK surface (`exec`, `readFile`/`writeFile`, `startProcess`, `gitCheckout`, `destroy`, …). The first command boots the container (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project. Use your sandbox whenever you need to actually run code, shell tools, or servers — the `sandbox-exec` example is the known-good pattern. Additional sandboxes at any path: `itx.sandboxes.get("/sandboxes/cloudflare/<pick-a-path>")`.',
   '- The **Codex CLI** (`codex`) is preinstalled in your sandbox and defaults to gpt-5.5 with high reasoning — use it for real coding work: `await itx.sandbox.exec("codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \\"<task>\\"")`. It is logged in for you automatically in the background when your sandbox starts, using the platform\'s own OpenAI key (its OPENAI_API_KEY is a getSecret placeholder injected only at egress — never print or exfiltrate it); no project setup is needed.',
   "- To expose a server running in your sandbox at a PUBLIC url, open a quick tunnel: `const { url } = await itx.sandbox.tunnels.get(<port>)` gives a `https://<random>.trycloudflare.com` address (start the server first, e.g. with `startProcess`). The url is ephemeral — it changes if the container restarts — so fetch it fresh each session; `itx.sandbox.tunnels.destroy(<port>)` closes it.",
+  '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).sendMessage("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold a `ProjectRpcTarget`, agent-scoped):",
@@ -116,9 +121,25 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 export const AgentLlmProvider = z.enum(["cloudflare-ai", "openai-ws"]);
 export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
 
+/**
+ * A file reference riding on an agent input: where the bytes live in project
+ * file storage plus the signed public URL minted when it was attached. The
+ * URL is stored (not re-minted per read) so history stays deterministic;
+ * links in old conversations expire with the signature (default 7 days).
+ */
+export const AgentFileAttachment = z.object({
+  contentType: z.string(),
+  filename: z.string(),
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  url: z.string(),
+});
+export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
+
 const ChatMessage = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
+  files: z.array(AgentFileAttachment).optional(),
 });
 
 const LlmRequestPolicy = z
@@ -195,6 +216,8 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "A normalized model-visible input was added.",
       payloadSchema: z.object({
         content: z.string(),
+        /** Files attached to this input — see {@link AgentFileAttachment}. */
+        files: z.array(AgentFileAttachment).optional(),
         llmRequestPolicy: LlmRequestPolicy,
       }),
     },
@@ -210,6 +233,8 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "A visible agent message was sent to the web UI.",
       payloadSchema: z.object({
         message: z.string(),
+        /** Files attached to the message — see {@link AgentFileAttachment}. */
+        files: z.array(AgentFileAttachment).optional(),
       }),
     },
     "events.iterate.com/agent/output-added": {

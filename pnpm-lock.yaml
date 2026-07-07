@@ -587,6 +587,9 @@ importers:
       comlink:
         specifier: ^4.4.2
         version: 4.4.2
+      croner:
+        specifier: ^10.0.1
+        version: 10.0.1
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(react@19.2.4)
@@ -7481,6 +7484,10 @@ packages:
   cron-schedule@6.0.0:
     resolution: {integrity: sha512-BoZaseYGXOo5j5HUwTaegIog3JJbuH4BbrY9A1ArLjXpy+RWb3mV28F/9Gv1dDA7E2L8kngWva4NWisnLTyfgQ==}
     engines: {node: '>=20'}
+
+  croner@10.0.1:
+    resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
+    engines: {node: '>=18.0'}
 
   cross-fetch@3.2.0:
     resolution: {integrity: sha512-Q+xVJLoGOeIMXZmbUK4HYk+69cQH6LudR0Vu/pRm2YlU/hDV9CiS0gKUMaWY5f2NeUH9C1nV3bsTlCo0FsTV1Q==}
@@ -19752,6 +19759,8 @@ snapshots:
   crelt@1.0.6: {}
 
   cron-schedule@6.0.0: {}
+
+  croner@10.0.1: {}
 
   cross-fetch@3.2.0:
     dependencies:

@@ -4,13 +4,14 @@ import type { Event } from "./types.ts";
 // Reduced state model + pure batch planner
 //
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
-// requests · 7.4 s") → assistant message. SETTLED items are emitted as ops
-// that the agent-ui processor writes into the `agent_feed_items` SQLite
-// table (the TanStack virtual list reads those rows); the reduced state holds
-// only what is still in flight — the live activity with partially streamed
-// thinking/response text, the presence roster, and the next dense row index.
-// The live part renders as one element below the list, straight from this
-// state.
+// requests · 7.4 s") → assistant message, with quiet stream wake dividers.
+// SETTLED items are emitted as ops that the agent-ui processor writes into
+// the `agent_feed_items` SQLite table (the TanStack virtual list reads those
+// rows); the reduced state holds only what is still in flight — the live
+// activity with partially streamed thinking/response text, the presence
+// roster, and the next dense row index. The live part renders as one element
+// below the list, straight from this state, and exists only while work is
+// active.
 //
 // Mirrors `browser-event-feed`'s planFeedOps contract: `reduce` advances
 // state one event at a time, `processEventBatch` plans the whole batch from
@@ -56,14 +57,19 @@ export type AgentUiStep = AgentUiLlmStep | AgentUiCodeStep;
 export type AgentUiActivity = {
   kind: "activity";
   id: string;
-  /**
-   * "waiting" = the agent went idle but no chat message has settled the
-   * activity yet — further rounds roll into it ("Ran code 3× · 3 requests").
-   */
-  status: "running" | "waiting" | "done";
+  status: "running" | "done";
   steps: AgentUiStep[];
   startedAtMs: number;
   endedAtMs?: number;
+};
+
+/** A file attachment shown alongside a user message in the agent UI. */
+export type AgentUiFileAttachment = {
+  contentType: string;
+  filename: string;
+  path: string;
+  size: number;
+  url: string;
 };
 
 export type AgentUiMessageItem = {
@@ -71,9 +77,17 @@ export type AgentUiMessageItem = {
   id: string;
   text: string;
   timestampMs: number;
+  files?: AgentUiFileAttachment[];
 };
 
-export type AgentUiItem = AgentUiMessageItem | AgentUiActivity;
+export type AgentUiStreamWakeItem = {
+  kind: "stream-woken";
+  id: string;
+  text: string;
+  timestampMs: number;
+};
+
+export type AgentUiItem = AgentUiMessageItem | AgentUiActivity | AgentUiStreamWakeItem;
 
 export type AgentUiProcessorAnnouncement = {
   slug: string;
@@ -93,7 +107,7 @@ export type AgentUiPresenceEntry = {
 };
 
 export type AgentUiState = {
-  /** The running activity (streaming thinking/code), or null when idle. */
+  /** The running activity (streaming thinking/code), or null when no work is active. */
   live: AgentUiActivity | null;
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
@@ -140,6 +154,7 @@ const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-reques
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
 const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
+const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
 // The openai-ws processor journals every raw Responses-WS frame as
@@ -157,6 +172,7 @@ const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
+const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -174,42 +190,53 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case "events.iterate.com/agents/user-message-received": {
       const text = readString(event, "content");
       if (text == null) return state;
-      // A user message while steps are still running must not archive those
-      // steps as finished — the agent is still working. Only a quiescent live
-      // activity settles here; an active one keeps streaming and settles on
-      // its own terminal event.
-      const hasRunningStep = state.live?.steps.some((step) => step.status === "running") ?? false;
-      const item: AgentUiMessageItem = {
+      return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-${event.offset}`,
         text,
         timestampMs,
-      };
-      if (hasRunningStep) {
-        return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
-      }
-      const base = hasRunningStep ? state : settleLive(state, timestampMs, ops);
-      return emitItem(base, ops, item);
+      });
+    }
+
+    case AGENT_INPUT_ADDED: {
+      const text = readString(event, "content");
+      const files = readFileAttachments(event);
+      if (text == null || files.length === 0) return state;
+      // Reflections of the agent's own sent messages (the processor's
+      // "The assistant sent this visible web-chat message" inputs, keyed
+      // agent/render-web-response@<offset>) carry the SAME attachments the
+      // web-message-sent event already rendered as an assistant bubble —
+      // they exist for the model's eyes, not the user's.
+      if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
+      return emitUserMessageItem(state, ops, {
+        kind: "user",
+        id: `user-file-${event.offset}`,
+        text,
+        files,
+        timestampMs,
+      });
     }
 
     case "events.iterate.com/agents/web-message-sent":
     case "events.iterate.com/agents/tui-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
-      const settled = settleLive(state, timestampMs, ops);
-      return emitItem(settled, ops, {
+      const files = readFileAttachments(event);
+      const item: AgentUiMessageItem = {
         kind: "assistant",
         id: `assistant-${event.offset}`,
         text,
+        ...(files.length === 0 ? {} : { files }),
         timestampMs,
-      });
+      };
+      return emitItem(state, ops, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
       const base =
         state.queuedUserMessages.length === 0
           ? state
-          : flushQueuedUserMessages(settleLive(state, timestampMs, ops), ops);
+          : flushQueuedUserMessages(settleLiveIfIdle(state, timestampMs, ops), ops);
       const live = ensureLive(base, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
@@ -305,35 +332,43 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         isRecord(result?.error) && typeof result.error.message === "string"
           ? result.error.message
           : undefined;
-      return updateLlmStep(state, llmRequestId, (step) =>
-        step.outcome === "cancelled"
-          ? step
-          : {
-              ...step,
-              status: "done",
-              outcome: status === "success" ? "completed" : "failed",
-              ...(typeof payload?.provider === "string" ? { provider: payload.provider } : {}),
-              ...(typeof payload?.durationMs === "number"
-                ? { durationMs: payload.durationMs }
-                : {}),
-              ...(usage.input == null ? {} : { inputTokens: usage.input }),
-              ...(usage.output == null ? {} : { outputTokens: usage.output }),
-              ...(errorMessage == null ? {} : { errorMessage }),
-              ...(typeof result?.providerResponseId === "string"
-                ? { providerResponseId: result.providerResponseId }
-                : {}),
-            },
+      return settleLiveIfIdle(
+        updateLlmStep(state, llmRequestId, (step) =>
+          step.outcome === "cancelled"
+            ? step
+            : {
+                ...step,
+                status: "done",
+                outcome: status === "success" ? "completed" : "failed",
+                ...(typeof payload?.provider === "string" ? { provider: payload.provider } : {}),
+                ...(typeof payload?.durationMs === "number"
+                  ? { durationMs: payload.durationMs }
+                  : {}),
+                ...(usage.input == null ? {} : { inputTokens: usage.input }),
+                ...(usage.output == null ? {} : { outputTokens: usage.output }),
+                ...(errorMessage == null ? {} : { errorMessage }),
+                ...(typeof result?.providerResponseId === "string"
+                  ? { providerResponseId: result.providerResponseId }
+                  : {}),
+              },
+        ),
+        timestampMs,
+        ops,
       );
     }
 
     case AGENT_LLM_REQUEST_CANCELLED: {
       const llmRequestId = readNumber(event, "llmRequestId");
       if (llmRequestId == null) return state;
-      return updateLlmStep(state, llmRequestId, (step) => ({
-        ...step,
-        status: "done",
-        outcome: "cancelled",
-      }));
+      return settleLiveIfIdle(
+        updateLlmStep(state, llmRequestId, (step) => ({
+          ...step,
+          status: "done",
+          outcome: "cancelled",
+        })),
+        timestampMs,
+        ops,
+      );
     }
 
     case SCRIPT_EXECUTION_REQUESTED:
@@ -367,16 +402,13 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const step = steps[index];
       if (step == null || step.kind !== "code") return state;
       steps[index] = { ...step, status: "done", ...outcome };
-      return { ...state, live: { ...state.live, steps } };
+      const next = { ...state, live: { ...state.live, steps } };
+      return settleLiveIfIdle(next, timestampMs, ops);
     }
 
     case AGENT_STATUS_UPDATED: {
       if (readString(event, "status") !== "idle") return state;
-      // Idle does NOT settle: rounds within one conversation roll into a
-      // single activity, and only chat messages break it up. Mark the live
-      // activity waiting so the UI can park the spinner until the next round.
-      if (state.live == null) return state;
-      return { ...state, live: { ...state.live, status: "waiting" } };
+      return settleLiveIfIdle(state, timestampMs, ops);
     }
 
     case STREAM_SUBSCRIBER_CONNECTED: {
@@ -423,12 +455,19 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case STREAM_WOKEN: {
       // Every connection died with the previous stream incarnation; survivors
       // re-dial and re-land as fresh connected facts.
-      return {
+      const next = {
         ...state,
         presence: state.presence.map((entry) =>
           entry.connected ? { ...entry, connected: false } : entry,
         ),
       };
+      if (isInitialStreamWake(event)) return next;
+      return emitItem(next, ops, {
+        kind: "stream-woken",
+        id: `stream-woken-${event.offset}`,
+        text: STREAM_WAKE_LABEL,
+        timestampMs,
+      });
     }
 
     default:
@@ -441,7 +480,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
 // ---------------------------------------------------------------------------
 
 function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): AgentUiActivity {
-  // A new step resumes a waiting activity — that's the roll-up.
+  // Multiple simultaneous steps render as one live activity.
   if (state.live != null) return { ...state.live, status: "running" };
   return {
     kind: "activity",
@@ -450,6 +489,20 @@ function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): A
     steps: [],
     startedAtMs,
   };
+}
+
+function isInitialStreamWake(event: Event): boolean {
+  // Brand-new streams commit stream/created at offset 1 and stream/woken at offset 2.
+  return event.offset <= 2;
+}
+
+function liveHasRunningStep(live: AgentUiActivity | null): boolean {
+  return live?.steps.some((step) => step.status === "running") ?? false;
+}
+
+function settleLiveIfIdle(state: AgentUiState, endedAtMs: number, ops: AgentUiOp[]): AgentUiState {
+  if (liveHasRunningStep(state.live)) return state;
+  return settleLive(state, endedAtMs, ops);
 }
 
 /** Closes the live activity (if any) and emits it as a settled item. */
@@ -473,6 +526,21 @@ function flushQueuedUserMessages(state: AgentUiState, ops: AgentUiOp[]): AgentUi
     next = emitItem(next, ops, item);
   }
   return next;
+}
+
+// A user message while steps are still running must not archive those steps
+// as finished — the agent is still working. Queue it for the next flush;
+// otherwise emit directly. Shared by plain user messages and file-attachment
+// inputs.
+function emitUserMessageItem(
+  state: AgentUiState,
+  ops: AgentUiOp[],
+  item: AgentUiMessageItem,
+): AgentUiState {
+  if (liveHasRunningStep(state.live)) {
+    return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
+  }
+  return emitItem(state, ops, item);
 }
 
 function updateLlmStep(
@@ -579,6 +647,23 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function readFileAttachments(event: Event): AgentUiFileAttachment[] {
+  const value = readPayloadRecord(event)?.files;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): AgentUiFileAttachment[] => {
+    if (!isRecord(item)) return [];
+    const contentType = typeof item.contentType === "string" ? item.contentType : null;
+    const filename = typeof item.filename === "string" ? item.filename : null;
+    const path = typeof item.path === "string" ? item.path : null;
+    const size = typeof item.size === "number" && Number.isFinite(item.size) ? item.size : null;
+    const url = typeof item.url === "string" ? item.url : null;
+    if (contentType == null || filename == null || path == null || size == null || url == null) {
+      return [];
+    }
+    return [{ contentType, filename, path, size, url }];
+  });
 }
 
 function readString(event: Event, key: string): string | null {

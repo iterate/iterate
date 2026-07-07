@@ -12,7 +12,14 @@
 import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import {
+  mintProjectFileUrl,
+  putProjectFile,
+  sanitizeFileFilename,
+} from "../files/project-files.ts";
+import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
 import { slackBotTokenSecretPath } from "./utils.ts";
+import { parseConfig } from "~/config.ts";
 
 type SlackWebApiResult = { error?: string; ok?: boolean } & Record<string, unknown>;
 
@@ -151,6 +158,78 @@ export async function callProjectSlackWebApi(input: {
   return await parseSlackWebApiResponse(response, input.method);
 }
 
+/**
+ * Downloads a Slack file's bytes (`url_private`) with one named connection's
+ * bot token — the same secret-placeholder egress path as
+ * callProjectSlackWebApi, and the same no-fallback stance: a missing secret
+ * fails loudly instead of silently downloading with someone else's credential.
+ * Slack answers unauthorized downloads with a 200 HTML login page, so HTML
+ * responses count as auth failures.
+ */
+async function downloadProjectSlackFile(input: {
+  connection: string;
+  projectId: string;
+  url: string;
+}): Promise<{ bytes: Uint8Array; contentType: string | undefined }> {
+  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
+  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(
+    new Request(input.url, { headers: { authorization: `Bearer ${placeholder}` } }),
+  );
+  if (!isUsableSlackFileResponse(response)) {
+    throw new Error(`Slack file download failed: HTTP ${response.status}`);
+  }
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") ?? undefined,
+  };
+}
+
+function isUsableSlackFileResponse(response: Response): boolean {
+  if (!response.ok) return false;
+  return !(response.headers.get("content-type") ?? "").includes("text/html");
+}
+
+/**
+ * Materializes Slack-shared files into project file storage under the
+ * agent's path and returns the attachments for the agent input event. Paths
+ * derive from the caller's stable `storageKey` (the webhook event offset), so
+ * a replayed processor batch overwrites the same objects instead of
+ * duplicating them.
+ */
+export async function storeSlackFilesForAgent(input: {
+  agentPath: string;
+  connection: string;
+  files: Array<{ mimetype?: string; name?: string; urlPrivate: string }>;
+  projectId: string;
+  storageKey: string;
+}): Promise<AgentFileAttachment[]> {
+  const config = parseConfig(itxEnv);
+  return await Promise.all(
+    input.files.map(async (file, index): Promise<AgentFileAttachment> => {
+      const download = await downloadProjectSlackFile({
+        connection: input.connection,
+        projectId: input.projectId,
+        url: file.urlPrivate,
+      });
+      const filename = sanitizeFileFilename(file.name ?? `slack-file-${index}`);
+      const path = `${input.agentPath}/${input.storageKey}-${index}-${filename}`;
+      const metadata = await putProjectFile({
+        contentType: file.mimetype ?? download.contentType,
+        data: download.bytes,
+        path,
+        projectId: input.projectId,
+      });
+      const url = await mintProjectFileUrl({ config, path, projectId: input.projectId });
+      return {
+        contentType: metadata.contentType,
+        filename,
+        path: metadata.path,
+        size: metadata.size,
+        url,
+      };
+    }),
+  );
+}
 async function parseSlackWebApiResponse(
   response: Response,
   method: string,
