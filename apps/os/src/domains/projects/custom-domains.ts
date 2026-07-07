@@ -257,9 +257,7 @@ async function snapshotCustomHostname(input: {
   fallbackHostname: string;
 }): Promise<ProjectCustomDomainCloudflareSnapshot> {
   const customHostname = await fetchCustomHostnameDetails(input.client, input.customHostname);
-  return toProjectCustomDomainCloudflareSnapshot(customHostname, input.fallbackHostname, {
-    dcvDelegationUuid: await input.client.getDcvDelegationUuid(),
-  });
+  return toProjectCustomDomainCloudflareSnapshot(customHostname, input.fallbackHostname);
 }
 
 async function fetchCustomHostnameDetails(
@@ -340,8 +338,6 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
   );
   const zone = zones.find((candidate) => candidate.name === zoneName);
   if (!zone) throw new Error(`Cloudflare zone "${zoneName}" was not found.`);
-  let dcvDelegationUuid: Promise<string | null> | undefined;
-
   return {
     async createCustomHostname(input: {
       hostname: string;
@@ -385,16 +381,6 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
       );
       return result.find((candidate) => candidate.hostname === hostname) ?? null;
     },
-
-    getDcvDelegationUuid(): Promise<string | null> {
-      dcvDelegationUuid ??= request<{ uuid?: unknown }>(`/zones/${zone.id}/dcv_delegation/uuid`)
-        .then((result) => stringValue(result.uuid))
-        .catch((error) => {
-          console.warn("Cloudflare DCV delegation lookup failed", error);
-          return null;
-        });
-      return dcvDelegationUuid;
-    },
   };
 }
 
@@ -417,7 +403,6 @@ function cloudflareErrorMessage(path: string, status: number, errors: Cloudflare
 export function toProjectCustomDomainCloudflareSnapshot(
   customHostname: CloudflareCustomHostname,
   fallbackHostname: string,
-  options: { dcvDelegationUuid?: string | null } = {},
 ): ProjectCustomDomainCloudflareSnapshot {
   const hostname =
     typeof customHostname.hostname === "string" ? customHostname.hostname : fallbackHostname;
@@ -434,10 +419,6 @@ export function toProjectCustomDomainCloudflareSnapshot(
     .join("; ");
 
   return {
-    certificateDelegationCname: toCertificateDelegationRecord({
-      hostname,
-      uuid: options.dcvDelegationUuid ?? null,
-    }),
     cloudflareHostnameId: customHostname.id ?? null,
     error: error || null,
     hostname,
@@ -447,17 +428,6 @@ export function toProjectCustomDomainCloudflareSnapshot(
     status: customDomainStatus({ error, hostnameStatus, sslStatus }),
     validationRecords,
     wildcard: customHostname.ssl?.wildcard === true,
-  };
-}
-
-function toCertificateDelegationRecord(input: {
-  hostname: string;
-  uuid: string | null;
-}): { name: string; value: string } | null {
-  if (!input.uuid) return null;
-  return {
-    name: `_acme-challenge.${input.hostname}`,
-    value: `${input.hostname}.${input.uuid}.dcv.cloudflare.com`,
   };
 }
 

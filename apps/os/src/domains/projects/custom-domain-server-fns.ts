@@ -6,59 +6,39 @@ import { ProjectProcessorContract } from "~/domains/projects/project-processor-c
 import type { RequestContext } from "~/request-context.ts";
 import type { UnauthenticatedOs } from "~/types.ts";
 
-type CustomDomainMutationResult = {
-  hostname: string;
-  offset: number;
-};
+type CustomDomainMutationAction = "add" | "refresh" | "remove";
 
-export const addProjectCustomDomainServerFn: (input: {
-  data: { hostname: string; projectId: string };
-}) => Promise<CustomDomainMutationResult> = createServerFn({ method: "POST" })
-  .validator((input: { hostname: string; projectId: string }) => input)
+export const mutateProjectCustomDomainServerFn: (input: {
+  data: { action: CustomDomainMutationAction; hostname: string; projectId: string };
+}) => Promise<{ hostname: string; offset: number }> = createServerFn({ method: "POST" })
+  .validator(
+    (input: { action: CustomDomainMutationAction; hostname: string; projectId: string }) => input,
+  )
   .handler(async ({ context, data }) => {
     const hostname = normalizeProjectCustomDomain({
       hostname: data.hostname,
       projectHostnameBases: context.config.projectHostnameBases ?? [],
     });
+    if (data.action === "remove") {
+      await assertProjectCustomDomainConfigured(context, data.projectId, hostname);
+    }
     const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
-      type: "events.iterate.com/project/custom-domain-add-requested",
+      type: customDomainEventType(data.action),
       payload: { hostname },
     });
     return { hostname, offset: event!.offset };
   });
 
-export const refreshProjectCustomDomainServerFn: (input: {
-  data: { hostname: string; projectId: string };
-}) => Promise<CustomDomainMutationResult> = createServerFn({ method: "POST" })
-  .validator((input: { hostname: string; projectId: string }) => input)
-  .handler(async ({ context, data }) => {
-    const hostname = normalizeProjectCustomDomain({
-      hostname: data.hostname,
-      projectHostnameBases: context.config.projectHostnameBases ?? [],
-    });
-    const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
-      type: "events.iterate.com/project/custom-domain-refresh-requested",
-      payload: { hostname },
-    });
-    return { hostname, offset: event!.offset };
-  });
-
-export const removeProjectCustomDomainServerFn: (input: {
-  data: { hostname: string; projectId: string };
-}) => Promise<CustomDomainMutationResult> = createServerFn({ method: "POST" })
-  .validator((input: { hostname: string; projectId: string }) => input)
-  .handler(async ({ context, data }) => {
-    const hostname = normalizeProjectCustomDomain({
-      hostname: data.hostname,
-      projectHostnameBases: context.config.projectHostnameBases ?? [],
-    });
-    await assertProjectCustomDomainConfigured(context, data.projectId, hostname);
-    const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
-      type: "events.iterate.com/project/custom-domain-remove-requested",
-      payload: { hostname },
-    });
-    return { hostname, offset: event!.offset };
-  });
+function customDomainEventType(action: CustomDomainMutationAction) {
+  switch (action) {
+    case "add":
+      return "events.iterate.com/project/custom-domain-add-requested";
+    case "refresh":
+      return "events.iterate.com/project/custom-domain-refresh-requested";
+    case "remove":
+      return "events.iterate.com/project/custom-domain-remove-requested";
+  }
+}
 
 function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");

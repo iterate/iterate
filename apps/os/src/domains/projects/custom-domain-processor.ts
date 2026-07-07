@@ -31,7 +31,6 @@ export function reduceCustomDomainEvent({
         });
       }
       return upsertCustomDomain(state, {
-        certificateDelegationCname: null,
         cloudflareHostnameId: null,
         createdAt: event.createdAt,
         error: null,

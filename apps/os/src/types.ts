@@ -699,13 +699,7 @@ export type ProjectCustomDomainValidationRecord = {
   value: string;
 };
 
-export type ProjectCustomDomainDnsRecord = {
-  name: string;
-  value: string;
-};
-
 export type ProjectCustomDomain = {
-  certificateDelegationCname: ProjectCustomDomainDnsRecord | null;
   cloudflareHostnameId: string | null;
   createdAt: string;
   error: string | null;

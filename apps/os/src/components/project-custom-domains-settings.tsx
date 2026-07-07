@@ -7,11 +7,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ProjectHostnameCard } from "~/components/project-hostname-card.tsx";
-import {
-  addProjectCustomDomainServerFn,
-  refreshProjectCustomDomainServerFn,
-  removeProjectCustomDomainServerFn,
-} from "~/domains/projects/custom-domain-server-fns.ts";
+import { mutateProjectCustomDomainServerFn } from "~/domains/projects/custom-domain-server-fns.ts";
 import {
   buildProjectWorkerUrl,
   isValidCustomHostname,
@@ -89,8 +85,8 @@ function CustomDomainsEditor({
   );
   const addDomain = useMutation({
     mutationFn: async (domainHostname: string) => {
-      const result = await addProjectCustomDomainServerFn({
-        data: { hostname: domainHostname, projectId },
+      const result = await mutateProjectCustomDomainServerFn({
+        data: { action: "add", hostname: domainHostname, projectId },
       });
       return result.hostname;
     },
@@ -102,8 +98,8 @@ function CustomDomainsEditor({
   });
   const refreshDomain = useMutation({
     mutationFn: async (domainHostname: string) => {
-      const result = await refreshProjectCustomDomainServerFn({
-        data: { hostname: domainHostname, projectId },
+      const result = await mutateProjectCustomDomainServerFn({
+        data: { action: "refresh", hostname: domainHostname, projectId },
       });
       return result.hostname;
     },
@@ -117,8 +113,8 @@ function CustomDomainsEditor({
       if (!existingHostnames.has(domainHostname)) {
         throw new Error(`Custom domain "${domainHostname}" is not configured on this project.`);
       }
-      const result = await removeProjectCustomDomainServerFn({
-        data: { hostname: domainHostname, projectId },
+      const result = await mutateProjectCustomDomainServerFn({
+        data: { action: "remove", hostname: domainHostname, projectId },
       });
       return result.hostname;
     },
@@ -211,13 +207,10 @@ function CustomDomainRow({
       ? [{ name: `*.${domain.hostname}`, type: "CNAME", value: cnameTarget }]
       : []),
   ];
-  const certificateRecords = domain.certificateDelegationCname
-    ? [{ ...domain.certificateDelegationCname, type: "CNAME" }]
-    : [];
-  const certificateFallbackRecords =
-    certificateRecords.length === 0
-      ? domain.validationRecords.map((record) => ({ ...record, type: "TXT" }))
-      : [];
+  const certificateRecords = domain.validationRecords.map((record) => ({
+    ...record,
+    type: "TXT",
+  }));
 
   return (
     <div className="grid gap-3 p-3">
@@ -261,12 +254,6 @@ function CustomDomainRow({
         title="Authorize domain"
       />
       <DomainSetupStep
-        note={
-          certificateRecords.length > 0
-            ? "Remove any existing TXT records at this _acme-challenge name before adding the CNAME."
-            : undefined
-        }
-        fallbackRecords={certificateFallbackRecords}
         records={certificateRecords}
         status={domain.sslStatus}
         title="Issue certificate"
@@ -277,19 +264,15 @@ function CustomDomainRow({
 }
 
 function DomainSetupStep({
-  fallbackRecords = [],
-  note,
   records,
   status,
   title,
 }: {
-  fallbackRecords?: DnsDisplayRecord[];
-  note?: string;
   records: DnsDisplayRecord[];
   status?: string | null;
   title: string;
 }) {
-  if (records.length === 0 && fallbackRecords.length === 0) return null;
+  if (records.length === 0) return null;
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
@@ -300,11 +283,7 @@ function DomainSetupStep({
         {records.map((record) => (
           <DnsLine key={`${record.type}:${record.name}:${record.value}`} record={record} />
         ))}
-        {fallbackRecords.map((record) => (
-          <DnsLine key={`${record.type}:${record.name}:${record.value}`} record={record} />
-        ))}
       </div>
-      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
     </div>
   );
 }

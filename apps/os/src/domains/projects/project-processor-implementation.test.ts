@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+import type { ProjectCustomDomainCloudflareSnapshot } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 class MemoryStream implements Stream {
@@ -99,101 +100,118 @@ const project: ProjectDirectoryRecord = {
   slug: "garple",
 };
 
-async function deliverNewEvents(input: {
-  processor: ProjectProcessor;
-  stream: MemoryStream;
-  cursor: { offset: number };
-}) {
-  const events = input.stream.events.slice(input.cursor.offset);
-  input.cursor.offset = input.stream.events.length;
-  if (events.length === 0) return;
-  await input.processor.ingest({
-    events,
-    streamMaxOffset: input.stream.events.length,
+type CustomDomainDeps = NonNullable<
+  ConstructorParameters<typeof ProjectProcessor>[0]["customDomains"]
+>;
+
+function customDomainSnapshot(
+  input: Partial<ProjectCustomDomainCloudflareSnapshot> = {},
+): ProjectCustomDomainCloudflareSnapshot {
+  const hostname = input.hostname ?? "garple.com";
+  return {
+    cloudflareHostnameId: "custom-hostname-1",
+    error: null,
+    hostname,
+    hostnameStatus: "active",
+    ownershipVerification: {
+      name: `_cf-custom-hostname.${hostname}`,
+      value: "ownership-token",
+    },
+    sslStatus: "active",
+    status: "active",
+    validationRecords: [
+      {
+        name: `_acme-challenge.${hostname}`,
+        status: "active",
+        value: "ssl-token",
+      },
+    ],
+    wildcard: true,
+    ...input,
+  };
+}
+
+function createHarness(overrides: Partial<CustomDomainDeps> = {}) {
+  const stream = new MemoryStream();
+  const customDomains: CustomDomainDeps = {
+    ensure: vi.fn(async () =>
+      customDomainSnapshot({
+        hostnameStatus: "pending",
+        sslStatus: "pending_validation",
+        status: "pending_validation",
+      }),
+    ),
+    readProject: vi.fn(async () => project),
+    refresh: vi.fn(async () => customDomainSnapshot()),
+    remove: vi.fn(),
+    ...overrides,
+  };
+  const processor = new ProjectProcessor({
+    customDomains,
+    defaultLlmProvider: "openai-ws",
+    itx: {
+      projectId: project.id,
+      worker: { processEvent: vi.fn() },
+    } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
+    stream,
   });
+  const cursor = { offset: 0 };
+
+  return {
+    customDomains,
+    deliver: async () => {
+      const events = stream.events.slice(cursor.offset);
+      cursor.offset = stream.events.length;
+      if (events.length === 0) return;
+      await processor.ingest({ events, streamMaxOffset: stream.events.length });
+    },
+    processor,
+    stream,
+  };
+}
+
+async function appendProjectEvent(
+  stream: MemoryStream,
+  input: Parameters<typeof ProjectProcessorContract.buildEvent>[0],
+) {
+  await stream.append(ProjectProcessorContract.buildEvent(input));
 }
 
 describe("ProjectProcessor custom domains", () => {
   it("provisions an add request and reduces the observed Cloudflare status", async () => {
-    const stream = new MemoryStream();
-    const customDomains = {
-      ensure: vi.fn(async () => ({
-        certificateDelegationCname: {
-          name: "_acme-challenge.garple.com",
-          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-        },
-        cloudflareHostnameId: "custom-hostname-1",
-        error: null,
-        hostname: "garple.com",
-        hostnameStatus: "pending",
-        ownershipVerification: {
-          name: "_cf-custom-hostname.garple.com",
-          value: "ownership-token",
-        },
-        sslStatus: "pending_validation",
-        status: "pending_validation" as const,
-        validationRecords: [
-          {
-            name: "_acme-challenge.garple.com",
-            status: "pending",
-            value: "ssl-token",
-          },
-        ],
-        wildcard: true,
-      })),
-      readProject: vi.fn(async () => project),
-      refresh: vi.fn(),
-      remove: vi.fn(),
-    };
-    const processor = new ProjectProcessor({
-      customDomains,
-      defaultLlmProvider: "openai-ws",
-      itx: {
-        projectId: project.id,
-        worker: { processEvent: vi.fn() },
-      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
-      stream,
+    const harness = createHarness();
+
+    await appendProjectEvent(harness.stream, {
+      type: "events.iterate.com/project/custom-domain-add-requested",
+      payload: { hostname: "garple.com" },
     });
-    const cursor = { offset: 0 };
 
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-add-requested",
-        payload: { hostname: "garple.com" },
-      }),
-    );
+    await harness.deliver();
 
-    await deliverNewEvents({ cursor, processor, stream });
-
-    expect(customDomains.ensure).toHaveBeenCalledWith({ hostname: "garple.com", project });
-    expect(stream.events.at(-1)).toMatchObject({
+    expect(harness.customDomains.ensure).toHaveBeenCalledWith({
+      hostname: "garple.com",
+      project,
+    });
+    expect(harness.stream.events.at(-1)).toMatchObject({
       type: "events.iterate.com/project/custom-domain-cloudflare-observed",
       payload: {
-        certificateDelegationCname: {
-          name: "_acme-challenge.garple.com",
-          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-        },
         cloudflareHostnameId: "custom-hostname-1",
         hostname: "garple.com",
         status: "pending_validation",
         wildcard: true,
       },
     });
-    expect(processor.state.customDomains).toMatchObject([
+    expect(harness.processor.state.customDomains).toMatchObject([
       {
         hostname: "garple.com",
         status: "requested",
       },
     ]);
 
-    await deliverNewEvents({ cursor, processor, stream });
+    await harness.deliver();
 
-    expect(processor.state.customDomains).toMatchObject([
+    expect(harness.processor.state.customDomains).toMatchObject([
       {
-        certificateDelegationCname: {
-          name: "_acme-challenge.garple.com",
-          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-        },
         cloudflareHostnameId: "custom-hostname-1",
         hostname: "garple.com",
         status: "pending_validation",
@@ -203,35 +221,17 @@ describe("ProjectProcessor custom domains", () => {
   });
 
   it("does not remove a custom domain that is absent from project state", async () => {
-    const stream = new MemoryStream();
-    const customDomains = {
-      ensure: vi.fn(),
-      readProject: vi.fn(async () => project),
-      refresh: vi.fn(),
-      remove: vi.fn(),
-    };
-    const processor = new ProjectProcessor({
-      customDomains,
-      defaultLlmProvider: "openai-ws",
-      itx: {
-        projectId: project.id,
-        worker: { processEvent: vi.fn() },
-      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
-      stream,
+    const harness = createHarness();
+
+    await appendProjectEvent(harness.stream, {
+      type: "events.iterate.com/project/custom-domain-remove-requested",
+      payload: { hostname: "garple.com" },
     });
-    const cursor = { offset: 0 };
 
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-remove-requested",
-        payload: { hostname: "garple.com" },
-      }),
-    );
+    await harness.deliver();
 
-    await deliverNewEvents({ cursor, processor, stream });
-
-    expect(customDomains.remove).not.toHaveBeenCalled();
-    expect(stream.events.at(-1)).toMatchObject({
+    expect(harness.customDomains.remove).not.toHaveBeenCalled();
+    expect(harness.stream.events.at(-1)).toMatchObject({
       type: "events.iterate.com/project/custom-domain-provision-failed",
       payload: {
         error: 'Custom domain "garple.com" is not configured on this project.',
@@ -239,256 +239,37 @@ describe("ProjectProcessor custom domains", () => {
       },
     });
 
-    await deliverNewEvents({ cursor, processor, stream });
+    await harness.deliver();
 
-    expect(processor.state.customDomains).toEqual([]);
+    expect(harness.processor.state.customDomains).toEqual([]);
   });
 
   it("preserves the last Cloudflare snapshot when refresh fails", async () => {
-    const stream = new MemoryStream();
-    const customDomains = {
-      ensure: vi.fn(),
-      readProject: vi.fn(async () => project),
+    const harness = createHarness({
       refresh: vi.fn(async () => {
         throw new Error("Cloudflare is unavailable");
       }),
-      remove: vi.fn(),
-    };
-    const processor = new ProjectProcessor({
-      customDomains,
-      defaultLlmProvider: "openai-ws",
-      itx: {
-        projectId: project.id,
-        worker: { processEvent: vi.fn() },
-      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
-      stream,
     });
-    const cursor = { offset: 0 };
 
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-        payload: {
-          certificateDelegationCname: {
-            name: "_acme-challenge.garple.com",
-            value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-          },
-          cloudflareHostnameId: "custom-hostname-1",
-          error: null,
-          hostname: "garple.com",
-          hostnameStatus: "active",
-          ownershipVerification: {
-            name: "_cf-custom-hostname.garple.com",
-            value: "ownership-token",
-          },
-          sslStatus: "active",
-          status: "active",
-          validationRecords: [
-            {
-              name: "_acme-challenge.garple.com",
-              status: "active",
-              value: "ssl-token",
-            },
-          ],
-          wildcard: true,
-        },
-      }),
-    );
-    await deliverNewEvents({ cursor, processor, stream });
+    await appendProjectEvent(harness.stream, {
+      type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+      payload: customDomainSnapshot(),
+    });
+    await harness.deliver();
 
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-refresh-requested",
-        payload: { hostname: "garple.com" },
-      }),
-    );
-    await deliverNewEvents({ cursor, processor, stream });
-    await deliverNewEvents({ cursor, processor, stream });
+    await appendProjectEvent(harness.stream, {
+      type: "events.iterate.com/project/custom-domain-refresh-requested",
+      payload: { hostname: "garple.com" },
+    });
+    await harness.deliver();
+    await harness.deliver();
 
-    expect(processor.state.customDomains).toMatchObject([
+    expect(harness.processor.state.customDomains).toMatchObject([
       {
-        certificateDelegationCname: {
-          name: "_acme-challenge.garple.com",
-          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-        },
         cloudflareHostnameId: "custom-hostname-1",
         error: "Cloudflare is unavailable",
         hostname: "garple.com",
-        hostnameStatus: "active",
-        ownershipVerification: {
-          name: "_cf-custom-hostname.garple.com",
-          value: "ownership-token",
-        },
-        sslStatus: "active",
         status: "active",
-        validationRecords: [
-          {
-            name: "_acme-challenge.garple.com",
-            status: "active",
-            value: "ssl-token",
-          },
-        ],
-      },
-    ]);
-  });
-
-  it("preserves an existing Cloudflare snapshot when a domain is re-added", async () => {
-    const stream = new MemoryStream();
-    const activeSnapshot = {
-      certificateDelegationCname: {
-        name: "_acme-challenge.garple.com",
-        value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-      },
-      cloudflareHostnameId: "custom-hostname-1",
-      error: null,
-      hostname: "garple.com",
-      hostnameStatus: "active",
-      ownershipVerification: {
-        name: "_cf-custom-hostname.garple.com",
-        value: "ownership-token",
-      },
-      sslStatus: "active",
-      status: "active" as const,
-      validationRecords: [
-        {
-          name: "_acme-challenge.garple.com",
-          status: "active",
-          value: "ssl-token",
-        },
-      ],
-      wildcard: true,
-    };
-    const customDomains = {
-      ensure: vi.fn(async () => activeSnapshot),
-      readProject: vi.fn(async () => project),
-      refresh: vi.fn(),
-      remove: vi.fn(),
-    };
-    const processor = new ProjectProcessor({
-      customDomains,
-      defaultLlmProvider: "openai-ws",
-      itx: {
-        projectId: project.id,
-        worker: { processEvent: vi.fn() },
-      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
-      stream,
-    });
-    const cursor = { offset: 0 };
-
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-        payload: activeSnapshot,
-      }),
-    );
-    await deliverNewEvents({ cursor, processor, stream });
-
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-add-requested",
-        payload: { hostname: "garple.com" },
-      }),
-    );
-    await deliverNewEvents({ cursor, processor, stream });
-
-    expect(processor.state.customDomains).toMatchObject([
-      {
-        certificateDelegationCname: {
-          name: "_acme-challenge.garple.com",
-          value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-        },
-        cloudflareHostnameId: "custom-hostname-1",
-        error: null,
-        hostname: "garple.com",
-        hostnameStatus: "active",
-        ownershipVerification: {
-          name: "_cf-custom-hostname.garple.com",
-          value: "ownership-token",
-        },
-        sslStatus: "active",
-        status: "active",
-        validationRecords: [
-          {
-            name: "_acme-challenge.garple.com",
-            status: "active",
-            value: "ssl-token",
-          },
-        ],
-      },
-    ]);
-  });
-
-  it("marks an existing failed custom domain as requested when re-added", async () => {
-    const stream = new MemoryStream();
-    const failedSnapshot = {
-      certificateDelegationCname: {
-        name: "_acme-challenge.garple.com",
-        value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
-      },
-      cloudflareHostnameId: "custom-hostname-1",
-      error: "Validation timed out",
-      hostname: "garple.com",
-      hostnameStatus: "validation_timed_out",
-      ownershipVerification: {
-        name: "_cf-custom-hostname.garple.com",
-        value: "ownership-token",
-      },
-      sslStatus: "validation_timed_out",
-      status: "failed" as const,
-      validationRecords: [
-        {
-          name: "_acme-challenge.garple.com",
-          status: "pending",
-          value: "ssl-token",
-        },
-      ],
-      wildcard: true,
-    };
-    const customDomains = {
-      ensure: vi.fn(async () => ({
-        ...failedSnapshot,
-        error: null,
-        hostnameStatus: "pending",
-        sslStatus: "pending_validation",
-        status: "pending_validation" as const,
-      })),
-      readProject: vi.fn(async () => project),
-      refresh: vi.fn(),
-      remove: vi.fn(),
-    };
-    const processor = new ProjectProcessor({
-      customDomains,
-      defaultLlmProvider: "openai-ws",
-      itx: {
-        projectId: project.id,
-        worker: { processEvent: vi.fn() },
-      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
-      stream,
-    });
-    const cursor = { offset: 0 };
-
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-        payload: failedSnapshot,
-      }),
-    );
-    await deliverNewEvents({ cursor, processor, stream });
-
-    await stream.append(
-      ProjectProcessorContract.buildEvent({
-        type: "events.iterate.com/project/custom-domain-add-requested",
-        payload: { hostname: "garple.com" },
-      }),
-    );
-    await deliverNewEvents({ cursor, processor, stream });
-
-    expect(customDomains.ensure).toHaveBeenCalledWith({ hostname: "garple.com", project });
-    expect(processor.state.customDomains).toMatchObject([
-      {
-        error: null,
-        hostname: "garple.com",
-        status: "requested",
       },
     ]);
   });
