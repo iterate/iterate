@@ -94,6 +94,27 @@ test("backtick interpolation bails; a lone $ at end of input is held back", () =
   expectPreviewOverEveryPrefix("itx.chat.sendMessage(`costs $5`)", "costs $5");
 });
 
+test("a later token can invalidate an already-showing preview: appear, then vanish", () => {
+  // Any preview of an unclosed literal can be invalidated by what streams in
+  // next — bail-to-null is deliberate (better a briefly-shown bubble that
+  // honestly disappears than previewing a message we can't know).
+  expect(distinctPreviews('itx.chat.sendMessage("hi" + name)')).toEqual([
+    null,
+    "",
+    "h",
+    "hi", // literal closed; trailing whitespace at end of input still looks well-formed
+    null, // the `+` reveals the literal wasn't the whole message — bubble disappears
+  ]);
+  expect(distinctPreviews("itx.chat.sendMessage(`hi ${name}`)")).toEqual([
+    null,
+    "",
+    "h",
+    "hi",
+    "hi ", // the lone `$` is held back — this stays "hi " until the next character decides
+    null, // `${` streams in: interpolation, value unknowable — bubble disappears
+  ]);
+});
+
 test("legacy object form gets no preview at any prefix", () => {
   const snippet = 'await itx.chat.sendMessage({ message: "Checking your email now..." })';
   for (let length = 0; length <= snippet.length; length++) {

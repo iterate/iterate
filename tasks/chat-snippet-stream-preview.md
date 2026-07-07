@@ -143,3 +143,15 @@ simple. It must be visually honest that it's in-progress.
 - oxfmt reformatted a nested-backtick line in this task file; the sibling
   task file (`itx-chat-send-message-string.md`) also got reformatted but was
   reverted here — it belongs to #1735.
+- Review round (3 comments on the PR, all addressed):
+  1. the render gate is now `looksLikeCode(...) || preview != null` — the
+     parser accepts bare `itx.chat.sendMessage("...`-style forms the
+     `CODE_START_PATTERN` heuristic misses, and a non-null preview is itself
+     proof the text is code;
+  2. documented + pinned (with a `distinctPreviews` test) that a preview can
+     appear then vanish when a later token invalidates it (`"hi" + name`,
+     `` `hi ${name}` ``) — bail-to-null is deliberate;
+  3. the preview bubble now renders through `MessageResponse` in streaming
+     markdown mode, so it's typographically identical to the settled
+     `web-message-sent` row it hands off to (cursor blinks on its own line —
+     streamdown owns the markdown DOM).

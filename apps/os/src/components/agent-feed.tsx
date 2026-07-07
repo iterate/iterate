@@ -990,7 +990,12 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
           {step.responseText === "" ? <StreamingCursor /> : null}
         </div>
       )}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {/* A non-null preview is proof the text is code: the parser accepts
+          forms looksLikeCode misses (bare `itx.chat.sendMessage("...`,
+          `void itx...`, bare `Promise.all([`) — those must render as a code
+          block with the preview above, not fall into the prose branch. */}
+      {step.responseText === "" ? null : looksLikeCode(step.responseText) ||
+        sendMessagePreview != null ? (
         <>
           {sendMessagePreview == null ? null : (
             <StreamingSendMessagePreview text={sendMessagePreview} />
@@ -1012,7 +1017,12 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
  * rendered like a settled agent chat message while the script is still being
  * generated. Honest fakery: the message hasn't been sent — the blinking
  * cursor marks it as in-flight, and the streaming code block stays visible
- * below it.
+ * below it. The text goes through the same MessageResponse markdown path as
+ * the settled web-message-sent row it hands off to (here in streaming mode,
+ * i.e. the default parseIncompleteMarkdown the settled row opts out of), so
+ * a markdown-y message previews with its final typography. Streamdown owns
+ * the markdown DOM, so the cursor can't ride the last character — it blinks
+ * on its own line below instead.
  */
 function StreamingSendMessagePreview({ text }: { text: string }) {
   return (
@@ -1023,10 +1033,8 @@ function StreamingSendMessagePreview({ text }: { text: string }) {
       data-kind="assistant-preview"
     >
       <MessageContent>
-        <div className="whitespace-pre-wrap leading-6">
-          {text}
-          <StreamingCursor />
-        </div>
+        <MessageResponse className="min-w-0 max-w-full overflow-hidden">{text}</MessageResponse>
+        <StreamingCursor />
       </MessageContent>
     </Message>
   );

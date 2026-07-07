@@ -12,11 +12,17 @@
  * web-message-sent event supersedes it.
  *
  * Deliberately conservative: returns null for anything unrecognized,
- * including the legacy object form `sendMessage({ message: ... })` and
- * template literals containing `${}` interpolation (the value is unknowable
- * before the script runs). A second options argument after the string —
- * `sendMessage("hello", { whatever: 123 })` — is fine: the preview is still
- * just the first string literal.
+ * including the legacy object form `sendMessage({ message: ... })`. A second
+ * options argument after the string — `sendMessage("hello", { whatever:
+ * 123 })` — is fine: the preview is still just the first string literal.
+ *
+ * A preview can appear and then VANISH: any preview of an unclosed literal
+ * can be invalidated by a later token. `` `hi ${name}` `` previews `"hi "`
+ * right up until `${` streams in (the interpolated value is unknowable
+ * before the script runs), and `"hi" + name` previews `"hi"` until the `+`
+ * arrives — both then revert to null and the bubble disappears. Bail-to-null
+ * is the honest choice; only for snippets that stay recognizable is the
+ * preview a monotonically growing slice of the final message.
  */
 export function extractStreamingSendMessagePreview(partialCode: string): string | null {
   const text = partialCode;
