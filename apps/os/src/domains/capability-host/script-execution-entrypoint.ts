@@ -4,7 +4,7 @@ import type { JsonValue, StatelessDynamicWorkerRef } from "../../types.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 
-export type ScriptExecutionEntrypointProps = {
+type ScriptExecutionEntrypointProps = {
   projectId: string;
   scopePath: string;
 };
