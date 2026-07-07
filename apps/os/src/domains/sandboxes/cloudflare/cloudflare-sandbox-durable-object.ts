@@ -517,7 +517,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
     if (backup === undefined) return null;
     try {
-      const result = await this.restoreBackup(backup);
+      // Same redial as every provisioning step: an interrupted SESSION dial
+      // means the restore never started, and falling through to a clone would
+      // silently discard a valid snapshot.
+      const result = await this.#redialOnInterruptedSessionSetup(() => this.restoreBackup(backup));
       return result.success ? backup.id : null;
     } catch (error) {
       console.warn("sandbox workspace restore failed, falling back to clone", error);
@@ -584,11 +587,10 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // old map — picks it up without a restart. The SDK call is safe when no
     // container is up (it only merges the in-memory map, never boots one).
     // Best-effort — never fail configuration on a transient container hiccup.
-    await super
-      .setEnvVars(vars)
-      .catch((error: unknown) =>
+    await this.#redialOnInterruptedSessionSetup(() => super.setEnvVars(vars)).catch(
+      (error: unknown) =>
         console.warn("sandbox configureEnvVars: applying to running container failed", error),
-      );
+    );
     return { keys: Object.keys(merged) };
   }
 
@@ -1022,11 +1024,13 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     }
 
     const link = BAKED_ITERATE_REPO_WORKSPACE_DIR;
-    const result = await super.exec(
-      [
-        `mkdir -p ${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate`,
-        `if [ -L ${link} ] || [ ! -e ${link} ]; then rm -rf ${link} && ln -s ${BAKED_ITERATE_REPO_SOURCE_DIR} ${link}; fi`,
-      ].join(" && "),
+    const result = await this.#redialOnInterruptedSessionSetup(() =>
+      super.exec(
+        [
+          `mkdir -p ${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate`,
+          `if [ -L ${link} ] || [ ! -e ${link} ]; then rm -rf ${link} && ln -s ${BAKED_ITERATE_REPO_SOURCE_DIR} ${link}; fi`,
+        ].join(" && "),
+      ),
     );
     if (result.exitCode !== 0) {
       throw new Error(
