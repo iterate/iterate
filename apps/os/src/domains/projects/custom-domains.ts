@@ -157,12 +157,13 @@ export function createCloudflareCustomDomainProvisioner(options: {
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const customHostname = cloudflareHostnameId
-        ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
-            if (error instanceof CloudflareApiError && error.status === 404) return null;
-            throw error;
-          })
-        : await client.findCustomHostname(normalized);
+      const customHostname =
+        (cloudflareHostnameId
+          ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
+              if (error instanceof CloudflareApiError && error.status === 404) return null;
+              throw error;
+            })
+          : null) ?? (await client.findCustomHostname(normalized));
       if (!customHostname) {
         throw new Error(`Cloudflare custom hostname "${normalized}" was not found.`);
       }
