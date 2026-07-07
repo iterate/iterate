@@ -70,6 +70,31 @@ describe("nextTriggerAtMs", () => {
       Date.parse("2026-01-17T09:00:00Z"),
     );
   });
+
+  it("slides a nonexistent local time forward across a DST spring-forward", () => {
+    // 2026-03-29 Europe/London: clocks jump 01:00 GMT → 02:00 BST, so 01:30
+    // local never exists that day. Croner fires at the shifted instant once,
+    // then resumes normal local time the next day.
+    const recurrence = { cron: "30 1 * * *", timezone: "Europe/London" };
+    expect(nextTriggerAtMs(recurrence, Date.parse("2026-03-28T12:00:00Z"))).toBe(
+      Date.parse("2026-03-29T01:30:00Z"), // = 02:30 BST, the slid occurrence
+    );
+    expect(nextTriggerAtMs(recurrence, Date.parse("2026-03-29T12:00:00Z"))).toBe(
+      Date.parse("2026-03-30T00:30:00Z"), // = 01:30 BST, back to normal
+    );
+  });
+
+  it("fires an ambiguous local time exactly once across a DST fall-back", () => {
+    // 2026-10-25 Europe/London: clocks fall 02:00 BST → 01:00 GMT, so 01:30
+    // local happens twice. Croner fires the first occurrence only.
+    const recurrence = { cron: "30 1 * * *", timezone: "Europe/London" };
+    expect(nextTriggerAtMs(recurrence, Date.parse("2026-10-24T12:00:00Z"))).toBe(
+      Date.parse("2026-10-25T00:30:00Z"), // = 01:30 BST, first pass
+    );
+    expect(nextTriggerAtMs(recurrence, Date.parse("2026-10-25T12:00:00Z"))).toBe(
+      Date.parse("2026-10-26T01:30:00Z"), // = 01:30 GMT the next day, not the repeat
+    );
+  });
 });
 
 describe("dueSchedules", () => {

@@ -240,6 +240,7 @@ describe("SchedulerProcessor reduce", () => {
     await stream.append(setEvent("alpha", "async () => {}", { metadata: { owner: "tests" } }));
     await deliver();
 
+    expect(processor.getScheduleView("missing")).toBeUndefined();
     expect(processor.getScheduleView("alpha")).toEqual({
       action: { kind: "itx-script", script: "async () => {}" },
       definedAtOffset: 2,
@@ -608,6 +609,30 @@ describe("recovery and alarm derivation", () => {
     const { processor, repointAlarm } = makeHarness();
     await processor.triggerDue();
     expect(repointAlarm).toHaveBeenCalledWith(null);
+  });
+
+  it("an in-flight execution is never double-launched by concurrent sweeps or redelivery", async () => {
+    let invocations = 0;
+    const harness = makeHarness({
+      invokeCapability: () => {
+        invocations += 1;
+        return new Promise(() => {}); // hangs — stays in-flight for the whole test
+      },
+    });
+    const { clock, deliver, processor, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver(); // launches the execution
+    await vi.waitFor(() => expect(invocations).toBe(1));
+
+    // Repeated wakes sweep the still-pending trigger but the in-memory
+    // in-flight set dedupes: exactly one live execution per executionId.
+    await processor.triggerDue();
+    await processor.triggerDue();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(invocations).toBe(1);
   });
 
   it("barren wakes back off exponentially instead of hot-looping at the minimum delay", async () => {
