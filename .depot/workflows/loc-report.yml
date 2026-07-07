@@ -1,0 +1,25 @@
+name: LOC report
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+concurrency:
+  group: loc-report-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  loc-report:
+    runs-on:
+      size: 8x32
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    env:
+      ITERATE_BOT_GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Post LOC report
+        run: pnpm tsx scripts/ci/loc-report.ts
