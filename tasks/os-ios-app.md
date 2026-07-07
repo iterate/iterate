@@ -64,8 +64,10 @@ Local dev servers rejected forge-minted bearer tokens with "missing or invalid a
 
 ## For the next pass (explicitly deferred)
 
-- Working-indicator upgrade to real activity rows (port or share `AgentUiState`)
-- Markdown rendering (Streamdown equivalent for RN)
+- ~~Working-indicator upgrade to real activity rows (port or share `AgentUiState`)~~ — _done (user request, same day): the thread screen now folds the shared `@iterate-com/ui` agent-ui-reducer in memory (TUI agent-feed-model pattern) — streaming thinking/code text, tap-to-expand activity cards, and a raw-events view toggle_
+- Markdown rendering (Streamdown equivalent for RN) — assistant bubbles and settled responseText are still plain text
+- Feed search + event-type filters and the raw-event inspector (web has `q`/`types`/offset bounds + presets: agent-chat / agent-events / everything)
+- Interrupt affordance (web appends `agent/llm-request-cancelled` for the running request; queued-messages banner has "interrupt and send now")
 - Push notifications on agent replies (needs a dev build / EAS — leaves Expo Go)
 - Reconcile with PR #1605 when its chain merges (voice screen onto this trunk)
 
