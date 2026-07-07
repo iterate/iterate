@@ -125,14 +125,17 @@ export class EmailAgentProcessor extends StreamProcessor<
 }
 
 /** The model-visible transcription of one inbound email. Curated rather than
- * the raw payload: html is omitted when a text body exists, and attachment
- * contents were never captured (metadata only in this slice). */
+ * the raw payload: html is omitted when a text body exists. */
 function inboundEmailAgentInput(payload: InboundEmailPayload): string {
   const { message } = payload;
+  // The stored path rides in the transcription too, not only in the files
+  // attachment list: if attachment signing failed (no files list that turn),
+  // the agent can still reach the bytes via itx.files.get(path).
   const attachments = message.attachments.map((attachment) => ({
     filename: attachment.filename ?? null,
     mimeType: attachment.mimeType ?? null,
     ...(attachment.size === undefined ? {} : { size: attachment.size }),
+    ...(attachment.path === undefined ? {} : { path: attachment.path }),
   }));
   const transcript = {
     from: { address: message.from.address ?? payload.envelope.from, name: message.from.name },
