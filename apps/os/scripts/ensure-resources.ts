@@ -135,9 +135,7 @@ export default async function ensureResources(
   });
 }
 
-if (process.argv[1]?.endsWith("ensure-resources.ts")) {
-  void createCli({ ...import.meta, name: "ensure-resources" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "ensure-resources" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});
