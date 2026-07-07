@@ -391,8 +391,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        // Custom hostnames don't exist yet (tasks/os-project-archival.md): the list carries none.
-        customHostname={null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
@@ -461,12 +459,10 @@ function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
 }
 
 function ProjectSidebarGroup({
-  customHostname,
   projectHostnameBases,
   projectSlug,
   appBaseUrl,
 }: {
-  customHostname: string | null;
   projectHostnameBases: readonly string[];
   projectSlug: string;
   appBaseUrl?: string;
@@ -479,9 +475,8 @@ function ProjectSidebarGroup({
       fuzzy: false,
     }),
   );
-  const customWorkerUrl = buildProjectWorkerUrl({
+  const projectWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
-    customHostname,
     projectHostnameBases,
     appBaseUrl,
   });
@@ -502,8 +497,15 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
-              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
+              render={
+                <Link to="/projects/$projectSlug/settings" params={{ projectSlug }} search={{}} />
+              }
               isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/settings",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }) ||
                 matchRoute({
                   to: "/projects/$projectSlug",
                   params: { projectSlug },
@@ -525,14 +527,14 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
-            {customWorkerUrl ? (
+            {projectWorkerUrl ? (
               <ProjectSidebarMenuItem
                 icon={ExternalLink}
                 label="Homepage"
                 render={
                   <a
                     aria-label={`Open ${projectSlug} project homepage`}
-                    href={customWorkerUrl}
+                    href={projectWorkerUrl}
                     target="_blank"
                     rel="noreferrer"
                   />

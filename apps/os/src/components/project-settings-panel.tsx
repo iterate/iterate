@@ -1,7 +1,7 @@
 import type { FormEvent, ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { CopyIcon, ExternalLinkIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
@@ -15,7 +15,11 @@ import {
   type Project,
 } from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { isValidCustomHostname, normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import {
+  buildProjectWorkerUrl,
+  isValidCustomHostname,
+  normalizeProjectHostnameBase,
+} from "~/lib/project-host-routing.ts";
 import type { ProjectCustomDomain, ProjectProcessorState } from "~/types.ts";
 
 export function ProjectSettingsPanel({
@@ -28,7 +32,12 @@ export function ProjectSettingsPanel({
   routeConfig: PublicRouteConfig;
 }) {
   const base = normalizeProjectHostnameBase(routeConfig.projectHostnameBases[0] ?? "");
-  const defaultHostname = base ? `${project.slug}.${base}` : project.slug;
+  const projectHostname = base ? `${project.slug}.${base}` : project.slug;
+  const projectWorkerUrl = buildProjectWorkerUrl({
+    appBaseUrl: routeConfig.baseUrl,
+    projectHostnameBases: routeConfig.projectHostnameBases,
+    projectSlug: project.slug,
+  });
   const customDomains = projectState?.customDomains;
 
   return (
@@ -46,8 +55,8 @@ export function ProjectSettingsPanel({
       </SettingsSection>
 
       <SettingsSection title="Hostname routing">
-        <SettingsField label="Default hostname">
-          <code className="text-xs">{defaultHostname}</code>
+        <SettingsField label="Project slug hostname">
+          <ProjectSlugHostname hostname={projectHostname} url={projectWorkerUrl} />
         </SettingsField>
         <SettingsField label="Custom domains">
           <CustomDomainsEditor
@@ -67,6 +76,52 @@ export function ProjectSettingsPanel({
         </SettingsField>
       </SettingsSection>
     </section>
+  );
+}
+
+function ProjectSlugHostname({ hostname, url }: { hostname: string; url: string | null }) {
+  const displayHost = hostFromUrl(url) ?? hostname;
+  const appHostPattern = `<app>.${displayHost}`;
+
+  return (
+    <div className="grid gap-2 rounded-md border p-3">
+      <div className="flex min-w-0 items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-medium">{displayHost}</p>
+          <p className="text-xs text-muted-foreground">Built-in project homepage</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            aria-label={`Copy project hostname ${displayHost}`}
+            onClick={() => copyToClipboard(displayHost)}
+            size="icon-xs"
+            type="button"
+            variant="outline"
+          >
+            <CopyIcon aria-hidden="true" />
+          </Button>
+          {url ? (
+            <Button
+              aria-label={`Open project homepage ${displayHost}`}
+              render={
+                <a href={url} target="_blank" rel="noreferrer">
+                  <span className="sr-only">Open project homepage</span>
+                </a>
+              }
+              size="icon-xs"
+              type="button"
+              variant="outline"
+            >
+              <ExternalLinkIcon aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <div className="grid gap-1 text-xs">
+        <p className="text-muted-foreground">Apps route from subdomains on the same host.</p>
+        <code className="min-w-0 rounded bg-muted px-1.5 py-1 break-all">{appHostPattern}</code>
+      </div>
+    </div>
   );
 }
 
@@ -342,16 +397,7 @@ function DnsCopyCell({
       <Button
         aria-label={`Copy DNS ${copyLabel}`}
         className="h-auto min-h-7 w-7 shrink-0"
-        onClick={() => {
-          if (!navigator.clipboard) {
-            toast.error("Clipboard unavailable");
-            return;
-          }
-          void navigator.clipboard.writeText(value).then(
-            () => toast.success("Copied"),
-            () => toast.error("Could not copy"),
-          );
-        }}
+        onClick={() => copyToClipboard(value)}
         size="icon-xs"
         type="button"
         variant="outline"
@@ -360,6 +406,22 @@ function DnsCopyCell({
       </Button>
     </div>
   );
+}
+
+function copyToClipboard(value: string) {
+  if (!navigator.clipboard) {
+    toast.error("Clipboard unavailable");
+    return;
+  }
+  void navigator.clipboard.writeText(value).then(
+    () => toast.success("Copied"),
+    () => toast.error("Could not copy"),
+  );
+}
+
+function hostFromUrl(url: string | null) {
+  if (!url || !URL.canParse(url)) return null;
+  return new URL(url).host;
 }
 
 function CustomDomainStatusBadge({ status }: { status: ProjectCustomDomain["status"] }) {
