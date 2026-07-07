@@ -182,17 +182,48 @@ export function dmarcPasses(authenticationResults: string | null): boolean {
  * ourselves). Structural input: the slice of an email/received payload both
  * callers hold.
  */
-export function isOwnProjectMail(payload: {
+/** One bare, lowercased address from a possibly angle-bracketed value. */
+function normalizeBareAddress(value: string | undefined): string | null {
+  const trimmed = value?.trim().toLowerCase().replace(/^<|>$/g, "") ?? "";
+  return trimmed.includes("@") ? trimmed : null;
+}
+
+/**
+ * The slice of an email/received payload the counterpart/loop helpers below
+ * read. Structural so the router, agent processor, and reply door can all
+ * pass their parsed payloads without import cycles.
+ */
+type InboundMailIdentitySlice = {
   envelope: { from: string; to: string };
   recipient: { slug: string };
-  message: { from: { address?: string } };
-}): boolean {
+  message: { from: { address?: string }; replyToAddress?: string | null };
+};
+
+/**
+ * THE reply-target chain for one inbound mail: Reply-To when set, else the
+ * header From, else the SMTP envelope from (the address ingress
+ * authenticated). Every consumer — the router's route event, the email-agent
+ * processor's state, email.reply's target — derives the counterpart from this
+ * one function so they can never disagree.
+ */
+export function emailCounterpart(payload: InboundMailIdentitySlice): string | null {
+  return (
+    normalizeBareAddress(payload.message.replyToAddress ?? undefined) ??
+    normalizeBareAddress(payload.message.from.address) ??
+    normalizeBareAddress(payload.envelope.from)
+  );
+}
+
+export function isOwnProjectMail(payload: InboundMailIdentitySlice): boolean {
   // Header From when parsed, else the SMTP envelope from — mirrors the
   // counterpart fallback chain so the loop filter sees the same identity.
-  const from = (payload.message.from.address ?? payload.envelope.from)?.toLowerCase();
-  if (!from) return false;
-  const recipientDomain = payload.envelope.to.split("@").pop()?.toLowerCase();
-  return from === `${payload.recipient.slug}@${recipientDomain}`;
+  const from = normalizeBareAddress(payload.message.from.address ?? payload.envelope.from);
+  if (from === null) return false;
+  // Parse the envelope recipient the same way ingress routing does
+  // (angle-bracket and case tolerant), instead of a bare split("@").
+  const recipient = parseInboundRecipient(payload.envelope.to);
+  if (recipient === null) return false;
+  return from === `${payload.recipient.slug.toLowerCase()}@${recipient.domain}`;
 }
 
 /**

@@ -5,7 +5,7 @@
 import { stringify as stringifyYaml } from "yaml";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
-import { isOwnProjectMail } from "./utils.ts";
+import { emailCounterpart, isOwnProjectMail } from "./utils.ts";
 import {
   EmailAgentProcessorContract,
   type EmailAgentProcessorState,
@@ -35,7 +35,7 @@ export class EmailAgentProcessor extends StreamProcessor<typeof EmailAgentProces
         // Neither our own looped-back mail nor automated mail (bounces,
         // Auto-Submitted) may become the thread counterpart.
         if (isOwnProjectMail(event.payload) || event.payload.automated) return state;
-        const counterpart = replyCounterpart(event.payload);
+        const counterpart = emailCounterpart(event.payload);
         return {
           ...state,
           ...(counterpart === null ? {} : { counterpart }),
@@ -80,15 +80,6 @@ export class EmailAgentProcessor extends StreamProcessor<typeof EmailAgentProces
       });
     });
   }
-}
-
-/** The address a reply should go to: the inbound Reply-To when set, else the
- * header From, else the SMTP envelope from — the same address ingress
- * authenticated when MIME parsing yields no From mailbox. */
-function replyCounterpart(payload: InboundEmailPayload): string | null {
-  return (
-    payload.message.replyToAddress ?? payload.message.from.address ?? payload.envelope.from ?? null
-  );
 }
 
 /** The model-visible transcription of one inbound email. Curated rather than

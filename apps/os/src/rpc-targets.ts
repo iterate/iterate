@@ -161,6 +161,7 @@ import {
   buildProjectEmailMessage,
   decodeBase64Attachment,
   emailAddressForProject,
+  emailCounterpart,
   emailDomainForDeployment,
   emailThreadIdFromAgentPath,
   emailThreadReplyAddress,
@@ -1272,12 +1273,10 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
     if (inbound === null) {
       throw new Error("email.reply found no inbound email on this thread to reply to.");
     }
-    // Same fallback chain as the email-agent processor's counterpart: the
-    // envelope from is what ingress authenticated when MIME parsing yields no
-    // From mailbox.
-    const to =
-      inbound.message.replyToAddress ?? inbound.message.from.address ?? inbound.envelope.from;
-    if (!to) {
+    // THE shared reply-target chain (emailCounterpart): Reply-To → header
+    // From → the SMTP envelope from ingress authenticated.
+    const to = emailCounterpart(inbound);
+    if (to === null) {
       throw new Error("email.reply could not determine the thread counterpart address.");
     }
     const inReplyTo = inbound.message.messageId ?? undefined;

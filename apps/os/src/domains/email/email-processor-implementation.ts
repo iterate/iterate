@@ -9,7 +9,7 @@ import {
   type EmailProcessorState,
   type InboundEmailPayload,
 } from "./email-processor-contract.ts";
-import { emailAgentPath, normalizeMessageId } from "./utils.ts";
+import { emailAgentPath, emailCounterpart, normalizeMessageId } from "./utils.ts";
 
 /** Where one inbound email belongs: an existing thread or a brand-new one. */
 type EmailThreadResolution = {
@@ -134,15 +134,16 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     };
 
     if (resolution.isNew) {
+      // Same reply-target chain as everywhere else (emailCounterpart), so the
+      // durable route event never disagrees with the agent's reply door.
+      const counterpart = emailCounterpart(event.payload);
       const routeEvent = {
         type: "events.iterate.com/email/thread-route-configured" as const,
         idempotencyKey: `email-route:${resolution.threadId}`,
         payload: {
           threadId: resolution.threadId,
           streamPath: resolution.streamPath,
-          ...(event.payload.message.from.address === undefined
-            ? {}
-            : { counterpart: event.payload.message.from.address }),
+          ...(counterpart === null ? {} : { counterpart }),
           ...(event.payload.message.subject === undefined
             ? {}
             : { subject: event.payload.message.subject }),
