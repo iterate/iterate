@@ -74,9 +74,7 @@ export default async function eraseData(options: {
   );
 }
 
-if (process.argv[1]?.endsWith("erase-data.ts")) {
-  void createCli({ ...import.meta, name: "erase-data" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "erase-data" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

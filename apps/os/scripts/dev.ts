@@ -254,15 +254,13 @@ function formatStatus(info: DevServerInfo | null) {
   };
 }
 
-// Run the CLI only when invoked directly (playwright.config.ts imports this
-// module for localOsDevServer without wanting a CLI).
-if (process.argv[1]?.endsWith("dev.ts")) {
-  void createCli({
-    ...import.meta,
-    name: "dev",
-    jsonInput: "auto",
-  }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+// createCli({...import.meta}) runs the CLI only when this file is the process
+// entry (playwright.config.ts imports this module for localOsDevServer).
+void createCli({
+  ...import.meta,
+  name: "dev",
+  jsonInput: "auto",
+}).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});
