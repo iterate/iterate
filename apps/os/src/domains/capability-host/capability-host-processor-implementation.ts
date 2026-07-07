@@ -106,6 +106,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
   #dynamicWorkers: DynamicWorkerRunner;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
+  // Each runScript body is a distinct inline Dynamic Worker source. Queue script
+  // starts so one delivered batch cannot exceed Cloudflare's cold-load backpressure.
+  #scriptExecutionChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
@@ -190,9 +193,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
   >[0]): undefined {
     if (event.type !== "events.iterate.com/capability-host/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
-    runInBackground(() =>
+    const execution = this.#scriptExecutionChain.then(() =>
       this.#executeScript({ code: event.payload.code, executionId: event.payload.executionId }),
     );
+    this.#scriptExecutionChain = execution.catch(() => undefined);
+    runInBackground(() => execution);
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
