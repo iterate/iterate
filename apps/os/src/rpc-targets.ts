@@ -994,7 +994,7 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
   async __describe() {
     return describeNode({
       instructions:
-        "First-party outbound email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. Returns { from, messageId }.",
+        "First-party outbound email: send({ to, subject, text, html, inReplyTo?, references? }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. When replying inside an email thread, pass inReplyTo (the Message-ID being answered) and references (thread ancestry, oldest first) so recipients' clients thread the reply. Returns { from, messageId }.",
       children: {
         send: "Send one email from the project's address; returns { from, messageId }.",
       },
@@ -1030,13 +1030,19 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
     await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
       type: EMAIL_SENT_EVENT_TYPE,
       idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
-      // Recipients + subject for audit; bodies stay out of the stream.
+      // Recipients + subject + threading ids for audit and for the email
+      // thread router (a human reply to this message threads back through
+      // inReplyTo/references); bodies stay out of the stream.
       payload: {
         from,
         messageId,
         projectId: this.props.projectId,
         subject: input.subject,
         to: input.to,
+        ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
+        ...(input.references && input.references.length > 0
+          ? { references: input.references }
+          : {}),
       },
     });
 

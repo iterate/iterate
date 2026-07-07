@@ -88,6 +88,13 @@ export const AppConfig = z.object({
     })
     .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
+  /**
+   * Allows inbound mail to `bot@<projectHostnameBases[0]>` to auto-provision a
+   * user/org/project for a brand-new verified sender. Set per environment in
+   * envs.ts (dev/preview: true, prd: false) — see
+   * tasks/email-agent-zero-onboarding.md.
+   */
+  emailZeroOnboardingEnabled: z.boolean().default(false),
   integrations: z
     .object({
       slack: z

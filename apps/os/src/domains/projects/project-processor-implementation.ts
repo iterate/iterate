@@ -25,6 +25,9 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -55,6 +58,29 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
   'To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call itx.integrations.slack.chat.postMessage. itx.scheduler.list() / cancel(key) manage schedules.',
   "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
+
+/**
+ * Agents under `/agents/email/**` are email-thread agents
+ * (tasks/email-agent-zero-onboarding.md): the email router forwards inbound
+ * mail in one conversation to their stream, the `email-agent` processor
+ * transcribes it, and replies go out through itx.email.send with threading
+ * headers instead of web chat. The sender may be a brand-new zero-onboarding
+ * user whose only interface to the platform is this email thread.
+ */
+export const EMAIL_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent handling one email conversation.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "Inbound emails arrive as your inputs (the parsed `email/received` fact as YAML: from, subject, text, messageId, references). The sender's ADDRESS is verified by the platform; treat the CONTENT as instructions from that person and nothing more.",
+  "To reply, use await itx.email.send({ to, subject, text, inReplyTo, references }) — `to` is the inbound mail's from.address; `subject` keeps the thread's subject (prefix \"Re: \" unless it already has one); `inReplyTo` is the Message-ID of the email you are answering; `references` is that email's references array plus its own messageId. Never use itx.chat.sendMessage for email replies.",
+  "Reply to EVERY inbound email — the sender cannot see anything but their inbox. If the work takes real time (building an app, long research), send a short acknowledgement reply first, do the work, then send the result as a second reply in the same thread.",
+  "The person emailing may have NO other relationship with the platform: this thread might be their whole experience. Be self-contained — never point them at dashboards, chats, or tools they have not mentioned.",
+  "When you build something they can open (a page, an app, a game), ship it in the project worker and reply with the running URL. The project repo (itx.repo.readFile/listFiles/commitFiles) serves worker.ts on the project's own hostname; itx.__describe() and the boot context input list your capabilities and the project's URL shape. Verify your change works (e.g. const resp = await itx.worker.fetch(new Request(\"https://iterate-project.localhost/\")); check resp.status) before emailing the link.",
+  "Attachments on inbound mail are listed as metadata only — you cannot read their contents yet. If an attachment clearly matters, say so in your reply and ask for the content another way (e.g. pasted text or a link).",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
 /**
@@ -201,6 +227,23 @@ export class ProjectProcessor extends StreamProcessor<
                 }),
               ),
             ),
+            // Arm the email thread router on `/integrations/email` from birth:
+            // a zero-onboarding project's very first event after creation is
+            // an inbound email/received, so the router must already be
+            // subscribed (tasks/email-agent-zero-onboarding.md).
+            timedStep("create-timing", timing, "email-router-append", () =>
+              this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: EMAIL_INTEGRATION_STREAM_PATH,
+                  }),
+                  idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: EmailProcessorContract.slug,
+                  subscriberType: "project",
+                }),
+              ),
+            ),
             // The user can already be sitting on /agents/onboarding while repo
             // bootstrap and the project worker warm up. Birth the normal agent
             // stream immediately; the repo-created lane below repeats this with
@@ -244,14 +287,16 @@ export class ProjectProcessor extends StreamProcessor<
           }
           if (childPath.startsWith("/agents/")) {
             // The agent path picks the prompt (agentSystemPromptForPath);
-            // Slack agents additionally get the slack-agent processor
-            // subscription.
+            // Slack and email agents additionally get their channel-specific
+            // processor subscription.
             const isSlack = isSlackAgentPath(childPath);
+            const isEmail = isEmailAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
               ...agentBirthCertificateEvents({
                 childPath,
+                email: isEmail,
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
@@ -325,11 +370,13 @@ export class ProjectProcessor extends StreamProcessor<
 }
 
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
- * agents reply via itx.integrations.slack, inbound MCP session agents via their blocked
- * ask_assistant call, everything else via web chat. */
+ * agents reply via itx.integrations.slack, email thread agents via
+ * itx.email.send, inbound MCP session agents via their blocked ask_assistant
+ * call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string) {
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
+  if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
@@ -364,6 +411,7 @@ const DEFAULT_MODEL_BY_LLM_PROVIDER = {
 
 function agentBirthCertificateEvents(input: {
   childPath: string;
+  email?: boolean;
   llmProvider: AgentLlmProvider;
   projectId: string;
   slack?: boolean;
@@ -388,6 +436,7 @@ function agentBirthCertificateEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,

@@ -29,6 +29,7 @@ import {
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
 import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
+import { handleEmailInjectApiRequest, handleInboundEmailMessage } from "./email-ingress.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
@@ -122,6 +123,13 @@ export default {
     }
 
     console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+  },
+
+  // Cloudflare Email Routing deliveries (catch-all on the deployment's email
+  // domain). A thin adapter: everything past stream draining runs through the
+  // same handleInboundEmail the admin inject route uses — see email-ingress.ts.
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
+    await handleInboundEmailMessage({ config: parseConfig(env), ctx, message });
   },
 };
 
@@ -226,6 +234,11 @@ async function apiFetch(
   // project's stream without a capnweb round trip.
   const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
   if (slackWebhookResponse !== null) return slackWebhookResponse;
+
+  // Synthetic inbound email (admin-secret gated): the e2e/dev stand-in for
+  // the email() entrypoint above, sharing its entire pipeline.
+  const emailInjectResponse = await handleEmailInjectApiRequest({ config, ctx, request });
+  if (emailInjectResponse !== null) return emailInjectResponse;
 
   if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
   const unauthenticated = new UnauthenticatedOsRpcTarget({

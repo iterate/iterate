@@ -85,6 +85,7 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+    APP_CONFIG_EMAIL_ZERO_ONBOARDING_ENABLED: JSON.stringify(env.emailZeroOnboardingEnabled),
   };
 }
 
@@ -395,6 +396,10 @@ function localDevBindings() {
     vars: {
       ...bindings.vars,
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev always allows email zero-onboarding (the inject route is the
+      // only way in anyway); a local var rather than a Doppler secret so dev
+      // configs need no new entry.
+      APP_CONFIG_EMAIL_ZERO_ONBOARDING_ENABLED: "true",
     },
   };
 }

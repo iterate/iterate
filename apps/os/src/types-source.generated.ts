@@ -462,6 +462,16 @@ export interface EmailCapability extends Describable {
     html?: string;
     /** Optional explicit sender; must equal the project's own address. */
     from?: string;
+    /**
+     * \`Message-ID\` of the message being replied to — sets the \`In-Reply-To\`
+     * MIME header so recipients' clients thread the reply.
+     */
+    inReplyTo?: string;
+    /**
+     * Thread ancestry for the \`References\` MIME header (oldest first). When
+     * replying, pass the inbound message's own References plus its Message-ID.
+     */
+    references?: string[];
   }): Promise<{ from: string; messageId: string | null }>;
 }
 

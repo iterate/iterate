@@ -19,6 +19,7 @@ import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -79,8 +80,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   });
 
+  // The email thread router. Like the Slack router above, it only ever WAKES
+  // on the instance addressed at `/integrations/email`, where project
+  // bootstrap configured its subscription.
+  readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
+
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  get emailProcessor() {
+    return new StreamProcessorRpcTarget(this.#emailProcessor);
   }
 
   get slackProcessor() {
