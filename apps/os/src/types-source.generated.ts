@@ -217,6 +217,13 @@ export interface ProjectRpcTarget {
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
   processor: StreamProcessorRpc<ProjectProcessorState>;
+  /**
+   * This project's stable id (\`prj_…\`). Handy inside scripts: \`await
+   * itx.projectId\` answers "which project am I running in", and \`await
+   * itx.capabilityHost.path\` answers "at which scope" (\`"/"\` for the project
+   * root, \`/agents/bla\` for an agent — the agent's stream path).
+   */
+  projectId: string;
   repo: Repo;
   repos: ProjectRepoCollection;
   /** Path-addressed sandboxes (\`itx.sandboxes.get(path)\`) — see {@link SandboxCollection}. */
@@ -629,8 +636,14 @@ export type SetScheduleInput = {
   key: string;
   metadata?: Record<string, unknown>;
   recurrence: SchedulerRecurrence | { in: number };
-  /** itx script source: \`async (itx, schedule, trigger) => { ... }\`. A string,
-   * not a function — closures would silently not survive serialization. */
+  /**
+   * itx script source: \`async (itx, schedule, trigger) => { ... }\`. A string,
+   * not a function — closures would silently not survive serialization.
+   * \`schedule\` is \`{ key, path, recurrence, metadata?, setAt }\` (\`path\` is the
+   * Scheduler stream this Schedule lives on); \`trigger\` is \`{ executionId,
+   * scheduledFor, requestedAt, runCount }\`. The itx is project-root scoped —
+   * \`await itx.projectId\` identifies the project.
+   */
   script: string;
 };
 

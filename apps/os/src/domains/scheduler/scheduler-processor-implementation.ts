@@ -32,6 +32,8 @@ export type SchedulerProcessorDeps = {
   repointAlarm: (atMs: number | null) => void | Promise<void>;
   /** Next armed alarm time, for runtime-state inspection only. */
   readAlarm: () => Promise<number | null>;
+  /** This Scheduler's stream path — handed to scripts as `schedule.path`. */
+  streamPath: string;
 };
 
 /**
@@ -337,6 +339,7 @@ export class SchedulerProcessor extends StreamProcessor<
             {
               key: pending.key,
               ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+              path: this.deps.streamPath,
               recurrence: entry.recurrence,
               setAt: entry.setAt,
             },

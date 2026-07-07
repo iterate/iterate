@@ -64,6 +64,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
         }),
         now: () => Date.now(),
         readAlarm: () => this.ctx.storage.getAlarm(),
+        streamPath: this.#name.path,
         repointAlarm: (atMs) =>
           atMs === null ? this.ctx.storage.deleteAlarm() : this.ctx.storage.setAlarm(atMs),
       }),

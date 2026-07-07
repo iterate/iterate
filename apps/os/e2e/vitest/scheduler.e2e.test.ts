@@ -36,7 +36,14 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
         idempotencyKey: "marker:" + trigger.executionId,
         payload: { key: schedule.key, marker: ${JSON.stringify(marker)}, runCount: trigger.runCount },
       });
-      return { marker: ${JSON.stringify(marker)} };
+      // The identity surface scripts can rely on: which project, which scope,
+      // which scheduler stream. Returned so the completion event proves it.
+      return {
+        marker: ${JSON.stringify(marker)},
+        projectId: await itx.projectId,
+        schedulerPath: schedule.path,
+        scopePath: await itx.capabilityHost.path,
+      };
     }`,
     metadata: { suite: "scheduler-e2e" },
   });
@@ -60,10 +67,18 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
     },
     () => `trigger-completed for ${key} on ${SCHEDULER_STREAM_PATH}`,
   );
+  const projectId = (await project.__describe()).projectId;
   expect(completed!.payload).toMatchObject({
     key,
     outcome: "succeeded",
-    result: { marker },
+    result: {
+      marker,
+      // Scripts can identify where they run: itx.projectId, the scheduler
+      // stream via schedule.path, and their scope via itx.capabilityHost.path.
+      projectId,
+      schedulerPath: SCHEDULER_STREAM_PATH,
+      scopePath: "/",
+    },
   });
 
   // The cross-stream side effect the script performed — exactly once per

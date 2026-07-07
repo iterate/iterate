@@ -114,6 +114,7 @@ function makeHarness(options?: {
     now: () => clock.now,
     readAlarm: async () => null,
     repointAlarm,
+    streamPath: "/scheduler/primary",
     readState: () => snapshotStore.snapshot,
     writeState: (snapshot) => {
       snapshotStore.snapshot = snapshot;
@@ -351,6 +352,7 @@ describe("triggering", () => {
     expect(scheduleArg).toMatchObject({
       key: "report",
       metadata: { owner: "test" },
+      path: "/scheduler/primary",
       recurrence: { every: 60 },
     });
     expect(triggerArg).toMatchObject({
