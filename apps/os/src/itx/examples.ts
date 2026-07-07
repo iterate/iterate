@@ -629,6 +629,35 @@ return {
 `.trim(),
   },
   {
+    id: "files-roundtrip",
+    title: "Store, read, and share a project file",
+    description:
+      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const path = vars.path ?? "/repl/files-demo.txt";
+const file = itx.files.get(path);
+
+// Strings are decoded as base64 — exactly the shape Workers AI image models
+// return in response.image.
+const note = vars.note ?? "hello project files";
+const stored = await file.put({ contentType: "text/plain", data: btoa(note) });
+
+// Read the bytes back over itx.
+const bytes = await file.bytes();
+const text = new TextDecoder().decode(new Uint8Array(bytes));
+
+// Mint a signed public URL and fetch it like any HTTP client would — this is
+// the link you paste into chat or hand to a vision model.
+const url = await file.url();
+const served = await fetch(url);
+const servedText = await served.text();
+
+return { servedStatus: served.status, servedText, size: stored.size, text, url };
+`.trim(),
+  },
+  {
     id: "exa-web-search",
     title: "Web search through the built-in Exa MCP server",
     description:
@@ -922,6 +951,76 @@ const receipt = await itx.email.send({
   text: "Sent by an agent through Cloudflare Email Service.",
 });
 return receipt; // { from: "<slug>@<hostname base>", messageId }
+`.trim(),
+  },
+  {
+    id: "scheduler-basics",
+    title: "Schedule an itx script (set, list, cancel)",
+    description:
+      "itx.scheduler runs itx scripts on a schedule: set() upserts by key with recurrence { cron, timezone? } | { every: seconds } | { at: ISO } | { in: seconds }, list() reads the reduced state, cancel(key) removes. The script is a STRING (no closures — bake values in) invoked later as fn(itx, schedule, trigger) with project-root authority, at least once per Trigger. Every set, trigger, and outcome is an event on the /scheduler/primary stream — the complete audit log.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Upsert by key: re-setting the same key replaces the schedule. Returns after
+// the scheduler has durably ingested it (read-your-writes), with the computed
+// next occurrence.
+const key = vars.schedulerKey ?? "examples/daily-report";
+const view = await itx.scheduler.set({
+  key,
+  recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" },
+  // The script runs later in its own isolate. schedule = { key, path,
+  // recurrence, metadata?, setAt }; trigger = { executionId, scheduledFor,
+  // requestedAt, runCount }. Inside it, \`await itx.projectId\` and
+  // \`await itx.capabilityHost.path\` identify where it is running.
+  script: \`async (itx, schedule, trigger) => {
+    // At-least-once delivery: key appends by trigger.executionId so a
+    // crash-retry cannot double-write.
+    await itx.streams.get("/reports/daily").append({
+      type: "com.example/report-requested",
+      idempotencyKey: "report:" + trigger.executionId,
+      payload: { scheduledFor: trigger.scheduledFor, runCount: trigger.runCount },
+    });
+    return "requested"; // recorded in the trigger-completed event
+  }\`,
+  metadata: { owner: "examples" },
+});
+
+const schedules = await itx.scheduler.list(); // every schedule, straight from reduced state
+
+// Clean up so this example leaves nothing behind (an emptied scheduler
+// deletes its alarm and sleeps).
+await itx.scheduler.cancel(key);
+return { found: schedules.some((s) => s.key === key), nextTriggerAt: view.nextTriggerAt };
+`.trim(),
+  },
+  {
+    id: "scheduler-agent-checkin",
+    title: "Give an agent a recurring task",
+    description:
+      "The scheduler + agents flywheel: schedule a script that sends an agent a message, and the agent wakes on cadence, does the work, and reports in its own chat. Sending to a fresh /agents/** path births that agent on first use — so a schedule targeting a date-stamped path creates a NEW agent per occurrence.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const key = vars.schedulerKey ?? "examples/agent-checkin";
+const view = await itx.scheduler.set({
+  key,
+  recurrence: { every: 3600 }, // seconds; re-anchors on each trigger
+  script: \`async (itx, schedule, trigger) => {
+    // A fixed path = one long-lived agent accumulating context. For a fresh
+    // agent per occurrence use a derived path instead, e.g.
+    // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
+    await itx.agents.get("/agents/checkin").sendMessage(
+      "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
+    );
+  }\`,
+});
+
+// Run it once right now without waiting for the hour (advances the clock):
+// await itx.scheduler.trigger(key);
+
+// Keep this example inert:
+await itx.scheduler.cancel(key);
+return { nextTriggerAt: view.nextTriggerAt };
 `.trim(),
   },
 ];

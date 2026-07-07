@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CloudflarePreviewAppEntry,
@@ -8,6 +10,8 @@ import {
   environmentConfigLeaseInventory,
   previewInternals,
 } from "./preview.ts";
+
+const repoRoot = resolve(import.meta.dirname, "../..");
 
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -124,6 +128,31 @@ describe("preview test commands", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
     });
+  });
+
+  it("normalizes OS preview artifacts before Depot upload", () => {
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain("scripts/preview/collect-test-artifacts.sh test-results");
+    expect(workflow).toContain("path: test-results");
+    expect(workflow).toContain("include-hidden-files: true");
+    expect(workflow).not.toContain("            /tmp/os-e2e-*");
+  });
+
+  it("normalizes marathon artifacts before Depot upload", () => {
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain("scripts/preview/collect-test-artifacts.sh test-results");
+    expect(workflow).toContain("path: test-results");
+    expect(workflow).toContain("include-hidden-files: true");
+    expect(workflow).not.toContain("            /tmp/os-e2e-*");
+    expect(workflow).not.toContain("            /tmp/marathon");
   });
 
   it("runs the OS vitest node project concurrently with the root Playwright specs", () => {

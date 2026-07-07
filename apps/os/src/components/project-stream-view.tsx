@@ -201,10 +201,8 @@ export function ProjectStreamView({
   const connectionLabel =
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
-  // Busy = a turn is actively running. A "waiting" activity (agent idle
-  // between rounds, not yet settled by a chat message) is not busy — the live
-  // feed already parks its spinner there, so the header must match.
-  const agentBusy = agentUiState?.live?.status === "running";
+  // Busy = work is actively running, independent of chat-message timing.
+  const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
   const presence = agentUiState?.presence ?? [];
 
   return (

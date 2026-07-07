@@ -99,6 +99,26 @@ _Avoid_: runtime config, deployment config
 Typed deployment-time configuration read by the deploy scripts (envs.ts, Cloudflare credentials) and not serialized into the running app.
 _Avoid_: app config, runtime config
 
+**Scheduler**:
+A project-scoped domain component — one Durable Object plus one stream processor over one stream — that owns durable time: it triggers due Schedules and records every Schedule change and Trigger as events on its own stream.
+_Avoid_: cron service, alarm manager, agent
+
+**Schedule**:
+A keyed, upsertable record on a Scheduler stream combining a Recurrence (when to trigger) with an Action (what happens on a Trigger). Re-setting a key replaces the Schedule; cancelling a key removes it.
+_Avoid_: cron job, timer, scheduled task
+
+**Action**:
+What a Schedule does when it triggers. A closed discriminated union owned by the Scheduler. The only kind today is running an itx script; a future kind may append stored events verbatim to a target stream.
+_Avoid_: callback, handler, job, hook
+
+**Trigger**:
+One due occurrence of one Schedule: the Scheduler resolves the Schedule's current Action at execution time, runs it, and records the request and outcome (with the defining set-event offset as provenance) as events on the Scheduler stream.
+_Avoid_: firing, tick, invocation
+
+**SchedulerCollection**:
+The project-bound itx catalog (`itx.schedulers`) that vends path-addressed Scheduler handles; `itx.scheduler` is the default handle for `/scheduler/primary`. `set` returns only after the Scheduler has ingested the set event, so a successful set is read-your-writes visible and provably alarm-armed.
+_Avoid_: cron API, scheduler client
+
 ## Relationships
 
 - A **StreamProcessorHost** provides stream capabilities to processor implementations.
@@ -138,6 +158,11 @@ _Avoid_: app config, runtime config
 - **Deployment Config** is available to deploy scripts only.
 - Cloudflare API credentials, worker names, resource IDs, hostnames, and
   generated binding layout belong in **Deployment Config**, not **App Config**.
+- A **Trigger** runs its Schedule's **Action** at least once; Actions must be idempotent per Trigger (derive append idempotency keys from the Trigger's executionId).
+- A **Trigger** always runs the newest Action for its key: code is resolved from reduced state at execution time, so a re-set between request and execution (or before a crash-replay) runs the updated code, and a cancelled Schedule's in-flight Triggers complete as skipped.
+- An itx script **Action** runs with project-root itx authority, so append access to a **Scheduler** stream is a privileged, arbitrary-code surface — same trust domain as an agent stream.
+- itx script Actions are invoked as `fn(itx, schedule, trigger)`.
+- A Schedule that missed occurrences (Scheduler downtime) Triggers once when the Scheduler recovers, not once per missed occurrence; the next occurrence is computed from now.
 
 ## Example dialogue
 
