@@ -258,7 +258,7 @@ with zero setup.
 Secret material is write-only: `itx.secrets.get(path).update({ material,
 egress: { urls } })` stores it encrypted in the Secret Durable Object;
 `describe()` returns audit metadata, never material. Outbound requests
-reference secrets as placeholders — `getSecret("/secrets/foo")` in a
+reference secrets as placeholders — `getSecret({ path: "/secrets/foo" })` in a
 header — and `itx.egress.fetch(request)` substitutes them only when the
 request origin is in the secret's egress allowlist, recording usage audit
 events. Dynamic workers' bare `fetch()` routes through the same egress path.

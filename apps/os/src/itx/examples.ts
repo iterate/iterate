@@ -371,7 +371,7 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Run shell commands in a sandbox (project repo included)",
     description:
-      'A sandbox is a real Linux container addressed by path — any non-root path, nested fine. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your own agent path) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
+      'A sandbox is a real Linux container addressed by a path under /sandboxes/. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your agent path under the prefix — /sandboxes/cloudflare/agents/...) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -510,7 +510,7 @@ return {
 const secret = itx.secrets.get(vars.secretPath ?? "/secrets/example");
 
 // Store the material once, with the URLs it may be substituted into. From
-// here on, egress headers reference it as: getSecret("...").
+// here on, egress headers reference it as: getSecret({ path: "..." }).
 await secret.update({
   egress: { urls: ["https://postman-echo.com/"] },
   material: "demo-" + (vars.note ?? "material"),
@@ -557,7 +557,7 @@ for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
 const response = await itx.egress.fetch(
   new Request("https://postman-echo.com/get?source=itx-secret-example", {
     headers: {
-      "x-itx-secret": \`Bearer getSecret("\${secretPath}")\`,
+      "x-itx-secret": \`Bearer getSecret({ path: "\${secretPath}" })\`,
     },
   }),
 );
@@ -793,7 +793,7 @@ await itx.provideCapability({
       "connect",
       {
         url: "https://api.githubcopilot.com/mcp/",
-        headers: { authorization: \`Bearer getSecret("\${tokenPath}")\` },
+        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
       },
     ],
   ],

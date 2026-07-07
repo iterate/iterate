@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { Stream, StreamEvent } from "../../types.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
@@ -29,24 +30,49 @@ describe("SandboxProcessor", () => {
       events: [
         event("events.iterate.com/sandbox/container-started"),
         event("events.iterate.com/sandbox/workspace-cloned"),
+        event("events.iterate.com/sandbox/warmed-up"),
         event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
         event("events.iterate.com/sandbox/container-stopped"),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: false },
+      state: { lastBackupId: "bkp-1", running: false, warmedUp: true },
     });
 
     await processor.ingest({
       events: [
+        // A fresh container starts logged-out, so container-started resets
+        // warmedUp until this container reports its own warm-up.
         event("events.iterate.com/sandbox/container-started"),
         event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: true },
+      state: { lastBackupId: "bkp-1", running: true, warmedUp: false },
+    });
+  });
+
+  it("folds the configured env map (later configs merge over earlier)", async () => {
+    const processor = sandboxProcessor();
+    await processor.ingest({
+      events: [
+        event("events.iterate.com/sandbox/configured", {
+          env: { ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })', FOO: "bar" },
+        }),
+        event("events.iterate.com/sandbox/configured", {
+          env: { OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })', FOO: "baz" },
+        }),
+      ],
+      streamMaxOffset: nextOffset,
+    });
+    const snap: { state: z.infer<typeof SandboxProcessorContract.stateSchema> } =
+      await processor.snapshot();
+    expect(snap.state.env).toEqual({
+      ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })',
+      OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })',
+      FOO: "baz",
     });
   });
 

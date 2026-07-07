@@ -29,7 +29,7 @@ export function connectionOctokit(input: {
   projectId: string;
 }): Octokit {
   const secretPath = githubConnectionSecretPath(input.connection);
-  const placeholder = `Bearer getSecret("${secretPath}", "accessToken")`;
+  const placeholder = `Bearer getSecret({ path: "${secretPath}", field: "accessToken" })`;
   const stub = itxEnv.SECRET.getByName(
     DurableObjectNameCodec.stringify({ path: secretPath, projectId: input.projectId }),
   );

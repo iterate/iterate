@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { E2E_CI_RETRIES, E2E_CI_RETRY_DELAY_MS } from "@iterate-com/shared/test-support/e2e-policy";
 
 export default defineConfig({
   resolve: {
@@ -17,6 +17,6 @@ export default defineConfig({
     // transient edge/platform fault ("Network connection lost." killed a
     // marathon run here on a 392ms-old socket); a real regression still
     // fails both attempts fast.
-    retry: process.env.CI ? E2E_CI_RETRIES : 0,
+    retry: process.env.CI ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
   },
 });

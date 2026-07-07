@@ -29,6 +29,18 @@
 export const E2E_CI_RETRIES = 1;
 
 /**
+ * Pause before the vitest retry (vitest `retry.delay`). Zero-delay retries
+ * re-run INTO the blip that failed the first attempt: observed twice on the
+ * streams-example-app capnweb lane, where a fresh websocket died and the
+ * instant re-roll died the same way within the same second (post-deploy
+ * rollout propagation / a brief edge wobble). 5s is longer than every blip
+ * observed and far below the lane watchdogs. Playwright needs no equivalent:
+ * its retry tears down and rebuilds the whole browser worker, which takes
+ * seconds by construction.
+ */
+export const E2E_CI_RETRY_DELAY_MS = 5_000;
+
+/**
  * Playwright per-action wait. Deliberately tight: the middlewright
  * spinner-waiter extends it (up to ~30s) only while the app visibly reports
  * progress, so an app that goes blank fails fast instead of being slept

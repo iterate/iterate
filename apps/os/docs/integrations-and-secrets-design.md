@@ -128,7 +128,7 @@ export type SecretUpdateInput = {
 ```
 
 **Placeholder grammar** — today's incantation plus field addressing into
-structured material: `getSecret("/secrets/…", "accessToken")`
+structured material: `getSecret({ path: "/secrets/…", field: "accessToken" })`
 (dotted paths for nesting). **Substitution is header-only, everywhere,
 forever** — no body scanning, no frame scanning, no content-type awareness.
 This is not a limitation that will grow later; it is the design line: header
@@ -269,7 +269,7 @@ substitution:
 await itx.egress.fetch("https://petshop.example/oauth/token", {
   method: "POST",
   headers: {
-    authorization: `Basic getSecret("/secrets/integrations/petshop-home", "basicAuth")`,
+    authorization: `Basic getSecret({ path: "/secrets/integrations/petshop-home", field: "basicAuth" })`,
     "content-type": "application/x-www-form-urlencoded",
   },
   body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri }).toString(),
@@ -384,7 +384,7 @@ export default class GoogleWorker extends WorkerEntrypoint<SecretWorkerEnv> {
       headers: {
         // App-tier creds ride a header placeholder, substituted en route under
         // the app secret's own pin. The worker never holds them.
-        authorization: `Basic getSecret("${this.env.APP_SECRET_PATH}", "basicAuth")`,
+        authorization: `Basic getSecret({ path: "${this.env.APP_SECRET_PATH}", field: "basicAuth" })`,
         "content-type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
@@ -663,7 +663,7 @@ Built and proven (PR #1508):
   webhooks, a `/__backdoor` console, **plus** an MCP server (`/mcp`),
   oRPC + OpenAPI (`/rpc`, `/api/v2`, `/openapi.json`), and a Discord-style
   **WebSocket gateway** (`/gateway`, credential in an IDENTIFY frame).
-- **S1** — secret material is any serializable value; `getSecret(path[, field])`
+- **S1** — secret material is any serializable value; `getSecret({ path[, field] })`
   header placeholders; multi-secret header chaining with per-hop pins;
   `hmac`/`matches`; the virtual platform-secret resolver.
 - **S2** — the secret worker runtime: a stateless dynamic worker overrides

@@ -198,7 +198,7 @@ function petshopGatewayRelayWorkerSource(input: {
     const SECRET_PATH = ${JSON.stringify(input.secretPath)};
     // The self-reference placeholder resolved (headers only) at the jailed
     // outbound — never held by this worker.
-    const TOKEN_REF = 'getSecret("' + SECRET_PATH + '", "accessToken")';
+    const TOKEN_REF = 'getSecret({ path: "' + SECRET_PATH + '", field: "accessToken" })';
     const PROBE_TIMEOUT_MS = 8000;
 
     export default class PetshopGatewayRelayWorker extends WorkerEntrypoint {

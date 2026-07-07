@@ -134,7 +134,7 @@ function statelessEgressFetch(egress: Fetcher): FetchLike {
       return Promise.resolve(new Response(null, { status: 405 }));
     }
 
-    // Headers may contain getSecret(path) placeholders. Egress owns
+    // Headers may contain getSecret({ path }) placeholders. Egress owns
     // substitution and origin checks, so this adapter forwards SDK-built
     // requests unchanged.
     return egress.fetch(request);

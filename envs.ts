@@ -275,15 +275,19 @@ export const tunnelsEnvs = {
 } satisfies Record<string, TunnelsEnv>;
 
 /**
- * apps/streams-example-app — the streams browser UI. workers.dev only:
- * no routes, no DNS, no resources, no secrets.
+ * apps/streams-example-app — the streams browser UI. Served on a custom
+ * domain (`streams.<env zone>`) like every other app, not workers.dev:
+ * workers.dev routes on this account have a documented drift class (routes
+ * dead at the edge while the API says healthy), and a websocket-first app
+ * feels every edge wobble. The deploy ensures the DNS record (create-only);
+ * no other resources.
  */
 export interface StreamsExampleEnv {
   cloudflareAccountId: string;
   /** Doppler config (project `streams-example-app`) supplying deploy credentials. */
   dopplerConfig: string;
   workerName: string;
-  /** workers.dev origin (the account's workers.dev subdomain is fixed). */
+  /** The env's public origin (`https://streams.<env zone>`). */
   baseUrl: string;
   /**
    * The env's apps/auth deployment. The playground is a relying party of the
@@ -341,7 +345,7 @@ function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: `preview_${n}`,
     workerName: `streams-example-app-preview-${n}`,
-    baseUrl: `https://streams-example-app-preview-${n}.iterate-dev-preview.workers.dev`,
+    baseUrl: `https://streams.iterate-preview-${n}.com`,
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
   };
 }
@@ -351,7 +355,7 @@ export const streamsExampleEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "streams-example-app-prd",
-    baseUrl: "https://streams-example-app-prd.iterate.workers.dev",
+    baseUrl: "https://streams.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
   },
   preview_1: streamsExamplePreviewSlot(1),

@@ -35,8 +35,10 @@ describe("selectSecretField", () => {
 describe("secret reference parsing", () => {
   test("parses path-only and path+field placeholders across headers", () => {
     const headers = new Headers({
-      authorization: 'Basic getSecret("/secrets/integrations/petshop-home", "basicAuth")',
-      "x-token": 'Bearer getSecret("/secrets/integrations/petshop-home/jonas", "tokens.access")',
+      authorization:
+        'Basic getSecret({ path: "/secrets/integrations/petshop-home", field: "basicAuth" })',
+      "x-token":
+        'Bearer getSecret({ path: "/secrets/integrations/petshop-home/jonas", field: "tokens.access" })',
     });
     expect(secretReferencesFromHeaders(headers)).toEqual([
       { field: "basicAuth", path: "/secrets/integrations/petshop-home" },
@@ -48,8 +50,8 @@ describe("secret reference parsing", () => {
     ]);
   });
 
-  test("whole-material placeholder still parses (pre-field shape)", () => {
-    const headers = new Headers({ authorization: 'Bearer getSecret("/secrets/openai")' });
+  test("whole-material placeholder (no field key) parses", () => {
+    const headers = new Headers({ authorization: 'Bearer getSecret({ path: "/secrets/openai" })' });
     expect(secretReferencesFromHeaders(headers)).toEqual([{ path: "/secrets/openai" }]);
   });
 });
@@ -57,7 +59,7 @@ describe("secret reference parsing", () => {
 describe("substituteSecretHeaders", () => {
   test("replaces each placeholder with the resolved value", () => {
     const request = new Request("https://api.resend.com/emails", {
-      headers: { authorization: 'Bearer getSecret("/secrets/resend", "apiKey")' },
+      headers: { authorization: 'Bearer getSecret({ path: "/secrets/resend", field: "apiKey" })' },
     });
     const substituted = substituteSecretHeaders(request, ({ path, field }) => {
       expect(path).toBe("/secrets/resend");
@@ -76,8 +78,8 @@ describe("substituteSecretHeaders", () => {
     const request = new Request("https://petshop.example/gateway-subprotocol", {
       headers: {
         upgrade: "websocket",
-        authorization: `Bearer getSecret("${path}", "accessToken")`,
-        "sec-websocket-protocol": `petshop.v1, petshop.access-token.getSecret("${path}", "accessToken")`,
+        authorization: `Bearer getSecret({ path: "${path}", field: "accessToken" })`,
+        "sec-websocket-protocol": `petshop.v1, petshop.access-token.getSecret({ path: "${path}", field: "accessToken" })`,
       },
     });
     const substituted = substituteSecretHeaders(request, ({ path: p, field }) => {

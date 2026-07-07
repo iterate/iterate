@@ -27,7 +27,7 @@ function waitroseWorkerSource(echoUrl: string): string {
     // cannot see its tokens.
     function waitroseSdk(connection) {
       const authorization =
-        'getSecret("/secrets/integrations/waitrose/' + connection + '/session")';
+        'getSecret({ path: "/secrets/integrations/waitrose/' + connection + '/session" })';
       const call = async (operation, payload) => {
         const response = await fetch(WAITROSE_API_URL, {
           method: "POST",
@@ -168,7 +168,7 @@ describe("provided integrations", () => {
       expect(search).toEqual({
         operation: "search-products",
         payload: { term: "milk" },
-        sentAuthorization: 'getSecret("/secrets/integrations/waitrose/family/session")',
+        sentAuthorization: 'getSecret({ path: "/secrets/integrations/waitrose/family/session" })',
         receivedAuthorization: secrets.family,
       });
 
@@ -176,7 +176,7 @@ describe("provided integrations", () => {
       expect(basket).toEqual({
         operation: "basket-add",
         payload: { itemId: "item-123" },
-        sentAuthorization: 'getSecret("/secrets/integrations/waitrose/mum/session")',
+        sentAuthorization: 'getSecret({ path: "/secrets/integrations/waitrose/mum/session" })',
         receivedAuthorization: secrets.mum,
       });
 

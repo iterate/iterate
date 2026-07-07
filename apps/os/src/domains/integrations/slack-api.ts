@@ -75,7 +75,7 @@ function slackEgressAdapter(stub: SlackEgressStub): NonNullable<WebClientOptions
  * this instance, so it IS the Slack SDK — no hand-mapped method table.
  */
 export function connectionSlackClient(input: { connection: string; projectId: string }): WebClient {
-  const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
+  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
   return new WebClient(placeholder, {
     adapter: slackEgressAdapter(projectStub(itxEnv.PROJECT, input.projectId)),
     // The egress door + our own error handling own retries; the SDK's node-retry
@@ -110,7 +110,7 @@ export async function callProjectSlackWebApi(input: {
   method: string;
   projectId: string;
 }): Promise<SlackWebApiResult> {
-  const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
+  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
   const request = new Request(`https://slack.com/api/${input.method}`, {
     body: JSON.stringify(input.body),
     headers: {

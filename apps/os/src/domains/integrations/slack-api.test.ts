@@ -28,7 +28,7 @@ describe("connectionSlackClient", () => {
     const request = captured.request!;
     expect(new URL(request.url).href).toBe("https://slack.com/api/chat.postMessage");
     expect(request.headers.get("authorization")).toBe(
-      'Bearer getSecret("/secrets/integrations/slack/main/bot-token")',
+      'Bearer getSecret({ path: "/secrets/integrations/slack/main/bot-token" })',
     );
   });
 });

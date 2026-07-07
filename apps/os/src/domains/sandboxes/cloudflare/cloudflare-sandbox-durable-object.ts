@@ -8,7 +8,7 @@ import {
   SandboxProcessorContract,
   type SandboxLifecycleEventInput,
 } from "../sandbox-processor-contract.ts";
-import { normalizeSandboxPath } from "../utils.ts";
+import { agentPathForSandbox, normalizeSandboxPath } from "../utils.ts";
 
 /**
  * The workspace root inside every sandbox container: what the backup/restore
@@ -27,12 +27,33 @@ const SANDBOX_WORKSPACE_DIR = "/workspace";
 const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/project`;
 
 /**
+ * The platform repo baked into the image with `pnpm install` already run.
+ * It lives outside `/workspace` because workspace restore overlays that tree
+ * and backups intentionally exclude node_modules. A symlink exposes it at the
+ * conventional workspace repo path after every restore/start.
+ */
+const BAKED_ITERATE_REPO_SOURCE_DIR = "/opt/iterate/iterate";
+const BAKED_ITERATE_REPO_WORKSPACE_DIR = `${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate/iterate`;
+
+/**
+ * The sandbox warm-up script, baked into the image (see
+ * `apps/os/sandbox/warmup.sh` and the `COPY` in `apps/os/sandbox/Dockerfile`).
+ * The Durable Object runs it on the container during provisioning, in the
+ * background, to get the baked coding tools logged in (e.g. Codex). Add
+ * container-side setup by extending the script, not this class.
+ */
+const SANDBOX_WARMUP_SCRIPT_PATH = "/opt/iterate/warmup.sh";
+
+/**
  * How long a sandbox's workspace backup survives without the sandbox waking
- * again (the SDK GCs backups after their ttl). 90 days: long enough that any
- * plausibly-still-wanted workspace comes back intact, short enough that the
- * churn of short-lived sandboxes (e2e runs a fresh project per test) does not
- * accumulate in R2 forever. Durable work belongs in the repo (committed and
- * pushed); the workspace backup is for everything in flight around it.
+ * again. The SDK only CHECKS the ttl at restore time — it never deletes
+ * expired objects from R2; actual deletion is the bucket's lifecycle rule
+ * (prefix `backups/`, set by apps/os/scripts/ensure-resources.ts — keep the
+ * two aligned). 90 days: long enough that any plausibly-still-wanted
+ * workspace comes back intact, short enough that the churn of short-lived
+ * sandboxes (e2e runs a fresh project per test) does not accumulate in R2
+ * forever. Durable work belongs in the repo (committed and pushed); the
+ * workspace backup is for everything in flight around it.
  */
 const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
 
@@ -50,6 +71,36 @@ const SANDBOX_BACKUP_TTL_SECONDS = 90 * 24 * 60 * 60;
  * scratch — durable work lives in the repo, committed and pushed.
  */
 const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
+
+/**
+ * Durable env-var map for the sandbox (see {@link CloudflareSandboxDurableObject}).
+ * A `Record<string,string>` applied to every command in the container;
+ * conventionally ALL_CAPS keys whose values are `getSecret({ path })`
+ * placeholders — so the material stays in the secret system and is injected
+ * only at egress, never entering the container.
+ */
+const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
+
+/**
+ * The sandbox env-var map shape, shared by durable storage,
+ * {@link CloudflareSandboxDurableObject.configureEnvVars}, and
+ * {@link DEFAULT_SANDBOX_ENV} — one type so the three can't drift.
+ */
+type SandboxEnvVars = Record<string, string>;
+
+/**
+ * Env vars every sandbox gets by default so a coding agent works out of the
+ * box: the provider keys the baked CLIs read, pointed at conventional project
+ * secret paths as `getSecret(...)` placeholders (substituted only at egress).
+ * A project that seeds a key at one of these paths lets its agents code
+ * immediately; if the path has no secret, the var is harmless until used (the
+ * egress substitution then fails loudly). `configureEnvVars` overrides any of
+ * these per sandbox.
+ */
+const DEFAULT_SANDBOX_ENV: SandboxEnvVars = {
+  OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai-api-key" })',
+  ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic-api-key" })',
+};
 
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
 // stream result) are not exported by the SDK, so recover them from the
@@ -74,6 +125,30 @@ type ReadFileReturns = Sandbox<Env>["readFile"] extends {
 // the lookup itself dials the sandbox for its durable identity.
 const projectIdByContainerId = new Map<string, string>();
 
+/**
+ * Whether an error is the SDK's "session SETUP was interrupted" case — the
+ * per-command `utils.createSession` dial died to a transport disposal or a
+ * runtime replacement, so the command itself was never admitted and a retry
+ * is provably safe. Reads the fields off the error instance (the SDK's
+ * SandboxError exposes `code`/`context` as getters) AND off the raw
+ * `errorResponse` it wraps, so a plain-object or re-serialized form of the
+ * same error (getters don't survive serialization) still matches.
+ */
+function isInterruptedSessionSetup(error: unknown): boolean {
+  const shape = error as {
+    code?: string;
+    context?: { operation?: string; reason?: string };
+    errorResponse?: { code?: string; context?: { operation?: string; reason?: string } };
+  };
+  const code = shape?.code ?? shape?.errorResponse?.code;
+  const context = shape?.context ?? shape?.errorResponse?.context;
+  return (
+    code === "OPERATION_INTERRUPTED" &&
+    context?.operation === "utils.createSession" &&
+    (context.reason === "transport_disposed" || context.reason === "runtime_replaced")
+  );
+}
+
 async function resolveEgressProjectId(env: Env, containerId: string): Promise<string> {
   const cached = projectIdByContainerId.get(containerId);
   if (cached !== undefined) return cached;
@@ -85,8 +160,9 @@ async function resolveEgressProjectId(env: Env, containerId: string): Promise<st
 
 /**
  * The sandbox's own address, as carried by its Durable Object name:
- * which project it belongs to and its path (an agent's own path for agent
- * sandboxes, `/sandboxes/cloudflare/...` for standalone ones).
+ * which project it belongs to and its path (always under `/sandboxes/` —
+ * `/sandboxes/cloudflare/agents/...` for an agent's sandbox, `/sandboxes/cloudflare/...`
+ * for standalone ones).
  */
 type SandboxIdentity = { path: string; projectId: string };
 
@@ -105,8 +181,9 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  * sleep. The container's own disk does NOT — but `/workspace` comes back,
  * because going to sleep snapshots it to R2 and the next start restores it
  * (see behavior 1). Lifecycle transitions are also appended as events to the
- * stream at this sandbox's own path — for an agent's sandbox that is the
- * agent's own journal (see `#emitLifecycleEvent`).
+ * stream at this sandbox's own path — and, for an agent's sandbox
+ * (`/sandboxes/cloudflare/agents/...`), to the agent's own journal too (see
+ * `#emitLifecycleEvent`).
  *
  * Three behaviors are added over the stock SDK class:
  *
@@ -118,9 +195,11 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *    `onActivityExpired` (the idle-timer hook, the one moment the container is
  *    still running but about to stop) snapshots `/workspace` to the env's
  *    {@link Env.BACKUP_BUCKET} R2 bucket, and the next `onStart` restores the
- *    newest snapshot before falling back to a fresh repo clone. Snapshots are
- *    gitignore-aware (no node_modules etc.), so they stay small and restore
- *    fast (~seconds, vs a cold clone).
+ *    newest snapshot before falling back to a fresh repo clone. Snapshots
+ *    exclude node_modules explicitly and honor gitignore rules where the SDK
+ *    finds a git checkout (the repo dir; `/workspace` itself is not a repo,
+ *    so top-level scratch is snapshotted verbatim), keeping them small and
+ *    restores fast (~seconds, vs a cold clone).
  *
  *    Known window: this is snapshot-granular. A container that CRASHES (rather
  *    than idling out) loses whatever changed since the last snapshot — durable
@@ -166,6 +245,12 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // Intercept HTTPS as well as HTTP: without this, only plaintext egress would
   // reach the `outbound` handler and TLS traffic would bypass project policy.
   override interceptHttps = true;
+
+  // Tag every instance for the Containers dashboard/analytics, so sandbox
+  // instances are filterable apart from any other container class in the
+  // account. Static (app/component); per-sandbox identity already lives in the
+  // Durable Object name and the lifecycle stream. See docs/cloudflare-sandboxes.md.
+  override labels = { app: "iterate-os", component: "sandbox" };
 
   /**
    * The catch-all container-egress handler: EVERY outbound request a sandbox
@@ -249,6 +334,18 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     if (keepAlive) {
       return super.onActivityExpired();
     }
+    // The SDK's default hook stops the container the instant the idle alarm
+    // fires; ours runs a backup FIRST, which takes seconds to tens of seconds
+    // — plenty of time for a new call to land. Destroying then would tear the
+    // RPC transport down under that call (observed live as OPERATION_INTERRUPTED
+    // / transport_disposed on utils.createSession). The SDK counts in-flight
+    // session work on `inflightRequests` (undeclared in the d.ts, hence the
+    // cast); if anything is in flight before or after the backup, the sandbox
+    // is not idle — skip the teardown and let the renewed activity re-arm the
+    // idle alarm (the next expiry snapshots again, so nothing is lost).
+    const busy = () =>
+      ((this as unknown as { inflightRequests?: number }).inflightRequests ?? 0) > 0;
+    if (busy()) return;
     try {
       await this.#backupWorkspace();
     } catch (error) {
@@ -258,6 +355,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
         payload: { error: String(error) },
       });
     }
+    if (busy()) return;
     await this.destroy();
   }
 
@@ -322,6 +420,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // or cloned). Gates the idle-time backup: snapshotting a half-provisioned
   // workspace would overwrite the pointer to the last GOOD backup.
   #workspaceProvisioned = false;
+  // Per-container memo for the background warm-up script (tool logins land on
+  // the ephemeral container disk, so a fresh container re-runs it).
+  #warmup: Promise<void> | undefined;
 
   override async onStart(): Promise<void> {
     await super.onStart();
@@ -345,6 +446,9 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     //   guard's in-flight one (two clones racing `rm -rf` in one directory).
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
+    // A fresh container has an empty disk (tool auth is gone), so warm-up must
+    // run again — clear the per-container memo.
+    this.#warmup = undefined;
   }
 
   override async onStop(): Promise<void> {
@@ -359,10 +463,11 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
   /**
    * Snapshot `/workspace` to R2 and move the durable handle to the new backup.
-   * Gitignore-aware and node_modules-free, so archives stay small and restores
-   * fast; reinstalling dependencies is the restored workspace's job. The
-   * handle is only overwritten AFTER `createBackup` succeeds, so a failed
-   * backup can never orphan the previous good snapshot.
+   * node_modules is excluded explicitly (gitignore rules apply only where the
+   * SDK finds a git checkout, and `/workspace` itself is not one), so archives
+   * stay small and restores fast; reinstalling dependencies is the restored
+   * workspace's job. The handle is only overwritten AFTER `createBackup`
+   * succeeds, so a failed backup can never orphan the previous good snapshot.
    *
    * Transfer mode is chosen by what the env provides: with R2 S3 credentials
    * the SDK presigns `*.r2.cloudflarestorage.com` URLs and the container
@@ -400,24 +505,26 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
   /**
    * Restore the newest workspace backup into the fresh container, if one
-   * exists. Returns whether `/workspace` now holds a restored snapshot; any
-   * failure (expired ttl, deleted object, transfer error) degrades to `false`
-   * so provisioning falls back to a clean clone rather than failing the start.
+   * exists. Returns the restored backup's id, or null when nothing was
+   * restored; any failure (expired ttl, deleted object, transfer error)
+   * degrades to null so provisioning falls back to a clean clone rather than
+   * failing the start. Emits nothing — `#ensureWorkspace` reports what
+   * happened once provisioning completes, behind its run-identity guard, so a
+   * superseded run can't journal a restore for a container it no longer owns
+   * and the events describe the finished workspace, not a step in flight.
    */
-  async #restoreWorkspace(): Promise<boolean> {
+  async #restoreWorkspace(): Promise<string | null> {
     const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
-    if (backup === undefined) return false;
+    if (backup === undefined) return null;
     try {
-      const result = await this.restoreBackup(backup);
-      if (!result.success) return false;
-      this.#emitLifecycleEvent({
-        type: "events.iterate.com/sandbox/workspace-restored",
-        payload: { backupId: backup.id },
-      });
-      return true;
+      // Same redial as every provisioning step: an interrupted SESSION dial
+      // means the restore never started, and falling through to a clone would
+      // silently discard a valid snapshot.
+      const result = await this.#redialOnInterruptedSessionSetup(() => this.restoreBackup(backup));
+      return result.success ? backup.id : null;
     } catch (error) {
       console.warn("sandbox workspace restore failed, falling back to clone", error);
-      return false;
+      return null;
     }
   }
 
@@ -442,6 +549,113 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       await run;
       if (this.#workspaceReady === run) return;
     }
+  }
+
+  /**
+   * Set environment variables for the sandbox — the durable `Record<string,
+   * string>` applied to every command (`exec`, `startProcess`, …). Merges into
+   * the stored map, so callers build the environment incrementally; keys are
+   * never deleted, but setting one to `""` blanks it (which is also how to
+   * mask a {@link DEFAULT_SANDBOX_ENV} entry). Returns the merged map's keys.
+   *
+   * The intended value shape is a `getSecret({ path })` placeholder: the
+   * material then stays in the secret system and is substituted only at egress
+   * (the project egress path already does this for any header carrying the
+   * placeholder), so a coding agent can read e.g. `ANTHROPIC_API_KEY` from the
+   * environment and call the provider, yet the real key never enters the
+   * container. Plain non-secret values are fine too. NEVER pass raw secret
+   * material — it would sit in the container's environment and the container
+   * filesystem's snapshots.
+   *
+   * Not guarded by `ensureProjectRepo()` (it's configuration, valid before the
+   * container ever boots): the map is persisted now and re-applied during
+   * provisioning; if a container is already running, the delta is applied to it
+   * immediately. Emits a `sandbox/configured` event whose `env` records the
+   * map set in this call (key → getSecret placeholder / literal) on the
+   * sandbox's stream/journal — so never pass raw secret material as a value.
+   */
+  async configureEnvVars(vars: SandboxEnvVars): Promise<{ keys: string[] }> {
+    const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
+    const merged = { ...stored, ...vars };
+    this.ctx.storage.kv.put(SANDBOX_ENV_STORAGE_KEY, merged);
+    this.#emitLifecycleEvent({
+      type: "events.iterate.com/sandbox/configured",
+      payload: { env: vars },
+    });
+    // Apply the delta immediately as well, so a running container — INCLUDING
+    // one still mid-provisioning, whose #applyStoredEnvVars already read the
+    // old map — picks it up without a restart. The SDK call is safe when no
+    // container is up (it only merges the in-memory map, never boots one).
+    // Best-effort — never fail configuration on a transient container hiccup.
+    await this.#redialOnInterruptedSessionSetup(() => super.setEnvVars(vars)).catch(
+      (error: unknown) =>
+        console.warn("sandbox configureEnvVars: applying to running container failed", error),
+    );
+    return { keys: Object.keys(merged) };
+  }
+
+  async #applyStoredEnvVars(): Promise<void> {
+    // Defaults first, explicit config last — so a project that seeds the
+    // conventional provider secrets gets a code-ready sandbox with no setup,
+    // while configureEnvVars still wins for anything it sets.
+    const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
+    // Redial-once like every command: setEnvVars is idempotent, and during a
+    // cold boot its session dial is as exposed to client churn as any exec.
+    await this.#redialOnInterruptedSessionSetup(() =>
+      super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored }),
+    );
+  }
+
+  /**
+   * Run the baked warm-up script ({@link SANDBOX_WARMUP_SCRIPT_PATH}) so the
+   * container's coding tools are ready to use out of the box — e.g. Codex 0.142
+   * won't use the `OPENAI_API_KEY` env directly, it needs a one-time
+   * `codex login --with-api-key`, which the script does. Kicked off in the
+   * BACKGROUND during provisioning (overlapping the clone) and memoized per
+   * container (tool auth is on the ephemeral disk). The script reads its keys
+   * from the env, where they are getSecret placeholders substituted at egress,
+   * so no material is handled here.
+   *
+   * Emits `sandbox/warmed-up` on success (so the whole start → restore/clone →
+   * warm-up saga is visible on the sandbox's stream) or `sandbox/warmup-failed`
+   * otherwise. Best-effort in the sense that a failure never breaks the
+   * sandbox: it is logged, reported as an event, and the memo cleared so a
+   * later provision retries. A tool whose provider secret simply isn't seeded
+   * is a SKIP (success), not a failure — see the script.
+   *
+   * Every step after the exec checks the run is still current, like
+   * `#ensureWorkspace`: a container restart mid-warm-up resets `#warmup` in
+   * `onStart` and a newer warm-up may already be in flight — a stale run must
+   * neither emit events for the new container's epoch nor clobber its memo.
+   */
+  #runWarmup(): Promise<void> {
+    if (this.#warmup !== undefined) return this.#warmup;
+    let run: Promise<void> | undefined = undefined;
+    run = (async () => {
+      const result = await this.#redialOnInterruptedSessionSetup(() =>
+        super.exec(`bash ${SANDBOX_WARMUP_SCRIPT_PATH}`),
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `sandbox warm-up failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`,
+        );
+      }
+      if (this.#warmup !== run) return; // container replaced mid-warm-up
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/warmed-up",
+        payload: {},
+      });
+    })().catch((error: unknown) => {
+      if (this.#warmup !== run) return; // stale failure: not this container's story
+      console.warn("sandbox warm-up failed", error);
+      this.#emitLifecycleEvent({
+        type: "events.iterate.com/sandbox/warmup-failed",
+        payload: { error: String(error) },
+      });
+      this.#warmup = undefined; // let a later provision retry
+    });
+    this.#warmup = run;
+    return run;
   }
 
   // ---------------------------------------------------------------------------
@@ -469,43 +683,77 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // - New SDK methods start unguarded — add workspace-touching ones here.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Re-dial ONCE when the SDK's per-command session SETUP was interrupted.
+   *
+   * Every command runner first dials `utils.createSession` on the container;
+   * a container-client replacement mid-dial — boot churn on a cold container,
+   * or a container transition racing the call — surfaces as
+   * OPERATION_INTERRUPTED / transport_disposed on that setup call (observed
+   * repeatedly in preview e2e and CI). The SDK marks it `retryable: false`
+   * because it can't know whether the COMMAND ran — but when the interrupted
+   * operation is the session setup itself, the command was never admitted, so
+   * one re-dial is provably safe. Scoped to exactly that case: a
+   * `commands.execute` interruption still throws (the command may have run).
+   * Done here at dispatch so every caller — agents, the REPL, e2e — inherits
+   * the resilience instead of each inventing its own retry.
+   */
+  async #redialOnInterruptedSessionSetup<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isInterruptedSessionSetup(error)) throw error;
+      console.warn("sandbox session dial interrupted mid-setup; re-dialing once", error);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      return call();
+    }
+  }
+
   override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
     await this.ensureProjectRepo();
     const [command, options] = args;
-    return super.exec(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.exec(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }),
+    );
   }
 
   override async execStream(...args: Parameters<Sandbox<Env>["execStream"]>) {
     await this.ensureProjectRepo();
     const [command, options] = args;
-    return super.execStream(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.execStream(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }),
+    );
   }
 
   override async startProcess(...args: Parameters<Sandbox<Env>["startProcess"]>) {
     await this.ensureProjectRepo();
     const [command, options, sessionId] = args;
-    return super.startProcess(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }, sessionId);
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.startProcess(command, { cwd: SANDBOX_PROJECT_REPO_DIR, ...options }, sessionId),
+    );
   }
 
   override async createSession(...args: Parameters<Sandbox<Env>["createSession"]>) {
     await this.ensureProjectRepo();
     const [options] = args;
-    return super.createSession({ cwd: SANDBOX_PROJECT_REPO_DIR, ...options });
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.createSession({ cwd: SANDBOX_PROJECT_REPO_DIR, ...options }),
+    );
   }
 
   override async runCode(...args: Parameters<Sandbox<Env>["runCode"]>) {
     await this.ensureProjectRepo();
-    return super.runCode(...args);
+    return this.#redialOnInterruptedSessionSetup(() => super.runCode(...args));
   }
 
   override async runCodeStream(...args: Parameters<Sandbox<Env>["runCodeStream"]>) {
     await this.ensureProjectRepo();
-    return super.runCodeStream(...args);
+    return this.#redialOnInterruptedSessionSetup(() => super.runCodeStream(...args));
   }
 
   override async gitCheckout(...args: Parameters<Sandbox<Env>["gitCheckout"]>) {
     await this.ensureProjectRepo();
-    return super.gitCheckout(...args);
+    return this.#redialOnInterruptedSessionSetup(() => super.gitCheckout(...args));
   }
 
   override async mkdir(...args: Parameters<Sandbox<Env>["mkdir"]>) {
@@ -587,19 +835,49 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // awaits) — initialized to undefined so TS's definite-assignment analysis
     // doesn't have to prove that ordering.
     let run: Promise<void> | undefined = undefined;
+    // Whether this run is still the registered one. False the moment a
+    // container restart resets `#workspaceReady` (onStart) or a newer run
+    // replaces it — a stale run's execs would land on the NEW container's
+    // disk, so every destructive step below re-checks this before acting.
+    const isCurrent = () => this.#workspaceReady === run;
     run = (async () => {
-      const restored = await this.#restoreWorkspace();
-      // Clone when the restore didn't produce a checkout (no backup yet, the
-      // backup expired, or it somehow predates the repo). #cloneProjectRepo
-      // probes the marker itself, so a restored checkout makes this a no-op.
-      await this.#cloneProjectRepo();
+      const restoredBackupId = await this.#restoreWorkspace();
+      // Re-apply the durable env map onto THIS container (the SDK does not
+      // document env persistence across restart), so every guarded command
+      // below runs with the configured vars. Done BEFORE the clone so the
+      // background warm-up (which reads the env) can overlap it.
+      await this.#applyStoredEnvVars();
+      // Run the warm-up script in the BACKGROUND — it reads the env placeholders
+      // (substituted at egress) to log the baked tools in, so they just work
+      // without any per-command login line. Kicked off here so it overlaps the
+      // (slower) clone and is ready by the time the workspace is; it emits
+      // sandbox/warmed-up and its failures are self-contained (see the method).
+      this.ctx.waitUntil(this.#runWarmup());
+      // Clone when the workspace has no completed checkout — no backup yet,
+      // the backup expired, its restore failed, OR the restored snapshot
+      // simply predates the repo. #cloneProjectRepo probes the marker itself
+      // and reports whether it actually cloned.
+      const cloned = await this.#cloneProjectRepo(isCurrent);
+      if (!isCurrent()) return;
+      await this.#ensureBakedIterateRepoLink();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag
       // would let the idle backup snapshot a half-provisioned /workspace over
       // the last good backup.
-      if (this.#workspaceReady !== run) return;
-      if (!restored) {
+      if (!isCurrent()) return;
+      // Report what ACTUALLY happened, only now that the workspace is whole
+      // and this run still owns the container: a restore and a clone can
+      // coexist (snapshot restored but it lacked a checkout), and an event
+      // emitted mid-provisioning would tell agents the repo is back while the
+      // clone is still running.
+      if (restoredBackupId !== null) {
+        this.#emitLifecycleEvent({
+          type: "events.iterate.com/sandbox/workspace-restored",
+          payload: { backupId: restoredBackupId },
+        });
+      }
+      if (cloned) {
         this.#emitLifecycleEvent({
           type: "events.iterate.com/sandbox/workspace-cloned",
           payload: {},
@@ -607,15 +885,17 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       }
       this.#workspaceProvisioned = true;
     })().catch((error: unknown) => {
+      // A stale run's failure is not this container's story: the newer run
+      // owns the events and the memo. Resolve quietly — the guard loop in
+      // ensureProjectRepo re-enters and picks up the current run.
+      if (!isCurrent()) return;
       console.error("sandbox workspace setup failed", error);
       this.#emitLifecycleEvent({
         type: "events.iterate.com/sandbox/workspace-setup-failed",
         payload: { error: String(error) },
       });
-      // Let the next ensure retry instead of caching the failure forever —
-      // but only clear OUR OWN registration; a stale failing run must not
-      // clobber the promise of the newer run that replaced it.
-      if (this.#workspaceReady === run) this.#workspaceReady = undefined;
+      // Let the next ensure retry instead of caching the failure forever.
+      this.#workspaceReady = undefined;
       throw error;
     });
     this.#workspaceReady = run;
@@ -623,27 +903,34 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   }
 
   /**
-   * Append a lifecycle event to the stream at this sandbox's own path — for an
-   * agent's sandbox that is the agent's own journal, so the agent (and anyone
-   * tailing the stream) sees container starts/stops, snapshots, and restores
-   * as ordinary history. The event catalog is the sandbox processor contract
-   * (sandbox-processor-contract.ts); building through it keeps emission and
-   * declaration from drifting. Best-effort by design: lifecycle telemetry must
-   * never block or fail container start/stop, so errors are logged and
-   * dropped.
+   * Append a lifecycle event to the stream at this sandbox's own path, so
+   * anyone tailing the stream sees container starts/stops, snapshots, and
+   * restores as ordinary history — and every sandbox in a project is
+   * discoverable as a stream under `/sandboxes/`. For an AGENT's sandbox
+   * (`/sandboxes/cloudflare/agents/...`) the same event is also appended to the agent's
+   * own journal (`/agents/...`): that is what the agent processor consumes to
+   * give the agent its FYI inputs, and it keeps the sandbox's story readable
+   * inline with the agent's. The event catalog is the sandbox processor
+   * contract (sandbox-processor-contract.ts); building through it keeps
+   * emission and declaration from drifting. Best-effort by design: lifecycle
+   * telemetry must never block or fail container start/stop, so errors are
+   * logged and dropped.
    */
   #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
       const event = SandboxProcessorContract.buildEvent(input);
       const { projectId, path } = this.#identity();
-      const stream = this.env.STREAM.getByName(
-        DurableObjectNameCodec.stringify({ projectId, path }),
-      );
-      this.ctx.waitUntil(
-        Promise.resolve(stream.append(event)).catch((error: unknown) =>
-          console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
-        ),
-      );
+      const agentPath = agentPathForSandbox(path);
+      for (const streamPath of agentPath === null ? [path] : [path, agentPath]) {
+        const stream = this.env.STREAM.getByName(
+          DurableObjectNameCodec.stringify({ projectId, path: streamPath }),
+        );
+        this.ctx.waitUntil(
+          Promise.resolve(stream.append(event)).catch((error: unknown) =>
+            console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
+          ),
+        );
+      }
     } catch (error) {
       console.warn(`sandbox lifecycle event skipped (${input.type})`, error);
     }
@@ -653,12 +940,16 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // methods on THIS class are guarded by ensureProjectRepo() (see the
   // overrides above), and provisioning runs inside that guard — `this.*`
   // would deadlock on its own promise.
-  async #cloneProjectRepo(): Promise<void> {
+  // Returns whether it actually cloned — false when the workspace already
+  // held a completed checkout (the usual case after a good restore).
+  async #cloneProjectRepo(isCurrent: () => boolean): Promise<boolean> {
     // Probe a marker only a completed clone has — a bare directory check
     // would treat the debris of an interrupted checkout as done and leave
     // the sandbox without the repo until the container is replaced.
-    const existing = await super.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
-    if (existing.exists) return;
+    const existing = await this.#redialOnInterruptedSessionSetup(() =>
+      super.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`),
+    );
+    if (existing.exists) return false;
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
@@ -680,13 +971,20 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // backoff instead of failing the sandbox start on one bad response.
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      // Execs are not bound to a container epoch: after a mid-clone restart
+      // this loop's retries would land on the NEW container, racing the new
+      // provisioning run's own clone with this `rm -rf`. Bail instead — the
+      // superseded-run catch in #ensureWorkspace swallows this quietly.
+      if (!isCurrent()) {
+        throw new Error("sandbox provisioning superseded by a container restart");
+      }
       await super.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
       try {
         const result = await super.gitCheckout(remote.toString(), {
           branch: access.defaultBranch,
           targetDir: SANDBOX_PROJECT_REPO_DIR,
         });
-        if (result.success) return;
+        if (result.success) return true;
         lastError = new Error(
           `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
         );
@@ -699,5 +997,45 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       }
     }
     throw lastError;
+  }
+
+  /**
+   * Expose the image-baked platform repo at the conventional workspace path.
+   * Re-made every provision because the symlink lives under `/workspace` but
+   * its target does not survive there: a workspace restore brings the link
+   * back only if the backup captured it, and a fresh container always starts
+   * without it. Probes the lockfile so an image without the bake no-ops.
+   *
+   * Replace ONLY a symlink (or nothing): the path is inside the persisted
+   * workspace, so an agent may have put a REAL checkout there (the baked tree
+   * has no `.git`, so cloning over it is the natural move for anyone wanting
+   * `git pull`) — a restore brings that directory back, and an unconditional
+   * `rm -rf` here would silently destroy it on the next provision.
+   */
+  async #ensureBakedIterateRepoLink(): Promise<void> {
+    const bakedRepo = await this.#redialOnInterruptedSessionSetup(() =>
+      super.exists(`${BAKED_ITERATE_REPO_SOURCE_DIR}/pnpm-lock.yaml`),
+    );
+    if (!bakedRepo.exists) {
+      console.warn(
+        `sandbox image has no baked repo at ${BAKED_ITERATE_REPO_SOURCE_DIR} — skipping workspace link`,
+      );
+      return;
+    }
+
+    const link = BAKED_ITERATE_REPO_WORKSPACE_DIR;
+    const result = await this.#redialOnInterruptedSessionSetup(() =>
+      super.exec(
+        [
+          `mkdir -p ${SANDBOX_WORKSPACE_DIR}/repos/github.com/iterate`,
+          `if [ -L ${link} ] || [ ! -e ${link} ]; then rm -rf ${link} && ln -s ${BAKED_ITERATE_REPO_SOURCE_DIR} ${link}; fi`,
+        ].join(" && "),
+      ),
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `linking baked Iterate repo failed (exit ${result.exitCode}): ${result.stderr}`,
+      );
+    }
   }
 }

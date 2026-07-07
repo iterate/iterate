@@ -81,3 +81,6 @@ playwriter-screenshot-*
 pr-videos/
 *.log
 experiments/archil-node-modules/disk-config.json
+
+# Local alchemy-era dev artifacts (local dev secrets + miniflare state); never commit.
+.alchemy/

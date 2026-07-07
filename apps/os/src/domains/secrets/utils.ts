@@ -2,14 +2,16 @@ import { normalizePath } from "../durable-object-names.ts";
 
 /**
  * The egress placeholder grammar. A request header may carry
- * `getSecret("/secrets/…")` (substitute the whole material — which must then be
- * a string) or `getSecret("/secrets/…", "a.b")` (substitute one dotted field of
- * structured material). Substitution is header-only, everywhere, forever: a
- * header is a substitutable reference, a body is bytes the composer already
- * holds (see apps/os/docs/integrations-and-secrets-design.md §2.1 and ADR
- * 0005). The second (field) argument is optional.
+ * `getSecret({ path: "/secrets/…" })` (substitute the whole material — which
+ * must then be a string) or `getSecret({ path: "/secrets/…", field: "a.b" })`
+ * (substitute one dotted field of structured material). Substitution is
+ * header-only, everywhere, forever: a header is a substitutable reference, a
+ * body is bytes the composer already holds (see
+ * apps/os/docs/integrations-and-secrets-design.md §2.1 and ADR 0005). The
+ * `field` key is optional; omit it for whole-material (plain-string) secrets.
  */
-const SECRET_REFERENCE = /getSecret\(\s*"([^"]+)"\s*(?:,\s*"([^"]+)"\s*)?\)/g;
+const SECRET_REFERENCE =
+  /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)/g;
 
 /** One parsed placeholder: the secret it addresses and, optionally, the dotted
  * field of that secret's material to substitute. */
@@ -17,7 +19,7 @@ type SecretReference = { field?: string; path: string };
 
 /** The substituted string a referenced secret owes each requested field of a
  * chained egress request. The empty-string key `""` is the whole-material
- * placeholder (`getSecret(path)` with no field). Shared by the Secret DO's
+ * placeholder (`getSecret({ path })` with no field). Shared by the Secret DO's
  * resolver and the platform-secret resolver. */
 export type ResolvedFields = Record<string, string>;
 

@@ -36,7 +36,7 @@ export default class OAuthRefreshWorker extends WorkerEntrypoint {
         "content-type": "application/x-www-form-urlencoded",
         // App-tier client credential as a header placeholder: substituted en
         // route under the app secret's own pin, never held here.
-        authorization: 'Basic getSecret("' + appSecretPath + '", "basicAuth")',
+        authorization: 'Basic getSecret({ path: "' + appSecretPath + '", field: "basicAuth" })',
       },
       body: new URLSearchParams({
         grant_type: "refresh_token",

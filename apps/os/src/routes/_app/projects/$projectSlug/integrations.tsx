@@ -57,7 +57,8 @@ const BUILTIN_API_INTEGRATIONS = [
       "First-party OpenAPI RPC target for Parallel Search, Extract, Task, FindAll, Monitor, and Chat.",
     docsUrl: "https://docs.parallel.ai/",
     icon: Brain,
-    keyReference: 'x-api-key: getSecret("/secrets/platform/integrations/parallel", "apiKey")',
+    keyReference:
+      'x-api-key: getSecret({ path: "/secrets/platform/integrations/parallel", field: "apiKey" })',
     name: "Parallel",
     namespace: "itx.integrations.parallel",
   },
@@ -66,7 +67,8 @@ const BUILTIN_API_INTEGRATIONS = [
       "Built-in Exa MCP client for web search and page fetch; API-key egress can use the Exa platform key when configured.",
     docsUrl: "https://exa.ai/docs/reference/getting-started",
     icon: SearchIcon,
-    keyReference: 'x-api-key: getSecret("/secrets/platform/integrations/exa", "apiKey")',
+    keyReference:
+      'x-api-key: getSecret({ path: "/secrets/platform/integrations/exa", field: "apiKey" })',
     name: "Exa",
     namespace: "itx.mcp.exa",
   },
@@ -84,7 +86,8 @@ const BUILTIN_API_INTEGRATIONS = [
       "OpenAI API calls through project egress or workers without storing a project-owned OpenAI key.",
     docsUrl: "https://platform.openai.com/docs/api-reference",
     icon: Sparkles,
-    keyReference: 'Authorization: Bearer getSecret("/secrets/platform/openai", "apiKey")',
+    keyReference:
+      'Authorization: Bearer getSecret({ path: "/secrets/platform/openai", field: "apiKey" })',
     name: "OpenAI",
     namespace: "itx.egress.fetch",
   },

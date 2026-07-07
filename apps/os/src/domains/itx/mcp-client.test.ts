@@ -56,7 +56,7 @@ describe("itx MCP client", () => {
       callMcpToolPath({
         args: [{ query: "Workers" }],
         config: {
-          headers: { authorization: 'Bearer getSecret("/secrets/mcp")' },
+          headers: { authorization: 'Bearer getSecret({ path: "/secrets/mcp" })' },
           url: "https://example.com/mcp",
         },
         egress,
@@ -66,7 +66,9 @@ describe("itx MCP client", () => {
 
     expect(methods).toEqual(["initialize", "notifications/initialized", "tools/call"]);
     expect(methods).not.toContain("tools/list");
-    expect(authHeaders).toEqual(expect.arrayContaining(['Bearer getSecret("/secrets/mcp")']));
+    expect(authHeaders).toEqual(
+      expect.arrayContaining(['Bearer getSecret({ path: "/secrets/mcp" })']),
+    );
   });
 
   it("rejects nested MCP tool paths before connecting", async () => {

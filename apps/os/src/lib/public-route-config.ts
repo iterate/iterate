@@ -28,6 +28,7 @@ export type PublicRouteConfig = {
   baseUrl?: string;
   cloudflareAccountId?: string;
   cloudflareArtifactsNamespace?: string;
+  cloudflareWorkerName?: string;
   mcpBaseUrl?: string;
   projectHostnameBases: string[];
 };
@@ -40,6 +41,7 @@ export const getPublicRouteConfig = createServerFn({ method: "GET" }).handler(
       baseUrl: config.baseUrl,
       cloudflareAccountId: config.cloudflare.accountId,
       cloudflareArtifactsNamespace: config.cloudflare.artifactsNamespace,
+      cloudflareWorkerName: config.cloudflare.workerName,
       mcpBaseUrl: config.mcp?.baseUrl,
       projectHostnameBases: config.projectHostnameBases ?? [],
     };

@@ -47,7 +47,9 @@ async function callThroughConnection(
 ): Promise<{ status: number; body: any }> {
   const response = await project.egress.fetch(
     new Request(`${petshopBaseUrl()}${path}`, {
-      headers: { authorization: `Bearer getSecret("${connectionPath}", "accessToken")` },
+      headers: {
+        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+      },
     }),
   );
   return { status: response.status, body: await response.json().catch(() => null) };

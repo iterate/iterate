@@ -477,7 +477,7 @@ describe("itx", () => {
       });
       expect(JSON.stringify(described)).not.toContain("actual-secret-material");
 
-      const secretReference = `Bearer getSecret("${secretPath}")`;
+      const secretReference = `Bearer getSecret({ path: "${secretPath}" })`;
       const expected = "Bearer actual-secret-material";
 
       const explicitResponse = await project.egress.fetch(
@@ -607,7 +607,7 @@ describe("itx", () => {
         description: "intercept proof secret to be available",
       });
 
-      const secretReference = `Bearer getSecret("${secretPath}")`;
+      const secretReference = `Bearer getSecret({ path: "${secretPath}" })`;
       using intercept = await project.egress.intercept(async (request) => {
         return Response.json({
           intercepted: true,
@@ -679,7 +679,7 @@ describe("itx", () => {
         timeoutMs: 30_000,
       });
 
-      const headers = { authorization: `Bearer getSecret("${secretPath}")` };
+      const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
       const specUrl = `${api.url}/openapi.json`;
 
       // Cap'n Web promise pipelining lets dynamic operation members be called
@@ -764,7 +764,7 @@ describe("itx", () => {
         description: "MCP secret to be available",
       });
 
-      const headers = { authorization: `Bearer getSecret("${secretPath}")` };
+      const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
 
       // Cap'n Web promise pipelining lets dynamic tool members be called before
       // connect() resolves.
@@ -845,7 +845,7 @@ describe("itx", () => {
         description: "expression built-in secret to be available",
       });
 
-      const headers = { authorization: `Bearer getSecret("${secretPath}")` };
+      const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
       const petsInstructions = "Tiny Pets expression mount: call findPetsByStatus with a status.";
       const petsTypes =
         "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };";

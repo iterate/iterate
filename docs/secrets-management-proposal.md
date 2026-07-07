@@ -36,7 +36,7 @@ Outbound requests reference secrets with a header placeholder:
 const request = new Request("https://api.openai.com/v1/responses", {
   method: "POST",
   headers: {
-    authorization: 'Bearer getSecret("/secrets/openai")',
+    authorization: 'Bearer getSecret({ path: "/secrets/openai" })',
     "content-type": "application/json",
   },
   body: JSON.stringify(body),
@@ -45,7 +45,7 @@ const request = new Request("https://api.openai.com/v1/responses", {
 const response = await itx.egress.fetch(request);
 ```
 
-`getSecret("/secrets/...")` is the current itx placeholder.
+`getSecret({ path: "/secrets/..." })` is the current itx placeholder.
 Substitution happens only inside the project egress path. Interceptors installed
 with `itx.egress.intercept(handler)` run before substitution and see the
 placeholder, never raw material.
@@ -93,7 +93,7 @@ Slack stores the project's bot token in the itx secret system at:
 /secrets/integrations/slack/bot-token
 ```
 
-Slack Web API calls place `getSecret("/secrets/integrations/slack/bot-token")`
+Slack Web API calls place `getSecret({ path: "/secrets/integrations/slack/bot-token" })`
 in the authorization header and go through project egress, so token material
 stays inside the substitution pipeline. The secret is allowlisted for
 `https://slack.com`.
@@ -113,7 +113,7 @@ Slack team routing is stored in the deployment-wide
 `packages/mock-http-proxy` still preserves `getIterateSecret({...})`-shaped
 values in HAR sanitization. That is a HAR safety carve-out for historical proxy
 placeholder tokens; it is not the current OS egress placeholder. Current OS
-egress uses `getSecret("/secrets/...")` in request headers.
+egress uses `getSecret({ path: "/secrets/..." })` in request headers.
 
 ## Current limits
 

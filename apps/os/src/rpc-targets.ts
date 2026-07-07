@@ -156,7 +156,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
     {
       baseUrl: PARALLEL_API_BASE_URL,
       headers: {
-        "x-api-key": `getSecret("${PARALLEL_PLATFORM_SECRET_PATH}", "apiKey")`,
+        "x-api-key": `getSecret({ path: "${PARALLEL_PLATFORM_SECRET_PATH}", field: "apiKey" })`,
       },
       specUrl: PARALLEL_OPENAPI_SPEC_URL,
     },
@@ -499,16 +499,17 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
  * from this project's id plus the validated path, after the same
- * project-access assert every collection performs. A sandbox can live at any
- * non-root path — a scope's own path names that scope's sandbox (`itx.sandbox`
- * on an agent is `sandboxes.get(<the agent's path>)`); standalone sandboxes
- * conventionally live under `/sandboxes/cloudflare/...`.
+ * project-access assert every collection performs. Every sandbox lives under
+ * `/sandboxes/` (the same domain-prefix convention as `/secrets/...` and
+ * `/repos/...`): an agent's sandbox is its agent path under the prefix
+ * (`itx.sandbox` on `/agents/bla` is `sandboxes.get("/sandboxes/cloudflare/agents/bla")`);
+ * standalone sandboxes conventionally live under `/sandboxes/cloudflare/...`.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
   async __describe() {
     return describeNode({
       instructions:
-        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Any non-root path works — an agent's own path is that agent's sandbox (itx.sandbox); pick /sandboxes/cloudflare/<name> for standalone ones.",
+        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Paths live under /sandboxes/ — an agent's sandbox is its agent path under the prefix (/sandboxes/cloudflare/agents/..., what itx.sandbox resolves to); pick /sandboxes/cloudflare/<name> for standalone ones.",
       children: { get: "The sandbox at a path (boots the container on first use)." },
       parent: "a project itx (itx.sandboxes)",
     });
@@ -861,7 +862,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       // jailed refresh worker substitutes the access token and refreshes on 401.
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
-        authorization: `Bearer getSecret("${connectionPath}", "accessToken")`,
+        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
         request: args[0] as GmailRequestInput,
         send: (request) =>
           env.SECRET.getByName(
@@ -2940,7 +2941,7 @@ async function fetchSpec(
 ): Promise<Record<string, unknown>> {
   const specHost = new URL(props.specUrl).host;
   const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
-  // Headers can contain getSecret("/secrets/...") placeholders.
+  // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(

@@ -77,7 +77,8 @@ describe("resolvePlatformSecretReference", () => {
   test("direct platform-key egress substitutes only for allowlisted provider origins", () => {
     const request = new Request("https://api.parallel.ai/v1/tasks/runs", {
       headers: {
-        "x-api-key": 'getSecret("/secrets/platform/integrations/parallel", "apiKey")',
+        "x-api-key":
+          'getSecret({ path: "/secrets/platform/integrations/parallel", field: "apiKey" })',
       },
     });
 
@@ -89,7 +90,8 @@ describe("resolvePlatformSecretReference", () => {
   test("direct platform-key egress rejects the wrong origin", () => {
     const request = new Request("https://example.com/v1/tasks/runs", {
       headers: {
-        "x-api-key": 'getSecret("/secrets/platform/integrations/parallel", "apiKey")',
+        "x-api-key":
+          'getSecret({ path: "/secrets/platform/integrations/parallel", field: "apiKey" })',
       },
     });
 

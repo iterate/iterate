@@ -68,7 +68,7 @@ async function driveShape(
         [PETSHOP_WS_SHAPE_HEADER]: shape,
         // Routing only: names the connection secret whose worker handles this.
         // The relay worker ignores this header and composes its own upgrade.
-        authorization: `Bearer getSecret("${connectionPath}", "accessToken")`,
+        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
       },
     }),
   );

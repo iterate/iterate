@@ -31,7 +31,7 @@ describe("connectionOctokit", () => {
     const request = captured.request!;
     expect(new URL(request.url).href).toBe("https://api.github.com/user");
     expect(request.headers.get("authorization")).toBe(
-      'Bearer getSecret("/secrets/integrations/github/acme", "accessToken")',
+      'Bearer getSecret({ path: "/secrets/integrations/github/acme", field: "accessToken" })',
     );
   });
 
