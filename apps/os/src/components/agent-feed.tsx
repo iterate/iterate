@@ -456,13 +456,15 @@ function AgentActivityStep({
 }
 
 function stepLabel(step: AgentUiStep): string {
-  if (step.kind === "code") return "Ran code";
+  if (step.kind === "code") return step.status === "running" ? "Running code" : "Ran code";
   return step.model ?? step.provider ?? "LLM request";
 }
 
 function stepMeta(step: AgentUiStep): string {
   if (step.kind === "code") {
-    return step.durationMs == null ? "" : formatSeconds(step.durationMs);
+    const parts = [`Started ${formatClockTime(step.startedAtMs)}`];
+    if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
+    return parts.join(" · ");
   }
   const parts: string[] = [];
   if (step.inputTokens != null || step.outputTokens != null) {
@@ -511,8 +513,16 @@ function llmStepRawSummary(step: AgentUiLlmStep) {
 }
 
 function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
+  const startedAtDateTime = formatDateTimeAttribute(step.startedAtMs);
+
   return (
     <>
+      <time
+        className="block px-1.5 font-mono text-xs text-muted-foreground"
+        dateTime={startedAtDateTime}
+      >
+        Started {formatDateTime(step.startedAtMs)}
+      </time>
       {step.code === "" ? null : (
         <SourceCodeBlock
           code={step.code}
@@ -572,13 +582,13 @@ function AgentLiveActivity({
   expandedIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
-  const liveStep = live.steps.findLast((step) => step.status === "running");
+  const runningSteps = live.steps.filter((step) => step.status === "running");
+  const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
-  // A waiting activity (agent idle, no chat message yet) keeps its steps on
-  // screen — the next round rolls into it — but parks the spinner.
-  const working = liveStep != null || live.status === "running";
+  const working = runningSteps.length > 0;
   const showStepRail =
-    doneSteps.length > 0 || (liveStep != null && liveStepHasVisibleContent(liveStep));
+    doneSteps.length > 0 ||
+    runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
 
   if (!working && activityWasInterrupted(live)) {
     return (
@@ -611,7 +621,18 @@ function AgentLiveActivity({
               onToggle={onToggle}
             />
           ))}
-          {liveStep == null ? null : <LiveStepStream step={liveStep} />}
+          {runningSteps.map((step) =>
+            step.kind === "code" ? (
+              <AgentActivityStep
+                key={step.id}
+                step={step}
+                expanded={expandedIds.has(step.id)}
+                onToggle={onToggle}
+              />
+            ) : step === liveStep && liveStepHasVisibleContent(step) ? (
+              <LiveStepStream key={step.id} step={step} />
+            ) : null,
+          )}
         </div>
       ) : null}
     </div>
@@ -722,6 +743,27 @@ function formatSeconds(durationMs: number): string {
   if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function formatClockTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatDateTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function formatDateTimeAttribute(timestampMs: number): string | undefined {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
 }
 
 function stringifyResult(result: unknown): string {

@@ -140,6 +140,25 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  it("keeps running script source and start time in the live activity", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: { executionId: "x1", code: "await itx.repo.readFile({ path: 'README.md' })" },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.live?.steps).toHaveLength(1);
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "code",
+      executionId: "x1",
+      status: "running",
+      code: "await itx.repo.readFile({ path: 'README.md' })",
+      startedAtMs: Date.parse("2026-06-11T00:00:01.000Z"),
+    });
+  });
+
   it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
     // itx journals every raw Responses-WS frame as llm-response-chunk
     // ({llmRequestId, sequence, chunk}). Regression guard: the feed once

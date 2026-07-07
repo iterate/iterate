@@ -20,6 +20,16 @@ FROM docker.io/cloudflare/sandbox:0.12.3
 ENV CI=true \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
+# Python 3 + pip. Codex reaches for Python constantly (it is the default
+# language for a "write a script" ask), and the base image has no python3 —
+# verified live on prd: an agent asked codex to write and run a Python file and
+# got `python3: command not found` (exit 127). A coding sandbox that can't run
+# the most common scripting language is a sharp edge; ~50 MB is worth it.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-pip \
+  && rm -rf /var/lib/apt/lists/* \
+  && python3 --version
+
 # Codex CLI (OpenAI). npm global; its bin lands on the exec shell's PATH
 # (/usr/local/bin). Uses OPENAI_API_KEY, injected via the sandbox env-var map
 # as a getSecret placeholder and substituted at egress (never in the container).

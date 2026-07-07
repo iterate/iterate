@@ -175,6 +175,11 @@ is real but minimal: `@openai/codex` is a single ~280MB statically-linked Rust
 binary (npm pulls linux-x64 only — nothing to trim), pulled once per instance
 and cached in Cloudflare's registry.
 
+**Runtimes on PATH:** Node (from the base image) and **Python 3 + pip** (baked
+because codex reaches for Python by default — a prd agent hit
+`python3: command not found` without it). Add another language the same way in
+the Dockerfile if a coding workflow needs it.
+
 Claude Code is **not baked yet** (it adds another ~240MB self-contained binary,
 and we have no Anthropic key wired to exercise it). Add it the same way — a
 `RUN curl -fsSL https://claude.ai/install.sh | bash` line (its native installer,
