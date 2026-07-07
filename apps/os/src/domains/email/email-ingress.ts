@@ -58,11 +58,22 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   }
 
   const rejectMail = async (reason: string, rejectMessage: string) => {
+    // Deterministic key from pre-parse headers, same rationale as the
+    // received-mail key: a redelivery of the same message (worker crash
+    // between append and setReject) must dedupe, not double-append.
+    const messageKey =
+      normalizeMessageId(message.headers.get("message-id")) ??
+      (await fallbackInboundMessageKey({
+        envelopeFrom: message.from,
+        date: message.headers.get("date") ?? undefined,
+        subject: message.headers.get("subject") ?? undefined,
+        body: undefined,
+      }));
     // Envelope-sized audit fact — the project can see someone knocked, but
     // rejected bodies are never stored.
     await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append({
       type: EMAIL_REJECTED_EVENT_TYPE,
-      idempotencyKey: `email-rejected:${crypto.randomUUID()}`,
+      idempotencyKey: `email-rejected:${messageKey}:${message.to.toLowerCase()}:${reason}`,
       payload: {
         envelope: { from: message.from, to: message.to },
         projectId: project.id,

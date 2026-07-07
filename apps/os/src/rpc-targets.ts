@@ -1885,11 +1885,36 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
           },
         },
       );
-    const [, , createRequested] = await timedStep(
-      "create-timing",
-      timing,
-      "root-append",
-      appendRootEvents,
+    // The email sender-allowlist seed ALSO lands synchronously here, not only
+    // in the project processor's create-requested lane: the dashboard uses
+    // waitUntilCreated: false, so mail from the owner can arrive before that
+    // lane runs — this append guarantees the allowlist is live before create()
+    // returns. Identical idempotency keys to the lane's appends, so whichever
+    // runs second dedupes cleanly.
+    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
+    const seedEmailAllowlist = () =>
+      creatorEmail === undefined
+        ? Promise.resolve()
+        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH)
+            .append(
+              buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                durableObjectName: streamDurableObjectName({
+                  projectId: registered.projectId,
+                  path: EMAIL_INTEGRATION_STREAM_PATH,
+                }),
+                idempotencyKey: `email-router-subscription:${registered.projectId}`,
+                processorSlug: EmailProcessorContract.slug,
+                subscriberType: "project",
+              }),
+              {
+                type: "events.iterate.com/email/sender-allowed",
+                idempotencyKey: `email-sender-allowed:${registered.projectId}:${creatorEmail.toLowerCase()}`,
+                payload: { pattern: creatorEmail, reason: "project-owner" },
+              },
+            )
+            .then(() => undefined);
+    const [[, , createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
+      Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether
     // to also wait for the saga to finish is the caller's choice — the
