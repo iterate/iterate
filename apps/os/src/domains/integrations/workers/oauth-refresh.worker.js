@@ -21,7 +21,7 @@ export default class OAuthRefreshWorker extends WorkerEntrypoint {
   async fetch(request) {
     // env.SECRET.fetch is the default substituting egress (also our
     // globalOutbound): it swaps the accessToken placeholder + pins the host.
-    let response = await this.env.SECRET.fetch(request);
+    const response = await this.env.SECRET.fetch(request);
     if (response.status !== 401) return response;
     await this.#refresh();
     return await this.env.SECRET.fetch(request);

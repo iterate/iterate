@@ -137,6 +137,25 @@ export async function petshopExchangeCode(input: {
  */
 export const petshopWorkerRef = oauthRefreshWorkerRef;
 
+/**
+ * Register (or replace) a GitHub-App installation's RS256 PUBLIC key on petshop
+ * — the only key petshop ever holds. The OS side keeps the private half in an
+ * app-tier secret and signs App JWTs with it in the jail via env.APP.sign (ADR
+ * 0006); petshop verifies those JWTs against this public key when minting an
+ * installation token. `appId` is the JWT issuer petshop enforces.
+ */
+export function petshopRegisterApp(input: {
+  appId: string;
+  installationId: string;
+  publicKeyPem: string;
+}): Promise<{ appId: string; installationId: string; webhookSecret: string }> {
+  return petshopJson("/__backdoor/apps", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify(input),
+  });
+}
+
 /** The three WebSocket credential shapes petshop and the OS side prove (design
  * §9 D6). Selected per request via the `x-relay-shape` header. */
 export type PetshopWsShape = "frame" | "header" | "subprotocol";

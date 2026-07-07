@@ -104,14 +104,25 @@ export const AppConfig = z.object({
           scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
         })
         .optional(),
-      /** The deployment's GitHub App, used for the user-authorization web
-       * flow (connect) — the App's OAuth client credentials. Other App fields
-       * (appId, privateKey, webhookSigningSecret) ride in the same Doppler
-       * JSON for future installation-token/webhook work and are ignored here. */
+      /** The deployment's first-party GitHub App. `appId` + `appSlug` are
+       * public (JWT issuer, install URL); `privateKey` (PKCS#8 PEM) signs App
+       * JWTs — never revealed, only signed with via the platform secret's
+       * sign() (ADR 0006); `webhookSecret` verifies inbound App webhooks at the
+       * door. `oauth*` remain for any user-authorization flow. All optional so
+       * a deployment without a GitHub App still parses. */
       github: z
         .object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
+          // First-party GitHub App fields (optional): `appId` is the JWT issuer
+          // (public); `privateKey` (PKCS#8 PEM) signs App JWTs — never revealed,
+          // only signed with via the platform secret's sign() (ADR 0006);
+          // `webhookSecret` verifies inbound App webhooks. The installation-token
+          // minting mechanism is proven via a userspace App; these wire the
+          // first-party App once one is registered.
+          appId: publicValue(z.string().trim().min(1)).optional(),
+          privateKey: redacted(z.string().trim().min(1)).optional(),
+          webhookSecret: redacted(z.string().trim().min(1)).optional(),
         })
         .optional(),
       /** The dummy third-party used to prove the integrations model end to end

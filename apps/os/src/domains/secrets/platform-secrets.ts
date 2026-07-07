@@ -131,8 +131,10 @@ function platformSecretFields(config: AppConfig, path: string): Record<string, s
   const creds = (config.integrations as Record<string, unknown>)[match[1]!] as
     | {
         apiKey?: { exposeSecret(): string };
+        appId?: string;
         oauthClientId?: string;
         oauthClientSecret?: { exposeSecret(): string };
+        privateKey?: { exposeSecret(): string };
       }
     | undefined;
   if (creds === undefined) return null;
@@ -149,6 +151,11 @@ function platformSecretFields(config: AppConfig, path: string): Record<string, s
     fields[""] = apiKey;
     fields.apiKey = apiKey;
   }
+  // First-party GitHub App: `privateKey` is signed with (never revealed) via
+  // env.APP.sign in the installation-token worker (ADR 0006); `appId` is the
+  // public JWT issuer.
+  if (creds.privateKey !== undefined) fields.privateKey = creds.privateKey.exposeSecret();
+  if (creds.appId !== undefined) fields.appId = creds.appId;
 
   return Object.keys(fields).length > 0 ? fields : null;
 }

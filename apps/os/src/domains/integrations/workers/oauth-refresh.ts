@@ -4,8 +4,8 @@
 // template-literal blob — lint/format-clean and immune to the editor NUL-byte
 // artifact that bit the inline sources. Parametrized entirely by props, so one
 // source serves every OAuth-refresh integration (Google, petshop userspace, …).
-import oauthRefreshWorkerSource from "./oauth-refresh.worker.js?raw";
 import type { StatelessDynamicWorkerRef } from "../../../types.ts";
+import oauthRefreshWorkerSource from "./oauth-refresh.worker.js?raw";
 
 /**
  * A connection-secret worker that refreshes an OAuth access token on 401.

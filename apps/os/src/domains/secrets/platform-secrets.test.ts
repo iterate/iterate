@@ -26,6 +26,14 @@ const config = {
       oauthClientId: "petshop-default",
       oauthClientSecret: { exposeSecret: () => "petshop-default-secret" },
     },
+    github: {
+      appId: "12345",
+      oauthClientId: "gh-client",
+      oauthClientSecret: { exposeSecret: () => "gh-secret" },
+      privateKey: {
+        exposeSecret: () => "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----",
+      },
+    },
   },
 } as unknown as AppConfig;
 
@@ -106,6 +114,18 @@ describe("resolvePlatformSecretReference", () => {
         url: "https://example.com/oauth/token",
       }),
     ).not.toThrow();
+  });
+
+  test("first-party GitHub App exposes privateKey (to sign with) + appId", () => {
+    // The installation-token worker calls env.APP.sign({ field: "privateKey" }),
+    // which resolves the PEM here — signed with, never revealed (ADR 0006).
+    const resolved = resolvePlatformSecretReference({
+      config,
+      fields: ["privateKey", "appId"],
+      path: "/secrets/platform/integrations/github",
+    });
+    expect(resolved.privateKey).toContain("BEGIN PRIVATE KEY");
+    expect(resolved.appId).toBe("12345");
   });
 
   test("unknown slug throws secret_not_found", () => {
