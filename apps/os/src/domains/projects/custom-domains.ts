@@ -160,15 +160,13 @@ export function createCloudflareCustomDomainProvisioner(options: {
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
-      await assertProjectHostnameRegistrationBelongsToProject({
-        directory: options.directory,
-        hostname: normalized,
-        projectId: project.id,
-      });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
       const customHostname = await client.findCustomHostname(normalized);
-      if (customHostname) assertCloudflareHostnameBelongsToProject(customHostname, project);
-      const id = customHostname?.id ?? cloudflareHostnameId ?? null;
+      const id = customHostname
+        ? cloudflareHostnameBelongsToProject(customHostname, project)
+          ? (stringValue(customHostname.id) ?? cloudflareHostnameId)
+          : null
+        : cloudflareHostnameId;
       if (id) await client.deleteCustomHostname(id);
       const registeredProject = await readProjectHostnameRegistration(
         options.directory,
@@ -271,25 +269,20 @@ async function reconcileProjectHostnameRegistration(input: {
   await primeProjectHostname(input.directory, input.hostname, input.project);
 }
 
-async function assertProjectHostnameRegistrationBelongsToProject(input: {
-  directory: KVNamespace;
-  hostname: string;
-  projectId: string;
-}): Promise<void> {
-  const registeredProject = await readProjectHostnameRegistration(input.directory, input.hostname);
-  if (registeredProject && registeredProject.id !== input.projectId) {
-    throw new Error(`"${input.hostname}" is already routed to another project.`);
-  }
-}
-
 function assertCloudflareHostnameBelongsToProject(
   customHostname: CloudflareCustomHostname,
   project: ProjectDirectoryRecord,
 ): void {
-  const projectId = stringValue(customHostname.custom_metadata?.projectId);
-  if (projectId === project.id) return;
+  if (cloudflareHostnameBelongsToProject(customHostname, project)) return;
   const hostname = customHostname.hostname ?? "custom hostname";
   throw new Error(`Cloudflare custom hostname "${hostname}" is already owned by another project.`);
+}
+
+function cloudflareHostnameBelongsToProject(
+  customHostname: CloudflareCustomHostname,
+  project: ProjectDirectoryRecord,
+): boolean {
+  return stringValue(customHostname.custom_metadata?.projectId) === project.id;
 }
 
 async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {

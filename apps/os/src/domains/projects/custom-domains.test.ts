@@ -410,8 +410,15 @@ describe("custom domain provisioning", () => {
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
   });
 
-  it("refuses to remove a Cloudflare hostname owned by another project", async () => {
+  it("leaves a Cloudflare hostname and routing owned by another project when removing", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
+    const otherProject: ProjectDirectoryRecord = {
+      id: "prj_other",
+      name: "Other",
+      organizationId: "org_1",
+      slug: "other",
+    };
+    await primeProjectHostname(directory, "garple.com", otherProject);
     let deleteCount = 0;
     const provisioner = createCloudflareCustomDomainProvisioner({
       config: parseConfig({
@@ -471,9 +478,12 @@ describe("custom domain provisioning", () => {
     });
 
     await expect(
-      provisioner.remove({ cloudflareHostnameId: null, hostname: "garple.com", project }),
-    ).rejects.toThrow(/owned by another project/);
+      provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
+    ).resolves.toBeUndefined();
     expect(deleteCount).toBe(0);
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      otherProject,
+    );
   });
 
   it("treats stale Cloudflare delete ids as already removed and clears same-project routing", async () => {
