@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  assertAttachmentsWithinLimits,
+  assertEmailMessageWithinLimits,
   buildProjectEmailMessage,
   decodeBase64Attachment,
   dmarcPasses,
@@ -14,7 +14,7 @@ import {
   parseMessageIdList,
   replySubject,
   senderMatchesAllowlist,
-  EMAIL_MAX_ATTACHMENT_TOTAL_BYTES,
+  EMAIL_MAX_MESSAGE_BYTES,
   type OutboundEmailAttachment,
 } from "./utils.ts";
 
@@ -165,24 +165,43 @@ describe("email attachments", () => {
 
   it("enforces the 32-file cap", () => {
     expect(() =>
-      assertAttachmentsWithinLimits(Array.from({ length: 33 }, () => attachment(1))),
+      assertEmailMessageWithinLimits({
+        attachments: Array.from({ length: 33 }, () => attachment(1)),
+        bodyBytes: 0,
+      }),
     ).toThrow(/32 files/);
     expect(() =>
-      assertAttachmentsWithinLimits(Array.from({ length: 32 }, () => attachment(1))),
+      assertEmailMessageWithinLimits({
+        attachments: Array.from({ length: 32 }, () => attachment(1)),
+        bodyBytes: 0,
+      }),
     ).not.toThrow();
   });
 
-  it("enforces the total byte cap, base64-aware", () => {
+  it("enforces the total message cap at wire (base64) size, bodies included", () => {
     expect(() =>
-      assertAttachmentsWithinLimits([attachment(EMAIL_MAX_ATTACHMENT_TOTAL_BYTES + 1)]),
+      assertEmailMessageWithinLimits({
+        attachments: [attachment(EMAIL_MAX_MESSAGE_BYTES)],
+        bodyBytes: 0,
+      }),
     ).toThrow(/5 MiB/);
-    // Base64 content is measured by its DECODED size: 8 MiB of base64 text
-    // decodes to 6 MiB of bytes — over the cap even though chars ≠ bytes.
+    // Base64 string content counts at its encoded length verbatim.
     const oversizedBase64: OutboundEmailAttachment = {
       ...attachment(0),
-      content: "A".repeat(8 * 1024 * 1024),
+      content: "A".repeat(EMAIL_MAX_MESSAGE_BYTES + 1),
     };
-    expect(() => assertAttachmentsWithinLimits([oversizedBase64])).toThrow(/5 MiB/);
+    expect(() =>
+      assertEmailMessageWithinLimits({ attachments: [oversizedBase64], bodyBytes: 0 }),
+    ).toThrow(/5 MiB/);
+    // Bodies count toward the same cap: an attachment that fits alone fails
+    // once the body pushes the total over.
+    const nearCap = attachment(Math.floor((EMAIL_MAX_MESSAGE_BYTES * 3) / 4) - 1024);
+    expect(() =>
+      assertEmailMessageWithinLimits({ attachments: [nearCap], bodyBytes: 0 }),
+    ).not.toThrow();
+    expect(() =>
+      assertEmailMessageWithinLimits({ attachments: [nearCap], bodyBytes: 100_000 }),
+    ).toThrow(/5 MiB/);
   });
 
   it("decodeBase64Attachment round-trips bytes and tolerates whitespace", () => {

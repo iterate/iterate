@@ -40,7 +40,10 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   const config = parseConfig(itxEnv);
 
   const recipient = parseInboundRecipient(message.to);
-  if (recipient === null || !config.projectHostnameBases.includes(recipient.domain)) {
+  // Only the FIRST hostname base — the same one every outbound From/Reply-To
+  // is built from (EmailRpcTarget senderIdentity) — accepts inbound mail, so
+  // a thread's reply address always lives on the domain the mail arrived on.
+  if (recipient === null || recipient.domain !== config.projectHostnameBases[0]) {
     message.setReject("No such address.");
     return;
   }

@@ -22,10 +22,10 @@ export const EMAIL_MAX_RAW_SIZE_BYTES = 15 * 1024 * 1024;
 export const EMAIL_BODY_TRUNCATE_CHARS = 100_000;
 
 /** Cloudflare Email Service outbound limits: at most 32 attachments and a
- * 5 MiB total message size (bodies + attachments).
+ * 5 MiB total message size (bodies + base64-encoded attachments).
  * https://developers.cloudflare.com/email-service/platform/limits/ */
 const EMAIL_MAX_ATTACHMENTS = 32;
-export const EMAIL_MAX_ATTACHMENT_TOTAL_BYTES = 5 * 1024 * 1024;
+export const EMAIL_MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 
 /**
  * The structured `send()` surface of a Cloudflare Email Service `send_email`
@@ -186,33 +186,37 @@ export function replySubject(subject: string | undefined): string {
 }
 
 /**
- * Enforces the Email Service attachment limits (count + total bytes) so a
- * too-big send fails here with a clear error instead of an opaque binding
- * rejection after the audit trail already moved.
+ * Enforces the Email Service message limits (attachment count + total message
+ * bytes) so a too-big send fails here with a clear error instead of an opaque
+ * binding rejection after the audit trail already moved. The byte total is
+ * what goes on the wire: bodies plus attachments at their base64-encoded MIME
+ * size (raw bytes inflate 4/3 in transit).
  */
-export function assertAttachmentsWithinLimits(attachments: OutboundEmailAttachment[]): void {
+export function assertEmailMessageWithinLimits(input: {
+  attachments: OutboundEmailAttachment[];
+  bodyBytes: number;
+}): void {
+  const { attachments, bodyBytes } = input;
   if (attachments.length > EMAIL_MAX_ATTACHMENTS) {
     throw new Error(
       `email attachments are limited to ${EMAIL_MAX_ATTACHMENTS} files; got ${attachments.length}.`,
     );
   }
-  const totalBytes = attachments.reduce(
-    (sum, attachment) => sum + attachmentContentBytes(attachment.content),
-    0,
-  );
-  if (totalBytes > EMAIL_MAX_ATTACHMENT_TOTAL_BYTES) {
+  const totalBytes =
+    bodyBytes +
+    attachments.reduce((sum, attachment) => sum + encodedAttachmentBytes(attachment.content), 0);
+  if (totalBytes > EMAIL_MAX_MESSAGE_BYTES) {
     throw new Error(
-      `email attachments are limited to ${EMAIL_MAX_ATTACHMENT_TOTAL_BYTES} bytes total (Email Service 5 MiB message cap); got ${totalBytes}.`,
+      `email messages are limited to ${EMAIL_MAX_MESSAGE_BYTES} bytes total including base64-encoded attachments (Email Service 5 MiB cap); got ${totalBytes}.`,
     );
   }
 }
 
-/** Decoded size of one attachment's content, base64-aware for string content. */
-function attachmentContentBytes(content: OutboundEmailAttachment["content"]): number {
-  if (typeof content !== "string") return content.byteLength;
-  // Base64 decodes to 3/4 of its length, minus padding.
-  const padding = content.endsWith("==") ? 2 : content.endsWith("=") ? 1 : 0;
-  return Math.floor((content.length * 3) / 4) - padding;
+/** Wire (base64-encoded MIME) size of one attachment's content. String
+ * content is already base64; raw bytes inflate 4/3 when encoded. */
+function encodedAttachmentBytes(content: OutboundEmailAttachment["content"]): number {
+  if (typeof content === "string") return content.length;
+  return Math.ceil(content.byteLength / 3) * 4;
 }
 
 /** Decode one inline base64 attachment payload into bytes. */
@@ -283,7 +287,12 @@ export function buildProjectEmailMessage(input: {
     );
   }
   const attachments = request.attachments ?? [];
-  assertAttachmentsWithinLimits(attachments);
+  assertEmailMessageWithinLimits({
+    attachments,
+    // Char length ≈ bytes for these bodies (100KB truncation cap upstream vs
+    // a 5 MiB limit — multi-byte slack is noise at this scale).
+    bodyBytes: request.subject.length + (request.text?.length ?? 0) + (request.html?.length ?? 0),
+  });
   const references = (request.references ?? []).map(angleBracketed).join(" ");
   const headers: Record<string, string> = {
     ...(request.inReplyTo ? { "In-Reply-To": angleBracketed(request.inReplyTo) } : {}),
