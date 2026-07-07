@@ -324,9 +324,27 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
       return state;
+    case "events.iterate.com/capability-host/script-execution-requested":
+      return {
+        ...state,
+        inProgressScriptExecutions: [
+          ...state.inProgressScriptExecutions.filter(
+            (script) => script.executionId !== event.payload.executionId,
+          ),
+          {
+            code: event.payload.code,
+            executionId: event.payload.executionId,
+            requestedOffset: event.offset,
+            startedAt: event.createdAt,
+          },
+        ],
+      };
     case "events.iterate.com/capability-host/script-execution-completed":
       return {
         ...state,
+        inProgressScriptExecutions: state.inProgressScriptExecutions.filter(
+          (script) => script.executionId !== event.payload.executionId,
+        ),
         scriptExecutionsCompleted: [...state.scriptExecutionsCompleted, event.payload.executionId],
       };
     default:

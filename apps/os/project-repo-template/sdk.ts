@@ -590,6 +590,12 @@ export type AgentProcessorState = {
   llmConfig: { model: string };
   llmProvider: "cloudflare-ai" | "openai-ws";
   pendingTriggerOffset: number | null;
+  inProgressScriptExecutions: Array<{
+    code: string;
+    executionId: string;
+    requestedOffset: number;
+    startedAt: string;
+  }>;
   scriptExecutionsCompleted: string[];
   systemPrompt: string;
 };

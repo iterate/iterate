@@ -166,6 +166,16 @@ export const AgentProcessorContract = defineProcessorContract({
      * collapses into one scheduled event at the stream's append dedup layer.
      */
     requestGeneration: z.number().int().nonnegative().default(0),
+    inProgressScriptExecutions: z
+      .array(
+        z.object({
+          code: z.string(),
+          executionId: z.string(),
+          requestedOffset: z.number().int().positive(),
+          startedAt: z.string(),
+        }),
+      )
+      .default([]),
     scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
   events: {
