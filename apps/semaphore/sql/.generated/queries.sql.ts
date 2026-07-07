@@ -7,15 +7,31 @@ ORDER BY type ASC, created_at ASC, slug ASC;
 `.trim();
 const selectResourcesQuery = { name: "selectResources", sql: selectResourcesSql, args: [] };
 
+function selectResourcesMapResult(row: selectResources.RawResult): selectResources.Result {
+  return {
+    type: row.type,
+    slug: row.slug,
+    data: row.data,
+    leaseState: row.lease_state,
+    leasedUntil: row.leased_until,
+    holder: row.holder,
+    lastAcquiredAt: row.last_acquired_at,
+    lastReleasedAt: row.last_released_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export const selectResources = Object.assign(
   async function selectResources(client: Client): Promise<selectResources.Result[]> {
-    return client.all<selectResources.Result>(selectResourcesQuery);
+    const rows = await client.all<selectResources.RawResult>(selectResourcesQuery);
+    return rows.map(selectResourcesMapResult);
   },
-  { sql: selectResourcesSql, query: selectResourcesQuery },
+  { sql: selectResourcesSql, query: selectResourcesQuery, mapResult: selectResourcesMapResult },
 );
 
 export namespace selectResources {
-  export type Result = {
+  export type RawResult = {
     type: string;
     slug: string;
     data: string;
@@ -26,6 +42,18 @@ export namespace selectResources {
     last_released_at?: number;
     created_at: string;
     updated_at: string;
+  };
+  export type Result = {
+    type: string;
+    slug: string;
+    data: string;
+    leaseState: string;
+    leasedUntil?: number;
+    holder?: string;
+    lastAcquiredAt?: number;
+    lastReleasedAt?: number;
+    createdAt: string;
+    updatedAt: string;
   };
 }
 
@@ -41,21 +69,45 @@ const selectResourcesByTypeQuery = (params: selectResourcesByType.Params) => ({
   args: [params.type],
 });
 
+function selectResourcesByTypeMapResult(
+  row: selectResourcesByType.RawResult,
+): selectResourcesByType.Result {
+  return {
+    type: row.type,
+    slug: row.slug,
+    data: row.data,
+    leaseState: row.lease_state,
+    leasedUntil: row.leased_until,
+    holder: row.holder,
+    lastAcquiredAt: row.last_acquired_at,
+    lastReleasedAt: row.last_released_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export const selectResourcesByType = Object.assign(
   async function selectResourcesByType(
     client: Client,
     params: selectResourcesByType.Params,
   ): Promise<selectResourcesByType.Result[]> {
-    return client.all<selectResourcesByType.Result>(selectResourcesByTypeQuery(params));
+    const rows = await client.all<selectResourcesByType.RawResult>(
+      selectResourcesByTypeQuery(params),
+    );
+    return rows.map(selectResourcesByTypeMapResult);
   },
-  { sql: selectResourcesByTypeSql, query: selectResourcesByTypeQuery },
+  {
+    sql: selectResourcesByTypeSql,
+    query: selectResourcesByTypeQuery,
+    mapResult: selectResourcesByTypeMapResult,
+  },
 );
 
 export namespace selectResourcesByType {
   export type Params = {
     type: string;
   };
-  export type Result = {
+  export type RawResult = {
     type: string;
     slug: string;
     data: string;
@@ -66,6 +118,18 @@ export namespace selectResourcesByType {
     last_released_at?: number;
     created_at: string;
     updated_at: string;
+  };
+  export type Result = {
+    type: string;
+    slug: string;
+    data: string;
+    leaseState: string;
+    leasedUntil?: number;
+    holder?: string;
+    lastAcquiredAt?: number;
+    lastReleasedAt?: number;
+    createdAt: string;
+    updatedAt: string;
   };
 }
 
@@ -105,17 +169,38 @@ const selectResourceByTypeAndSlugQuery = (params: selectResourceByTypeAndSlug.Pa
   args: [params.type, params.slug],
 });
 
+function selectResourceByTypeAndSlugMapResult(
+  row: selectResourceByTypeAndSlug.RawResult,
+): selectResourceByTypeAndSlug.Result {
+  return {
+    type: row.type,
+    slug: row.slug,
+    data: row.data,
+    leaseState: row.lease_state,
+    leasedUntil: row.leased_until,
+    holder: row.holder,
+    lastAcquiredAt: row.last_acquired_at,
+    lastReleasedAt: row.last_released_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export const selectResourceByTypeAndSlug = Object.assign(
   async function selectResourceByTypeAndSlug(
     client: Client,
     params: selectResourceByTypeAndSlug.Params,
   ): Promise<selectResourceByTypeAndSlug.Result | null> {
-    const rows = await client.all<selectResourceByTypeAndSlug.Result>(
+    const rows = await client.all<selectResourceByTypeAndSlug.RawResult>(
       selectResourceByTypeAndSlugQuery(params),
     );
-    return rows.length > 0 ? rows[0] : null;
+    return rows.length > 0 ? selectResourceByTypeAndSlugMapResult(rows[0]!) : null;
   },
-  { sql: selectResourceByTypeAndSlugSql, query: selectResourceByTypeAndSlugQuery },
+  {
+    sql: selectResourceByTypeAndSlugSql,
+    query: selectResourceByTypeAndSlugQuery,
+    mapResult: selectResourceByTypeAndSlugMapResult,
+  },
 );
 
 export namespace selectResourceByTypeAndSlug {
@@ -123,7 +208,7 @@ export namespace selectResourceByTypeAndSlug {
     type: string;
     slug: string;
   };
-  export type Result = {
+  export type RawResult = {
     type: string;
     slug: string;
     data: string;
@@ -134,6 +219,18 @@ export namespace selectResourceByTypeAndSlug {
     last_released_at?: number;
     created_at: string;
     updated_at: string;
+  };
+  export type Result = {
+    type: string;
+    slug: string;
+    data: string;
+    leaseState: string;
+    leasedUntil?: number;
+    holder?: string;
+    lastAcquiredAt?: number;
+    lastReleasedAt?: number;
+    createdAt: string;
+    updatedAt: string;
   };
 }
 
