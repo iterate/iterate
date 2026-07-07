@@ -682,12 +682,13 @@ function applyReaction(
 }
 
 /**
- * Wire the per-frame ECHO loop shared by all three gateways: once a connection
- * is identified (by IDENTIFY frame or a valid upgrade), every further frame runs
- * through `handleGatewayMessage`, which echoes it. The frame shape also does its
- * IDENTIFY here (the connection starts un-identified); the header/subprotocol
- * shapes pass an already-identified connection, so this only ever echoes for
- * them. Any per-frame failure closes with the auth-failed code, never throws.
+ * Wire the per-frame ECHO loop: once a connection is identified (by IDENTIFY
+ * frame or a valid upgrade), every further frame runs through
+ * `handleGatewayMessage`, which echoes it. The frame shape does its IDENTIFY
+ * here (the connection starts un-identified); the header/subprotocol shapes
+ * attach this only AFTER a successful upgrade auth, so it only ever echoes for
+ * them — a failed upgrade gets no loop at all (upgrade auth is those shapes'
+ * only auth). Any per-frame failure closes with the auth-failed code.
  */
 function attachGatewayEchoLoop(
   server: WebSocket,
@@ -737,7 +738,9 @@ async function gatewayHeaderUpgrade(request: Request, deps: PetshopDeps): Promis
   const token = bearerTokenFromHeader(request.headers.get("authorization"));
   const auth = await handleUpgradeAuth(token, gatewayDeps(deps));
   applyReaction(server, auth);
-  attachGatewayEchoLoop(server, { identified: auth.identified }, deps);
+  // Upgrade auth is this shape's ONLY auth: on failure the socket is closing,
+  // and attaching no loop keeps a racing IDENTIFY frame from authing instead.
+  if (auth.identified) attachGatewayEchoLoop(server, { identified: true }, deps);
   return new Response(null, { status: 101, webSocket: client });
 }
 
@@ -758,7 +761,9 @@ async function gatewaySubprotocolUpgrade(request: Request, deps: PetshopDeps): P
   server.send(helloFrame());
   const auth = await handleUpgradeAuth(token, gatewayDeps(deps));
   applyReaction(server, auth);
-  attachGatewayEchoLoop(server, { identified: auth.identified }, deps);
+  // Upgrade auth is this shape's ONLY auth: on failure the socket is closing,
+  // and attaching no loop keeps a racing IDENTIFY frame from authing instead.
+  if (auth.identified) attachGatewayEchoLoop(server, { identified: true }, deps);
   // The selected subprotocol must be echoed in the 101 handshake response (RFC
   // 6455 §4.2.2). It is a real protocol, never the credential carrier.
   return new Response(null, {
