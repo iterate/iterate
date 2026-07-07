@@ -388,8 +388,6 @@ export function foldEmailSenderDirectory(
   return claims;
 }
 
-type SenderVerification = { verified: true } | { verified: false; reason: string };
-
 /**
  * The zero-onboarding trust gate: Cloudflare's inbound MX computes
  * SPF/DKIM/DMARC before invoking the worker and records the verdicts in
@@ -410,7 +408,7 @@ type SenderVerification = { verified: true } | { verified: false; reason: string
 export function verifySenderAlignment(input: {
   authenticationResults: string[];
   fromDomain: string;
-}): SenderVerification {
+}): { verified: true } | { verified: false; reason: string } {
   if (input.authenticationResults.length === 0) {
     return { verified: false, reason: "no authentication-results header" };
   }
