@@ -1,5 +1,5 @@
-import { useMemo, useState, type ReactElement } from "react";
-import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
+import { Suspense, useMemo, useState, type ReactElement } from "react";
+import { ClientOnly, Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -65,6 +65,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
+import { ItxProvider, useItxState } from "~/itx/itx-react.tsx";
 import { primaryActiveCustomDomainHostname } from "~/lib/project-custom-domains.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
@@ -73,6 +74,7 @@ import {
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
 import type { ProjectListEntry } from "~/types.ts";
+import type { ProjectProcessorState } from "~/types.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -391,18 +393,20 @@ function AppSidebarNav({
 }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
-  const activeProjectSlug = getActiveProjectSlug(matches);
+  const activeRouteProject = getActiveRouteProject(matches);
+  const activeProjectSlug = activeRouteProject?.slug ?? getActiveProjectSlug(matches);
   const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
   // project that isn't in the cached list still shows its nav.
   if (activeProjectSlug) {
     return (
-      <ProjectSidebarGroup
+      <ProjectSidebarGroupWithLiveCustomDomain
+        projectId={activeRouteProject?.id ?? activeProject?.id}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
-        customHostname={primaryActiveCustomDomainHostname(activeProject?.customDomains)}
+        fallbackCustomHostname={primaryActiveCustomDomainHostname(activeProject?.customDomains)}
       />
     );
   }
@@ -465,6 +469,92 @@ function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
         : [],
     )
     .at(-1);
+}
+
+type ActiveRouteProject = Pick<ProjectListEntry, "id" | "slug">;
+
+function getActiveRouteProject(matches: ReturnType<typeof useMatches>): ActiveRouteProject | null {
+  return (
+    matches
+      .map((match) => (match.context as { project?: ActiveRouteProject } | undefined)?.project)
+      .filter((project): project is ActiveRouteProject =>
+        Boolean(project && typeof project.id === "string" && typeof project.slug === "string"),
+      )
+      .at(-1) ?? null
+  );
+}
+
+function ProjectSidebarGroupWithLiveCustomDomain({
+  appBaseUrl,
+  fallbackCustomHostname,
+  projectHostnameBases,
+  projectId,
+  projectSlug,
+}: {
+  appBaseUrl?: string;
+  fallbackCustomHostname?: string | null;
+  projectHostnameBases: readonly string[];
+  projectId?: string;
+  projectSlug: string;
+}) {
+  const fallback = (
+    <ProjectSidebarGroup
+      appBaseUrl={appBaseUrl}
+      customHostname={fallbackCustomHostname}
+      projectHostnameBases={projectHostnameBases}
+      projectSlug={projectSlug}
+    />
+  );
+
+  if (!projectId) return fallback;
+
+  return (
+    <ClientOnly fallback={fallback}>
+      <Suspense fallback={fallback}>
+        <ItxProvider projectId={projectId} prewarm={false}>
+          <LiveProjectSidebarGroup
+            appBaseUrl={appBaseUrl}
+            fallbackCustomHostname={fallbackCustomHostname}
+            projectHostnameBases={projectHostnameBases}
+            projectId={projectId}
+            projectSlug={projectSlug}
+          />
+        </ItxProvider>
+      </Suspense>
+    </ClientOnly>
+  );
+}
+
+function LiveProjectSidebarGroup({
+  appBaseUrl,
+  fallbackCustomHostname,
+  projectHostnameBases,
+  projectId,
+  projectSlug,
+}: {
+  appBaseUrl?: string;
+  fallbackCustomHostname?: string | null;
+  projectHostnameBases: readonly string[];
+  projectId: string;
+  projectSlug: string;
+}) {
+  const { state } = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [projectId],
+  );
+  const customHostname =
+    state === undefined
+      ? fallbackCustomHostname
+      : primaryActiveCustomDomainHostname(state.customDomains);
+
+  return (
+    <ProjectSidebarGroup
+      appBaseUrl={appBaseUrl}
+      customHostname={customHostname}
+      projectHostnameBases={projectHostnameBases}
+      projectSlug={projectSlug}
+    />
+  );
 }
 
 function ProjectSidebarGroup({
