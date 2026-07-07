@@ -31,7 +31,7 @@ lockfile churn". PRs should show a small table of net LOC change broken down by 
       table: group | files | added | removed | net. _Marker `<!-- iterate-loc-report -->`, upsert
       via Octokit issues API using `ITERATE_BOT_GITHUB_TOKEN`._
 - [x] Colors: render the table inside a ```diff code block — each group's row is prefixed
-    `+`/`-`/` ` by net sign, which GitHub renders green/red. _`renderTable` computes column
+`+`/`-`/` ` by net sign, which GitHub renders green/red. _`renderTable` computes column
       widths and prefixes rows by net sign.\_
 - [x] Script is runnable locally with no PR context (prints the table instead of commenting).
       _`pnpm tsx scripts/ci/loc-report.ts [base] [head]`, defaults `origin/main HEAD`._
