@@ -50,19 +50,19 @@ export const FILES_APP_SLUG = "iterate-files";
  * still works next week, short enough that leaked links eventually die. */
 const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-/** What a stored file looks like from the outside: address + wire facts. */
-type ProjectFileMetadata = {
-  contentType: string;
-  path: string;
-  size: number;
-};
-
 function fileObjectKey(input: { path: string; projectId: string }): string {
   return DurableObjectNameCodec.stringify({
     path: normalizePath(input.path),
     projectId: input.projectId,
   });
 }
+
+/** What a stored file looks like from the outside: address + wire facts. */
+type ProjectFileMetadata = {
+  contentType: string;
+  path: string;
+  size: number;
+};
 
 export async function putProjectFile(input: {
   contentType?: string;
