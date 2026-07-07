@@ -577,6 +577,7 @@ describe("agent-ui reducer", () => {
         payload: {
           body: {
             type: "event_callback",
+            authorizations: [{ is_bot: true, bot_id: "B0BOT", user_id: "U9BOT" }],
             event: {
               type: "message",
               subtype: "bot_message",
@@ -596,6 +597,37 @@ describe("agent-ui reducer", () => {
         kind: "assistant",
         text: "All 3 checks passed.",
         via: { service: "slack", sender: "iterate" },
+      },
+    ]);
+  });
+
+  it("renders a third-party bot's slack message as a user bubble, not the assistant", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            authorizations: [{ is_bot: true, bot_id: "B0BOT", user_id: "U9BOT" }],
+            event: {
+              type: "message",
+              subtype: "bot_message",
+              channel: "C08R1SMTZGD",
+              bot_id: "B0OTHER",
+              bot_profile: { name: "github", user_id: "UGITHUB" },
+              ts: "1783437300.000100",
+              text: "Deploy finished.",
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: "Deploy finished.",
+        via: { service: "slack", sender: "github" },
       },
     ]);
   });

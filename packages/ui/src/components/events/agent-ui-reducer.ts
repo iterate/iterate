@@ -429,7 +429,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const message = readSlackWebhookMessage(event);
       if (message == null) return state;
       const item: AgentUiMessageItem = {
-        kind: message.fromBot ? "assistant" : "user",
+        kind: message.kind,
         id: `slack-${event.offset}`,
         text: message.text,
         timestampMs,
@@ -438,10 +438,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           ...(message.sender == null ? {} : { sender: message.sender }),
         },
       };
-      // Bot echoes land mid-turn (the bot posts from inside a code step), so
-      // they emit directly like web-message-sent; human messages queue while
-      // steps are running, like web user messages.
-      return message.fromBot ? emitItem(state, ops, item) : emitUserMessageItem(state, ops, item);
+      // Our bot's echoes land mid-turn (it posts from inside a code step), so
+      // they emit directly like web-message-sent; humans and third-party bots
+      // queue while steps are running, like web user messages.
+      return message.kind === "assistant"
+        ? emitItem(state, ops, item)
+        : emitUserMessageItem(state, ops, item);
     }
 
     case STREAM_SUBSCRIBER_CONNECTED: {
@@ -689,7 +691,7 @@ function readStringArray(value: unknown): string[] {
 // (reactions, channel joins) and edit/delete subtypes return null.
 function readSlackWebhookMessage(
   event: Event,
-): { text: string; fromBot: boolean; sender?: string } | null {
+): { text: string; kind: "user" | "assistant"; sender?: string } | null {
   const body = readRecord(event, "body");
   if (body?.type !== "event_callback") return null;
   const slackEvent = isRecord(body.event) ? body.event : null;
@@ -705,11 +707,48 @@ function readSlackWebhookMessage(
   const username = typeof slackEvent.username === "string" ? slackEvent.username : "";
   const userId = typeof slackEvent.user === "string" ? slackEvent.user : "";
   const sender = fromBot ? botName || username : userId;
+  // Only OUR bot's messages are the assistant speaking; a third-party bot is
+  // just another participant and renders as a user bubble (its name stays on
+  // the via label). Identity comes from the webhook's `authorizations`
+  // envelope, mirroring the slack-agent processor's isOwnBotMessage — and
+  // like it, an incomparable identity is assumed to be our own.
+  const kind = !fromBot ? "user" : isOwnSlackBotMessage(body, slackEvent) ? "assistant" : "user";
   return {
     text: slackMrkdwnToMarkdown(text),
-    fromBot,
+    kind,
     ...(sender === "" ? {} : { sender }),
   };
+}
+
+function isOwnSlackBotMessage(
+  body: Record<string, unknown>,
+  slackEvent: Record<string, unknown>,
+): boolean {
+  const authorizations = Array.isArray(body.authorizations) ? body.authorizations : [];
+  const botAuth = authorizations
+    .filter(isRecord)
+    .find((authorization) => authorization.is_bot === true);
+  const authBotId = typeof botAuth?.bot_id === "string" ? botAuth.bot_id : null;
+  const authUserId = typeof botAuth?.user_id === "string" ? botAuth.user_id : null;
+  const botProfile = isRecord(slackEvent.bot_profile) ? slackEvent.bot_profile : null;
+  const messageBotId = typeof slackEvent.bot_id === "string" ? slackEvent.bot_id : null;
+  const messageUserId =
+    typeof slackEvent.user === "string"
+      ? slackEvent.user
+      : typeof botProfile?.user_id === "string"
+        ? botProfile.user_id
+        : null;
+
+  let compared = false;
+  if (authBotId != null && messageBotId != null) {
+    compared = true;
+    if (messageBotId === authBotId) return true;
+  }
+  if (authUserId != null && messageUserId != null) {
+    compared = true;
+    if (messageUserId === authUserId) return true;
+  }
+  return !compared;
 }
 
 /**
