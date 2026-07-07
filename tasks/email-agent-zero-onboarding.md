@@ -1,7 +1,8 @@
 ---
-status: ready
+status: implemented, awaiting review
 size: large
 branch: email-agent-zero-onboarding
+pr: https://github.com/iterate/iterate/pull/1707
 tags: [os, auth, agents, email, cloudflare, integrations, onboarding]
 relatedTasks: [os-agent-email-cloudflare-workers.md]
 ---
@@ -10,13 +11,17 @@ relatedTasks: [os-agent-email-cloudflare-workers.md]
 
 ## Status summary
 
-Spec complete (grill session 2026-07-07, transcript in
-`tasks/email-agent-zero-onboarding.interview.md`). Implementation not started.
-Main pieces: inbound email ingress (`email()` handler + admin-gated inject
-route over one shared `handleInboundEmail`), sender-verification gate,
-auto-provisioning of user/org/project via existing auth internal calls, email
-sender directory + thread router modeled on Slack, agent kickoff, threaded
-reply via an extended `itx.email.send`, preview-N e2e.
+Implementation complete, both slices, e2e-verified against a live local dev
+environment (see Implementation log). Spec came from a grill session
+(transcript in `tasks/email-agent-zero-onboarding.interview.md`). Shipped
+pieces: inbound email ingress (`email()` handler + admin-gated inject route
+over one shared `handleInboundEmail`), DMARC/DKIM sender-verification gate,
+auto-provisioning of user/org/project, email sender directory + thread router
+modeled on Slack, agent kickoff with an email system prompt, threaded reply
+via an extended `itx.email.send`, and an e2e suite runnable against dev or
+preview-N. Remaining: review, plus the deliberately-deferred follow-ups (real
+MX + prd enablement + rate limiting; full `<slug>@` inbox semantics in the
+sibling task).
 
 ## Raw ask (verbatim from Misha)
 
