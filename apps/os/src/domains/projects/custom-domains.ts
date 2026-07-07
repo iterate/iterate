@@ -1,6 +1,7 @@
 import type { AppConfig } from "../../config.ts";
 import {
   deleteProjectHostname,
+  listProjectHostnameRegistrationsUnder,
   primeProjectHostname,
   readProjectByHostname,
   readProjectHostnameRegistration,
@@ -188,7 +189,6 @@ async function assertHostnameAvailable(input: {
   if (exact && exact.id !== input.projectId) {
     throw new Error(`"${input.hostname}" is already routed to another project.`);
   }
-  if (exact) return;
 
   const covered = await readProjectByHostname(input.directory, input.hostname);
   if (covered && covered.record.id !== input.projectId) {
@@ -196,6 +196,15 @@ async function assertHostnameAvailable(input: {
       `"${input.hostname}" is already covered by ${
         covered.appSlug === null ? "a custom domain" : "a custom-domain app route"
       }.`,
+    );
+  }
+
+  const child = (await listProjectHostnameRegistrationsUnder(input.directory, input.hostname)).find(
+    (registration) => registration.record.id !== input.projectId,
+  );
+  if (child) {
+    throw new Error(
+      `"${input.hostname}" overlaps existing custom domain "${child.hostname}" routed to another project.`,
     );
   }
 }

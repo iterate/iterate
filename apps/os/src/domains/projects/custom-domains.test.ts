@@ -28,6 +28,18 @@ class MemoryKv {
   async delete(key: string): Promise<void> {
     this.values.delete(key);
   }
+
+  async list(options: { cursor?: string; prefix?: string } = {}) {
+    const prefix = options.prefix ?? "";
+    return {
+      cursor: "",
+      keys: [...this.values.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .sort()
+        .map((name) => ({ name })),
+      list_complete: true,
+    };
+  }
 }
 
 const project: ProjectDirectoryRecord = {
@@ -283,6 +295,41 @@ describe("custom domain provisioning", () => {
       appSlug: null,
       record: project,
     });
+  });
+
+  it("rejects apex domains that would cover another project's explicit subdomain", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const otherProject: ProjectDirectoryRecord = {
+      id: "prj_other",
+      name: "Other",
+      organizationId: "org_1",
+      slug: "other",
+    };
+    await primeProjectHostname(directory, "www.garple.com", otherProject);
+    let fetchCalls = 0;
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async () => {
+        fetchCalls += 1;
+        throw new Error("Cloudflare should not be called for unavailable hostnames.");
+      }) as typeof fetch,
+    });
+
+    await expect(provisioner.ensure({ hostname: "garple.com", project })).rejects.toThrow(
+      /overlaps existing custom domain "www\.garple\.com"/,
+    );
+    expect(fetchCalls).toBe(0);
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
   });
 
   it("registers active custom subdomains when no parent domain route exists", async () => {

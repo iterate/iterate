@@ -136,6 +136,37 @@ export async function readProjectHostnameRegistration(
     .catch(() => null);
 }
 
+export async function listProjectHostnameRegistrationsUnder(
+  directory: KVNamespace,
+  hostname: string,
+  { limit = 1000 }: { limit?: number } = {},
+): Promise<Array<{ hostname: string; record: ProjectDirectoryRecord }>> {
+  const records: Array<{ hostname: string; record: ProjectDirectoryRecord }> = [];
+  const suffix = `.${hostname}`;
+  let cursor: string | undefined;
+  while (records.length < limit) {
+    const page = await directory.list({ prefix: "hostname:", cursor });
+    const childHostnames = page.keys
+      .map((key) => key.name.slice("hostname:".length))
+      .filter((candidate) => candidate.endsWith(suffix))
+      .slice(0, limit - records.length);
+    const values = await Promise.all(
+      childHostnames.map((childHostname) =>
+        directory
+          .get<ProjectDirectoryRecord>(hostnameKey(childHostname), "json")
+          .then((record) => (record ? { hostname: childHostname, record } : null))
+          .catch(() => null),
+      ),
+    );
+    for (const value of values) {
+      if (value) records.push(value);
+    }
+    if (page.list_complete) break;
+    cursor = page.cursor;
+  }
+  return records;
+}
+
 /**
  * Custom-domain routing projection. The parent-domain key is enough for ingress:
  * `garple.com` resolves exact, and `counter.garple.com` falls back to it with
