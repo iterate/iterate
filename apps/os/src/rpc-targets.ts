@@ -962,6 +962,30 @@ class CloudflareIntegrationsRpcTarget extends RpcTarget implements CloudflareInt
 }
 
 /**
+ * The `__describe()` answer for one built-in connection node
+ * (`itx.integrations.<slug>["<connection>"]`). The SDK proxies replay dotted
+ * paths onto a real vendor SDK, so there is no member map to reflect — the
+ * description states what the node IS, one working example, and the calling
+ * grammar: exactly what a scripting agent needs to shape its next call.
+ */
+function describeConnectionSdk(input: {
+  connection: string;
+  example: string;
+  grammar: string;
+  sdk: string;
+  slug: string;
+}) {
+  return describeNode({
+    instructions: [
+      `itx.integrations.${input.slug}[${JSON.stringify(input.connection)}] is ${input.sdk}.`,
+      `Example: ${input.example}`,
+      input.grammar,
+    ].join("\n"),
+    parent: `the integrations collection (itx.integrations.${input.slug})`,
+  });
+}
+
+/**
  * The `itx.integrations` collection. Built-in integrations (code shipped with
  * the deployment) are dispatch branches on the dotted path-call fallback —
  * plain imperative branches, not classes, because their only callers are
@@ -1012,6 +1036,18 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       if (!connection || method.length === 0) {
         throw new Error(SLACK_CALL_GRAMMAR);
       }
+      // Every node answers __describe() — the SDK proxies must not break that
+      // promise by replaying it as a Web API path (a live agent stalled on
+      // exactly this: the miss error taught it nothing).
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.slack[${JSON.stringify(connection)}].chat.postMessage({ channel, text })`,
+          grammar: SLACK_CALL_GRAMMAR,
+          sdk: "a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object argument",
+          slug: "slack",
+        });
+      }
       // The connection's wrapped Slack WebClient: replay the caller's dotted Web
       // API path onto it (chat.postMessage, conversations.list, …) — the real
       // SDK, its transport riding the connection secret's substituting egress
@@ -1025,6 +1061,16 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     }
 
     if (slug === "google") {
+      if (connection && method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.google[${JSON.stringify(connection)}].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`,
+          grammar:
+            "itx.integrations.google expected `<connection>.gmail.request({...})`; paths are relative to https://gmail.googleapis.com/gmail/v1.",
+          sdk: "the Gmail REST API behind gmail.request({ path, query, method, headers, body })",
+          slug: "google",
+        });
+      }
       // gmail.request is two segments; fewer after the connection means the
       // caller skipped the connection (the pre-connections itx.gmail shape).
       if (!connection || method.length < 2) {
@@ -1058,6 +1104,15 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     if (slug === "github") {
       if (!connection || method.length === 0) {
         throw new Error(GITHUB_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.github[${JSON.stringify(connection)}].rest.repos.listForAuthenticatedUser({ per_page: 5, sort: "updated" })`,
+          grammar: GITHUB_CALL_GRAMMAR,
+          sdk: 'a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request("GET /repos/{owner}/{repo}", params) escape hatch, graphql(query, variables), and paginate(route, params). There is NO generic api.request({ method, path }) shape',
+          slug: "github",
+        });
       }
       // The connection's wrapped Octokit: replay the caller's dotted path onto
       // it (rest.*, request(...), graphql(...)) — a real Octokit whose transport
@@ -1163,8 +1218,14 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
+        github:
+          'Per-connection wrapped Octokit: github["<connection>"].rest.repos.listForAuthenticatedUser(), .request("GET /..."), .graphql(...).',
+        google:
+          'Per-connection Gmail: google["<connection>"].gmail.request({ path: "/users/me/messages", query }).',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
         parallel: "Parallel API RPC target using Iterate's platform API key.",
+        slack:
+          'Per-connection wrapped Slack WebClient: slack["<connection>"].chat.postMessage({ channel, text }) — any Web API method, one body object.',
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
       },
       parent: "a project itx (itx.integrations)",

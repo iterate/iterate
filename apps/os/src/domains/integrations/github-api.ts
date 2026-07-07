@@ -12,6 +12,7 @@
 
 import { Octokit } from "@octokit/rest";
 import { itxEnv } from "../../env.ts";
+import { isPathMissMessage } from "../../itx/path-proxy.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { githubAccessTokenPlaceholder, githubConnectionSecretPath } from "./utils.ts";
 
@@ -74,7 +75,9 @@ export function normalizeGithubError(error: unknown, connection: string): Error 
       `GitHub connection "${connection}" has no usable installation token (${pipeline}). Use itx.integrations.list() to see connections.`,
     );
   }
-  if (typeof e.message === "string" && e.message.includes("did not resolve to a function")) {
+  if (typeof e.message === "string" && isPathMissMessage(e.message)) {
+    // Covers mid-path misses too (an invented `.api.request(...)` dies on
+    // `api` being undefined, not on the leaf) — every miss gets the grammar.
     return new Error(GITHUB_CALL_GRAMMAR);
   }
   return new Error(`GitHub API failed with HTTP ${e.status ?? "?"}: ${e.message ?? String(error)}`);

@@ -786,10 +786,108 @@ return {
 `.trim(),
   },
   {
+    id: "github-list-repos",
+    title: "List repositories through the built-in GitHub integration",
+    description:
+      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const repos = await itx.integrations.github[github.connection].rest.repos.listForAuthenticatedUser({
+  per_page: Number(vars.count ?? 5),
+  sort: "updated",
+});
+
+return repos.data.map((repo) => ({ fullName: repo.full_name, updatedAt: repo.updated_at }));
+`.trim(),
+  },
+  {
+    id: "github-read-file",
+    title: "Read a file from a repo through the built-in GitHub integration",
+    description:
+      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const owner = vars.owner ?? "octocat";
+const repo = vars.repo ?? "hello-world";
+// README shortcut; use "GET /repos/{owner}/{repo}/contents/{path}" with a path param for any file.
+const readme = await itx.integrations.github[github.connection].request(
+  "GET /repos/{owner}/{repo}/readme",
+  { owner, repo, headers: { accept: "application/vnd.github.raw+json" } },
+);
+
+return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo };
+`.trim(),
+  },
+  {
+    id: "gmail-search-inbox",
+    title: "Search the inbox through the built-in Gmail integration",
+    description:
+      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const google = connections.find((entry) => entry.integration === "google");
+if (!google) return { error: "No Google connection — connect one from the dashboard integrations page." };
+
+const gmail = itx.integrations.google[google.connection].gmail;
+const inbox = await gmail.request({
+  path: "/users/me/messages",
+  query: { maxResults: 5, q: vars.q ?? "in:inbox is:unread" },
+});
+
+const messages = await Promise.all(
+  (inbox.data.messages ?? []).map((message) =>
+    gmail.request({
+      path: "/users/me/messages/" + message.id,
+      query: { format: "metadata", metadataHeaders: "Subject" },
+    }),
+  ),
+);
+
+return {
+  resultSizeEstimate: inbox.data.resultSizeEstimate,
+  subjects: messages.map((m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value),
+};
+`.trim(),
+  },
+  {
+    id: "slack-post-message",
+    title: "Post a message through the built-in Slack integration",
+    description:
+      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const slack = connections.find((entry) => entry.integration === "slack");
+if (!slack) return { error: "No Slack connection — connect one from the dashboard integrations page." };
+
+const client = itx.integrations.slack[slack.connection];
+// Find a channel to talk in; vars.channel (an id like C0123...) skips the lookup.
+const channels = await client.conversations.list({ exclude_archived: true, limit: 20, types: "public_channel" });
+const channel = vars.channel ?? channels.channels?.[0]?.id;
+if (!channel) return { error: "No channel found", channels };
+
+const posted = await client.chat.postMessage({ channel, text: vars.text ?? "Hello from itx!" });
+return { channel, ok: posted.ok, ts: posted.ts };
+`.trim(),
+  },
+  {
     id: "github-mcp-connect",
     title: "GitHub's MCP server as a provided integration",
     description:
-      "The provided-integration lane, using GitHub's official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, api.request, sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.",
+      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.',
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
