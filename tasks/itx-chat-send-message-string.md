@@ -8,12 +8,13 @@ branch: itx-chat-send-message-string
 
 ## Status summary
 
-Implementation essentially complete: runtime accepts both forms, all prompts,
-docs, examples, and tests use the plain-string form, generated files
-regenerated, and the e2e project-tool test now covers both call forms.
-Remaining: e2e lane needs a live env run (covered by CI). This is PR 1 of 2 —
-a follow-up PR (`chat-snippet-stream-preview`) will build a streaming preview
-UI on top of the string form.
+Implementation complete: runtime accepts both forms (options ride in a second
+argument), all prompts, docs, examples, and tests use the plain-string form,
+generated files regenerated, and the e2e project-tool test covers both call
+forms — verified against a local dev server. Remaining: full e2e lane in CI,
+and human review. This is PR 1 of 2 — a follow-up PR
+(`chat-snippet-stream-preview`) will build a streaming preview UI on top of
+the string form.
 
 ## Ask (verbatim-ish)
 
@@ -70,7 +71,7 @@ position is much easier to pre-parse than an object literal.
 - [x] `apps/os/project-repo-template/sdk.ts` chat interface types the string form
       (union with the legacy object form)
       _mirrors types.ts: `sendMessage(message: string | { message; files? },
-    options?: AgentChatSendOptions)`; also gained the previously-missing
+  options?: AgentChatSendOptions)`; also gained the previously-missing
       files surface_
 - [x] Regenerate: ~~`itx-api.generated.ts`~~, `types-source.generated.ts`,
       `project-repo-template.generated.ts` (freshness tests enforce these)
@@ -90,7 +91,10 @@ position is much easier to pre-parse than an object literal.
       `sendMessage({ text })` which was already wrong — fix to string form)
       _both doc comments now `itx.chat.sendMessage(text)`_
 - [x] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green
-      _all green locally; e2e lane (needs a live env) left to CI_
+      _all green locally; additionally ran the three touched e2e tests
+      (both-forms, replay, dynamic-worker) against a local dev server via
+      `doppler run --config dev -- pnpm e2e run vitest/itx.e2e.test.ts -t ...`
+      — all pass; the full e2e lane is left to CI_
 
 ## Implementation log
 
