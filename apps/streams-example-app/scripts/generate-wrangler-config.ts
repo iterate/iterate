@@ -7,8 +7,9 @@
  * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
  * The top-level config is local dev; each deployed environment gets an env
- * block expanded from its streamsExampleEnvs entry. The app is workers.dev
- * only: no routes, no DNS, no resources. Its one binding is the
+ * block expanded from its streamsExampleEnvs entry. Each env serves on its
+ * custom domain (routes from the envs.ts baseUrl; deploy.ts ensures the DNS
+ * record); workers.dev is off (see envs.ts for why). Its one binding is the
  * same-script STREAM Durable Object — the app re-exports apps/os's
  * StreamDurableObject from its own worker entry (src/worker.ts) via the `~`
  * alias, so the class lives in this script.
@@ -58,8 +59,13 @@ function envBlock(env: StreamsExampleEnv) {
   return {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
-    // The env's only public URL is its workers.dev origin (envs.ts baseUrl).
-    workers_dev: true,
+    routes: [
+      {
+        pattern: `${new URL(env.baseUrl).hostname}/*`,
+        zone_name: new URL(env.baseUrl).hostname.split(".").slice(1).join("."),
+      },
+    ],
+    workers_dev: false,
     ...workerBindings(),
     secrets: { required: REQUIRED_SECRETS },
     vars: envShapedVars(env),

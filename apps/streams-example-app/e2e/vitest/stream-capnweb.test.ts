@@ -43,18 +43,15 @@ describe("stream capnweb protocol", () => {
   });
 
   e2eIt("appends events after the stream-created event over capnweb @preview", async () => {
-    // Deployed previews ride workers.dev (envs.ts: deliberately no custom
-    // domain), and that edge intermittently kills fresh authenticated
-    // websockets for minutes at a time: the upgrade succeeds, the socket dies
-    // within ~1s ("Network connection lost"), the worker's own invocation
-    // logs "Ok", and custom-domain websockets in the same minutes are fine
-    // (diagnosed live 2026-07-07, window 01:32-01:43 UTC; 3 CI/marathon
-    // sightings before that). Re-dial ONCE on a fresh path after a pause:
-    // nothing was appended when the socket dies mid-first-call, and a fresh
-    // path per attempt means a late duplicate could only land on an abandoned
-    // stream. A window longer than the pause still fails the test — correct,
-    // because that's an outage, not a blip. The durable fix is a custom
-    // domain for the playground.
+    // Re-dial ONCE on a fresh path after a pause. This test dials a FRESH
+    // stream DO per attempt, so it is the fleet's canary for Durable Object
+    // weather: during the 2026-07-06/07 Cloudflare "DO increased error rate
+    // in ENAM" incident it failed in minutes-long windows (socket dead <1s
+    // after a clean upgrade, on workers.dev AND custom domains alike) while
+    // warm-DO tests sailed on. The re-dial is safe (nothing was appended when
+    // the socket dies mid-first-call; a fresh path per attempt means a late
+    // duplicate could only land on an abandoned stream) and absorbs blips; a
+    // window longer than the pause still fails — correct, that's an outage.
     const dialAndAppend = async () => {
       const path = e2eStreamPathLabel("stream-capnweb-append");
       using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
