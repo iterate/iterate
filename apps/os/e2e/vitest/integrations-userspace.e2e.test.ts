@@ -327,5 +327,13 @@ describe("seeded waitrose integration files", () => {
     await expect(integrations.waitrose.mum.noSuchMethod()).rejects.toThrow(
       /waitrose client has no method noSuchMethod/,
     );
+
+    // Discovery: __describe on a provided mount answers from the mount's
+    // durable metadata, never dialing the vendor. (A trailing __describe is a
+    // valid INVOCATION path — only mount NAMES reserve it; this used to die
+    // in path validation with "invalid capability path segment".)
+    const described = await integrations.waitrose.__describe();
+    expect(JSON.stringify(described)).toContain("Waitrose grocery integration");
+    await expect(integrations.ocado.__describe()).rejects.toThrow(/no capability/);
   });
 });

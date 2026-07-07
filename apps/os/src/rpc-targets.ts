@@ -1110,9 +1110,9 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.github[${JSON.stringify(connection)}].rest.repos.listForAuthenticatedUser({ per_page: 5, sort: "updated" })`,
+          example: `await itx.integrations.github[${JSON.stringify(connection)}].rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: 'a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request("GET /repos/{owner}/{repo}", params) escape hatch, graphql(query, variables), and paginate(route, params). There is NO generic api.request({ method, path }) shape',
+          sdk: 'a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request("GET /repos/{owner}/{repo}", params) escape hatch, graphql(query, variables), and paginate(route, params). There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App INSTALLATION: enumerate repos with rest.apps.listReposAccessibleToInstallation() (data.repositories); user-scoped ...ForAuthenticatedUser endpoints answer 403',
           slug: "github",
         });
       }
@@ -1178,9 +1178,9 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit — await itx.integrations.github["<connection>"].rest.repos.listForAuthenticatedUser(), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }).',
+        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
-        'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape — copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
+        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
       types: [
         "type GmailRequestInput = {",
@@ -1197,6 +1197,9 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         '// itx.integrations.github["<connection>"] IS a wrapped Octokit (@octokit/rest):',
         "// its whole surface works — rest.<namespace>.<method>(params), the",
         "// request(route, params) escape hatch, and graphql(query, variables).",
+        "// The connection acts as a GitHub App INSTALLATION: enumerate repos with",
+        "// rest.apps.listReposAccessibleToInstallation() (data.repositories);",
+        "// user-scoped ...ForAuthenticatedUser endpoints answer 403.",
         "interface GithubConnection {",
         "  rest: RestEndpointMethods; // e.g. rest.repos.get({ owner, repo }) -> { data, status, headers, url }",
         "  request(route: string, params?: Record<string, unknown>): Promise<{ data: unknown; headers: Record<string, string>; status: number; url: string }>;",
@@ -1221,7 +1224,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
-          'Per-connection wrapped Octokit: github["<connection>"].rest.repos.listForAuthenticatedUser(), .request("GET /..."), .graphql(...).',
+          'Per-connection wrapped Octokit (a GitHub App installation): github["<connection>"].rest.apps.listReposAccessibleToInstallation(), .request("GET /..."), .graphql(...).',
         google:
           'Per-connection Gmail: google["<connection>"].gmail.request({ path: "/users/me/messages", query }).',
         list: "Every connection the project holds (built-in journals plus provided mounts).",

@@ -789,7 +789,7 @@ return {
     id: "github-list-repos",
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
+      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -797,12 +797,13 @@ const connections = await itx.integrations.list();
 const github = connections.find((entry) => entry.integration === "github");
 if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
 
-const repos = await itx.integrations.github[github.connection].rest.repos.listForAuthenticatedUser({
+// The connection is a GitHub App installation: this endpoint (not the
+// user-scoped listForAuthenticatedUser, which 403s) enumerates its repos.
+const repos = await itx.integrations.github[github.connection].rest.apps.listReposAccessibleToInstallation({
   per_page: Number(vars.count ?? 5),
-  sort: "updated",
 });
 
-return repos.data.map((repo) => ({ fullName: repo.full_name, updatedAt: repo.updated_at }));
+return repos.data.repositories.map((repo) => ({ fullName: repo.full_name, updatedAt: repo.updated_at }));
 `.trim(),
   },
   {
@@ -908,8 +909,11 @@ for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
 
 // 2. One durable mount makes GitHub part of the integrations collection. The
 // itx-expression is a journaled recipe: replayed per call, revocable,
-// enumerated by itx.integrations.list().
-await itx.provideCapability({
+// enumerated by itx.integrations.list(). Mount at the PROJECT ROOT:
+// itx.integrations.* resolves through the project capability table, so an
+// own-scope itx.provideCapability from an agent is unreachable there.
+const rootHost = await itx.capabilityHosts.get("/");
+await rootHost.provideCapability({
   path: ["integrations", "github-mcp", connection],
   type: "itx-expression",
   instructions:
