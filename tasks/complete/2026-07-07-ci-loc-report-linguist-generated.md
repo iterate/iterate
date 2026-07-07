@@ -1,5 +1,5 @@
 ---
-status: in-review
+status: done
 size: small
 follows-up: https://github.com/iterate/iterate/pull/1715
 ---
@@ -8,7 +8,7 @@ follows-up: https://github.com/iterate/iterate/pull/1715
 
 ## Status summary
 
-Implemented (PR #1718). Follow-up to #1715: files marked `linguist-generated=true` via
+Done, merged in PR #1718. Follow-up to #1715: files marked `linguist-generated=true` via
 `.gitattributes` land in the "Generated" group, queried from git at runtime - no glob list to
 keep in sync.
 
