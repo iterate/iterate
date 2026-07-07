@@ -4,8 +4,8 @@ import {
   primeProjectHostname,
   readProjectByHostname,
   readProjectHostnameRegistration,
-  type ProjectDirectoryRecord,
-} from "../../project-directory.ts";
+} from "../../project-hostname-directory.ts";
+import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import {
   createCloudflareCustomDomainProvisioner,
   normalizeProjectCustomDomain,

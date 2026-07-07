@@ -1265,7 +1265,7 @@ class DynamicWorkerRpcTarget extends RpcTarget {
   }
 }
 
-type ProjectListEntryBase = Omit<ProjectListEntry, "customDomains" | "deploymentStatus">;
+type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
 
 export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
   async __describe() {
@@ -1453,11 +1453,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
    */
   async list(input?: Parameters<ProjectCollection["list"]>[0]) {
     const bases = await this.#listEntryBases(input?.scope);
-    const outcomes = await Promise.allSettled(
-      bases.map(async (base) => {
-        return await projectProcessorState(base.id);
-      }),
-    );
+    const outcomes = await Promise.allSettled(bases.map((base) => projectProcessorState(base.id)));
     const statuses = deploymentStatusesFromProbes(
       bases.map((base) => base.id),
       outcomes.map((outcome): PromiseSettledResult<boolean> => {
@@ -1465,14 +1461,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
         return { status: "fulfilled", value: outcome.value.created === true };
       }),
     );
-    return bases.map((base, index) => {
-      const outcome = outcomes[index];
-      return {
-        ...base,
-        customDomains: outcome?.status === "fulfilled" ? outcome.value.customDomains : [],
-        deploymentStatus: statuses.get(base.id) ?? "unknown",
-      };
-    });
+    return bases.map((base) => ({
+      ...base,
+      deploymentStatus: statuses.get(base.id) ?? "unknown",
+    }));
   }
 
   /**

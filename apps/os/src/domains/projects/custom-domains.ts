@@ -1,12 +1,14 @@
 import type { AppConfig } from "../../config.ts";
+import { parseConfig } from "../../config.ts";
+import type { Env } from "../../env.ts";
 import {
   deleteProjectHostname,
   listProjectHostnameRegistrationsUnder,
   primeProjectHostname,
   readProjectByHostname,
   readProjectHostnameRegistration,
-  type ProjectDirectoryRecord,
-} from "../../project-directory.ts";
+} from "../../project-hostname-directory.ts";
+import { readProjectById, type ProjectDirectoryRecord } from "../../project-directory.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -72,6 +74,23 @@ export type ProjectCustomDomainProvisioner = {
     project: ProjectDirectoryRecord;
   }): Promise<void>;
 };
+
+export type ProjectCustomDomainDeps = ProjectCustomDomainProvisioner & {
+  readProject(): Promise<ProjectDirectoryRecord | null>;
+};
+
+export function createCloudflareProjectCustomDomainDeps(options: {
+  env: Env;
+  projectId: string;
+}): ProjectCustomDomainDeps {
+  return {
+    ...createCloudflareCustomDomainProvisioner({
+      config: parseConfig(options.env),
+      directory: options.env.PROJECT_DIRECTORY,
+    }),
+    readProject: () => readProjectById(options.env.PROJECT_DIRECTORY, options.projectId),
+  };
+}
 
 export function normalizeProjectCustomDomain(input: {
   hostname: string;

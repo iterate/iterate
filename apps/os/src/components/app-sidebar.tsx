@@ -1,5 +1,5 @@
-import { Suspense, useMemo, useState, type ReactElement } from "react";
-import { ClientOnly, Link, useMatches, useMatchRoute } from "@tanstack/react-router";
+import { useMemo, useState, type ReactElement } from "react";
+import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -65,8 +65,6 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
-import { ItxProvider, useItxState } from "~/itx/itx-react.tsx";
-import { primaryActiveCustomDomainHostname } from "~/lib/project-custom-domains.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   fetchProjectsList,
@@ -74,7 +72,6 @@ import {
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
 import type { ProjectListEntry } from "~/types.ts";
-import type { ProjectProcessorState } from "~/types.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -106,7 +103,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
         <AppSidebarHeader projects={projects} />
       </SidebarHeader>
       <SidebarContent>
-        <AppSidebarNav projects={projects} routeConfig={routeConfig} />
+        <AppSidebarNav routeConfig={routeConfig} />
       </SidebarContent>
       <SidebarFooter>
         <AppSidebarCollapseButton />
@@ -384,29 +381,20 @@ function authWorkerOrigin(config: PublicConfig) {
   return "https://auth.iterate.com";
 }
 
-function AppSidebarNav({
-  projects,
-  routeConfig,
-}: {
-  projects: ProjectListEntry[];
-  routeConfig: PublicRouteConfig;
-}) {
+function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
   const activeRouteProject = getActiveRouteProject(matches);
   const activeProjectSlug = activeRouteProject?.slug ?? getActiveProjectSlug(matches);
-  const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
   // project that isn't in the cached list still shows its nav.
   if (activeProjectSlug) {
     return (
-      <ProjectSidebarGroupWithLiveCustomDomain
-        projectId={activeRouteProject?.id ?? activeProject?.id}
+      <ProjectSidebarGroup
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
-        fallbackCustomHostname={primaryActiveCustomDomainHostname(activeProject?.customDomains)}
       />
     );
   }
@@ -484,89 +472,14 @@ function getActiveRouteProject(matches: ReturnType<typeof useMatches>): ActiveRo
   );
 }
 
-function ProjectSidebarGroupWithLiveCustomDomain({
-  appBaseUrl,
-  fallbackCustomHostname,
-  projectHostnameBases,
-  projectId,
-  projectSlug,
-}: {
-  appBaseUrl?: string;
-  fallbackCustomHostname?: string | null;
-  projectHostnameBases: readonly string[];
-  projectId?: string;
-  projectSlug: string;
-}) {
-  const fallback = (
-    <ProjectSidebarGroup
-      appBaseUrl={appBaseUrl}
-      customHostname={fallbackCustomHostname}
-      projectHostnameBases={projectHostnameBases}
-      projectSlug={projectSlug}
-    />
-  );
-
-  if (!projectId) return fallback;
-
-  return (
-    <ClientOnly fallback={fallback}>
-      <Suspense fallback={fallback}>
-        <ItxProvider projectId={projectId} prewarm={false}>
-          <LiveProjectSidebarGroup
-            appBaseUrl={appBaseUrl}
-            fallbackCustomHostname={fallbackCustomHostname}
-            projectHostnameBases={projectHostnameBases}
-            projectId={projectId}
-            projectSlug={projectSlug}
-          />
-        </ItxProvider>
-      </Suspense>
-    </ClientOnly>
-  );
-}
-
-function LiveProjectSidebarGroup({
-  appBaseUrl,
-  fallbackCustomHostname,
-  projectHostnameBases,
-  projectId,
-  projectSlug,
-}: {
-  appBaseUrl?: string;
-  fallbackCustomHostname?: string | null;
-  projectHostnameBases: readonly string[];
-  projectId: string;
-  projectSlug: string;
-}) {
-  const { state } = useItxState<ProjectProcessorState>(
-    (itx, setState) => itx.processor.onStateChange(setState),
-    [projectId],
-  );
-  const customHostname =
-    state === undefined
-      ? fallbackCustomHostname
-      : primaryActiveCustomDomainHostname(state.customDomains);
-
-  return (
-    <ProjectSidebarGroup
-      appBaseUrl={appBaseUrl}
-      customHostname={customHostname}
-      projectHostnameBases={projectHostnameBases}
-      projectSlug={projectSlug}
-    />
-  );
-}
-
 function ProjectSidebarGroup({
   projectHostnameBases,
   projectSlug,
   appBaseUrl,
-  customHostname,
 }: {
   projectHostnameBases: readonly string[];
   projectSlug: string;
   appBaseUrl?: string;
-  customHostname?: string | null;
 }) {
   const matchRoute = useMatchRoute();
   const isNewChatActive = Boolean(
@@ -580,7 +493,6 @@ function ProjectSidebarGroup({
     projectSlug,
     projectHostnameBases,
     appBaseUrl,
-    customHostname,
   });
 
   return (

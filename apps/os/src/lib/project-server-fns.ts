@@ -10,8 +10,6 @@ import {
   chooseRootProjectRedirect,
   type RootProjectRedirectDecision,
 } from "~/lib/project-root-redirect.ts";
-import { normalizeProjectCustomDomain } from "~/domains/projects/custom-domains.ts";
-import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
 import type { ProjectDeploymentStatus, UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
@@ -45,18 +43,12 @@ export type Project = {
   slug: string;
   organizationId: string | null;
   organizationName: string | null;
-  customHostname: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   deploymentStatus: ProjectDeploymentStatus;
 };
 
 type ProjectWithIngressUrl = Project & { ingressUrl: string };
-
-type CustomDomainMutationResult = {
-  hostname: string;
-  offset: number;
-};
 
 /**
  * The root `/` redirect decision. It runs during SSR (itx is client-only), so
@@ -152,7 +144,6 @@ export const getProjectBySlugServerFn: (input: {
         slug: claimed.slug,
         organizationId: claimed.organizationId ?? null,
         organizationName: null,
-        customHostname: null,
         createdAt: null,
         updatedAt: null,
         deploymentStatus: "unknown",
@@ -180,60 +171,10 @@ export const getProjectBySlugServerFn: (input: {
       slug: record.slug,
       organizationId: record.organizationId ?? null,
       organizationName: null,
-      customHostname: null,
       createdAt: null,
       updatedAt: null,
       deploymentStatus: "unknown",
     });
-  });
-
-export const addProjectCustomDomainServerFn: (input: {
-  data: { hostname: string; projectId: string };
-}) => Promise<CustomDomainMutationResult> = createServerFn({ method: "POST" })
-  .validator((input: { hostname: string; projectId: string }) => input)
-  .handler(async ({ context, data }) => {
-    const hostname = normalizeProjectCustomDomain({
-      hostname: data.hostname,
-      projectHostnameBases: context.config.projectHostnameBases ?? [],
-    });
-    const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
-      type: "events.iterate.com/project/custom-domain-add-requested",
-      payload: { hostname },
-    });
-    return { hostname, offset: event!.offset };
-  });
-
-export const refreshProjectCustomDomainServerFn: (input: {
-  data: { hostname: string; projectId: string };
-}) => Promise<CustomDomainMutationResult> = createServerFn({ method: "POST" })
-  .validator((input: { hostname: string; projectId: string }) => input)
-  .handler(async ({ context, data }) => {
-    const hostname = normalizeProjectCustomDomain({
-      hostname: data.hostname,
-      projectHostnameBases: context.config.projectHostnameBases ?? [],
-    });
-    const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
-      type: "events.iterate.com/project/custom-domain-refresh-requested",
-      payload: { hostname },
-    });
-    return { hostname, offset: event!.offset };
-  });
-
-export const removeProjectCustomDomainServerFn: (input: {
-  data: { hostname: string; projectId: string };
-}) => Promise<CustomDomainMutationResult> = createServerFn({ method: "POST" })
-  .validator((input: { hostname: string; projectId: string }) => input)
-  .handler(async ({ context, data }) => {
-    const hostname = normalizeProjectCustomDomain({
-      hostname: data.hostname,
-      projectHostnameBases: context.config.projectHostnameBases ?? [],
-    });
-    await assertProjectCustomDomainConfigured(context, data.projectId, hostname);
-    const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
-      type: "events.iterate.com/project/custom-domain-remove-requested",
-      payload: { hostname },
-    });
-    return { hostname, offset: event!.offset };
   });
 
 /** Admin cookie, admin-role user, or the capnweb admin header. */
@@ -253,7 +194,6 @@ function withIngressUrl(
   const ingressUrl =
     buildProjectWorkerUrl({
       projectSlug: project.slug,
-      customHostname: project.customHostname,
       projectHostnameBases: context.config.projectHostnameBases ?? [],
       appBaseUrl: context.config.baseUrl,
     }) ?? `${(context.config.baseUrl ?? "").replace(/\/+$/, "")}/${project.id}`;
@@ -272,30 +212,6 @@ function engineBatchSession(context: RequestContext) {
       headers: { cookie },
     }),
   );
-}
-
-async function appendProjectCustomDomainEvent(
-  context: RequestContext,
-  projectId: string,
-  event: Parameters<typeof ProjectProcessorContract.buildEvent>[0],
-) {
-  const session = engineBatchSession(context);
-  const root = session.authenticate({ type: "from-server-cookie" });
-  const project = await root.projects.get(projectId);
-  return await project.streams.get("/").append(ProjectProcessorContract.buildEvent(event));
-}
-
-async function assertProjectCustomDomainConfigured(
-  context: RequestContext,
-  projectId: string,
-  hostname: string,
-): Promise<void> {
-  const session = engineBatchSession(context);
-  const root = session.authenticate({ type: "from-server-cookie" });
-  const project = await root.projects.get(projectId);
-  const { state } = await project.processor.snapshot();
-  if (state.customDomains.some((domain) => domain.hostname === hostname)) return;
-  throw new Error(`Custom domain "${hostname}" is not configured on this project.`);
 }
 
 function organizationSlugForProject(

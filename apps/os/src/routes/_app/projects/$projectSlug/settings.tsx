@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { useItxState } from "~/itx/itx-react.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -34,9 +35,11 @@ function ProjectSettingsContent() {
   ).state;
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-6">
-      <ProjectSettingsPanel
-        project={project}
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6">
+      <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+      <ProjectCustomDomainsSettings
+        projectId={project.id}
+        projectSlug={project.slug}
         projectState={projectState}
         routeConfig={routeConfig}
       />

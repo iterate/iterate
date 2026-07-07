@@ -93,11 +93,7 @@ function ProjectHomePage() {
             <ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
           </Link>
         ) : null}
-        <ProjectSettingsPanel
-          project={project}
-          projectState={lifecycle.state}
-          routeConfig={routeConfig}
-        />
+        <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
       </>
     ) : (
       // Creating, or the welcome handoff is in flight (the effect above is

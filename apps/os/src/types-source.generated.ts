@@ -150,7 +150,6 @@ export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
 
 /** One entry of {@link ProjectCollection.list}. */
 export type ProjectListEntry = {
-  customDomains: ProjectCustomDomain[];
   id: string;
   slug: string;
   organizationId: string | null;

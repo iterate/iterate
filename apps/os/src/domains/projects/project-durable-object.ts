@@ -1,8 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { parseConfig } from "../../config.ts";
 import type { Env } from "../../env.ts";
-import { readProjectById } from "../../project-directory.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
@@ -23,7 +21,7 @@ import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agen
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
-import { createCloudflareCustomDomainProvisioner } from "./custom-domains.ts";
+import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -43,13 +41,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
         // key configured; otherwise they fall back to Workers AI.
         defaultLlmProvider:
           readOpenAiApiKeyFromAppConfig(this.env) === null ? "cloudflare-ai" : "openai-ws",
-        customDomains: {
-          ...createCloudflareCustomDomainProvisioner({
-            config: parseConfig(this.env),
-            directory: this.env.PROJECT_DIRECTORY,
-          }),
-          readProject: () => readProjectById(this.env.PROJECT_DIRECTORY, this.#name.projectId),
-        },
+        customDomains: createCloudflareProjectCustomDomainDeps({
+          env: this.env,
+          projectId: this.#name.projectId,
+        }),
         itx: itxForScope({
           auth: trustedInternalAuthContext(),
           ctx: this.ctx,
