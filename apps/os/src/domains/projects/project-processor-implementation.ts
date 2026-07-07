@@ -308,20 +308,6 @@ export class ProjectProcessor extends StreamProcessor<
                 systemPrompt: agentSystemPromptForPath(childPath),
               }),
             );
-            // Every agent owns the sandbox at its own path under /sandboxes
-            // (`itx.sandbox` → agentSandboxPath). Awaiting the get mints the
-            // Durable Object and pins its identity durably — that IS creation;
-            // no container starts here (the first command boots it, idle puts
-            // it back to sleep), so agent birth stays cheap however many
-            // agents a project accumulates. Non-fatal on purpose:
-            // `itx.sandbox` re-ensures identity on every use, so this is eager
-            // minting only — and in container-less local dev the sandbox
-            // constructor throws, which must not wedge agent birth.
-            await this.deps.itx.sandboxes
-              .get(agentSandboxPath(childPath))
-              .catch((error: unknown) => {
-                console.error(`agent sandbox create failed for ${childPath}`, error);
-              });
             return;
           }
 
@@ -475,7 +461,9 @@ function agentBirthCertificateEvents(input: {
     // and replays with the stream. A durable itx-expression, not a live mount:
     // every `itx.sandbox.<method>(...)` re-evaluates
     // `itx.sandboxes.get(/sandboxes/cloudflare<agent path>)` against the agent's own itx
-    // at call time, so nothing here holds a connection or a container open.
+    // at call time. Agent birth itself does not call `sandboxes.get`, because
+    // that mints the container-backed Durable Object identity and creates
+    // Cloudflare container inventory rows even before a Linux container starts.
     {
       type: "events.iterate.com/capability-host/capability-provided" as const,
       idempotencyKey: `capability-host/sandbox-provided:${input.projectId}:${input.childPath}`,
