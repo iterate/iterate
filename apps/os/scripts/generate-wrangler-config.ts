@@ -179,12 +179,15 @@ function workerBindings(input: {
       SANDBOX_TRANSPORT: "rpc",
       // Container startup budget must cover the IMAGE PULL on a host that
       // hasn't cached it: the baked-monorepo image is ~3 GB and a cold-host
-      // pull measured 1.5-3.2 min. The SDK default (90s port-ready; dial
-      // budget instanceGet+portReady+30s = 150s) sat mid-pull, so fresh
-      // sandboxes on cold hosts died with OPERATION_INTERRUPTED /
-      // transport_disposed on utils.createSession — the dominant e2e flake
-      // after the image grew. 300s clears the worst observed pull; anything
-      // slower is a genuinely stuck container and should fail.
+      // pull measured 1.5-3.2 min. The SDK defaults (instance-get 30s, i.e.
+      // schedule+start INCLUDING the pull; port-ready 90s) both sat inside a
+      // pull, so fresh sandboxes on cold hosts died with
+      // OPERATION_INTERRUPTED / transport_disposed on utils.createSession —
+      // the dominant e2e flake after the image grew (fast ~30-60s failures =
+      // the instance-get cap; ~150s ones = the dial budget). 300s each (the
+      // SDK's validation max for instance-get) clears the worst observed
+      // pull; anything slower is a genuinely stuck container and should fail.
+      SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
       SANDBOX_PORT_TIMEOUT_MS: "300000",
     },
     durable_objects: {
