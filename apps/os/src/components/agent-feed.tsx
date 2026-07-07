@@ -315,14 +315,18 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     );
   }
 
-  return (
-    <AgentActivityRow
-      activity={item}
-      expanded={toggledIds.has(item.id)}
-      toggledIds={toggledIds}
-      onToggle={onToggle}
-    />
-  );
+  if (item.kind === "activity") {
+    return (
+      <AgentActivityRow
+        activity={item}
+        expanded={toggledIds.has(item.id)}
+        toggledIds={toggledIds}
+        onToggle={onToggle}
+      />
+    );
+  }
+
+  return null;
 });
 
 function ChildStreamCreatedRow({
