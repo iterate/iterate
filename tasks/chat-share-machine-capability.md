@@ -7,11 +7,19 @@ size: small
 
 ## Status summary
 
-POC implemented and green (new tests + typecheck + lint pass). `!share`/`!unshare`
+POC implemented and **verified end-to-end against prod**. `!share`/`!unshare`
 work in the chat composer; the live capability (exec/readFile/writeFile/glob/notify)
-mounts on the agent's scope and re-provides across reconnects. Not yet driven
-end-to-end against a live agent (needs a running `pnpm dev` + doppler). One
-**pre-existing, unrelated** test failure found on `main` — see notes.
+mounts on the agent's scope, is invocable, and re-provides across reconnects.
+
+Key finding during verification: the agent's system prompt is **static** (it embeds
+the types.ts surface + documents built-ins, but does not inject a live list of
+dynamically-mounted capabilities). So a mid-session mount is invisible unless the
+agent calls `__describe()` — which it won't do unprompted. Fix: `!share` now sends
+a one-time announcement message to the agent naming `itx.usersMachine`. Confirmed:
+after that, asking "read ~/hi.txt on my machine" (without naming the method) makes
+the agent resolve $HOME via exec and readFile the path on its own.
+
+One **pre-existing, unrelated** test failure found on `main` — see notes.
 
 ## Goal
 
@@ -80,9 +88,11 @@ for "my laptop, while I'm in this chat".
       invocation notices _(submit() interception + onMachineInvocation notice)_.
       Revoke on quit is best-effort via the existing `connection.dispose()` on
       process exit — the live stub dies with the socket regardless.
-- [ ] verify end-to-end against local dev (`pnpm dev`): `!share`, ask agent to
-      `itx.usersMachine.glob(...)`, watch it run _(not done — needs running dev
-      server + doppler; deferred to reviewer / follow-up)_
+- [x] announce the capability to the agent on `!share` (static prompt doesn't
+      surface mid-session mounts) _(MACHINE_SHARED_ANNOUNCEMENT in agent-connection.ts,
+      sent once on first share)_
+- [x] verify end-to-end against a live agent _(done against prod: mount +
+      invocation + agent auto-discovery all confirmed)_
 - [x] typecheck / lint / format / new tests all pass
 
 ## Pre-existing issue found (NOT introduced here)
@@ -114,3 +124,8 @@ separate concern needing the feed-model author's intent. Flagged for the user.
   `stream-woken` reducer drift (needed to compile the package).
 - Found + attributed a pre-existing unrelated feed-model test failure on main
   (see section above); left it untouched.
+- Verified end-to-end against prod (project prj_e44b8…962, /agents/1648): mount
+  shows in the capability-host `__describe()` at offset 16 as a live cap;
+  `usersMachine.glob` invoked cross-connection returned real results; and after
+  the announcement the agent used `exec`+`readFile` unprompted. Discovered the
+  static-prompt gap and added the announcement to close it.
