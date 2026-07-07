@@ -11,6 +11,7 @@ import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
@@ -104,6 +105,12 @@ export class AgentDurableObject extends DurableObject<Env> {
         },
       }),
   );
+
+  // Registered on every agent host; it only wakes on routed email agent
+  // streams (`/agents/email/**`) where the project processor configured its
+  // subscription. No side-effect deps: replies leave through itx.email.reply,
+  // called by the agent itself.
+  readonly emailAgentProcessor = this.#processorHost.add((deps) => new EmailAgentProcessor(deps));
 
   async #readAgentPromptEvents(): Promise<StreamEvent[]> {
     const events: StreamEvent[] = [];
