@@ -43,7 +43,6 @@ export type Project = {
   slug: string;
   organizationId: string | null;
   organizationName: string | null;
-  customHostname: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   deploymentStatus: ProjectDeploymentStatus;
@@ -145,7 +144,6 @@ export const getProjectBySlugServerFn: (input: {
         slug: claimed.slug,
         organizationId: claimed.organizationId ?? null,
         organizationName: null,
-        customHostname: null,
         createdAt: null,
         updatedAt: null,
         deploymentStatus: "unknown",
@@ -173,7 +171,6 @@ export const getProjectBySlugServerFn: (input: {
       slug: record.slug,
       organizationId: record.organizationId ?? null,
       organizationName: null,
-      customHostname: null,
       createdAt: null,
       updatedAt: null,
       deploymentStatus: "unknown",
@@ -197,7 +194,6 @@ function withIngressUrl(
   const ingressUrl =
     buildProjectWorkerUrl({
       projectSlug: project.slug,
-      customHostname: project.customHostname,
       projectHostnameBases: context.config.projectHostnameBases ?? [],
       appBaseUrl: context.config.baseUrl,
     }) ?? `${(context.config.baseUrl ?? "").replace(/\/+$/, "")}/${project.id}`;

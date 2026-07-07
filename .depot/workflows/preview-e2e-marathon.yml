@@ -75,15 +75,15 @@ jobs:
         # lane, exiting non-zero (failing the job) on the first FAIL / SKIP /
         # PARTIAL. Its caffeinate re-exec is Darwin-only and no-ops here.
         run: ./scripts/preview/flake-hunt-loop.sh
+      - name: Collect marathon test artifacts
+        if: always()
+        run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload marathon logs
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: preview-e2e-marathon-logs
-          path: |-
-            /tmp/marathon
-            test-results
-            apps/os/test-results
-            /tmp/os-e2e-*
+          path: test-results
+          include-hidden-files: true
           if-no-files-found: ignore

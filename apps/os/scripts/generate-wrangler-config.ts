@@ -191,9 +191,8 @@ function workerBindings(input: {
   accountId: string;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Sandbox container instance cap. Preview slots get extra headroom: e2e
-   * churn spins sandboxes faster than they idle out, and a saturated cap
-   * 503s every sandbox exec (observed live at 10/10 on preview-3). */
+  /** Sandbox container instance cap. standard-1 reserves quota per slot, so
+   * preview headroom is bounded by the preview account's memory allocation. */
   maxContainerInstances?: number;
 }) {
   return {
@@ -323,53 +322,52 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, and the project-host patterns. The zone is the hostname minus
- * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
+ * catch-all routes. The zone is the hostname minus its first label for
+ * app/MCP/event-docs hosts; project bases are themselves zones.
  *
- * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
- * The catch-all `*base/*` should subsume the others, but the live preview
- * zone only reliably invoked the worker for project hosts once all three
- * existed (observed 2026-06) — kept verbatim; collapse only with an edge
- * experiment proving it.
+ * Project bases get three built-in project-host patterns: `base/*`,
+ * `*.base/*`, and `*base/*`.
+ * The `*base/*` pattern should subsume the first two, but the live preview zone
+ * only reliably invoked the worker for project hosts once all three existed
+ * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
+ * proving it.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
   const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
+  const cloudflareForSaasBases = new Set(env.cloudflareForSaasProjectHostnameBases);
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
     { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
-    ...env.projectHostnameBases.flatMap((base) => [
-      { pattern: `${base}/*`, zone_name: base },
-      { pattern: `*.${base}/*`, zone_name: base },
-      { pattern: `*${base}/*`, zone_name: base },
-    ]),
+    ...env.projectHostnameBases.flatMap((base) => {
+      const projectRoutes = [
+        { pattern: `${base}/*`, zone_name: base },
+        { pattern: `*.${base}/*`, zone_name: base },
+        { pattern: `*${base}/*`, zone_name: base },
+      ];
+      return cloudflareForSaasBases.has(base)
+        ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
+        : projectRoutes;
+    }),
   ];
 }
 
 function envBlock(env: DeployedEnv) {
+  const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // Sandbox containers are `lite` and bill on usage, not reservation, so a
-    // high cap is free headroom. Idle containers are destroyed (not just
-    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
-    // which releases their instance slot — but under sustained churn the
-    // platform backfills released slots into an "assigned" warm pool that
-    // rides at max_instances, and sandbox start latency grows as the pool
-    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
-    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
-    // `wrangler containers info` reached the cap;
-    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
-    // comfortably exceed a whole marathon's cumulative sandbox creations
-    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
-    // prd churns far less (real agent sandboxes, no fixture storms) and
-    // destroy-on-idle bounds its growth.
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
+    // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
+    // against account memory quota at deploy time. The old preview cap of 500
+    // was viable for lite instances because it reserved 128000 MiB; 31
+    // standard-1 instances reserve 126976 MiB and fit that same quota.
+    maxContainerInstances: isProduction ? 50 : 31,
   });
   return {
     name: env.osWorkerName,
