@@ -82,6 +82,8 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "connect-public-mcp",
   "connect-openapi-petstore",
   "secret-postman-echo",
+  "github-mcp-connect",
+  "github-webhooks-project-worker",
   "email-send",
 ]);
 
@@ -127,8 +129,11 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(Object.keys(shaped.rootChildren)).toEqual(
         expect.arrayContaining(["capabilityHost", "capabilityHosts", "streams"]),
       );
+      // The integrations collection's children are its management verbs;
+      // per-connection call surfaces (slack/google/github) are dotted
+      // dispatch, not member nodes — connections enumerate via list().
       expect(Object.keys(shaped.integrationsChildren)).toEqual(
-        expect.arrayContaining(["gmail", "slack"]),
+        expect.arrayContaining(["list", "getConnection", "completeConnect"]),
       );
     },
   },

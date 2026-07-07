@@ -29,7 +29,7 @@ import {
   UnauthenticatedOsRpcTarget,
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
-import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
+import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
@@ -149,6 +149,7 @@ async function appFetch(
 
       const context: RequestContext = {
         config: requestConfig,
+        executionCtx: ctx,
         isEventDocsHost: host.isEventDocsHost,
         log,
         rawRequest: request,
@@ -222,11 +223,11 @@ async function apiFetch(
     return await handleCapnwebAdminCookieRequest({ config, request });
   }
 
-  // Slack webhook ingress lives here (not the app lane): this pipeline has
-  // the engine bindings, so a signed event routes straight into the claiming
-  // project's stream without a capnweb round trip.
-  const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
-  if (slackWebhookResponse !== null) return slackWebhookResponse;
+  // Integration webhook ingress (Slack, GitHub, …) lives here (not the app
+  // lane): this pipeline has the engine bindings, so a signed event routes
+  // straight into the claiming project's stream without a capnweb round trip.
+  const webhookResponse = await handleIntegrationWebhookApiRequest({ config, request });
+  if (webhookResponse !== null) return webhookResponse;
 
   if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
   const unauthenticated = new UnauthenticatedOsRpcTarget({

@@ -15,11 +15,9 @@ import { getOctokit, getRepo, readEventPayload } from "./github.ts";
  * churn (CI, config, docs) after; generated noise last.
  */
 export const groups: Array<{ name: string; glob: string; priority: number }> = [
-  {
-    name: "Generated",
-    glob: "{pnpm-lock.yaml,**/.generated/**,**/generated/**,**/*.generated.*}",
-    priority: 8,
-  },
+  // Files with linguist-generated set in .gitattributes (e.g. pnpm-lock.yaml,
+  // routeTree.gen.ts) also land here, ahead of every glob - see computeReport.
+  { name: "Generated", glob: "{**/.generated/**,**/generated/**,**/*.generated.*}", priority: 8 },
   {
     name: "Tests",
     glob: "{**/*.{test,spec}.*,**/{e2e,tests,__tests__,test-helpers}/**}",
@@ -44,6 +42,7 @@ export type ChangedFile = {
   added: number;
   removed: number;
   binary: boolean;
+  generated: boolean;
 };
 
 /** Parses `git diff --numstat -z -M` output (NUL-separated, rename-aware). */
@@ -64,6 +63,7 @@ export function parseNumstat(raw: string): ChangedFile[] {
       added: binary ? 0 : Number(added),
       removed: binary ? 0 : Number(removed),
       binary,
+      generated: false, // filled in by getChangedFiles, which can ask git
     });
   }
   return files;
@@ -86,12 +86,36 @@ export function getChangedFiles(baseRef: string, headRef: string): ChangedFile[]
   const mergeBase = execFileSync("git", ["merge-base", baseRef, headRef], {
     encoding: "utf8",
   }).trim();
-  return parseNumstat(raw).map((file) => {
-    if (file.binary) return file;
+  const files = parseNumstat(raw);
+  const generated = linguistGeneratedPaths(files.map((file) => file.path));
+  return files.map((file) => {
+    const marked = { ...file, generated: generated.has(file.path) };
+    if (marked.binary) return marked;
     const before = significantLines(gitShow(mergeBase, file.previousPath), file.previousPath);
     const after = significantLines(gitShow(headRef, file.path), file.path);
-    return { ...file, ...slocDiffCounts(before, after) };
+    return { ...marked, ...slocDiffCounts(before, after) };
   });
+}
+
+/**
+ * Paths whose `linguist-generated` attribute is set in .gitattributes - the
+ * same source of truth GitHub uses to collapse generated files in diffs.
+ * One batched `git check-attr` call; output is path/attr/value triplets.
+ */
+function linguistGeneratedPaths(paths: string[]): Set<string> {
+  const generated = new Set<string>();
+  if (paths.length === 0) return generated;
+  const out = execFileSync("git", ["check-attr", "--stdin", "-z", "linguist-generated"], {
+    encoding: "utf8",
+    input: paths.join("\0"),
+    maxBuffer: gitMaxBuffer,
+  });
+  const tokens = out.split("\0");
+  for (let i = 0; i + 2 < tokens.length; i += 3) {
+    const value = tokens[i + 2];
+    if (value === "true" || value === "set") generated.add(tokens[i]);
+  }
+  return generated;
 }
 
 const jsExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
@@ -208,7 +232,9 @@ export function computeReport(files: ChangedFile[]) {
     removed: 0,
   }));
   for (const file of files) {
-    const index = groups.findIndex((group) => group.glob && matchesGlob(file.path, group.glob));
+    const index = file.generated
+      ? groups.findIndex((group) => group.name === "Generated")
+      : groups.findIndex((group) => group.glob && matchesGlob(file.path, group.glob));
     const row = rows[index === -1 ? rows.length - 1 : index];
     row.files += 1;
     row.added += file.added;

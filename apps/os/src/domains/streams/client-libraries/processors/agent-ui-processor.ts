@@ -24,7 +24,9 @@ import type { SqlClient, SqlValue } from "../browser/stream-browser-db.ts";
 export const AGENT_UI_FEED_TABLE = "agent_feed_items";
 
 /** Bumped into the writer-lock name so a schema change lets a fresh tab take over. */
-export const AGENT_UI_SCHEMA_VERSION = 7;
+// 8: both #1708 (slack bubbles) and #1713 (child-stream rows) shipped
+// reduction changes under 7 — mirrors built under either need a rebuild.
+export const AGENT_UI_SCHEMA_VERSION = 8;
 
 // planAgentUiOps still types its events against packages/ui's shared Event
 // type; deriving the parameter type here keeps this file free of
@@ -34,7 +36,7 @@ type AgentUiReducerEvents = Parameters<typeof planAgentUiOps>[1];
 
 export const AgentUiProcessorContract = defineProcessorContract({
   slug: "agent-ui",
-  version: "0.1.1",
+  version: "0.1.2",
   description:
     "Browser-side processor that folds agent streams (including partial LLM chunks) into settled chat rows in SQLite plus a live in-flight activity in reduced state.",
   // itx derives a processor's empty fold from `stateSchema.parse({})`

@@ -5,6 +5,7 @@ import {
   type FetchLike,
   type RequestOptions,
   type StreamableHTTPClientTransportOptions,
+  type Tool,
 } from "@modelcontextprotocol/client";
 import type { McpClientConnectInput } from "../../types.ts";
 
@@ -28,6 +29,15 @@ export async function callMcpToolPath(
   const session = await ItxMcpClientSession.connect(input);
   try {
     return await session.callTool(toolCall);
+  } finally {
+    await session.close();
+  }
+}
+
+export async function listMcpTools(input: McpClientSessionInput): Promise<Tool[]> {
+  const session = await ItxMcpClientSession.connect(input);
+  try {
+    return (await session.listTools()).tools;
   } finally {
     await session.close();
   }
@@ -68,6 +78,10 @@ class ItxMcpClientSession {
         this.requestOptions,
       ),
     );
+  }
+
+  async listTools() {
+    return await this.client.listTools(undefined, this.requestOptions);
   }
 
   async close() {

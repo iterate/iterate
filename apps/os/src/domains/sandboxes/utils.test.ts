@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { agentPathForSandbox, agentSandboxPath, normalizeSandboxPath } from "./utils.ts";
+import {
+  agentPathForSandbox,
+  agentSandboxPath,
+  githubTokenEnvForConnections,
+  normalizeSandboxPath,
+} from "./utils.ts";
 
 describe("normalizeSandboxPath", () => {
   test("accepts /sandboxes/ paths, arbitrarily nested", () => {
@@ -61,5 +66,27 @@ describe("normalizeSandboxPath", () => {
     expect(() => normalizeSandboxPath("/sandboxes/foo bar")).toThrow(
       /round-trip|stable Durable Object/,
     );
+  });
+});
+
+describe("githubTokenEnvForConnections", () => {
+  test("builds the connection secret's accessToken placeholder — never token bytes", () => {
+    expect(
+      githubTokenEnvForConnections([{ connection: "install-42", integration: "github" }]),
+    ).toBe('getSecret({ path: "/secrets/integrations/github/install-42", field: "accessToken" })');
+  });
+
+  test("null when the project has no GitHub connection (other integrations don't count)", () => {
+    expect(githubTokenEnvForConnections([])).toBe(null);
+    expect(githubTokenEnvForConnections([{ connection: "acme", integration: "slack" }])).toBe(null);
+  });
+
+  test("several connections: the lexicographically first connection name wins, deterministically", () => {
+    const placeholder = githubTokenEnvForConnections([
+      { connection: "install-9", integration: "github" },
+      { connection: "acme", integration: "slack" },
+      { connection: "install-10", integration: "github" },
+    ]);
+    expect(placeholder).toContain("/secrets/integrations/github/install-10");
   });
 });

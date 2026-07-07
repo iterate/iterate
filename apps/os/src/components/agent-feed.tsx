@@ -7,12 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   BanIcon,
   ChevronRightIcon,
   CircleQuestionMarkIcon,
   CodeIcon,
+  GitBranchIcon,
   PaperclipIcon,
 } from "lucide-react";
 import type {
@@ -40,6 +42,7 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 /** How many rows past the virtualizer's window the tail query prefetches. */
 const TAIL_PREFETCH_ROWS = 32;
 
@@ -65,6 +68,7 @@ export function AgentFeedView({
   isPending = false,
   isInterruptingQueuedMessages = false,
   onInterruptQueuedMessages,
+  projectSlug,
 }: {
   database: StreamBrowserDatabase;
   liveState: AgentUiState | null;
@@ -73,6 +77,7 @@ export function AgentFeedView({
   isPending?: boolean;
   isInterruptingQueuedMessages?: boolean;
   onInterruptQueuedMessages?: () => Promise<void> | void;
+  projectSlug?: string;
 }) {
   const query = search.trim().toLowerCase();
   const countResult = useStreamQuery(
@@ -224,7 +229,12 @@ export function AgentFeedView({
                 ) : item == null ? (
                   <div className="my-2 h-10 rounded-xl bg-muted/40" />
                 ) : (
-                  <AgentFeedItemRow item={item} toggledIds={toggledIds} onToggle={toggleExpanded} />
+                  <AgentFeedItemRow
+                    item={item}
+                    toggledIds={toggledIds}
+                    onToggle={toggleExpanded}
+                    projectSlug={projectSlug}
+                  />
                 )}
               </div>
             );
@@ -243,13 +253,19 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
   toggledIds,
   onToggle,
+  projectSlug,
 }: {
   item: AgentUiItem;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  projectSlug?: string;
 }) {
   if (item.kind === "stream-woken") {
     return <StreamWakeRow item={item} />;
+  }
+
+  if (item.kind === "child-stream-created") {
+    return <ChildStreamCreatedRow item={item} projectSlug={projectSlug} />;
   }
 
   if (item.kind !== "activity") {
@@ -301,6 +317,45 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     />
   );
 });
+
+function ChildStreamCreatedRow({
+  item,
+  projectSlug,
+}: {
+  item: Extract<AgentUiItem, { kind: "child-stream-created" }>;
+  projectSlug?: string;
+}) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+  const streamLabel = compactStreamPath(item.childPath);
+  const linkOptions =
+    projectSlug == null ? null : linkOptionsForStreamPath(projectSlug, item.childPath);
+
+  return (
+    <div
+      className="flex items-center gap-2 py-2 text-xs text-muted-foreground"
+      data-testid="agent-feed-child-stream-created"
+      data-kind="child-stream-created"
+    >
+      <div className="h-px min-w-8 flex-1 bg-border/70" />
+      <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+      <span className="shrink-0">Created child stream</span>
+      {linkOptions == null ? (
+        <span className="min-w-0 truncate font-mono text-foreground/70">{streamLabel}</span>
+      ) : (
+        <Link
+          {...linkOptions}
+          className="min-w-0 truncate font-mono text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
+        >
+          {streamLabel}
+        </Link>
+      )}
+      <time className="sr-only" dateTime={dateTime}>
+        {formatDateTime(item.timestampMs)}
+      </time>
+      <div className="h-px min-w-8 flex-1 bg-border/70" />
+    </div>
+  );
+}
 
 function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-woken" }> }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
@@ -979,4 +1034,11 @@ function stringifyResult(result: unknown): string {
   } catch {
     return String(result);
   }
+}
+
+function compactStreamPath(path: string): string {
+  if (path.length <= 64) return path;
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length <= 3) return path;
+  return `.../${segments.slice(-3).join("/")}`;
 }

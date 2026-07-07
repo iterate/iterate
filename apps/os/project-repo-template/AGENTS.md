@@ -21,3 +21,8 @@ from it, treat it as read-only.
 The worker also exposes a Slack Web API surface backed by the real Slack SDK:
 `itx.worker.slack.chat.postMessage({ channel, text })` (any nested Web API
 method works). Configure it by committing `slack.config.ts`.
+
+`integrations/waitrose/` is the reference project-owned integration: code in
+this repo, mounted once into `itx.integrations.*` and addressed like a
+built-in. Its README.md documents the connect + mount recipe; copy the pattern
+for any provider the platform has no built-in for.

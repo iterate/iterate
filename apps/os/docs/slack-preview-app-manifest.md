@@ -295,7 +295,7 @@ production `iterate` app or legacy `Niterate (CI bot)` actor are acceptable.
    ```
 
    The Slack processor compiles this into a call to
-   `itx.slack.chat.postMessage` in the same thread.
+   `itx.integrations.slack["<connection>"].chat.postMessage` in the same thread.
 
 4. In OS, inspect the project stream
    `/projects/<projectSlug>/streams/integrations/slack`. A successful real
