@@ -14,10 +14,15 @@ mounts on the agent's scope, is invocable, and re-provides across reconnects.
 Key finding during verification: the agent's system prompt is **static** (it embeds
 the types.ts surface + documents built-ins, but does not inject a live list of
 dynamically-mounted capabilities). So a mid-session mount is invisible unless the
-agent calls `__describe()` — which it won't do unprompted. Fix: `!share` now sends
-a one-time announcement message to the agent naming `itx.usersMachine`. Confirmed:
-after that, asking "read ~/hi.txt on my machine" (without naming the method) makes
-the agent resolve $HOME via exec and readFile the path on its own.
+agent calls `__describe()` — which it won't do unprompted.
+
+Fix (general, not a workaround): a hard nudge in the agent prompt
+(`agent-processor-contract.ts`, DISCOVERING THE SURFACE) telling the agent its
+capability surface changes at runtime, so it must `__describe()` before claiming it
+can't do something. This makes ALL runtime-mounted capabilities discoverable, not
+just `usersMachine`. An earlier per-`!share` announcement message was tried and then
+**removed** in favour of this. The `eval-agent-discovers-runtime-capabilities` task
+guards the behavior.
 
 One **pre-existing, unrelated** test failure found on `main` — see notes.
 
@@ -88,9 +93,9 @@ for "my laptop, while I'm in this chat".
       invocation notices _(submit() interception + onMachineInvocation notice)_.
       Revoke on quit is best-effort via the existing `connection.dispose()` on
       process exit — the live stub dies with the socket regardless.
-- [x] announce the capability to the agent on `!share` (static prompt doesn't
-      surface mid-session mounts) _(MACHINE_SHARED_ANNOUNCEMENT in agent-connection.ts,
-      sent once on first share)_
+- [x] make the agent discover mid-session mounts _(via prompt nudge in
+      `agent-processor-contract.ts` — the general fix; the earlier per-`!share`
+      announcement hack was removed)_
 - [x] verify end-to-end against a live agent _(done against prod: mount +
       invocation + agent auto-discovery all confirmed)_
 - [x] typecheck / lint / format / new tests all pass
@@ -126,6 +131,11 @@ separate concern needing the feed-model author's intent. Flagged for the user.
   (see section above); left it untouched.
 - Verified end-to-end against prod (project prj_e44b8…962, /agents/1648): mount
   shows in the capability-host `__describe()` at offset 16 as a live cap;
-  `usersMachine.glob` invoked cross-connection returned real results; and after
-  the announcement the agent used `exec`+`readFile` unprompted. Discovered the
-  static-prompt gap and added the announcement to close it.
+  `usersMachine.glob` invoked cross-connection returned real results; agent used
+  `exec`+`readFile` once it knew about the capability. This exposed the
+  static-prompt discovery gap.
+- Closed the gap the right way: added a discovery nudge to the agent prompt
+  (`agent-processor-contract.ts`) so the agent `__describe()`s before saying it
+  can't — general fix for all runtime-mounted capabilities. Removed the earlier
+  per-`!share` announcement message that had been a stopgap. Added a task for the
+  first eval to guard this behavior (`eval-agent-discovers-runtime-capabilities`).

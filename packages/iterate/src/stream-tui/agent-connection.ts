@@ -25,20 +25,6 @@ import {
 /** Path the machine capability mounts at on the agent's scope. */
 export const MACHINE_CAPABILITY_PATH = ["usersMachine"];
 
-/**
- * Sent to the agent once when the user runs `!share`. The agent's system prompt
- * is static and only documents built-in capabilities, so a capability mounted
- * mid-session is invisible unless the agent calls `__describe()` — which it
- * won't do unprompted. This message puts `usersMachine` in the conversation so
- * the agent actually reaches for it. Phrased in the user's voice because the
- * external agent surface only accepts user messages.
- */
-export const MACHINE_SHARED_ANNOUNCEMENT =
-  "I've shared my local machine with you for this chat. You now have `itx.usersMachine` " +
-  "with `exec`, `readFile`, `writeFile`, `glob`, and `notify` — call `itx.usersMachine.__describe()` " +
-  "for the exact signatures. Use it whenever I refer to files, paths, or commands on my machine " +
-  "(as opposed to the project repo or your sandbox).";
-
 const RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 
@@ -191,14 +177,8 @@ export function connectAgentFeed(input: {
       await agent.sendMessage(text);
     },
     async shareMachine() {
-      const alreadySharing = sharingMachine;
       sharingMachine = true;
       await provideMachine();
-      // Tell the agent the capability exists — but only on the first `!share`,
-      // not when re-sharing after an accidental `!share` while already sharing.
-      if (!alreadySharing && agent !== undefined) {
-        await agent.sendMessage(MACHINE_SHARED_ANNOUNCEMENT);
-      }
     },
     async stopSharingMachine() {
       sharingMachine = false;
