@@ -3,12 +3,16 @@ import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 
 export function ProjectHostnameCard({
+  appHostPattern,
+  appRoutingDescription,
   copyLabel,
   description,
   hostname,
   openLabel,
   url,
 }: {
+  appHostPattern: (displayHost: string) => string;
+  appRoutingDescription: string;
   copyLabel: string;
   description: string;
   hostname: string;
@@ -16,7 +20,7 @@ export function ProjectHostnameCard({
   url: string | null;
 }) {
   const displayHost = hostFromUrl(url) ?? hostname;
-  const appHostPattern = `<app>.${displayHost}`;
+  const appHostExample = appHostPattern(displayHost);
 
   return (
     <div className="grid gap-2 rounded-md border p-3">
@@ -53,8 +57,8 @@ export function ProjectHostnameCard({
         </div>
       </div>
       <div className="grid gap-1 text-xs">
-        <p className="text-muted-foreground">Apps route from subdomains on the same host.</p>
-        <code className="min-w-0 rounded bg-muted px-1.5 py-1 break-all">{appHostPattern}</code>
+        <p className="text-muted-foreground">{appRoutingDescription}</p>
+        <code className="min-w-0 rounded bg-muted px-1.5 py-1 break-all">{appHostExample}</code>
       </div>
     </div>
   );

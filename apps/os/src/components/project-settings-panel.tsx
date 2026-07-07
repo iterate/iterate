@@ -38,6 +38,8 @@ export function ProjectSettingsPanel({
       <SettingsSection title="Hostname routing">
         <SettingsField label="Project slug hostname">
           <ProjectHostnameCard
+            appHostPattern={(displayHost) => `<app>--${displayHost}`}
+            appRoutingDescription="Apps use double-hyphen hosts on the built-in project hostname."
             copyLabel="Copy project hostname"
             description="Built-in project hostname"
             hostname={projectHostname}

@@ -48,6 +48,8 @@ export function ProjectCustomDomainsSettings({
         {primaryCustomHostname ? (
           <SettingsField label="Project homepage">
             <ProjectHostnameCard
+              appHostPattern={(displayHost) => `<app>.${displayHost}`}
+              appRoutingDescription="Apps use subdomains on this custom domain."
               copyLabel="Copy custom domain"
               description="Active custom-domain homepage"
               hostname={primaryCustomHostname}
