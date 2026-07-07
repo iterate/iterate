@@ -69,8 +69,9 @@ Looking at a slack agent chat like
       `AgentUiMessageItem`, rendered by `MessageViaLabel` in agent-feed.tsx._
 - [x] Render slack message text through the existing `MessageResponse`
       markdown path (slack mrkdwn ≈ markdown is fine as best effort).
-      _Assistant bubbles go through `MessageResponse` as before; user bubbles
-      keep the plain pre-wrap body all user messages use, for consistency._
+      _Both bubble kinds go through `MessageResponse` for slack-origin
+      messages (web user bubbles keep the plain pre-wrap body), with
+      `parseIncompleteMarkdown={false}` since settled text never streams._
 - [x] Bump `AGENT_UI_SCHEMA_VERSION`. _6 → 7._
 - [x] Reducer tests: human slack message → user bubble; bot echo → assistant
       bubble; reaction/edit webhooks ignored.
