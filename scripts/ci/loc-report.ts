@@ -248,7 +248,9 @@ export function renderTable(report: ReturnType<typeof computeReport>) {
   };
   return [
     "| Group | Changes |",
-    "| --- | --- |",
+    // Right-align: bars are a constant five squares, so they stack flush right
+    // and the numbers right-justify against them instead of leaving them ragged.
+    "| --- | ---: |",
     ...report.rows.map((row) => line(row, (text) => text)),
     line(report.total, (text) => `**${text}**`),
   ].join("\n");
