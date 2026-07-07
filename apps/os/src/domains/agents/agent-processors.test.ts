@@ -914,6 +914,71 @@ describe("minimal web-chat agent processors", () => {
       expect.arrayContaining(["events.iterate.com/agent/output-added"]),
     );
   });
+
+  it("fails orphaned requests a dead incarnation left behind (recovery sweep)", async () => {
+    // Regression for the 2026-07-07 prd email-thread wedge: an incarnation
+    // accepted a request (runInBackground advanced the checkpoint), got
+    // evicted before completing it, and the agent queued every later input
+    // behind the never-completing request forever.
+    const stream = new MemoryStream();
+    // Incarnation 1: accepted the request and appended started, then died —
+    // simulated by writing the events directly, never running a processor.
+    const [requested] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-1" },
+    });
+    await stream.append({
+      type: "events.iterate.com/openai-ws/llm-request-started",
+      payload: { llmRequestId: requested!.offset, model: "gpt-test" },
+    });
+
+    // Incarnation 2: fresh processor (empty #liveExecutions), catching up.
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => {
+        throw new Error("should not dial during orphan recovery");
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+    // Deliver only the STARTED event (the requested event is before the
+    // checkpoint of a caught-up-but-restarted instance in the real incident;
+    // any batch works — the sweep reads folded state, not the batch).
+    await openAiWs.ingest({
+      events: stream.events.filter((event) => event.offset > requested!.offset),
+      streamMaxOffset: stream.events.length,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const completions = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+    );
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.payload).toMatchObject({
+      llmRequestId: requested!.offset,
+      provider: "openai-ws",
+      result: { status: "failure", error: { message: expect.stringContaining("orphaned") } },
+    });
+
+    // A LIVE request in this incarnation is never swept: accept a new request
+    // (execution registers synchronously) and deliver the batch — no failure
+    // completion appears for it while it runs.
+    const [second] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-2" },
+    });
+    await openAiWs.ingest({
+      events: [second!],
+      streamMaxOffset: stream.events.length,
+    });
+    const sweptSecond = stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/llm-request-completed" &&
+        (event.payload as { llmRequestId: number }).llmRequestId === second!.offset &&
+        JSON.stringify(event.payload).includes("orphaned"),
+    );
+    expect(sweptSecond).toHaveLength(0);
+  });
 });
 
 describe("file attachments in the LLM request", () => {

@@ -57,6 +57,10 @@ const OpenAiWebSocketReadyState = {
   Open: 1,
 } as const;
 
+/** Hard wall-clock cap per response (see #withRequestDeadline). Generous —
+ * long reasoning turns are minutes, not tens of minutes. */
+const OPENAI_WS_REQUEST_DEADLINE_MS = 10 * 60_000;
+
 export class OpenAiWsProcessor extends StreamProcessor<
   typeof OpenAiWsProcessorContract,
   {
@@ -83,11 +87,30 @@ export class OpenAiWsProcessor extends StreamProcessor<
    */
   #executionChain: Promise<unknown> = Promise.resolve();
 
+  /**
+   * llmRequestIds with an execution alive in THIS incarnation. A request the
+   * durable fold shows incomplete but that no live execution owns was
+   * orphaned — the incarnation running it was evicted (deploy, hibernation)
+   * or its socket wedged past the deadline — and must be failed, or it
+   * occupies the agent's currentRequest forever and every later input queues
+   * behind it (the 2026-07-07 prd email-thread wedge).
+   */
+  readonly #liveExecutions = new Set<number>();
+
   protected override reduce({
     event,
     state,
   }: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/agent/llm-request-requested": {
+        if (event.payload.provider !== OpenAiWsProcessorContract.slug) return state;
+        const key = String(event.offset);
+        if (state.requests[key]?.status === "completed") return state;
+        return {
+          ...state,
+          requests: { ...state.requests, [key]: { status: "requested" as const } },
+        };
+      }
       case "events.iterate.com/openai-ws/llm-request-started":
         return {
           ...state,
@@ -118,9 +141,50 @@ export class OpenAiWsProcessor extends StreamProcessor<
     if (event.payload.provider !== OpenAiWsProcessorContract.slug) return;
     const llmRequestId = event.offset;
     if (state.requests[String(llmRequestId)]?.status === "completed") return;
+    // Registered synchronously, before any await: the same batch's orphan
+    // sweep must see this request as live.
+    this.#liveExecutions.add(llmRequestId);
     const execution = this.#executionChain.then(() => this.#executeRequest({ event }));
     this.#executionChain = execution.catch(() => undefined);
     runInBackground(() => execution);
+  }
+
+  /**
+   * After every batch: fail requests the durable fold shows incomplete but
+   * that no execution in THIS incarnation owns. Such a request's executing
+   * incarnation is gone (eviction mid-request advances the checkpoint —
+   * executions are runInBackground — so the requested event never redelivers)
+   * and nothing else will ever complete it; without this sweep it occupies
+   * the agent's currentRequest forever and every later input queues behind
+   * it. The failure completions use the exact idempotency keys of the normal
+   * completion path, so any race resolves to one durable outcome.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    const orphaned = Object.entries(args.state.requests)
+      .filter(
+        ([id, request]) => request.status !== "completed" && !this.#liveExecutions.has(Number(id)),
+      )
+      .map(([id]) => Number(id));
+    if (orphaned.length === 0) return;
+    args.blockProcessorWhile(async () => {
+      for (const llmRequestId of orphaned) {
+        console.error("[openai-ws] failing orphaned llm request", { llmRequestId });
+        await this.#appendCompletion({
+          llmRequestId,
+          durationMs: 0,
+          result: {
+            status: "failure" as const,
+            error: {
+              message:
+                "LLM request orphaned: the incarnation executing it went away before completing (eviction or wedged socket). Failed by the recovery sweep; the agent's next trigger reschedules.",
+            },
+          },
+        });
+      }
+    });
   }
 
   async #executeRequest(input: { event: LlmRequestRequestedEvent }): Promise<void> {
@@ -148,24 +212,28 @@ export class OpenAiWsProcessor extends StreamProcessor<
       const attemptedPreviousResponseId = this.#previousResponseId;
       let completion;
       try {
-        completion = await this.#createAndConsumeResponse({
-          messages: body.messages,
-          model,
-          previousResponseId: attemptedPreviousResponseId,
-          sourceEvent: input.event,
-        });
+        completion = await this.#withRequestDeadline(
+          this.#createAndConsumeResponse({
+            messages: body.messages,
+            model,
+            previousResponseId: attemptedPreviousResponseId,
+            sourceEvent: input.event,
+          }),
+        );
       } catch (error) {
         if (attemptedPreviousResponseId === null || !isPreviousResponseNotFoundError(error)) {
           throw error;
         }
         this.#previousResponseId = null;
-        completion = await this.#createAndConsumeResponse({
-          idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
-          messages: body.messages,
-          model,
-          previousResponseId: null,
-          sourceEvent: input.event,
-        });
+        completion = await this.#withRequestDeadline(
+          this.#createAndConsumeResponse({
+            idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
+            messages: body.messages,
+            model,
+            previousResponseId: null,
+            sourceEvent: input.event,
+          }),
+        );
       }
       const durationMs = Date.now() - startedAt;
       const providerResult = {
@@ -183,54 +251,77 @@ export class OpenAiWsProcessor extends StreamProcessor<
         if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
       }
 
-      await this.stream.append(
-        {
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: `openai-ws/provider-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            result: providerResult,
-          },
-        },
-        {
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `openai-ws/agent-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            provider: "openai-ws",
-            result: providerResult,
-          },
-        },
-      );
+      await this.#appendCompletion({ durationMs, llmRequestId, result: providerResult });
     } catch (error) {
-      const durationMs = Date.now() - startedAt;
-      const failure = {
-        status: "failure" as const,
-        error: { message: stringifyError(error) },
-      };
-      await this.stream.append(
-        {
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: `openai-ws/provider-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            result: failure,
-          },
+      await this.#appendCompletion({
+        durationMs: Date.now() - startedAt,
+        llmRequestId,
+        result: {
+          status: "failure" as const,
+          error: { message: stringifyError(error) },
         },
-        {
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `openai-ws/agent-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            provider: "openai-ws",
-            result: failure,
-          },
+      });
+    } finally {
+      this.#liveExecutions.delete(llmRequestId);
+    }
+  }
+
+  /** The one durable outcome of a request — provider + agent completion pair.
+   * Success, in-execution failure, and the orphan sweep all land here with
+   * identical idempotency keys, so races collapse at the append dedup layer. */
+  async #appendCompletion(input: {
+    durationMs: number;
+    llmRequestId: number;
+    result:
+      | { status: "success"; rawResponse?: unknown; usage?: unknown }
+      | { status: "failure"; error: { message: string }; rawResponse?: unknown };
+  }): Promise<void> {
+    await this.stream.append(
+      {
+        type: "events.iterate.com/openai-ws/llm-request-completed",
+        idempotencyKey: `openai-ws/provider-completed@${input.llmRequestId}`,
+        payload: {
+          durationMs: input.durationMs,
+          llmRequestId: input.llmRequestId,
+          result: input.result,
         },
-      );
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `openai-ws/agent-completed@${input.llmRequestId}`,
+        payload: {
+          durationMs: input.durationMs,
+          llmRequestId: input.llmRequestId,
+          provider: "openai-ws",
+          result: input.result,
+        },
+      },
+    );
+  }
+
+  /**
+   * Hard cap on one response's wall clock. A Responses WebSocket that stops
+   * yielding frames would otherwise hang the execution forever (the DO stays
+   * alive on keepAlive, nothing completes, the agent wedges). On timeout the
+   * connection is dropped so the next request opens a fresh socket instead of
+   * inheriting the wedged one.
+   */
+  async #withRequestDeadline<T>(work: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        this.#connection = null;
+        reject(
+          new Error(
+            `OpenAI request exceeded the ${OPENAI_WS_REQUEST_DEADLINE_MS / 1000}s deadline; dropping the socket.`,
+          ),
+        );
+      }, OPENAI_WS_REQUEST_DEADLINE_MS);
+    });
+    try {
+      return await Promise.race([work, deadline]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
