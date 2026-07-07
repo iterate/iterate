@@ -4,6 +4,8 @@
 // "email" processor on `/integrations/email` into one agent stream per email
 // thread (`/agents/email/t<threadId>`); see email-processor-contract.ts.
 
+import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
+
 /** Stream that receives the project's email traffic: `email/sent` audit
  * events, inbound `email/received`/`email/rejected` events, and the email
  * router's `email/thread-route-configured` facts. */
@@ -62,6 +64,21 @@ type EmailParty = {
   email: string;
   name?: string;
 };
+
+/**
+ * THE deployment's email domain: the first project hostname base, normalized
+ * exactly the way host routing normalizes bases (lowercase, `*.` wildcard and
+ * port stripped — see normalizeProjectHostnameBase). Inbound acceptance and
+ * every outbound From/Reply-To derive from this one function, so a config
+ * value like `*.iterate-preview-3.app` can never make the door and the sender
+ * identity disagree. Null when the deployment has no hostname base.
+ */
+export function emailDomainForDeployment(projectHostnameBases: readonly string[]): string | null {
+  const base = projectHostnameBases[0];
+  if (base === undefined) return null;
+  const normalized = normalizeProjectHostnameBase(base);
+  return normalized === "" ? null : normalized;
+}
 
 /** The project's own sending identity: `<slug>@<sender domain>`. */
 export function emailAddressForProject(input: { slug: string; domain: string }): string {

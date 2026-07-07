@@ -20,6 +20,7 @@ import { envs } from "../../../envs.ts";
 import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
+import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
 import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /**
@@ -153,8 +154,8 @@ export default async function ensureResources(
   // zone's MX + SPF records; both calls are idempotent. NOTE: Email SENDING
   // (the itx.email outbound half) is onboarded separately in the dashboard —
   // there is no public API for sending onboarding yet.
-  const emailBase = env.projectHostnameBases[0];
-  const emailZones = emailBase === undefined ? [] : [emailBase];
+  const emailBase = emailDomainForDeployment(env.projectHostnameBases);
+  const emailZones = emailBase === null ? [] : [emailBase];
   for (const base of emailZones) {
     const zone = zones.find((candidate) => candidate.name === base);
     if (!zone) {

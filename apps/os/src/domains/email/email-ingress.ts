@@ -30,6 +30,7 @@ import {
   EMAIL_RECEIVED_EVENT_TYPE,
   EMAIL_REJECTED_EVENT_TYPE,
   dmarcPasses,
+  emailDomainForDeployment,
   fallbackInboundMessageKey,
   normalizeMessageId,
   parseInboundRecipient,
@@ -41,10 +42,12 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   const config = parseConfig(itxEnv);
 
   const recipient = parseInboundRecipient(message.to);
-  // Only the FIRST hostname base — the same one every outbound From/Reply-To
-  // is built from (EmailRpcTarget senderIdentity) — accepts inbound mail, so
-  // a thread's reply address always lives on the domain the mail arrived on.
-  if (recipient === null || recipient.domain !== config.projectHostnameBases[0]) {
+  // Only the deployment's email domain — the same normalized first hostname
+  // base every outbound From/Reply-To is built from (EmailRpcTarget
+  // senderIdentity) — accepts inbound mail, so a thread's reply address
+  // always lives on the domain the mail arrived on.
+  const emailDomain = emailDomainForDeployment(config.projectHostnameBases);
+  if (recipient === null || emailDomain === null || recipient.domain !== emailDomain) {
     message.setReject("No such address.");
     return;
   }

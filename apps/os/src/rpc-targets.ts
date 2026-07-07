@@ -145,6 +145,7 @@ import {
   buildProjectEmailMessage,
   decodeBase64Attachment,
   emailAddressForProject,
+  emailDomainForDeployment,
   emailThreadIdFromAgentPath,
   emailThreadReplyAddress,
   EMAIL_INTEGRATION_STREAM_PATH,
@@ -1135,7 +1136,7 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
     if (!env.EMAIL) {
       throw new Error("email.send requires the EMAIL send_email binding (see wrangler config).");
     }
-    const domain = parseConfig(env).projectHostnameBases[0];
+    const domain = emailDomainForDeployment(parseConfig(env).projectHostnameBases);
     if (!domain) {
       throw new Error(
         "email.send requires APP_CONFIG_PROJECT_HOSTNAME_BASES to derive the sender domain.",
