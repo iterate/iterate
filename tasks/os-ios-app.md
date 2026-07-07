@@ -1,11 +1,11 @@
 ---
-status: ready
+status: implemented, needs on-device pass
 size: large
 ---
 
 # os-ios-app
 
-**Status summary (for skimmers):** spec complete (grill-you interview done, see `tasks/os-ios-app.interview.md`); implementation not started. Main pieces: new `apps/mobile` Expo app on main (chat-first), plumbing ported from the voice-ios-app branch, live vitest e2e of the chat round-trip. Missing: everything; on-device pass needs Misha's phone.
+**Status summary (for skimmers):** implemented and verified up to the machine's limits. Done: `apps/mobile` Expo app (sign-in → projects → chat list → live thread), all plumbing ported/adapted, unit tests, `expo export`/`prebuild` clean, and a LIVE e2e that passed against a real local dev server (bearer auth over the app's own dial → new `/agents/mobile/<ts>` chat → real agent reply → live subscription). Also fixed a pre-existing platform gap: local dev servers now trust forge-minted tokens (`apps/os/scripts/dev.ts`). Missing: the one manual on-device pass (Expo Go on Misha's phone — see "Handoff" below) and the captun live-check.
 
 An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com → log in → new chat" — cold app open to typing a new message in a couple of taps, against any deployment (prd, preview*N, local dev via captun). Foundations over screen count: this is \_the* iterate mobile app; native features (voice, push, widgets) graft on later.
 
@@ -22,15 +22,27 @@ An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com 
 
 ## Checklist
 
-- [ ] `apps/mobile` scaffold on main: Expo SDK 57, expo-router, tanstack-query, tsconfig/vitest wiring, joins root typecheck/lint/test, excluded from knip; no wrangler/envs.ts entry (not a worker); native build stays out of CI
-- [ ] Port `lib/{auth,itx,storage,servers,theme}.ts` from voice-ios-app branch with attribution + divergence comments (`/api` dial, `iterate` scheme, chat presets)
-- [ ] Screens: sign-in (in-app browser PKCE), server picker (presets + custom URL + recents), project picker (org name as secondary label), chat list (live `/agents` catalogue, compose affordance), chat thread (bubbles + working indicator + composer), new chat (compose → mint `/agents/mobile/<ts>` → becomes thread), sign-out
-- [ ] Live subscription for the chat thread (mirror `useItxSubscription`/`useItxState` semantics from `apps/os/src/itx/itx-react.tsx` — reconnect + liveness watchdog)
-- [ ] Vitest e2e spec inside apps/mobile driving the app's own auth/itx modules from Node against the ambient environment (dev-server discovery file or env var; forge-minted bearer token): authenticate → new mobile agent → sendMessage → observe reply event. Doubles as the regression net; pointing at a preview is a doppler-config change
-- [ ] Unit tests for pure-TS logic (working-indicator derivation, servers/recents persistence)
-- [ ] Verify bundle health: `expo prebuild` + `expo export` clean
-- [ ] Docs: `apps/mobile/README.md` — how to run (Expo Go QR), how to point at prod/preview/captun-dev, verification boundary
-- [ ] Handoff notes for the one manual on-device pass (Expo Go → sign in → send → see reply), including the captun path live-check
+- [x] `apps/mobile` scaffold on main: Expo SDK 57, expo-router, tanstack-query, tsconfig/vitest wiring, joins root typecheck/lint/test, excluded from knip; no wrangler/envs.ts entry (not a worker); native build stays out of CI — _copied non-voice files from the voice-ios-app worktree; knip already ignores `apps/*` except allowlisted apps, no config change needed; added an `apps/mobile → project os` scope to doppler.yaml for the e2e lane_
+- [x] Port `lib/{auth,itx,storage,servers,theme}.ts` from voice-ios-app branch with attribution + divergence comments (`/api` dial, `iterate` scheme, chat presets) — _also split the dial into an Expo-free `lib/itx-core.ts` (token getter injected) so the e2e drives the exact phone seam from Node_
+- [x] Screens: sign-in (in-app browser PKCE), server picker (presets + custom URL + recents), project picker (org name as secondary label), chat list (live `/agents` catalogue, compose affordance), chat thread (bubbles + working indicator + composer), new chat (compose → mint `/agents/mobile/<ts>` → becomes thread), sign-out — _new chat is the thread screen pointed at a fresh path (reading lazily initializes; first send creates), so there's no separate composer screen_
+- [x] Live subscription for the chat thread — _`lib/live-thread.ts`: module-level subscription per thread pushing into the tanstack-query cache (no useEffect anywhere), ping watchdog every 15s, drop-and-refetch recovery; simpler than the web's useItxSubscription by design, noted for convergence later_
+- [x] Vitest e2e spec driving the app's own modules from Node — _`e2e/chat-roundtrip.e2e.test.ts`; **passed live** against this worktree's dev server: throwaway project (admin lane) → forge bearer over `dialItx` → sendMessage → real agent reply in ~9s → live subscription saw both messages. Base URL from APP_CONFIG_BASE_URL or the dev-server discovery file_
+- [x] Unit tests for pure-TS logic — _6 specs over the chat reducer/merge/path conventions (`src/lib/chat.test.ts`); recents/last-project persistence is thin SecureStore JSON, exercised via the screens_
+- [x] Verify bundle health — _`expo export --platform ios` (4MB Hermes bundle) and `expo prebuild` (scheme `iterate` + bundle id land in Info.plist) both clean_
+- [x] Docs: `apps/mobile/README.md` — _run via Expo Go QR, deployment targeting incl. captun, verification lane table_
+- [x] Handoff notes for the manual on-device pass — _see "Handoff" below_
+- [x] ~~Register redirect URIs on the auth worker for the mobile client~~ — _not needed: registration is dynamic (RFC 7591, open by design); the app registers whatever redirect URI its runtime resolves (exp:// in Expo Go, iterate:// standalone)_
+
+## Found along the way (fixed here)
+
+Local dev servers rejected forge-minted bearer tokens with "missing or invalid auth" — the deploy path bakes the forge public key into the JWKS but `pnpm dev` had no equivalent, which is exactly `tasks/os-dev-server-auth-minting-without-auth-worker.md` (pre-existing, high-priority, small). Fixed in `apps/os/scripts/dev.ts`: at startup, when the Doppler config carries `AUTH_FORGE_PRIVATE_JWK` but no pinned `APP_CONFIG_ITERATE_AUTH__JWKS`, it fetches the issuer's JWKS, merges the forge public key, and injects the result into the vite child env (best-effort, warns and continues on failure — never blocks dev boot). Verified live: both admin-secret and forged-bearer lanes authenticate against a fresh dev server.
+
+## Handoff — the one manual pass (needs Misha's phone)
+
+1. `pnpm --dir apps/mobile start` in this worktree, install **Expo Go** from the App Store, scan the QR (same wifi).
+2. Sign in against **Production** (default preset) — in-app browser, Google/OTP. This is the first live test of the dynamic-registration + PKCE flow from Expo Go's `exp://` redirect URI (verified for custom schemes on the voice branch; the exp:// variant is the untested delta).
+3. Pick a project → New chat → send something → watch for "working…" then the reply.
+4. Captun check (the flagged guess): `CAPTUN_TUNNEL_NAME=<name> pnpm dev`, add `https://<name>.tunnels.iterate.com` as a custom server, sign in and send a message through it.
 
 ## Out of scope (v1)
 

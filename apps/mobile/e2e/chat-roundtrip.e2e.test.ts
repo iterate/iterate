@@ -16,6 +16,8 @@
 // is exercised by the real sign-in on the phone; this lane proves transport,
 // event shapes, live push, and reducer.
 
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { newWebSocketRpcSession } from "capnweb";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
@@ -29,7 +31,7 @@ import {
 import { dialItx } from "../src/lib/itx-core.ts";
 
 test("phone client seam: new mobile chat gets a live agent reply", async () => {
-  const baseUrl = requireEnv("APP_CONFIG_BASE_URL");
+  const baseUrl = resolveBaseUrl();
 
   // A throwaway project, created the same way the other e2e lanes do (the
   // admin handle may create projects; there is no projects.remove yet).
@@ -99,6 +101,25 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   );
   subscription.unsubscribe();
 });
+
+/**
+ * Deployed targets set APP_CONFIG_BASE_URL in Doppler; a local dev server
+ * runs on a random port and publishes itself to the discovery file instead
+ * (apps/os/scripts/lib/dev-server-info.ts).
+ */
+function resolveBaseUrl(): string {
+  const fromEnv = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (fromEnv) return fromEnv;
+  const discoveryFile = resolve(import.meta.dirname, "../../os/.dev-server/dev-server.json");
+  if (existsSync(discoveryFile)) {
+    const info = JSON.parse(readFileSync(discoveryFile, "utf8")) as { baseUrl?: string };
+    if (info.baseUrl) return info.baseUrl;
+  }
+  throw new Error(
+    "No target deployment: set APP_CONFIG_BASE_URL (doppler config for a deployed env) " +
+      "or start the local dev server (`pnpm dev start --detach`).",
+  );
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
