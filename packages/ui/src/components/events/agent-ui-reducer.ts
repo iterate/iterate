@@ -87,7 +87,18 @@ export type AgentUiStreamWakeItem = {
   timestampMs: number;
 };
 
-export type AgentUiItem = AgentUiMessageItem | AgentUiActivity | AgentUiStreamWakeItem;
+export type AgentUiChildStreamItem = {
+  kind: "child-stream-created";
+  id: string;
+  childPath: string;
+  timestampMs: number;
+};
+
+export type AgentUiItem =
+  | AgentUiMessageItem
+  | AgentUiActivity
+  | AgentUiStreamWakeItem
+  | AgentUiChildStreamItem;
 
 export type AgentUiProcessorAnnouncement = {
   slug: string;
@@ -172,6 +183,7 @@ const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
+const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -466,6 +478,17 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         kind: "stream-woken",
         id: `stream-woken-${event.offset}`,
         text: STREAM_WAKE_LABEL,
+        timestampMs,
+      });
+    }
+
+    case STREAM_CHILD_STREAM_CREATED: {
+      const childPath = readString(event, "childPath");
+      if (childPath == null) return state;
+      return emitItem(state, ops, {
+        kind: "child-stream-created",
+        id: `child-stream-created-${event.offset}`,
+        childPath,
         timestampMs,
       });
     }
