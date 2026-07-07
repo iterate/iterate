@@ -72,12 +72,20 @@ export type AgentUiFileAttachment = {
   url: string;
 };
 
+/** Marks a message that arrived through an external chat integration. */
+export type AgentUiMessageVia = {
+  service: "slack";
+  /** Best-effort sender label: slack user id for humans, bot name for bots. */
+  sender?: string;
+};
+
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
+  via?: AgentUiMessageVia;
 };
 
 export type AgentUiStreamWakeItem = {
@@ -169,6 +177,7 @@ const CODEMODE_SCRIPT_EXECUTION_REQUESTED =
   "events.iterate.com/codemode/script-execution-requested";
 const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
   "events.iterate.com/codemode/script-execution-completed";
+const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
@@ -208,12 +217,17 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // web-message-sent event already rendered as an assistant bubble —
       // they exist for the model's eyes, not the user's.
       if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
+      // Slack messages already render as a bubble from the webhook event
+      // itself; the slack-agent's yaml-dump input exists for the model's
+      // eyes. Only the stored file attachments are worth surfacing.
+      const isSlackInput = event.idempotencyKey?.startsWith("slack-agent:webhook-to-agent-input:");
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-file-${event.offset}`,
-        text,
+        text: isSlackInput ? "" : text,
         files,
         timestampMs,
+        ...(isSlackInput ? { via: { service: "slack" as const } } : {}),
       });
     }
 
@@ -409,6 +423,25 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case AGENT_STATUS_UPDATED: {
       if (readString(event, "status") !== "idle") return state;
       return settleLiveIfIdle(state, timestampMs, ops);
+    }
+
+    case SLACK_WEBHOOK_RECEIVED: {
+      const message = readSlackWebhookMessage(event);
+      if (message == null) return state;
+      const item: AgentUiMessageItem = {
+        kind: message.fromBot ? "assistant" : "user",
+        id: `slack-${event.offset}`,
+        text: message.text,
+        timestampMs,
+        via: {
+          service: "slack",
+          ...(message.sender == null ? {} : { sender: message.sender }),
+        },
+      };
+      // Bot echoes land mid-turn (the bot posts from inside a code step), so
+      // they emit directly like web-message-sent; human messages queue while
+      // steps are running, like web user messages.
+      return message.fromBot ? emitItem(state, ops, item) : emitUserMessageItem(state, ops, item);
     }
 
     case STREAM_SUBSCRIBER_CONNECTED: {
@@ -647,6 +680,52 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+// Best-effort view of a Slack Events API `event_callback` message webhook.
+// Mirrors the shape the slack-agent processor parses (see apps/os
+// slack-agent-processor-implementation.ts) without depending on it: the
+// reducer only needs enough to render a chat bubble. Non-message webhooks
+// (reactions, channel joins) and edit/delete subtypes return null.
+function readSlackWebhookMessage(
+  event: Event,
+): { text: string; fromBot: boolean; sender?: string } | null {
+  const body = readRecord(event, "body");
+  if (body?.type !== "event_callback") return null;
+  const slackEvent = isRecord(body.event) ? body.event : null;
+  if (slackEvent == null || slackEvent.type !== "message") return null;
+  const subtype = typeof slackEvent.subtype === "string" ? slackEvent.subtype : null;
+  if (subtype != null && subtype !== "bot_message" && subtype !== "file_share") return null;
+  const text = typeof slackEvent.text === "string" ? slackEvent.text : "";
+  if (text === "") return null;
+  const botProfile = isRecord(slackEvent.bot_profile) ? slackEvent.bot_profile : null;
+  const fromBot =
+    subtype === "bot_message" || typeof slackEvent.bot_id === "string" || botProfile != null;
+  const botName = typeof botProfile?.name === "string" ? botProfile.name : "";
+  const username = typeof slackEvent.username === "string" ? slackEvent.username : "";
+  const userId = typeof slackEvent.user === "string" ? slackEvent.user : "";
+  const sender = fromBot ? botName || username : userId;
+  return {
+    text: slackMrkdwnToMarkdown(text),
+    fromBot,
+    ...(sender === "" ? {} : { sender }),
+  };
+}
+
+/**
+ * Light mrkdwn → markdown: unwrap mentions and links, decode the three HTML
+ * entities slack escapes. Deliberately does not touch bold/italic markers —
+ * close enough is the goal.
+ */
+function slackMrkdwnToMarkdown(text: string): string {
+  return text
+    .replace(/<@([A-Z0-9]+)(?:\|([^>]+))?>/g, (_, id: string, label?: string) => `@${label || id}`)
+    .replace(/<#[A-Z0-9]+\|([^>]+)>/g, "#$1")
+    .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, "[$2]($1)")
+    .replace(/<(https?:\/\/[^>]+)>/g, "$1")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 function readFileAttachments(event: Event): AgentUiFileAttachment[] {

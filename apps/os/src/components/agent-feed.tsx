@@ -22,6 +22,7 @@ import type {
   AgentUiItem,
   AgentUiLlmStep,
   AgentUiMessageItem,
+  AgentUiMessageVia,
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -85,7 +86,11 @@ export function AgentFeedView({
   const live = liveState?.live ?? null;
   const queuedUserMessages = liveState?.queuedUserMessages ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
+  // Ids whose disclosure the user flipped away from its default state.
+  // Activities and live-rail steps default collapsed (has(id) = expanded);
+  // steps inside an expanded settled activity default expanded when their
+  // detail has content (has(id) = collapsed).
+  const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
   // The live in-flight activity and the queued-messages panel are the list's
   // trailing items, so TanStack Virtual owns ALL tail behavior natively:
@@ -170,7 +175,7 @@ export function AgentFeedView({
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.
   const toggleExpanded = useCallback((id: string) => {
-    setExpandedIds((previous) => {
+    setToggledIds((previous) => {
       const next = new Set(previous);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -207,7 +212,7 @@ export function AgentFeedView({
                 {isLiveItem ? (
                   <AgentLiveActivity
                     live={live}
-                    expandedIds={expandedIds}
+                    toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                   />
                 ) : isQueuedItem ? (
@@ -219,11 +224,7 @@ export function AgentFeedView({
                 ) : item == null ? (
                   <div className="my-2 h-10 rounded-xl bg-muted/40" />
                 ) : (
-                  <AgentFeedItemRow
-                    item={item}
-                    expandedIds={expandedIds}
-                    onToggle={toggleExpanded}
-                  />
+                  <AgentFeedItemRow item={item} toggledIds={toggledIds} onToggle={toggleExpanded} />
                 )}
               </div>
             );
@@ -240,11 +241,11 @@ export function AgentFeedView({
 // the underlying SQLite snapshot actually changes.
 const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
-  expandedIds,
+  toggledIds,
   onToggle,
 }: {
   item: AgentUiItem;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
   if (item.kind === "stream-woken") {
@@ -274,6 +275,9 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
         data-kind="assistant"
       >
         <MessageContent>
+          {item.via == null ? null : (
+            <MessageViaLabel via={item.via} className="text-muted-foreground" />
+          )}
           <MessageResponse className="min-w-0 max-w-full overflow-hidden">
             {item.text}
           </MessageResponse>
@@ -286,8 +290,8 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
   return (
     <AgentActivityRow
       activity={item}
-      expanded={expandedIds.has(item.id)}
-      expandedIds={expandedIds}
+      expanded={toggledIds.has(item.id)}
+      toggledIds={toggledIds}
       onToggle={onToggle}
     />
   );
@@ -344,12 +348,12 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
 function AgentActivityRow({
   activity,
   expanded,
-  expandedIds,
+  toggledIds,
   onToggle,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
   const interrupted = activityWasInterrupted(activity);
@@ -379,14 +383,24 @@ function AgentActivityRow({
       </Button>
       {expanded ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {activity.steps.map((step) => (
-            <AgentActivityStep
-              key={step.id}
-              step={step}
-              expanded={expandedIds.has(step.id)}
-              onToggle={onToggle}
-            />
-          ))}
+          {activity.steps.map((step, index) => {
+            // Expanding the activity shows what happened directly — code and
+            // results are the point of expanding, not a second disclosure.
+            // Steps whose detail would show nothing (e.g. an LLM step whose
+            // whole response is the very script the next code step renders
+            // anyway) stay collapsed behind their slim header row.
+            const hideDuplicateResponse = llmResponseDuplicatesCode(activity.steps, index);
+            const defaultExpanded = stepDetailHasContent(step, hideDuplicateResponse);
+            return (
+              <AgentActivityStep
+                key={step.id}
+                step={step}
+                expanded={toggledIds.has(step.id) !== defaultExpanded}
+                hideDuplicateResponse={hideDuplicateResponse}
+                onToggle={onToggle}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -441,9 +455,20 @@ function QueuedMessagesPanel({
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
+      {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
       {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
       <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
+  );
+}
+
+/** Small "slack · U0123ABC" marker on messages from external chat integrations. */
+function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className?: string }) {
+  return (
+    <div className={cn("font-mono text-[11px] leading-none", className)}>
+      {via.service}
+      {via.sender == null ? "" : ` · ${via.sender}`}
+    </div>
   );
 }
 
@@ -526,10 +551,12 @@ function activitySummary(activity: AgentUiActivity): string {
 function AgentActivityStep({
   step,
   expanded,
+  hideDuplicateResponse,
   onToggle,
 }: {
   step: AgentUiStep;
   expanded: boolean;
+  hideDuplicateResponse: boolean;
   onToggle: (id: string) => void;
 }) {
   return (
@@ -557,11 +584,51 @@ function AgentActivityStep({
       </Button>
       {expanded ? (
         <div className="flex flex-col gap-2 pb-2.5 pl-5 pt-0.5">
-          {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
+          {step.kind === "llm" ? (
+            <LlmStepDetail step={step} hideResponse={hideDuplicateResponse} />
+          ) : (
+            <CodeStepDetail step={step} />
+          )}
         </div>
       ) : null}
     </div>
   );
+}
+
+/**
+ * Whether an expanded step detail would actually show something. Steps with
+ * empty details default to collapsed so an expanded activity reads as code →
+ * results without blank sections (their headers still carry timing/tokens).
+ */
+function stepDetailHasContent(step: AgentUiStep, hideDuplicateResponse: boolean): boolean {
+  if (step.kind === "code") return true;
+  return (
+    step.thinkingText !== "" ||
+    step.errorMessage != null ||
+    (step.responseText !== "" && !hideDuplicateResponse)
+  );
+}
+
+// In code-mode turns the LLM response *is* the script that a following code
+// step executes — rendering the same code twice buries the results the reader
+// is after. Compares against code steps up to the next LLM step.
+function llmResponseDuplicatesCode(steps: AgentUiStep[], index: number): boolean {
+  const step = steps[index];
+  if (step == null || step.kind !== "llm" || step.responseText === "") return false;
+  const response = stripCodeFence(step.responseText);
+  for (const later of steps.slice(index + 1)) {
+    if (later.kind === "llm") return false;
+    if (later.code !== "" && stripCodeFence(later.code) === response) return true;
+  }
+  return false;
+}
+
+function stripCodeFence(text: string): string {
+  return text
+    .trim()
+    .replace(/^```[a-z]*\n?/i, "")
+    .replace(/\n?```$/, "")
+    .trim();
 }
 
 function stepLabel(step: AgentUiStep): string {
@@ -584,11 +651,13 @@ function stepMeta(step: AgentUiStep): string {
   return parts.join(" · ");
 }
 
-function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
+function LlmStepDetail({ step, hideResponse }: { step: AgentUiLlmStep; hideResponse: boolean }) {
+  const showResponse = step.responseText !== "" && !hideResponse;
+  const hasContent = step.thinkingText !== "" || showResponse || step.errorMessage != null;
   return (
     <>
       {step.thinkingText === "" ? null : <ThinkingBlock>{step.thinkingText}</ThinkingBlock>}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {!showResponse ? null : looksLikeCode(step.responseText) ? (
         <SourceCodeBlock
           code={step.responseText}
           language="typescript"
@@ -602,9 +671,18 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
           {step.responseText}
         </div>
       )}
-      <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
-        {JSON.stringify(llmStepRawSummary(step), null, 2)}
-      </pre>
+      {step.errorMessage == null ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
+          {step.errorMessage}
+        </pre>
+      )}
+      {/* Token/timing metadata lives in the step's header row; the raw
+          summary only fills in when the step has nothing else to show. */}
+      {hasContent ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
+          {JSON.stringify(llmStepRawSummary(step), null, 2)}
+        </pre>
+      )}
     </>
   );
 }
@@ -622,16 +700,10 @@ function llmStepRawSummary(step: AgentUiLlmStep) {
 }
 
 function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
-  const startedAtDateTime = formatDateTimeAttribute(step.startedAtMs);
-
+  // No timestamp heading here: the step's header row already says when it
+  // started — the detail is the code and what it returned.
   return (
     <>
-      <time
-        className="block px-1.5 font-mono text-xs text-muted-foreground"
-        dateTime={startedAtDateTime}
-      >
-        Started {formatDateTime(step.startedAtMs)}
-      </time>
       {step.code === "" ? null : (
         <SourceCodeBlock
           code={step.code}
@@ -684,11 +756,11 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
  */
 function AgentLiveActivity({
   live,
-  expandedIds,
+  toggledIds,
   onToggle,
 }: {
   live: AgentUiActivity;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
   const runningSteps = live.steps.filter((step) => step.status === "running");
@@ -703,8 +775,8 @@ function AgentLiveActivity({
     return (
       <AgentActivityRow
         activity={live}
-        expanded={expandedIds.has(live.id)}
-        expandedIds={expandedIds}
+        expanded={toggledIds.has(live.id)}
+        toggledIds={toggledIds}
         onToggle={onToggle}
       />
     );
@@ -722,11 +794,14 @@ function AgentLiveActivity({
       ) : null}
       {showStepRail ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
+          {/* Steps in the live rail default to collapsed quiet rows — the
+              streaming tail below is the focus while work is in flight. */}
           {doneSteps.map((step) => (
             <AgentActivityStep
               key={step.id}
               step={step}
-              expanded={expandedIds.has(step.id)}
+              expanded={toggledIds.has(step.id)}
+              hideDuplicateResponse={false}
               onToggle={onToggle}
             />
           ))}
@@ -735,7 +810,8 @@ function AgentLiveActivity({
               <AgentActivityStep
                 key={step.id}
                 step={step}
-                expanded={expandedIds.has(step.id)}
+                expanded={toggledIds.has(step.id)}
+                hideDuplicateResponse={false}
                 onToggle={onToggle}
               />
             ) : step === liveStep && liveStepHasVisibleContent(step) ? (

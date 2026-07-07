@@ -7,7 +7,11 @@ size: medium
 
 ## Status summary
 
-Spec fleshed out from a prompt + screenshots (assumptions marked below). Implementation not started yet.
+Implementation done: slack webhooks render as user/assistant bubbles with a
+"slack · <sender>" label, and expanding a "Ran code" activity shows code +
+results directly (steps default-expanded, duplicate LLM-response code
+suppressed, redundant metadata dropped). Unit tests added and passing;
+typecheck/lint/format clean. Remaining: browser verification + PR screenshots.
 
 ## Problem
 
@@ -50,34 +54,52 @@ Looking at a slack agent chat like
 
 ### Slack message rendering
 
-- [ ] Handle `slack/webhook-received` in `reduceAgentUiEvent`: for
+- [x] Handle `slack/webhook-received` in `reduceAgentUiEvent`: for
       `event_callback` message events with text, emit a message item — kind
       `user` for human messages, kind `assistant` for bot messages (detect via
       `bot_id`/bot profile on the inner event). Ignore non-message webhooks,
       message edits/deletes and other subtypes (best-effort).
-- [ ] Carry best-effort sender metadata (slack user id / username when present)
+      _`readSlackWebhookMessage` in agent-ui-reducer.ts; also unwraps mrkdwn
+      mentions/links and decodes slack's HTML entities._
+- [x] Carry best-effort sender metadata (slack user id / username when present)
       on the message item and show it on the bubble, so slack messages are
       distinguishable from web-composer messages.
-- [ ] Render slack message text through the existing `MessageResponse`
+      _New optional `via: { service: "slack"; sender? }` on
+      `AgentUiMessageItem`, rendered by `MessageViaLabel` in agent-feed.tsx._
+- [x] Render slack message text through the existing `MessageResponse`
       markdown path (slack mrkdwn ≈ markdown is fine as best effort).
-- [ ] Bump `AGENT_UI_SCHEMA_VERSION`.
-- [ ] Reducer tests: human slack message → user bubble; bot echo → assistant
+      _Assistant bubbles go through `MessageResponse` as before; user bubbles
+      keep the plain pre-wrap body all user messages use, for consistency._
+- [x] Bump `AGENT_UI_SCHEMA_VERSION`. _6 → 7._
+- [x] Reducer tests: human slack message → user bubble; bot echo → assistant
       bubble; reaction/edit webhooks ignored.
+      _Five new cases in agent-ui-reducer.test.ts, including mid-turn queueing
+      and the slack yaml input-added attachments-only bubble._
 
 ### Ran-code expansion flattening
 
-- [ ] Expanding an activity shows step details directly: steps inside an
+- [x] Expanding an activity shows step details directly: steps inside an
       expanded activity default to expanded (code + result visible
       immediately), with individual steps still collapsible via their slim
       header row.
-- [ ] Remove the double "Ran code" nesting: the step header inside an expanded
+      _`expandedIds` became `toggledIds` — a set of per-id overrides of the
+      context-dependent default; settled-activity steps default expanded when
+      their detail has content._
+- [x] Remove the double "Ran code" nesting: the step header inside an expanded
       activity is a slim one-liner (label + duration), not a second
       collapsed-by-default disclosure that repeats the activity summary.
-- [ ] Drop metadata throat-clearing in step details (the repeated
+- [x] Drop metadata throat-clearing in step details (the repeated
       "Started <full date>" line); keep timing info in the slim header.
-- [ ] LLM-request steps inside an expanded activity: show the response
+      _Also demoted the always-on raw JSON usage block in LLM details to a
+      fallback shown only when the step has no other content; failures show
+      the error message directly._
+- [x] LLM-request steps inside an expanded activity: show the response
       content directly too, with the token/timing meta staying in the header
       line.
+      _With one wrinkle: in code-mode turns the LLM response is the very
+      script the next code step executes, so `llmResponseDuplicatesCode`
+      suppresses the duplicate and the expanded activity reads thinking →
+      code → result per round._
 
 ## Assumptions (made while fleshing out from the prompt)
 
