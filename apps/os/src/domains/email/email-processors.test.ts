@@ -420,13 +420,86 @@ describe("EmailProcessor (thread router)", () => {
 });
 
 describe("EmailAgentProcessor", () => {
-  function setup() {
+  function setup(deps?: {
+    resolveStoredAttachments?: ConstructorParameters<
+      typeof EmailAgentProcessor
+    >[0]["resolveStoredAttachments"];
+  }) {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/agents/email/t1");
-    const processor = new EmailAgentProcessor({ stream });
+    const processor = new EmailAgentProcessor({ stream, ...deps });
     const cursors = new Map<object, number>();
     return { cursors, network, processor, stream };
   }
+
+  it("attaches door-stored attachments to the agent input as files", async () => {
+    const resolved = {
+      contentType: "application/pdf",
+      filename: "report.pdf",
+      path: "/email/inbound/msg-0-report.pdf",
+      size: 1234,
+      url: "https://iterate-files--acme.iterate.app/report.pdf?sig=x",
+    };
+    const seen: unknown[] = [];
+    const { cursors, processor, stream } = setup({
+      resolveStoredAttachments: async (attachments) => {
+        seen.push(attachments);
+        return [resolved];
+      },
+    });
+
+    const payload = receivedPayload({});
+    payload.message.attachments = [
+      {
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        size: 1234,
+        path: "/email/inbound/msg-0-report.pdf",
+      },
+      // Metadata-only attachment (storage failed at the door): not resolved.
+      { filename: "broken.bin", mimeType: null, size: 10 },
+    ];
+    await stream.append({ type: "events.iterate.com/email/received", payload });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(seen).toEqual([
+      [
+        {
+          filename: "report.pdf",
+          mimeType: "application/pdf",
+          path: "/email/inbound/msg-0-report.pdf",
+          size: 1234,
+        },
+      ],
+    ]);
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.payload).toMatchObject({ files: [resolved] });
+  });
+
+  it("degrades to a plain transcription when attachment resolution fails", async () => {
+    const { cursors, processor, stream } = setup({
+      resolveStoredAttachments: async () => {
+        throw new Error("signing exploded");
+      },
+    });
+
+    const payload = receivedPayload({});
+    payload.message.attachments = [
+      { filename: "cat.png", mimeType: "image/png", size: 3, path: "/email/inbound/msg-0-cat.png" },
+    ];
+    await stream.append({ type: "events.iterate.com/email/received", payload });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.payload).not.toHaveProperty("files");
+    expect((inputs[0]!.payload as { content: string }).content).toContain("cat.png");
+  });
 
   it("captures thread context and transcribes inbound mail into triggering agent input", async () => {
     const { cursors, processor, stream } = setup();

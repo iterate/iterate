@@ -12,6 +12,8 @@ import { SlackAgentProcessor } from "../integrations/slack-agent-processor-imple
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
+import { mintProjectFileUrl } from "../files/project-files.ts";
+import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
@@ -106,11 +108,36 @@ export class AgentDurableObject extends DurableObject<Env> {
       }),
   );
 
-  // Registered on every agent host; it only wakes on routed email agent
-  // streams (`/agents/email/**`) where the project processor configured its
-  // subscription. No side-effect deps: replies leave through itx.email.reply,
-  // called by the agent itself.
-  readonly emailAgentProcessor = this.#processorHost.add((deps) => new EmailAgentProcessor(deps));
+  // Registered on every agent host; it wakes on routed email agent streams
+  // (`/agents/email/**`) and on any agent stream an agent-scoped email.send
+  // bound. Replies leave through itx.email.reply, called by the agent itself;
+  // the one dep turns door-stored inbound attachments into signed
+  // AgentFileAttachments so images are visible to the model.
+  readonly emailAgentProcessor = this.#processorHost.add(
+    (deps) =>
+      new EmailAgentProcessor({
+        ...deps,
+        resolveStoredAttachments: async (attachments) => {
+          const config = parseConfig(this.env);
+          return await Promise.all(
+            attachments.map(async (attachment, index) => {
+              const url = await mintProjectFileUrl({
+                config,
+                path: attachment.path,
+                projectId: this.#name.projectId,
+              });
+              return {
+                contentType: attachment.mimeType ?? "application/octet-stream",
+                filename: attachment.filename ?? `attachment-${index}`,
+                path: attachment.path,
+                size: attachment.size,
+                url,
+              };
+            }),
+          );
+        },
+      }),
+  );
 
   async #readAgentPromptEvents(): Promise<StreamEvent[]> {
     const events: StreamEvent[] = [];
