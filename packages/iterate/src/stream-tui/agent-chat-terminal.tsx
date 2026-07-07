@@ -27,6 +27,7 @@ import {
   type AgentConnectionStatus,
 } from "./agent-connection.ts";
 import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
+import { parseChatBangCommand } from "./chat-bang-command.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
@@ -82,6 +83,7 @@ const connection = connectAgentFeed({
     if (model.applyEvents(events)) patchAppState({ feed: model.snapshot() });
   },
   onStatus: (status) => patchAppState({ status }),
+  onMachineInvocation: (invocation) => patchAppState({ notice: `machine ← ${invocation.summary}` }),
 });
 
 // ---------------------------------------------------------------------------
@@ -112,15 +114,33 @@ function AgentChatApp() {
     (value: string) => {
       const message = value.trim();
       if (message === "") return;
+
+      // Bang commands (`!share` / `!unshare`) are handled locally and never sent
+      // to the agent as a chat turn, in the spirit of Slack's `!debug`.
+      const bang = parseChatBangCommand(message);
+      if (bang != null) {
+        clearComposer();
+        if (bang.kind === "share") {
+          patchAppState({ notice: "sharing this machine — agent can run commands as you" });
+          connection.shareMachine().catch((error: unknown) => {
+            patchAppState({ notice: `!share failed: ${errorText(error)}` });
+          });
+        } else {
+          patchAppState({ notice: "stopped sharing this machine" });
+          connection.stopSharingMachine().catch((error: unknown) => {
+            patchAppState({ notice: `!unshare failed: ${errorText(error)}` });
+          });
+        }
+        return;
+      }
+
       clearComposer();
       patchAppState({ notice: "sending…" });
       connection
         .sendMessage(message)
         .then(() => patchAppState({ notice: "" }))
         .catch((error: unknown) => {
-          patchAppState({
-            notice: `send failed: ${error instanceof Error ? error.message : String(error)}`,
-          });
+          patchAppState({ notice: `send failed: ${errorText(error)}` });
         });
     },
     [clearComposer],
@@ -164,7 +184,7 @@ function AgentChatApp() {
           key={composerRevision}
           width="100%"
           value={composerValue}
-          placeholder="Message the agent (Enter to send, Ctrl+C to quit)"
+          placeholder="Message the agent (Enter to send · !share to share this machine · Ctrl+C to quit)"
           focused
           backgroundColor="transparent"
           focusedBackgroundColor="transparent"
@@ -228,6 +248,9 @@ function ChatHeader(props: { status: AgentConnectionStatus; notice: string; even
 
 function FeedItem(props: { item: AgentUiItem }) {
   if (props.item.kind === "activity") return <SettledActivity activity={props.item} />;
+  if (props.item.kind === "stream-woken") {
+    return <text fg={COLORS.textMuted}>✦ {props.item.text}</text>;
+  }
   return <Message item={props.item} />;
 }
 
@@ -268,9 +291,7 @@ function LiveActivity(props: { activity: AgentUiActivity }) {
         : "";
   return (
     <box flexDirection="column">
-      <text fg={props.activity.status === "waiting" ? COLORS.textMuted : COLORS.warning}>
-        ✦ {props.activity.status === "waiting" ? "waiting" : "working…"}
-      </text>
+      <text fg={COLORS.warning}>✦ working…</text>
       {props.activity.steps.map((step) => (
         <text key={step.id} fg={COLORS.textMuted}>
           {"  "}· {formatStepLine(step)}
@@ -288,6 +309,10 @@ function getBrandMarkText() {
     bg("#000000")(fg("#ffffff")(" 𝑖 ")),
     fg("#000000")(bg(COLORS.surface)("▌")),
   ]);
+}
+
+function errorText(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatClock(timestampMs: number) {

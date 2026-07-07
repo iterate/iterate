@@ -7,7 +7,11 @@ size: small
 
 ## Status summary
 
-POC being implemented. Spec fleshed out below; no implementation yet.
+POC implemented and green (new tests + typecheck + lint pass). `!share`/`!unshare`
+work in the chat composer; the live capability (exec/readFile/writeFile/glob/notify)
+mounts on the agent's scope and re-provides across reconnects. Not yet driven
+end-to-end against a live agent (needs a running `pnpm dev` + doppler). One
+**pre-existing, unrelated** test failure found on `main` — see notes.
 
 ## Goal
 
@@ -63,19 +67,36 @@ for "my laptop, while I'm in this chat".
 
 ## Checklist
 
-- [ ] `machine-capability.ts`: capability factory (`exec`, `readFile`, `writeFile`,
+- [x] `machine-capability.ts`: capability factory (`exec`, `readFile`, `writeFile`,
       `glob`, `notify`) with `instructions`/`types` strings for `__describe`
-      discovery, and an `onInvocation` hook for the TUI notices
-- [ ] unit test for the capability methods (tmpdir roundtrip: write → glob → read;
-      exec echo; truncation)
-- [ ] bang-command parsing for the composer (`!share` / `!unshare`), unit tested
-- [ ] `agent-connection.ts`: expose provide/revoke on the connection + re-provide
-      on reconnect while sharing is active
-- [ ] `agent-chat-terminal.tsx`: intercept bang commands, warning + status notices,
-      invocation notices, revoke on quit
+      discovery, and an `onInvocation` hook for the TUI notices _(machine-capability.ts)_
+- [x] unit test for the capability methods (tmpdir roundtrip: write → glob → read;
+      exec echo; truncation) _(machine-capability.test.ts)_
+- [x] bang-command parsing for the composer (`!share` / `!unshare`), unit tested
+      _(chat-bang-command.ts + .test.ts)_
+- [x] `agent-connection.ts`: expose provide/revoke on the connection + re-provide
+      on reconnect while sharing is active _(shareMachine/stopSharingMachine + provideMachine() in establish())_
+- [x] `agent-chat-terminal.tsx`: intercept bang commands, warning + status notices,
+      invocation notices _(submit() interception + onMachineInvocation notice)_.
+      Revoke on quit is best-effort via the existing `connection.dispose()` on
+      process exit — the live stub dies with the socket regardless.
 - [ ] verify end-to-end against local dev (`pnpm dev`): `!share`, ask agent to
-      `itx.usersMachine.glob(...)`, watch it run
-- [ ] typecheck / lint / format / test
+      `itx.usersMachine.glob(...)`, watch it run _(not done — needs running dev
+      server + doppler; deferred to reviewer / follow-up)_
+- [x] typecheck / lint / format / new tests all pass
+
+## Pre-existing issue found (NOT introduced here)
+
+While running the package suite I found `agent-feed-model.test.ts > folds a chat
+round` failing on `origin/main`, independent of this branch. After
+`web-message-sent` the live activity no longer settles to null. I confirmed it
+fails even against the reducer from _before_ the recent `stream-woken` commit
+(`34f48c4f`), so it's an older stale test (likely a drifted event name), not
+caused by that commit or by this work. I fixed the _typecheck_ siblings of the
+same drift in `agent-chat-terminal.tsx` (a new `stream-woken` item kind and a
+removed `"waiting"` activity status) because they block compiling this package —
+but I deliberately did **not** touch the reducer test semantics, as that's a
+separate concern needing the feed-model author's intent. Flagged for the user.
 
 ## Follow-ups (out of scope)
 
@@ -87,3 +108,9 @@ for "my laptop, while I'm in this chat".
 ## Implementation log
 
 - (start) Spec committed before implementation, per worktreeify flow.
+- Implemented the capability factory, bang parser, connection wiring, and TUI
+  interception. New tests green; package typecheck/lint/format clean.
+- Fixed two pre-existing typecheck errors in `agent-chat-terminal.tsx` from the
+  `stream-woken` reducer drift (needed to compile the package).
+- Found + attributed a pre-existing unrelated feed-model test failure on main
+  (see section above); left it untouched.

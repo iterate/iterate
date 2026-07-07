@@ -8,8 +8,22 @@
  */
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../../../apps/os/src/itx-client.ts";
-import type { Agent, ItxAuthCredentials, StreamEvent } from "../../../../apps/os/src/types.ts";
+import type {
+  Agent,
+  CapabilityProvision,
+  ItxAuthCredentials,
+  StreamEvent,
+} from "../../../../apps/os/src/types.ts";
 import { readConfig } from "../config.ts";
+import {
+  createMachineCapability,
+  MACHINE_CAPABILITY_INSTRUCTIONS,
+  MACHINE_CAPABILITY_TYPES,
+  type MachineInvocation,
+} from "./machine-capability.ts";
+
+/** Path the machine capability mounts at on the agent's scope. */
+export const MACHINE_CAPABILITY_PATH = ["usersMachine"];
 
 const RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 15_000;
@@ -47,6 +61,14 @@ export function resolveItxAuth(input: { configName: string | undefined }): ItxAu
 type AgentConnection = {
   /** Append one user message to the agent stream (triggers the agent loop). */
   sendMessage(text: string): Promise<void>;
+  /**
+   * Provide the live machine capability on the current agent, and keep it
+   * provided across reconnects until `stopSharingMachine` (the live stub dies
+   * with its socket, so we re-provide on each fresh connection).
+   */
+  shareMachine(): Promise<void>;
+  /** Revoke the machine capability and stop re-providing it on reconnect. */
+  stopSharingMachine(): Promise<void>;
   dispose(): void;
 };
 
@@ -59,19 +81,45 @@ export function connectAgentFeed(input: {
   replayAfterOffset: () => number;
   onEvents: (events: readonly StreamEvent[]) => void;
   onStatus: (status: AgentConnectionStatus) => void;
+  /** Called before each method the agent invokes on the shared machine. */
+  onMachineInvocation?: (invocation: MachineInvocation) => void;
 }): AgentConnection {
   let disposed = false;
   let agent: RpcStub<Agent> | undefined;
   let subscription: Disposable | undefined;
   let consecutiveFailures = 0;
+  // When the user has `!share`d, this is set and we (re-)provide the capability
+  // on every fresh connection. `provision` is the current live mount, if any.
+  let sharingMachine = false;
+  let provision: CapabilityProvision | undefined;
+
+  const machineCapability = createMachineCapability({
+    onInvocation: (invocation) => input.onMachineInvocation?.(invocation),
+  });
+
+  const provideMachine = async () => {
+    if (!sharingMachine || agent === undefined || provision !== undefined) return;
+    provision = await agent.provideCapability({
+      type: "live",
+      path: MACHINE_CAPABILITY_PATH,
+      capability: machineCapability,
+      instructions: MACHINE_CAPABILITY_INSTRUCTIONS,
+      types: MACHINE_CAPABILITY_TYPES,
+    });
+  };
 
   const disposeAgent = () => {
     try {
+      // The provision's revoke rides the same socket, so once the agent stub is
+      // gone the mount is unreachable anyway; just drop our handle and re-provide
+      // on the next connection.
+      provision?.[Symbol.dispose]?.();
       subscription?.[Symbol.dispose]?.();
       agent?.[Symbol.dispose]?.();
     } catch {
       // The socket may already be gone; the stub is dead either way.
     }
+    provision = undefined;
     subscription = undefined;
     agent = undefined;
   };
@@ -114,6 +162,8 @@ export function connectAgentFeed(input: {
       }
       consecutiveFailures = 0;
       input.onStatus({ kind: "live" });
+      // Re-establish sharing on a fresh socket (no-op if not sharing).
+      await provideMachine();
     } catch (error) {
       if (agent === nextAgent) scheduleReconnect(errorMessage(error));
     }
@@ -126,8 +176,24 @@ export function connectAgentFeed(input: {
       if (agent === undefined) throw new Error("not connected");
       await agent.sendMessage(text);
     },
+    async shareMachine() {
+      sharingMachine = true;
+      await provideMachine();
+    },
+    async stopSharingMachine() {
+      sharingMachine = false;
+      const current = provision;
+      provision = undefined;
+      if (current === undefined) return;
+      try {
+        await current.revoke();
+      } catch {
+        // Socket may be gone; the mount dies with it regardless.
+      }
+    },
     dispose() {
       disposed = true;
+      sharingMachine = false;
       disposeAgent();
     },
   };
