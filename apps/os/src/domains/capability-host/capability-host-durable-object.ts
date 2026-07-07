@@ -3,7 +3,6 @@ import type { Env } from "../../env.ts";
 import type { CapabilityDescription } from "../../types.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
-import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
@@ -16,6 +15,19 @@ import {
   type ProvideCapabilityInput,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
+
+type ScriptExecutionEntrypoint = {
+  run(code: string): Promise<unknown>;
+};
+
+type ScriptExecutionLoopbackExports = {
+  ScriptExecutionEntrypoint(input: {
+    props: {
+      projectId: string;
+      scopePath: string;
+    };
+  }): ScriptExecutionEntrypoint;
+};
 
 /**
  * One capability scope: the durable dynamic-capability table and script
@@ -49,15 +61,23 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         // chain.
         parent: this.#parentCapabilityHost(),
         path: this.#name.path,
-        // Scripts execute in THIS scope — the runner is minted once for it.
-        dynamicWorkers: new DynamicWorkerRunner({
-          exports: this.ctx.exports,
-          projectId: this.#name.projectId,
-          scopePath: this.#name.path,
-          waitUntil: (promise) => this.ctx.waitUntil(promise),
-        }),
+        scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
       }),
   );
+
+  #scriptExecutionEntrypoint(): ScriptExecutionEntrypoint {
+    // Scripts execute in THIS scope, but the Dynamic Worker load happens in a
+    // stateless loopback entrypoint instead of this Durable Object. Keep the
+    // type shallow to avoid deep-instantiating the generated `ctx.exports`
+    // WorkerEntrypoint type through the Durable Object's processor field.
+    const exports = this.ctx.exports as unknown as ScriptExecutionLoopbackExports;
+    return exports.ScriptExecutionEntrypoint({
+      props: {
+        scopePath: this.#name.path,
+        projectId: this.#name.projectId,
+      },
+    });
+  }
 
   #parentCapabilityHost(): ParentCapabilityHost | undefined {
     const parentPath = parentScopePath(this.#name.path);

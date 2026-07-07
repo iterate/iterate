@@ -1,9 +1,12 @@
 /**
- * Repro for Cloudflare Dynamic Worker Loader owner-side saturation.
+ * Regression coverage for Cloudflare Dynamic Worker Loader owner-side
+ * saturation.
  *
  * Each runScript call below becomes a distinct inline Dynamic Worker source.
- * On deployed Workers, five concurrent long-lived script starts from one
- * capability-host DO currently trips "Too many concurrent dynamic workers".
+ * On deployed Workers, five concurrent long-lived scripts from one
+ * capability-host scope must all complete instead of sharing one Durable Object
+ * as the dynamic-loader owner and tripping "Too many concurrent dynamic
+ * workers".
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
