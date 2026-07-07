@@ -4,6 +4,7 @@ import type { StatefulDynamicWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { takeWorkerFetchDispatch } from "./worker-fetch-dispatch.ts";
+import { isWorkerBuildInProgressError } from "./worker-loader.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
@@ -53,7 +54,19 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     if (taken.dispatch.ref.type !== "stateful") {
       throw new Error("StatefulWorkerDurableObject.fetch dispatched with a non-stateful ref.");
     }
-    const facet = await this.#facet(taken.dispatch.ref, taken.dispatch.buildBudgetMs);
+    let facet: unknown;
+    try {
+      facet = await this.#facet(taken.dispatch.ref, taken.dispatch.buildBudgetMs);
+    } catch (error) {
+      // Answer the building case HERE rather than relying on the error name
+      // surviving the Durable Object fetch hop back to the dispatching
+      // entrypoint — same retryable 503 a client's reconnect loop rides.
+      if (!isWorkerBuildInProgressError(error)) throw error;
+      return new Response("This worker is still building.", {
+        headers: { "retry-after": "2" },
+        status: 503,
+      });
+    }
     return await (facet as Fetcher).fetch(taken.request);
   }
 
