@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
+    "@iterate-com/ui": "workspace:*",
     "@tanstack/react-query": "^5.90.0",
     "capnweb": "^0.8.0",
     "expo": "~54.0.35",

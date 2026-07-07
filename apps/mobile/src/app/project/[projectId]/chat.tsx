@@ -1,12 +1,16 @@
-// Chat thread — one agent stream rendered as messages. The heart of the app.
+// Chat thread — one agent stream rendered as a feed. The heart of the app.
 //
 // Data flow: loadAndFollowThread (lib/live-thread.ts) reads the stream's
 // events and keeps a live server-push subscription feeding the same query
 // cache, so this screen is a plain useQuery consumer. Sending appends to the
 // agent stream over itx (the same lane the web dashboard uses); the echo of
-// our own message and the agent's replies both arrive through the
-// subscription. Only visible messages render — everything else on the stream
-// collapses into a "working…" row (see lib/chat.ts).
+// our own message and everything the agent does arrive through the
+// subscription.
+//
+// Rendering runs the SAME reduction as the web dashboard (packages/ui
+// agent-ui-reducer via lib/feed.ts): user/assistant bubbles plus activity
+// roll-ups whose thinking/code text streams token-by-token while the agent
+// works. A header toggle flips to the raw event feed for debugging.
 //
 // A brand-new chat is just this screen pointed at a fresh /agents/mobile/<ts>
 // path: reading lazily initializes the stream and the first send creates the
@@ -27,12 +31,14 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
 import { SignInRequiredError } from "../../../lib/auth.ts";
-import { reduceChatEvents, type ChatMessage } from "../../../lib/chat.ts";
+import { reduceFeed, type AgentUiItem, type AgentUiMessageItem } from "../../../lib/feed.ts";
 import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
+import type { StreamEvent } from "../../../../../os/src/types.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatScreen() {
@@ -67,6 +73,7 @@ export default function ChatScreen() {
   });
 
   const [draft, setDraft] = useState("");
+  const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
   const send = useMutation({
     mutationFn: async (message: string) => {
       const itx = await getItxSession(baseUrl!);
@@ -81,10 +88,7 @@ export default function ChatScreen() {
     router.replace("/");
   }
 
-  const thread = reduceChatEvents(events.data || []);
-  // Inverted list keeps the newest message at the bottom and pinned on
-  // keyboard open; data is reversed to match.
-  const rows = [...thread.messages].reverse();
+  const feed = reduceFeed(path, events.data || []);
   const insets = useSafeAreaInsets();
 
   return (
@@ -93,7 +97,16 @@ export default function ChatScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={100}
     >
-      <Stack.Screen options={{ title: path.replace(/^\/agents\//, "") }} />
+      <Stack.Screen
+        options={{
+          title: path.replace(/^\/agents\//, ""),
+          headerRight: () => (
+            <Pressable onPress={() => setViewMode(viewMode === "chat" ? "events" : "chat")}>
+              <Text style={styles.modeToggle}>{viewMode === "chat" ? "raw" : "chat"}</Text>
+            </Pressable>
+          ),
+        }}
+      />
       {events.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.textMuted} />
@@ -105,30 +118,10 @@ export default function ChatScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
+      ) : viewMode === "chat" ? (
+        <FeedList feed={feed} sendPending={send.isPending} />
       ) : (
-        <FlatList
-          inverted
-          data={rows}
-          keyExtractor={(message) => String(message.offset)}
-          contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
-          ListHeaderComponent={
-            // Inverted list: the "header" renders at the visual bottom.
-            thread.working || send.isPending ? (
-              <View style={styles.workingRow}>
-                <ActivityIndicator size="small" color={colors.working} />
-                <Text style={styles.workingText}>working…</Text>
-              </View>
-            ) : null
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyFlip}>
-              <Text style={styles.empty}>
-                Say what you want done. The agent replies here — long tasks show as working…
-              </Text>
-            </View>
-          }
-          renderItem={({ item: message }) => <MessageBubble message={message} />}
-        />
+        <EventList events={events.data || []} />
       )}
 
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
@@ -160,15 +153,85 @@ export default function ChatScreen() {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
-  const isUser = message.role === "user";
+function FeedList({
+  feed,
+  sendPending,
+}: {
+  feed: ReturnType<typeof reduceFeed>;
+  sendPending: boolean;
+}) {
+  // Inverted list keeps the newest item at the bottom and pinned on keyboard
+  // open; data is reversed to match. The live activity is part of the feed,
+  // so streaming updates scroll naturally.
+  const rows = [...feed.items].reverse();
+  return (
+    <FlatList
+      inverted
+      data={rows}
+      keyExtractor={(item) => item.id}
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
+      ListHeaderComponent={
+        // Inverted list: the "header" renders at the visual bottom.
+        sendPending || (feed.working && feed.live?.steps.length === 0) ? (
+          <View style={styles.workingRow}>
+            <ActivityIndicator size="small" color={colors.working} />
+            <Text style={styles.workingText}>working…</Text>
+          </View>
+        ) : null
+      }
+      ListEmptyComponent={
+        <View style={styles.emptyFlip}>
+          <Text style={styles.empty}>
+            Say what you want done. You&apos;ll see the agent think, write code, run it, and reply —
+            all live.
+          </Text>
+        </View>
+      }
+      renderItem={({ item }) => <FeedItem item={item} />}
+    />
+  );
+}
+
+function FeedItem({ item }: { item: AgentUiItem }) {
+  if (item.kind === "activity") return <ActivityCard activity={item} />;
+  return <MessageBubble message={item} />;
+}
+
+function MessageBubble({ message }: { message: AgentUiMessageItem }) {
+  const isUser = message.kind === "user";
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-      <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText}>
+      <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
         {message.text}
       </Text>
     </View>
   );
+}
+
+/** The unreduced stream, newest first — the debugging view. */
+function EventList({ events }: { events: StreamEvent[] }) {
+  const rows = [...events].reverse();
+  return (
+    <FlatList
+      inverted
+      data={rows}
+      keyExtractor={(event) => String(event.offset)}
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
+      renderItem={({ item: event }) => (
+        <View style={styles.eventRow}>
+          <Text style={styles.eventType}>
+            {event.offset} · {event.type.replace("events.iterate.com/", "")}
+          </Text>
+          {event.payload ? <CodeBlock text={previewPayload(event.payload)} muted /> : null}
+        </View>
+      )}
+    />
+  );
+}
+
+function previewPayload(payload: Record<string, unknown>): string {
+  const json = JSON.stringify(payload, null, 1);
+  return json.length > 800 ? `${json.slice(0, 800)}…` : json;
 }
 
 const styles = StyleSheet.create({
@@ -180,6 +243,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
+  modeToggle: { color: colors.textMuted, fontSize: 14 },
   emptyFlip: { transform: [{ scaleY: -1 }], padding: spacing.lg },
   empty: { color: colors.textMuted, fontSize: 14, lineHeight: 20, textAlign: "center" },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
@@ -214,6 +278,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   workingText: { color: colors.working, fontSize: 13 },
+  eventRow: { gap: 4 },
+  eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
