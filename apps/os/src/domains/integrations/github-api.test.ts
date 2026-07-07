@@ -49,6 +49,17 @@ describe("normalizeGithubError", () => {
     );
     expect(error.message).toBe("GitHub API failed with HTTP 404: Not Found");
   });
+
+  // Reserved-segment rejections share the "Capability path" prefix but are a
+  // protocol violation, not a wrong guess at the surface — the real reason
+  // must survive, not be rewritten to the grammar.
+  test("reserved-segment errors pass through", () => {
+    const error = normalizeGithubError(
+      new Error('Capability path segment "constructor" is reserved.'),
+      "acme",
+    );
+    expect(error.message).toContain("is reserved");
+  });
 });
 
 describe("connectionOctokit", () => {

@@ -181,13 +181,15 @@ export async function replayPathCall(
  * True when `message` is a replayPathCall traversal miss — the caller drove a
  * dotted path that does not exist on the replayed target (mid-path `hit
  * undefined`, leaf `did not resolve to a function`, or a non-callable root).
- * Error normalizers use this to answer with their surface's calling-convention
- * grammar instead of passing through a generic failure, so the caller's next
- * attempt is shaped right.
+ * Deliberately NOT matched: the reserved-segment rejection above — that is a
+ * protocol violation, not a wrong guess at the surface, and its message must
+ * survive. Error normalizers use this to answer misses with their surface's
+ * calling-convention grammar, so the caller's next attempt is shaped right.
  */
 export function isPathMissMessage(message: string): boolean {
   return (
-    message.includes("Capability path") ||
+    message.includes("did not resolve to a function") ||
+    /Capability path .* hit (undefined|null)\./.test(message) ||
     message.includes("Capability invoked as a function but the target is not callable")
   );
 }
