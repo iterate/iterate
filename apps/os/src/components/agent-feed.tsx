@@ -24,6 +24,7 @@ import type {
   AgentUiItem,
   AgentUiLlmStep,
   AgentUiMessageItem,
+  AgentUiMessageVia,
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -90,7 +91,11 @@ export function AgentFeedView({
   const live = liveState?.live ?? null;
   const queuedUserMessages = liveState?.queuedUserMessages ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
+  // Ids whose disclosure the user flipped away from its default state.
+  // Activities and live-rail steps default collapsed (has(id) = expanded);
+  // steps inside an expanded settled activity default expanded when their
+  // detail has content (has(id) = collapsed).
+  const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
   // The live in-flight activity and the queued-messages panel are the list's
   // trailing items, so TanStack Virtual owns ALL tail behavior natively:
@@ -175,7 +180,7 @@ export function AgentFeedView({
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.
   const toggleExpanded = useCallback((id: string) => {
-    setExpandedIds((previous) => {
+    setToggledIds((previous) => {
       const next = new Set(previous);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -212,7 +217,7 @@ export function AgentFeedView({
                 {isLiveItem ? (
                   <AgentLiveActivity
                     live={live}
-                    expandedIds={expandedIds}
+                    toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                   />
                 ) : isQueuedItem ? (
@@ -226,7 +231,7 @@ export function AgentFeedView({
                 ) : (
                   <AgentFeedItemRow
                     item={item}
-                    expandedIds={expandedIds}
+                    toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     projectSlug={projectSlug}
                   />
@@ -246,12 +251,12 @@ export function AgentFeedView({
 // the underlying SQLite snapshot actually changes.
 const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
-  expandedIds,
+  toggledIds,
   onToggle,
   projectSlug,
 }: {
   item: AgentUiItem;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
   projectSlug?: string;
 }) {
@@ -286,7 +291,15 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
         data-kind="assistant"
       >
         <MessageContent>
-          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+          {item.via == null ? null : (
+            <MessageViaLabel via={item.via} className="text-muted-foreground" />
+          )}
+          {/* Settled messages never stream, so skip streamdown's unpaired-
+              marker balancing — it appends a phantom `*` to text like "17 * 23". */}
+          <MessageResponse
+            className="min-w-0 max-w-full overflow-hidden"
+            parseIncompleteMarkdown={false}
+          >
             {item.text}
           </MessageResponse>
           <MessageAttachments files={item.files} hasText={item.text !== ""} />
@@ -298,8 +311,8 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
   return (
     <AgentActivityRow
       activity={item}
-      expanded={expandedIds.has(item.id)}
-      expandedIds={expandedIds}
+      expanded={toggledIds.has(item.id)}
+      toggledIds={toggledIds}
       onToggle={onToggle}
     />
   );
@@ -395,12 +408,12 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
 function AgentActivityRow({
   activity,
   expanded,
-  expandedIds,
+  toggledIds,
   onToggle,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
   const interrupted = activityWasInterrupted(activity);
@@ -430,14 +443,31 @@ function AgentActivityRow({
       </Button>
       {expanded ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {activity.steps.map((step) => (
-            <AgentActivityStep
-              key={step.id}
-              step={step}
-              expanded={expandedIds.has(step.id)}
-              onToggle={onToggle}
-            />
-          ))}
+          {activity.steps.map((step) => {
+            // Expanding the activity shows what happened directly — code and
+            // results are the point of expanding, not a second disclosure.
+            // The activity header already says "Ran code 1×", so a lone code
+            // step renders its detail bare instead of repeating a "Ran code"
+            // header row underneath (multiple code steps keep their headers:
+            // the start times tell the runs apart). Steps whose detail would
+            // show nothing stay collapsed behind their slim header row.
+            if (step.kind === "code" && codeStepCount(activity) === 1) {
+              return (
+                <div key={step.id} className="flex flex-col gap-2 pb-1 pt-0.5">
+                  <CodeStepDetail step={step} />
+                </div>
+              );
+            }
+            const defaultExpanded = stepDetailHasContent(step);
+            return (
+              <AgentActivityStep
+                key={step.id}
+                step={step}
+                expanded={toggledIds.has(step.id) !== defaultExpanded}
+                onToggle={onToggle}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -492,9 +522,33 @@ function QueuedMessagesPanel({
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
-      {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
+      {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
+      {item.text === "" ? null : item.via == null ? (
+        <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+      ) : (
+        // Slack text is converted to markdown-ish (mentions, [label](url)
+        // links) by the reducer — render it through the markdown path so
+        // links come out clickable instead of as raw syntax. Settled text
+        // never streams, so skip the unpaired-marker balancing.
+        <MessageResponse
+          className="min-w-0 max-w-full overflow-hidden"
+          parseIncompleteMarkdown={false}
+        >
+          {item.text}
+        </MessageResponse>
+      )}
       <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
+  );
+}
+
+/** Small "slack · U0123ABC" marker on messages from external chat integrations. */
+function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className?: string }) {
+  return (
+    <div className={cn("font-mono text-[11px] leading-none", className)}>
+      {via.service}
+      {via.sender == null ? "" : ` · ${via.sender}`}
+    </div>
   );
 }
 
@@ -542,8 +596,12 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   );
 }
 
+function codeStepCount(activity: AgentUiActivity): number {
+  return activity.steps.filter((step) => step.kind === "code").length;
+}
+
 function activitySummary(activity: AgentUiActivity): string {
-  const codeCount = activity.steps.filter((step) => step.kind === "code").length;
+  const codeCount = codeStepCount(activity);
   const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
   const interrupted = activity.steps.some(
     (step) => step.kind === "llm" && step.outcome === "cancelled",
@@ -615,6 +673,28 @@ function AgentActivityStep({
   );
 }
 
+/**
+ * Whether an expanded step detail would actually show something. Steps with
+ * empty details default to collapsed so an expanded activity reads as code →
+ * results without blank sections (their headers still carry timing/tokens).
+ */
+function stepDetailHasContent(step: AgentUiStep): boolean {
+  if (step.kind === "code") return true;
+  return step.thinkingText !== "" || step.errorMessage != null || llmResponseVisible(step);
+}
+
+// In code-mode the LLM's response *is* the script that a code step executes
+// and renders with its results — showing the fenced-code variant here too
+// just duplicates it (the raw event view has it for anyone who wants it).
+// It only appears when the request was cancelled or failed, i.e. the code
+// likely never ran and this partial response is the only copy (the activity
+// summary promises "click to see partial response"). Prose always renders.
+function llmResponseVisible(step: AgentUiLlmStep): boolean {
+  if (step.responseText === "") return false;
+  if (!looksLikeCode(step.responseText)) return true;
+  return step.outcome === "cancelled" || step.outcome === "failed";
+}
+
 function stepLabel(step: AgentUiStep): string {
   if (step.kind === "code") return step.status === "running" ? "Running code" : "Ran code";
   return step.model ?? step.provider ?? "LLM request";
@@ -636,10 +716,12 @@ function stepMeta(step: AgentUiStep): string {
 }
 
 function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
+  const showResponse = llmResponseVisible(step);
+  const hasContent = step.thinkingText !== "" || showResponse || step.errorMessage != null;
   return (
     <>
       {step.thinkingText === "" ? null : <ThinkingBlock>{step.thinkingText}</ThinkingBlock>}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {!showResponse ? null : looksLikeCode(step.responseText) ? (
         <SourceCodeBlock
           code={step.responseText}
           language="typescript"
@@ -653,9 +735,18 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
           {step.responseText}
         </div>
       )}
-      <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
-        {JSON.stringify(llmStepRawSummary(step), null, 2)}
-      </pre>
+      {step.errorMessage == null ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
+          {step.errorMessage}
+        </pre>
+      )}
+      {/* Token/timing metadata lives in the step's header row; the raw
+          summary only fills in when the step has nothing else to show. */}
+      {hasContent ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
+          {JSON.stringify(llmStepRawSummary(step), null, 2)}
+        </pre>
+      )}
     </>
   );
 }
@@ -673,16 +764,10 @@ function llmStepRawSummary(step: AgentUiLlmStep) {
 }
 
 function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
-  const startedAtDateTime = formatDateTimeAttribute(step.startedAtMs);
-
+  // No timestamp heading here: the step's header row already says when it
+  // started — the detail is the code and what it returned.
   return (
     <>
-      <time
-        className="block px-1.5 font-mono text-xs text-muted-foreground"
-        dateTime={startedAtDateTime}
-      >
-        Started {formatDateTime(step.startedAtMs)}
-      </time>
       {step.code === "" ? null : (
         <SourceCodeBlock
           code={step.code}
@@ -735,17 +820,18 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
  */
 function AgentLiveActivity({
   live,
-  expandedIds,
+  toggledIds,
   onToggle,
 }: {
   live: AgentUiActivity;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
   const working = runningSteps.length > 0;
+  const toggleLive = useCallback((id: string) => onToggle(`live:${id}`), [onToggle]);
   const showStepRail =
     doneSteps.length > 0 ||
     runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
@@ -754,8 +840,8 @@ function AgentLiveActivity({
     return (
       <AgentActivityRow
         activity={live}
-        expanded={expandedIds.has(live.id)}
-        expandedIds={expandedIds}
+        expanded={toggledIds.has(live.id)}
+        toggledIds={toggledIds}
         onToggle={onToggle}
       />
     );
@@ -773,12 +859,18 @@ function AgentLiveActivity({
       ) : null}
       {showStepRail ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
+          {/* Steps in the live rail default to collapsed quiet rows — the
+              streaming tail below is the focus while work is in flight. Toggle
+              keys are namespaced with "live:" so they don't leak into the
+              settled activity, where membership means the opposite (collapse
+              a default-expanded step); a step expanded while streaming stays
+              expanded after settling via the settled default. */}
           {doneSteps.map((step) => (
             <AgentActivityStep
               key={step.id}
               step={step}
-              expanded={expandedIds.has(step.id)}
-              onToggle={onToggle}
+              expanded={toggledIds.has(`live:${step.id}`)}
+              onToggle={toggleLive}
             />
           ))}
           {runningSteps.map((step) =>
@@ -786,8 +878,8 @@ function AgentLiveActivity({
               <AgentActivityStep
                 key={step.id}
                 step={step}
-                expanded={expandedIds.has(step.id)}
-                onToggle={onToggle}
+                expanded={toggledIds.has(`live:${step.id}`)}
+                onToggle={toggleLive}
               />
             ) : step === liveStep && liveStepHasVisibleContent(step) ? (
               <LiveStepStream key={step.id} step={step} />
