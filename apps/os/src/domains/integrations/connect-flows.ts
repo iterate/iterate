@@ -1,23 +1,24 @@
-// itx-side OAuth connect flows for Slack and Google, resurrected from the
-// legacy integration plumbing (pre-migration integration-api.ts, git history, +
-// the pre-purge secrets domain) and re-homed onto itx:
+// itx-side connect/disconnect flows for the built-in integrations (Slack +
+// Google OAuth, GitHub App installation). Each provider contributes only its
+// exchange half; the storage half is the shared recordConnection.
 //
-// Every connection is NAMED: a project can hold several Slack workspaces and
-// several Google accounts, each addressed by a sanitized connection name.
+// Every connection is NAMED: a project can hold several Slack workspaces /
+// Google accounts / GitHub installations, each at a sanitized connection name.
 //
-//   - OAuth state:    stateless HMAC-signed token (oauth-state.ts), no D1.
-//   - Slack token:    itx secret DO `/secrets/integrations/slack/{connection}/bot-token`
-//                     (egress-substituted; material never read back).
-//   - Slack facts:    `/integrations/slack/{connection}` project stream
-//                     (connected/disconnected + the webhook router's events).
-//   - Team routing:   deployment-wide `/integrations/slack-team-directory`
-//                     stream (claimed/unclaimed events, folded per webhook).
-//   - Google tokens:  AES-GCM ciphertext events on
-//                     `/integrations/google/{connection}` (google-tokens.ts).
+//   - Connect state:  stateless HMAC-signed token (oauth-state.ts), no D1.
+//   - Credentials:    a Secret DO per connection at
+//                     `/secrets/integrations/<slug>/<connection>` — a bot token
+//                     (slack), `{ accessToken, refreshToken }` + a jailed refresh
+//                     worker (google), or `{ installationId }` + a jailed
+//                     install worker (github). Material is never read back.
+//   - Facts:          `/integrations/<slug>/<connection>` project stream
+//                     (connected/disconnected + inbound webhook events).
+//   - Routing:        the deployment-wide `(slug, externalId)` directory
+//                     (integration-streams.ts) — claimed at connect, folded by
+//                     the webhook door to route inbound events.
 //
-// These functions run with the itx bindings (they need SECRET_ENCRYPTION_KEY and
-// the DO bindings). The dashboard's /api/integrations/* routes reach them
-// through the itx surface (rpc-targets.ts).
+// These run with the itx bindings (SECRET_ENCRYPTION_KEY + the DO bindings).
+// The dashboard's /api/integrations/* routes reach them via itx (rpc-targets.ts).
 
 import type {
   CompleteConnectResult,
