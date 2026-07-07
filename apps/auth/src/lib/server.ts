@@ -226,6 +226,62 @@ type OAuthInfra = {
   audiences: () => string[];
 };
 
+type VerifyTokenSetResult =
+  | {
+      ok: true;
+      accessToken: AccessTokenClaims;
+      idToken: IdTokenClaims;
+    }
+  | {
+      ok: false;
+      reason: AuthenticateErrorReason;
+      error: unknown;
+    };
+
+async function verifyTokenSet(input: {
+  tokenSet: TokenSet;
+  jwks: JWKS;
+  issuer: string;
+  audiences: string[];
+  clientId: string;
+}): Promise<VerifyTokenSetResult> {
+  let rawAccessToken: unknown;
+  try {
+    const { payload } = await jwtVerify(input.tokenSet.accessToken, input.jwks, {
+      issuer: input.issuer,
+      audience: input.audiences,
+    });
+    rawAccessToken = payload;
+  } catch (error) {
+    return { ok: false, reason: "access_token_verify_failed", error };
+  }
+
+  let rawIdToken: unknown;
+  try {
+    const { payload } = await jwtVerify(input.tokenSet.idToken, input.jwks, {
+      issuer: input.issuer,
+      audience: input.clientId,
+    });
+    rawIdToken = payload;
+  } catch (error) {
+    return { ok: false, reason: "id_token_verify_failed", error };
+  }
+
+  try {
+    return {
+      ok: true,
+      accessToken: AccessTokenClaims.parse(rawAccessToken),
+      idToken: IdTokenClaims.parse(rawIdToken),
+    };
+  } catch (error) {
+    return { ok: false, reason: "session_claims_parse_failed", error };
+  }
+}
+
+function hasJwtShapedTokens(tokenSet: TokenSet) {
+  return tokenSet.accessToken.split(".").length === 3 && tokenSet.idToken.split(".").length === 3;
+}
+
 function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
   const issuerURL = new URL(config.issuer ?? DEFAULT_ISSUER);
   const oauthClient: oauth.Client = { client_id: config.clientId };
@@ -443,33 +499,44 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
         return { session: null, responseHeaders: new Headers() };
       }
 
-      let rawAccessToken: unknown;
-      try {
-        const { payload } = await jwtVerify(tokenSet.accessToken, jwks, {
-          issuer,
-          audience: audiences(),
-        });
-        rawAccessToken = payload;
-      } catch (error) {
-        onError?.({ reason: "access_token_verify_failed", error });
+      let verification = await verifyTokenSet({
+        tokenSet,
+        jwks,
+        issuer,
+        audiences: audiences(),
+        clientId: config.clientId,
+      });
+      if (
+        !verification.ok &&
+        tokenSet.refreshToken &&
+        !refreshed &&
+        !isWebSocketUpgrade &&
+        hasJwtShapedTokens(tokenSet)
+      ) {
+        try {
+          const newTokenSet = await doRefresh(tokenSet);
+          if (newTokenSet) {
+            tokenSet = newTokenSet;
+            refreshed = true;
+            verification = await verifyTokenSet({
+              tokenSet,
+              jwks,
+              issuer,
+              audiences: audiences(),
+              clientId: config.clientId,
+            });
+          }
+        } catch (error) {
+          onError?.({ reason: "session_refresh_failed", error });
+        }
+      }
+
+      if (!verification.ok) {
+        onError?.({ reason: verification.reason, error: verification.error });
         return { session: null, responseHeaders: new Headers() };
       }
 
-      let rawIdToken: unknown;
       try {
-        const { payload } = await jwtVerify(tokenSet.idToken, jwks, {
-          issuer,
-          audience: config.clientId,
-        });
-        rawIdToken = payload;
-      } catch (error) {
-        onError?.({ reason: "id_token_verify_failed", error });
-        return { session: null, responseHeaders: new Headers() };
-      }
-
-      try {
-        const accessToken = AccessTokenClaims.parse(rawAccessToken);
-        const idToken = IdTokenClaims.parse(rawIdToken);
         const userInfo = includeUserInfo ? await getUserInfo(tokenSet.accessToken) : null;
 
         const responseHeaders = new Headers();
@@ -478,7 +545,11 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
         }
 
         return {
-          session: buildAuthenticatedSession(accessToken, idToken, userInfo),
+          session: buildAuthenticatedSession(
+            verification.accessToken,
+            verification.idToken,
+            userInfo,
+          ),
           responseHeaders,
         };
       } catch (error) {
@@ -663,6 +734,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
   app.get("/session", async (c) => {
     let tokenSet = getTokenSet(c);
     const forceRefresh = c.req.query("refresh") === "force";
+    let refreshed = false;
     if (
       tokenSet &&
       tokenSet.refreshToken &&
@@ -670,7 +742,11 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     ) {
       const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();
       try {
-        tokenSet = (await doRefresh(tokenSet)) ?? tokenSet;
+        const refreshedTokenSet = await doRefresh(tokenSet);
+        if (refreshedTokenSet) {
+          tokenSet = refreshedTokenSet;
+          refreshed = true;
+        }
       } catch {
         if (accessTokenExpired) {
           deleteCookie(c, SESSION_COOKIE, cookieOpts());
@@ -683,29 +759,50 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
       return c.json({ authenticated: false } satisfies SessionResponse);
     }
 
+    let verification = await verifyTokenSet({
+      tokenSet,
+      jwks,
+      issuer: issuerURL.href,
+      audiences: infra.audiences(),
+      clientId: config.clientId,
+    });
+    if (!verification.ok && tokenSet.refreshToken && !refreshed && hasJwtShapedTokens(tokenSet)) {
+      try {
+        const refreshedTokenSet = await doRefresh(tokenSet);
+        if (refreshedTokenSet) {
+          tokenSet = refreshedTokenSet;
+          refreshed = true;
+          verification = await verifyTokenSet({
+            tokenSet,
+            jwks,
+            issuer: issuerURL.href,
+            audiences: infra.audiences(),
+            clientId: config.clientId,
+          });
+        }
+      } catch {
+        // Fall through to the unauthenticated response below.
+      }
+    }
+
+    if (!verification.ok) {
+      deleteCookie(c, SESSION_COOKIE, cookieOpts());
+      return c.json({ authenticated: false } satisfies SessionResponse, 401);
+    }
+
+    let userInfo: UserInfoClaims | null;
     try {
-      const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
-        issuer: issuerURL.href,
-        audience: infra.audiences(),
-      });
-      const { payload: rawIdToken } = await jwtVerify(tokenSet.idToken, jwks, {
-        issuer: issuerURL.href,
-        audience: config.clientId,
-      });
-
-      const accessToken = AccessTokenClaims.parse(rawAccessToken);
-      const idToken = IdTokenClaims.parse(rawIdToken);
-      const userInfo = await getUserInfo(tokenSet.accessToken);
-
-      writeCookie(c, tokenSet);
-      return c.json({
-        authenticated: true,
-        ...buildAuthenticatedSession(accessToken, idToken, userInfo),
-      } satisfies SessionResponse);
+      userInfo = await getUserInfo(tokenSet.accessToken);
     } catch {
       deleteCookie(c, SESSION_COOKIE, cookieOpts());
       return c.json({ authenticated: false } satisfies SessionResponse, 401);
     }
+
+    writeCookie(c, tokenSet);
+    return c.json({
+      authenticated: true,
+      ...buildAuthenticatedSession(verification.accessToken, verification.idToken, userInfo),
+    } satisfies SessionResponse);
   });
 
   // One-URL sign-in for minted/programmatic tokens: validates an access+id
