@@ -144,9 +144,10 @@ What ships now:
   configures `oauth-refresh-token` with `clientCreds: "material"` — no worker
   needed (the petshop userspace e2e). A provider-specific dance is another
   small named strategy, not a framework: `waitrose-session` closes the
-  username/password → session archetype for the seeded waitrose integration
-  (mint on first use, re-login on 401), proven live against petshop's
-  Waitrose-shaped GraphQL fixture in the seeded-waitrose e2e lane.
+  username/password → session archetype (mint on first use, re-login on 401),
+  proven against petshop's GraphQL session-login door — one more way into
+  petshop's one pets API — in the waitrose-session e2e lane. The seeded
+  waitrose integration itself talks to the real Waitrose.
 
 Deferred to the userspace-integrations PR (see ADR 0005):
 

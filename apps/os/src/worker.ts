@@ -265,6 +265,7 @@ function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
 function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
   headers.delete("x-iterate-app");
+  headers.delete("x-iterate-host-kind");
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete("x-forwarded-host");

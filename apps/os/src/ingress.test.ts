@@ -159,6 +159,7 @@ it("selects an app from <app>--<slug> hosts as the trusted x-iterate-app header"
   });
   const headers = (route as { fetch: { headers: Headers } }).fetch.headers;
   expect(headers.get("x-iterate-app")).toBe("hello");
+  expect(headers.get("x-iterate-host-kind")).toBe("platform");
 });
 
 it("selects an app from dotted <app>.<slug> hosts", async () => {
@@ -227,6 +228,8 @@ it("resolves registered custom hostnames, with <app>. subdomains selecting an ap
     lane: "project",
     resolved: { projectId: "prj_custom", appSlug: null },
   });
+  const exactHeaders = (exact as { fetch: { headers: Headers } }).fetch.headers;
+  expect(exactHeaders.get("x-iterate-host-kind")).toBe("custom");
 
   const app = await decideIngressRoute({
     config: PREVIEW_CONFIG,

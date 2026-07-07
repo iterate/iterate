@@ -383,7 +383,7 @@ describe("expiry, refresh, revocation", () => {
   });
 });
 
-describe("legacy login (the Waitrose stand-in)", () => {
+describe("legacy login (email + password, no refresh grant)", () => {
   test("email + the well-known password yields a working short-TTL token", async () => {
     const shop = makeShop();
     const response = await shop(

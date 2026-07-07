@@ -44,8 +44,7 @@ export class WaitroseIntegration extends WorkerEntrypoint {
 }
 
 /** The mount recipe may pass `props: { baseUrl }` on the worker ref to point
- * the client at a stand-in (the platform e2e uses its dummy-petshop fixture);
- * no props means the real Waitrose. */
+ * the client at a stand-in; no props means the real Waitrose. */
 function baseUrlFromProps(props: unknown): string | undefined {
   const baseUrl = (props as { baseUrl?: unknown } | null | undefined)?.baseUrl;
   return typeof baseUrl === "string" ? baseUrl : undefined;

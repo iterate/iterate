@@ -216,16 +216,15 @@ describe("provided integrations", () => {
   });
 });
 
-// The SEEDED waitrose integration, live against the deployed dummy-petshop's
-// Waitrose-shaped GraphQL fixture — the username/password → session-token
-// archetype closed end to end. Every project repo carries
-// integrations/waitrose/** (the vendored client + entrypoint from
-// apps/os/project-repo-template); the connection secret holds ONLY the
-// account credential plus the `waitrose-session` refresh strategy, so the
-// Secret DO logs in itself: mint on first use (no initial token anywhere),
-// re-mint on 401. Same opt-in gate as integrations-petshop.e2e.test.ts.
-describe.skipIf(!process.env.PETSHOP_BASE_URL)("seeded waitrose integration", () => {
-  test("username/password secret + waitrose-session strategy: mint on first use, re-mint on 401", async () => {
+// The username/password → session-token archetype, closed end to end against
+// petshop's GraphQL session-login door (the wire shape the `waitrose-session`
+// strategy speaks): the connection secret holds ONLY the account credential
+// plus the refresh strategy, so the Secret DO logs in itself — mint on first
+// use (no initial token anywhere), re-mint on 401 — and the minted session is
+// an ordinary bearer on petshop's ONE pets API. Same opt-in gate as
+// integrations-petshop.e2e.test.ts.
+describe.skipIf(!process.env.PETSHOP_BASE_URL)("waitrose-session strategy", () => {
+  test("username/password secret: mint on first use, re-mint on 401, session works on the API", async () => {
     const petshop = petshopBaseUrl();
     const username = `mum-${RUN_SUFFIX}@example.com`;
 
@@ -233,67 +232,48 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("seeded waitrose integration", ()
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = itx.projects.create({ slug: `waitrose-live-${RUN_SUFFIX}` });
     await project.__describe();
-    const integrations = project.integrations as any;
 
     // The connection secret: the account credential and NOTHING token-shaped.
-    // "correct-horse" is the fixture's one accepted password (waitrose.ts).
+    // "correct-horse" is the fixture's one accepted password (graphql-login.ts).
     using secret = project.secrets.get("/secrets/integrations/waitrose/mum/session");
     await secret.update({
       egress: { urls: [petshop] },
       material: { username, password: "correct-horse" },
       refresh: {
         kind: "waitrose-session",
-        graphqlUrl: `${petshop}/api/graphql-prod/graph/live`,
+        graphqlUrl: `${petshop}/graphql`,
       },
     });
     await waitForCondition(async () => (await secret.describe()).refresh === "waitrose-session", {
       description: "waitrose/mum refresh strategy to fold",
     });
 
-    // ONE durable mount of the SEEDED worker — the exact recipe the template's
-    // integrations/waitrose/README.md documents, plus `props.baseUrl` to point
-    // the vendored client at the fixture instead of the real Waitrose.
-    using _provision = await project.provideCapability({
-      path: ["integrations", "waitrose"],
-      type: "itx-expression",
-      flattenNestedPaths: true,
-      instructions:
-        "Waitrose grocery integration. Address a connection first: itx.integrations.waitrose.<connection>.shoppingContext() / .trolley(orderId?).",
-      expression: [
-        "workers",
-        [
-          "get",
-          {
-            type: "stateless",
-            path: "/",
-            entrypoint: "WaitroseIntegration",
-            props: { baseUrl: petshop },
-            source: {
-              files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
-              options: { entryPoint: "integrations/waitrose/worker.ts" },
-            },
+    const callApi = async (path: string) => {
+      const response = await project.egress.fetch(
+        new Request(`${petshop}${path}`, {
+          headers: {
+            authorization:
+              'Bearer getSecret({ path: "/secrets/integrations/waitrose/mum/session", field: "accessToken" })',
           },
-        ],
-      ],
-    });
+        }),
+      );
+      return { status: response.status, body: (await response.json().catch(() => null)) as any };
+    };
 
     // First use: the material has no accessToken, so substitution misses, the
     // strategy runs the NewSession login inside the Secret DO, and the retried
-    // request lands — the fixture's ids derive from the login username.
-    const context = await integrations.waitrose.mum.shoppingContext();
-    expect(context).toEqual({
-      customerId: `customer-${username}`,
-      customerOrderId: `order-${username}`,
-      customerOrderState: "PENDING",
-      defaultBranchId: "branch-petshop",
-    });
+    // request lands on the pets API as the logged-in account.
+    const me = await callApi("/api/me");
+    expect(me.status).toBe(200);
+    expect(me.body.sub).toBe(username);
+    expect(me.body.clientId).toBe("graphql-session-login");
 
     // Force a real 401 (epoch bump kills the stored session) and call again:
     // re-login IS the refresh — the same strategy re-mints and the retry wins.
     await petshopExpireTokens();
-    const trolley = await integrations.waitrose.mum.trolley();
-    expect(trolley.trolley.orderId).toBe(`order-${username}`);
-    expect(trolley.trolley.trolleyItems).toHaveLength(1);
+    const pets = await callApi("/api/pets");
+    expect(pets.status).toBe(200);
+    expect(Array.isArray(pets.body.pets ?? pets.body)).toBe(true);
 
     // Confinement: describe() leaks neither the password nor a session token
     // (hasMaterial is the only material-shaped fact), and uses are audited.
@@ -303,5 +283,49 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("seeded waitrose integration", ()
     await waitForCondition(async () => (await secret.describe()).audit.usedCount >= 2, {
       description: "waitrose/mum usage audit to fold",
     });
+  });
+});
+
+// The SEEDED waitrose integration (apps/os/project-repo-template
+// /integrations/waitrose/**, carried by every project repo) talks to the REAL
+// Waitrose, so CI never calls its vendor methods — this lane proves the
+// cheaper platform half: the seeded files BUILD as a dynamic worker, MOUNT
+// into the collection, and DISPATCH userspace code (the method-miss error
+// below is thrown by the seeded worker itself, not by the platform).
+describe("seeded waitrose integration files", () => {
+  test("seeded files build, mount, and dispatch", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `waitrose-seed-${RUN_SUFFIX}` });
+    await project.__describe();
+    const integrations = project.integrations as any;
+
+    using _provision = await project.provideCapability({
+      path: ["integrations", "waitrose"],
+      type: "itx-expression",
+      flattenNestedPaths: true,
+      instructions: "Waitrose grocery integration (seeded template files).",
+      expression: [
+        "workers",
+        [
+          "get",
+          {
+            type: "stateless",
+            path: "/",
+            entrypoint: "WaitroseIntegration",
+            source: {
+              files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
+              options: { entryPoint: "integrations/waitrose/worker.ts" },
+            },
+          },
+        ],
+      ],
+    });
+
+    // The seeded worker's own dispatcher answers — proof the repo files
+    // compiled and ran without any call ever leaving toward the vendor.
+    await expect(integrations.waitrose.mum.noSuchMethod()).rejects.toThrow(
+      /waitrose client has no method noSuchMethod/,
+    );
   });
 });

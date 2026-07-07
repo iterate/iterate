@@ -22,6 +22,9 @@ const baseConfig = {
   ],
   ".agents/skills/**": [
     () => "pnpm -C apps/iterate-com skills:generate",
+    // the generator emits raw JSON.stringify style; format before staging or
+    // autofix.ci sees a diff on every skills change
+    () => "oxfmt apps/iterate-com/backend/generated/skills-registry.ts",
     "git add apps/iterate-com/backend/generated/skills-registry.ts",
   ],
 };

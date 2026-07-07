@@ -43,7 +43,7 @@ await rootHost.provideCapability({
   type: "itx-expression", // durable: a journaled recipe, replayed per call
   flattenNestedPaths: true,
   instructions:
-    "Waitrose grocery integration. Address a connection first: itx.integrations.waitrose.<connection>.shoppingContext() / .trolley(orderId?).",
+    'Waitrose grocery integration. Address a connection first: itx.integrations.waitrose.<connection>.searchProducts("milk", { size: 5 }) / .addToTrolley(lineNumber, quantity) / .removeFromTrolley(lineNumber) / .trolley(orderId?) / .shoppingContext().',
   expression: [
     "workers",
     [
@@ -66,8 +66,12 @@ await rootHost.provideCapability({
 
 ```js
 const context = await itx.integrations.waitrose.mum.shoppingContext();
+const search = await itx.integrations.waitrose.mum.searchProducts("milk", { size: 5 });
+await itx.integrations.waitrose.mum.addToTrolley(search.products[0].lineNumber, 1);
 const trolley = await itx.integrations.waitrose.mum.trolley(context.customerOrderId);
 ```
 
-Add methods by editing client.ts (each is one GraphQL operation) — the mount
-is late-bound to the repo, so the next call after a commit runs the new code.
+Add methods by editing client.ts (each is one GraphQL operation or one REST
+call) — the mount is late-bound to the repo, so the next call after a commit
+runs the new code. Every request carries the Android app's User-Agent
+(`WAITROSE_USER_AGENT`): Waitrose's edge rejects UA-less requests with HTTP 520.
