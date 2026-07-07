@@ -9,9 +9,13 @@ base: itx-chat-send-message-string
 
 ## Status summary
 
-Task fleshed out, implementation not started. PR 2 of 2, stacked on
-`itx-chat-send-message-string` (#1735) — depends on the plain-string
-`itx.chat.sendMessage("...")` form landing first.
+Mostly done. The pure parser (`extractStreamingSendMessagePreview`) is
+implemented with 15 hard unit tests (token-by-token prefix simulation), and
+wired into `LiveStepStream` in `agent-feed.tsx` — the preview renders as an
+in-flight assistant message bubble above the streaming code block. Main
+missing piece: PR-body media (screenshot/recording) — follow-up. PR 2 of 2,
+stacked on `itx-chat-send-message-string` (#1735) — depends on the
+plain-string `itx.chat.sendMessage("...")` form landing first.
 
 ## Ask (verbatim-ish)
 
@@ -45,7 +49,7 @@ export function extractStreamingSendMessagePreview(partialCode: string): string 
 
 Rules (deliberately conservative — bail with `null` on anything else):
 
-- Strip a leading ` ```ts`/```` ``` ````fence and `async (itx) => {`-style
+- Strip a leading ` ```ts`/` ``` `fence and `async (itx) => {`-style
   wrapper openers if present, plus leading comments/blank lines.
 - Match when the first real statement is (optionally `await`)
   `itx.chat.sendMessage(` followed by a string literal — `"`, `'`, or
@@ -58,6 +62,11 @@ Rules (deliberately conservative — bail with `null` on anything else):
   `await Promise.all([` prefix before the `itx.chat.sendMessage(` call.
 - Once the literal closes, stop extending the preview (later statements are
   NOT previewed); if the closed call turns out to be malformed, drop preview.
+- (Design note from review) `sendMessage` may rarely take options as a SECOND
+  argument — `itx.chat.sendMessage("hello", { whatever: 123 })`. A `,` after
+  the closed literal is well-formed, not malformed: the preview stays the
+  first string literal, both mid-stream (`sendMessage("hello", { wha`) and
+  complete.
 
 Rendering: while a live code step's snippet yields a preview, show it styled
 like an agent chat message (the same look as a settled `web-message-sent`
@@ -76,16 +85,61 @@ simple. It must be visually honest that it's in-progress.
 
 ## Checklist
 
-- [ ] Pure `extractStreamingSendMessagePreview` helper + colocated unit tests
+- [x] Pure `extractStreamingSendMessagePreview` helper + colocated unit tests
       (mid-stream truncation cases, escapes, Promise.all, template literals,
       comments, non-first-statement bails, object-form `{ message:` bails)
-- [ ] Wire into the live step rendering in `agent-feed.tsx` (preview styled as
+      _`apps/os/src/components/streaming-send-message-preview.ts` + `.test.ts`
+      (15 tests; `expectPreviewOverEveryPrefix` simulates token-by-token
+      growth over every prefix; second-options-arg cases included)_
+- [x] Wire into the live step rendering in `agent-feed.tsx` (preview styled as
       an in-flight agent chat message with streaming affordance)
-- [ ] Real `web-message-sent` event cleanly supersedes the preview (no
+      _`LiveStepStream` derives the preview from `step.responseText` via
+      `useMemo`; `StreamingSendMessagePreview` renders a
+      `Message from="assistant"` bubble with the shared `StreamingCursor`,
+      above the still-visible `StreamingCodeBlock`_
+- [x] Real `web-message-sent` event cleanly supersedes the preview (no
       double-render moment worth worrying about; verify visually)
+      _by construction: the preview only renders for the live *streaming* LLM
+      step (`LiveStepStream` is only mounted for running llm steps), and the
+      real message row lands after the script executes — see log for why the
+      running-code phase deliberately gets no preview_
 - [ ] Screenshot / short recording in the PR body
-- [ ] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green
+      _skipped for now — driving a real browser with a mid-stream agent turn
+      is heavy/flaky; unit tests were the priority. Follow-up._
+- [x] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green
+      _run from the worktree root; live-env e2e lanes not run (need a running
+      environment)_
 
 ## Implementation log
 
-(append notes here as work happens)
+- Parser lives in `apps/os/src/components/streaming-send-message-preview.ts`,
+  colocated with the feed like `agent-ui-reducer.test.ts`. Hand-rolled cursor
+  scan (no regex-only tricks for the literal): strip fence → trivia →
+  `async (itx) => {` opener → optional `const [, x] = await Promise.all([`
+  opener → `(await )itx.chat.sendMessage(` head → read the (possibly
+  unclosed) string literal with escape processing.
+- Mid-stream "hold" semantics: a half-streamed escape (dangling `\`, partial
+  `\u{1F6`) or a backtick `$` that might become `${` stops the preview just
+  _before_ it; the next chunk re-derives the whole thing and picks the
+  characters back up. So over successive prefixes the preview is always a
+  leading slice of the final message (asserted for every prefix in tests).
+- `,` after the closed literal is accepted (second options argument, per
+  design note); `+` or anything else after it drops the preview.
+- Also accepted an assignment prefix on the Promise.all form
+  (`const [, inbox] = await Promise.all([`) — that's the exact shape the
+  contract prompt teaches, so bare `await Promise.all([` alone would have
+  missed the main case.
+- Rendering: preview only attaches to the _streaming LLM step's_
+  `responseText` (the token-by-token generation this task is about).
+  `LiveStepStream`'s `step.kind === "code"` branch is currently unreachable
+  (AgentLiveActivity routes running code steps to collapsed
+  `AgentActivityStep` rows) and deliberately gets no preview: while a script
+  is _executing_, the real `web-message-sent` may already have landed as a
+  settled row, so a preview there would double-render the message for
+  long-running scripts.
+- Note the brief gap: streaming ends → preview unmounts → script runs →
+  real message lands. sendMessage is the first statement so the gap is small;
+  judged acceptable vs. the duplicate-bubble risk above.
+- oxfmt reformatted a nested-backtick line in this task file; the sibling
+  task file (`itx-chat-send-message-string.md`) also got reformatted but was
+  reverted here — it belongs to #1735.

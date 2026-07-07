@@ -41,6 +41,7 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { extractStreamingSendMessagePreview } from "./streaming-send-message-preview.ts";
 import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
@@ -962,6 +963,17 @@ function looksLikeCode(text: string): boolean {
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {
+  // While the snippet's first statement is a still-streaming
+  // `itx.chat.sendMessage("...`, its partial string literal previews as a
+  // live chat message. Pure render-time derivation from the partial text —
+  // nothing has been sent yet, and once the step settles (and the real
+  // web-message-sent event lands) this preview is simply no longer rendered.
+  const responseText = step.kind === "llm" ? step.responseText : "";
+  const sendMessagePreview = useMemo(
+    () => extractStreamingSendMessagePreview(responseText),
+    [responseText],
+  );
+
   if (step.kind === "code") {
     return (
       <div className="flex flex-col gap-1.5 py-1">
@@ -979,7 +991,12 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
         </div>
       )}
       {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
-        <StreamingCodeBlock code={step.responseText} />
+        <>
+          {sendMessagePreview == null ? null : (
+            <StreamingSendMessagePreview text={sendMessagePreview} />
+          )}
+          <StreamingCodeBlock code={step.responseText} />
+        </>
       ) : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
           {step.responseText}
@@ -987,6 +1004,31 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The streamed snippet's leading `itx.chat.sendMessage("...")` literal,
+ * rendered like a settled agent chat message while the script is still being
+ * generated. Honest fakery: the message hasn't been sent — the blinking
+ * cursor marks it as in-flight, and the streaming code block stays visible
+ * below it.
+ */
+function StreamingSendMessagePreview({ text }: { text: string }) {
+  return (
+    <Message
+      from="assistant"
+      className="py-1"
+      data-testid="agent-feed-message-preview"
+      data-kind="assistant-preview"
+    >
+      <MessageContent>
+        <div className="whitespace-pre-wrap leading-6">
+          {text}
+          <StreamingCursor />
+        </div>
+      </MessageContent>
+    </Message>
   );
 }
 
