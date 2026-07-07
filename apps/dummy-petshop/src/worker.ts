@@ -465,7 +465,10 @@ async function appInstallationAccessToken(
     clientId: app.appId,
     installationId,
     appId: app.appId,
-    epoch: state.accessTokenEpoch,
+    // Re-read the epoch at seal time (verifyAppJwt released the input gate) so a
+    // concurrent expire-tokens can't make this token 401 immediately — same
+    // freshness the OAuth token path has.
+    epoch: (await deps.state.getState()).accessTokenEpoch,
     exp,
   };
   // GitHub answers 201 Created with { token, expires_at } (ISO 8601 UTC).
