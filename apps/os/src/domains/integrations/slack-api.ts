@@ -57,7 +57,9 @@ function slackEgressAdapter(stub: SlackEgressStub): NonNullable<WebClientOptions
       config,
       data: text ? JSON.parse(text) : {},
       headers: responseHeaders,
-      request: undefined,
+      // WebClient reads response.request.path (WebClient.ts) — axios normally
+      // sets `request` to a Node ClientRequest; give it the shape it reads.
+      request: { path: new URL(url).pathname },
       status: response.status,
       statusText: response.statusText,
     };
