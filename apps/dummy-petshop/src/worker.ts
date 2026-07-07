@@ -356,11 +356,14 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     if (!(await deps.state.consumeAuthorizationCode(code.jti))) {
       return json({ error: "invalid_grant", error_description: "code already used" }, 400);
     }
+    // Re-read the epoch at issue time: the awaits above release the DO input
+    // gate, so a concurrent expire-tokens could have bumped the epoch since the
+    // snapshot — stamping the stale epoch would mint a token that 401s at once.
     return issueTokens({
       sub: code.sub,
       clientId: credentials.clientId,
       ttlSeconds: client.accessTokenTtlSeconds,
-      epoch: state.accessTokenEpoch,
+      epoch: (await deps.state.getState()).accessTokenEpoch,
       sealKey: deps.sealKey,
     });
   }
@@ -369,14 +372,17 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     if (!refresh || refresh.t !== "refresh" || refresh.clientId !== credentials.clientId) {
       return json({ error: "invalid_grant" }, 400);
     }
-    if (state.revokedRefreshTokenIds.includes(refresh.jti)) {
+    // Re-read fresh state so the revocation check and the stamped epoch agree
+    // with what accessGrant will validate against (same input-gate race).
+    const current = await deps.state.getState();
+    if (current.revokedRefreshTokenIds.includes(refresh.jti)) {
       return json({ error: "invalid_grant", error_description: "refresh token revoked" }, 400);
     }
     return issueTokens({
       sub: refresh.sub,
       clientId: credentials.clientId,
       ttlSeconds: client.accessTokenTtlSeconds,
-      epoch: state.accessTokenEpoch,
+      epoch: current.accessTokenEpoch,
       sealKey: deps.sealKey,
     });
   }
