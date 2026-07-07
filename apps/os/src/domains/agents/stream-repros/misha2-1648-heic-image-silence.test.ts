@@ -5,10 +5,14 @@
 // valid image... supported: jpeg/png/gif/webp") and the agent went silent —
 // no reply, no error, nothing.
 //
-// The fixture is the real event journal up to offset 3007 (just before the
-// bad message), shrunk at dump time — noted per the fix-stream skill:
-// - dropped events.iterate.com/openai-ws/llm-response-chunk (2670 bulk events
-//   no processor under test consumes)
+// The fixture is real events from the prod journal, minimised to the smallest
+// prefix that still reproduces (confirmed red with the fix reverted): the
+// llm-provider-selected event (offset 9, selects openai-ws/gpt-5.5) plus the
+// full final turn before the bad message (offsets 2940–3007, ending quiescent:
+// no current request, no pending trigger). Shrinks applied, per the fix-stream
+// skill:
+// - dropped events.iterate.com/openai-ws/llm-response-chunk (bulk events no
+//   processor under test consumes)
 // - stripped payload.result.rawResponse from both llm-request-completed event
 //   types (no reducer reads it)
 // Everything else, including offsets and idempotency keys, is verbatim.

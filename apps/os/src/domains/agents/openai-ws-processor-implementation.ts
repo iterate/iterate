@@ -394,30 +394,16 @@ function buildResponsesClientEvent(args: {
 
 type ResponsesInputMessage = AgentChatMessage & { role: "user" | "assistant" };
 
-/**
- * The image formats OpenAI's Responses API accepts as `input_image`. Anything
- * else (e.g. image/heic straight off an iPhone) fails the WHOLE request with a
- * 400 when OpenAI fetches the URL, so it must ride as a hint line instead.
- */
-const OPENAI_INPUT_IMAGE_CONTENT_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-]);
-
 function toResponsesInput(messages: ResponsesInputMessage[]) {
   return messages.map((message) => {
-    // OpenAI-ingestible image attachments become real vision inputs (fetched
-    // by OpenAI via the signed URL); everything else flattens to a hint line
-    // the agent can act on. Image parts are only valid on user-role messages —
-    // all attachment inputs are user-role, so that is the only case built
-    // here. Loopback (local-dev http) URLs are unreachable from OpenAI's
-    // fetcher and fail the whole request, so only https URLs ride as image
-    // parts.
+    // Image attachments become real vision inputs (fetched by OpenAI via the
+    // signed URL); everything else flattens to a hint line the agent can act
+    // on. Image parts are only valid on user-role messages — all attachment
+    // inputs are user-role, so that is the only case built here. Loopback
+    // (local-dev http) URLs are unreachable from OpenAI's fetcher and fail
+    // the whole request, so only https URLs ride as image parts.
     const images = (message.files ?? []).filter(
-      (file) =>
-        OPENAI_INPUT_IMAGE_CONTENT_TYPES.has(file.contentType) && file.url.startsWith("https://"),
+      (file) => file.contentType.startsWith("image/") && file.url.startsWith("https://"),
     );
     if (message.role !== "user" || images.length === 0) {
       return {
