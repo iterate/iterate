@@ -243,19 +243,12 @@ export function renderTable(report: ReturnType<typeof computeReport>) {
     return "🟩".repeat(green) + "🟥".repeat(filled - green) + "⬜".repeat(5 - filled);
   };
   const line = (row: GroupRow, wrap: (text: string) => string) => {
-    const net = row.added - row.removed;
-    const cells = [
-      wrap(row.name),
-      wrap(String(row.files)),
-      wrap(count(row.added, "+")),
-      wrap(count(row.removed, "-")),
-      wrap(count(net, net > 0 ? "+" : "-")),
-    ];
-    return `| ${cells.join(" | ")} | ${bar(row)} |`;
+    const changes = `${count(row.added, "+")} ${count(row.removed, "-")}`;
+    return `| ${wrap(row.name)} | ${wrap(changes)} ${bar(row)} |`;
   };
   return [
-    "| Group | Files | Added | Removed | Net | |",
-    "| --- | ---: | ---: | ---: | ---: | --- |",
+    "| Group | Changes |",
+    "| --- | --- |",
     ...report.rows.map((row) => line(row, (text) => text)),
     line(report.total, (text) => `**${text}**`),
   ].join("\n");
@@ -267,8 +260,6 @@ export function renderBodySection(
   headSha: string,
 ) {
   return [
-    "### LOC report",
-    "",
     renderTable(report),
     "",
     `<sub>Source lines changed (blank lines and JS comments ignored) between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
