@@ -310,8 +310,9 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
   if (!accountId) throw new Error("Cloudflare account id is not configured.");
 
   const zoneName = projectHostnameZoneName(input.config);
+  const fetcher = input.fetch;
   const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await input.fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    const response = await fetcher(`https://api.cloudflare.com/client/v4${path}`, {
       ...init,
       headers: {
         authorization: `Bearer ${token}`,
