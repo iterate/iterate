@@ -18,6 +18,14 @@ declared in `package.json` (like `@slack/web-api`) are installed at build time.
 `@iterate-com/sdk` package) taken when this repo was seeded — import types
 from it, treat it as read-only.
 
+Apps live under `apps/` as their own dynamic workers, routed by the APPS map
+in the root `worker.ts`. `apps/websocket/` is the seeded WebSocket
+proof-of-concept: a stateful Durable Object app serving live sockets at `/ws`.
+When building an app that needs WebSockets, copy its shape — and keep the
+router's rule that upgrade requests dispatch through `this.env.ITX.fetch(...)`
+with the app's ref in the `x-iterate-worker-dispatch` header: a WebSocket
+response cannot travel back through an `app.fetch(req)` RPC call.
+
 The worker also exposes a Slack Web API surface backed by the real Slack SDK:
 `itx.worker.slack.chat.postMessage({ channel, text })` (any nested Web API
 method works). Configure it by committing `slack.config.ts`.
