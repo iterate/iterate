@@ -114,3 +114,18 @@ options?: AgentChatSendOptions)`; also gained the previously-missing
   ("Agent scripts can send web-chat messages (string and legacy object form)
   and call project tools") — exercises the real `AgentChatRpcTarget` through
   the script runner with both call forms.
+- Review-pass follow-ups (2026-07-08): mixed-form calls
+  (`sendMessage({ message }, { files })`) now honor the options instead of
+  silently dropping them (object's own files win if both are given), and the
+  e2e test grew coverage for `("msg", { files })` second-arg plumbing plus the
+  mixed form, asserting the stored attachment records on the
+  web-message-sent payload.
+
+## Possible follow-up
+
+- The legacy `{ message }` union in `types.ts` is visible to models because
+  `ITX_TYPES_SOURCE` embeds the file verbatim into agent system prompts — so
+  "undocumented" is only true for human-facing docs. If the streaming-preview
+  PR finds models still emitting the object form, the lever is to narrow the
+  PROMPT-FACING generated type surface to `sendMessage(message: string,
+options?)` while keeping the runtime union in the real contract.

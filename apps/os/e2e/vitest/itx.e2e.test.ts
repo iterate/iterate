@@ -1864,6 +1864,16 @@ describe("itx", () => {
       predicate: (event) => event.payload?.message === "legacy object form still works",
       timeoutMs: 30_000,
     });
+    const filesOptionReply = agent.stream.waitForEvent({
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) => event.payload?.message === "string form with files",
+      timeoutMs: 30_000,
+    });
+    const mixedFormReply = agent.stream.waitForEvent({
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) => event.payload?.message === "mixed form keeps its attachment",
+      timeoutMs: 30_000,
+    });
 
     await agent.stream.append({
       type: AGENT_OUTPUT_ADDED_TYPE,
@@ -1875,6 +1885,16 @@ describe("itx", () => {
             // Live agents' history is full of the legacy object form — it must
             // keep working alongside the plain-string form.
             await itx.chat.sendMessage({ message: "legacy object form still works" });
+            // The documented way to attach files: the options second argument.
+            await itx.chat.sendMessage("string form with files", {
+              files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
+            });
+            // Mixed form (legacy object + options): the attachment must not be
+            // silently dropped.
+            await itx.chat.sendMessage(
+              { message: "mixed form keeps its attachment" },
+              { files: [{ filename: "mixed.txt", contentType: "text/plain", data: "aGVsbG8=" }] },
+            );
           }
         `),
       },
@@ -1887,6 +1907,20 @@ describe("itx", () => {
     expect(await legacyFormReply).toMatchObject({
       type: AGENT_WEB_MESSAGE_SENT_TYPE,
       payload: { message: "legacy object form still works" },
+    });
+    expect(await filesOptionReply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: {
+        message: "string form with files",
+        files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
+      },
+    });
+    expect(await mixedFormReply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: {
+        message: "mixed form keeps its attachment",
+        files: [{ contentType: "text/plain", filename: "mixed.txt", size: 5 }],
+      },
     });
 
     const events = await agent.stream.getEvents();
