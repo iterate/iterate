@@ -322,12 +322,26 @@ export class SecretDurableObject extends DurableObject<Env> {
     const password = readStringField(material, "password");
     const response = await fetch(refresh.graphqlUrl, {
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        // Waitrose's edge answers UA-less requests with HTTP 520 (proven live
+        // 2026-07-07); the Android app's UA is the known-good request shape.
+        "user-agent": "Waitrose/3.9.1 (Android)",
+      },
       body: JSON.stringify({
         query: WAITROSE_NEW_SESSION_MUTATION,
         variables: { input: { clientId: "ANDROID_APP", password, username } },
       }),
     });
+    if (response.status === 401) {
+      // The live API answers wrong credentials with a 401 GraphQL error (the
+      // failures[] shape below is the app-client contract, not what the edge
+      // actually returns) — name the fix without echoing the credential.
+      throw new Error(
+        "waitrose session mint refused (HTTP 401): check the connection secret's username/password",
+      );
+    }
     if (!response.ok) throw new Error(`waitrose session mint failed with HTTP ${response.status}`);
     const data = (await response.json()) as {
       data?: {
