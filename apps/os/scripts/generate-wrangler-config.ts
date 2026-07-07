@@ -324,9 +324,9 @@ function envBlock(env: DeployedEnv) {
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
     // against account memory quota at deploy time. The old preview cap of 500
-    // was only viable for lite instances; keep previews deployable until the
-    // preview account has enough quota for larger sandbox-e2e marathons.
-    maxContainerInstances: isProduction ? 50 : 40,
+    // was viable for lite instances because it reserved 128000 MiB; 31
+    // standard-1 instances reserve 126976 MiB and fit that same quota.
+    maxContainerInstances: isProduction ? 50 : 31,
   });
   return {
     name: env.osWorkerName,
