@@ -32,8 +32,13 @@ into requests only at project egress, toward the pinned host.
 
 ## 2. Mount the integration (once)
 
+Mount at the PROJECT ROOT: `itx.integrations.*` resolves through the project
+capability table, so an own-scope `itx.provideCapability` from an agent is
+unreachable there.
+
 ```js
-await itx.provideCapability({
+const rootHost = await itx.capabilityHosts.get("/");
+await rootHost.provideCapability({
   path: ["integrations", "waitrose"],
   type: "itx-expression", // durable: a journaled recipe, replayed per call
   flattenNestedPaths: true,

@@ -909,8 +909,11 @@ for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
 
 // 2. One durable mount makes GitHub part of the integrations collection. The
 // itx-expression is a journaled recipe: replayed per call, revocable,
-// enumerated by itx.integrations.list().
-await itx.provideCapability({
+// enumerated by itx.integrations.list(). Mount at the PROJECT ROOT:
+// itx.integrations.* resolves through the project capability table, so an
+// own-scope itx.provideCapability from an agent is unreachable there.
+const rootHost = await itx.capabilityHosts.get("/");
+await rootHost.provideCapability({
   path: ["integrations", "github-mcp", connection],
   type: "itx-expression",
   instructions:

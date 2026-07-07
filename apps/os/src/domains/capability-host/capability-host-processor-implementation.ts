@@ -288,7 +288,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    assertCapabilityPath(path);
+    // A trailing __describe is a valid INVOCATION (answered from the mount's
+    // durable metadata below) — the reserved-name rule is for MOUNT names, so
+    // validate the path without it or discovery on provided capabilities dies
+    // here with "invalid capability path segment".
+    assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) {
       // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
