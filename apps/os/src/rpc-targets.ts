@@ -461,16 +461,17 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
  * from this project's id plus the validated path, after the same
- * project-access assert every collection performs. A sandbox can live at any
- * non-root path — a scope's own path names that scope's sandbox (`itx.sandbox`
- * on an agent is `sandboxes.get(<the agent's path>)`); standalone sandboxes
- * conventionally live under `/sandboxes/cloudflare/...`.
+ * project-access assert every collection performs. Every sandbox lives under
+ * `/sandboxes/` (the same domain-prefix convention as `/secrets/...` and
+ * `/repos/...`): an agent's sandbox is its agent path under the prefix
+ * (`itx.sandbox` on `/agents/bla` is `sandboxes.get("/sandboxes/cloudflare/agents/bla")`);
+ * standalone sandboxes conventionally live under `/sandboxes/cloudflare/...`.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
   async __describe() {
     return describeNode({
       instructions:
-        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Any non-root path works — an agent's own path is that agent's sandbox (itx.sandbox); pick /sandboxes/cloudflare/<name> for standalone ones.",
+        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Paths live under /sandboxes/ — an agent's sandbox is its agent path under the prefix (/sandboxes/cloudflare/agents/..., what itx.sandbox resolves to); pick /sandboxes/cloudflare/<name> for standalone ones.",
       children: { get: "The sandbox at a path (boots the container on first use)." },
       parent: "a project itx (itx.sandboxes)",
     });

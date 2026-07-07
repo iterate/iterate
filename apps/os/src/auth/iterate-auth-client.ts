@@ -15,7 +15,11 @@ export function createOsIterateAuth(config: AppConfig, requestUrl: string): OsIt
   if (!authConfig) return null;
 
   const requestOrigin = new URL(requestUrl).origin;
-  const resource = (authConfig.resource ?? config.baseUrl ?? requestOrigin).replace(/\/+$/, "");
+  const resource = resolveIterateAuthResource({
+    authResource: authConfig.resource,
+    baseUrl: config.baseUrl,
+    requestUrl,
+  });
   const clientConfig = {
     issuer: authConfig.issuer,
     clientId: authConfig.clientId,
@@ -32,4 +36,29 @@ export function createOsIterateAuth(config: AppConfig, requestUrl: string): OsIt
   const auth = createIterateAuth(clientConfig);
   authClients.set(cacheKey, auth);
   return auth;
+}
+
+export function resolveIterateAuthResource(input: {
+  authResource?: string;
+  baseUrl?: string;
+  requestUrl: string;
+}) {
+  return normalizeOAuthResource(
+    input.authResource ?? input.baseUrl ?? new URL(input.requestUrl).origin,
+  );
+}
+
+function normalizeOAuthResource(rawResource: string) {
+  const url = new URL(rawResource);
+  url.pathname = "";
+  url.search = "";
+  url.hash = "";
+  if (
+    url.hostname === "localhost" ||
+    url.hostname.endsWith(".localhost") ||
+    url.hostname === "127.0.0.1"
+  ) {
+    url.port = "";
+  }
+  return url.toString().replace(/\/+$/u, "");
 }

@@ -2246,13 +2246,14 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   setDopplerSecrets("streams-example-app", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
   console.log("streams-example-app/preview root config ensured");
 
-  const workersSubdomain = await getWorkersDevSubdomain("streams-example-app", "preview");
   for (const slot of previewEnvironmentSlotNumbers) {
     const config = `preview_${slot}`;
     const authOrigin = `https://auth.iterate-preview-${slot}.com`;
     const osOrigin = `https://os.iterate-preview-${slot}.com`;
     const semaphoreOrigin = `https://semaphore.iterate-preview-${slot}.com`;
-    const streamsExampleOrigin = `https://streams-example-app-preview-${slot}.${workersSubdomain}.workers.dev`;
+    // Keep in lockstep with streamsExampleEnvs in envs.ts (custom domain —
+    // workers.dev is off for this app).
+    const streamsExampleOrigin = `https://streams.iterate-preview-${slot}.com`;
     const clientId = `os-preview-${slot}`;
     const semaphoreClientId = `semaphore-preview-${slot}`;
     const streamsExampleClientId = `streams-example-app-preview-${slot}`;
@@ -2410,38 +2411,6 @@ function ensureDopplerConfig(project: string, config: string) {
 
 function freshSecret() {
   return randomBytes(32).toString("hex");
-}
-
-async function getWorkersDevSubdomain(project: string, config: string) {
-  const accountId = getDopplerSecret(project, config, "CLOUDFLARE_ACCOUNT_ID");
-  const apiToken = getDopplerSecret(project, config, "CLOUDFLARE_API_TOKEN");
-  if (!accountId || !apiToken) {
-    throw new Error(`${project}/${config} is missing Cloudflare credentials`);
-  }
-
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`,
-    { headers: { authorization: `Bearer ${apiToken}` } },
-  );
-  const parsed = (await response.json()) as {
-    errors?: Array<{ message?: string }>;
-    result?: { subdomain?: unknown };
-    success?: boolean;
-  };
-  if (!response.ok || parsed.success !== true) {
-    const message =
-      parsed.errors
-        ?.map((error) => error.message)
-        .filter(Boolean)
-        .join("; ") || `${response.status} ${response.statusText}`;
-    throw new Error(`Failed to read Workers subdomain for ${project}/${config}: ${message}`);
-  }
-
-  if (typeof parsed.result?.subdomain !== "string" || parsed.result.subdomain.trim() === "") {
-    throw new Error(`Cloudflare returned no Workers subdomain for ${project}/${config}`);
-  }
-
-  return parsed.result.subdomain.trim();
 }
 
 function tryReadGhAuthToken() {

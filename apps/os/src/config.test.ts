@@ -39,10 +39,12 @@ describe("AppConfig", () => {
       APP_CONFIG: JSON.stringify(baseConfig),
       ARTIFACTS_ACCOUNT_ID: "04b3b57291ef2626c6a8daa9d47065a7",
       ARTIFACTS_NAMESPACE: "os-prd-repos",
+      WORKER_SELF: "os-prd",
     });
 
     expect(config.cloudflare.accountId).toEqual("04b3b57291ef2626c6a8daa9d47065a7");
     expect(config.cloudflare.artifactsNamespace).toEqual("os-prd-repos");
+    expect(config.cloudflare.workerName).toEqual("os-prd");
   });
 
   it("accepts structured Slack and Google integration runtime config", () => {

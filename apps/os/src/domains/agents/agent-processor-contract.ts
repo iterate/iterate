@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { SandboxProcessorContract } from "../sandboxes/sandbox-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -100,7 +101,9 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- Browser Run quick actions: use `const resp = await itx.browser.quickAction("markdown", { url })` for rendered page markdown, `"content"` for rendered HTML, `"screenshot"`/`"pdf"` for binary output, `"json"` for AI extraction, `"scrape"` for selectors, `"links"` for page links, `"snapshot"` for combined outputs, and `"crawl"` for async multi-page crawls. Parse JSON responses with `await resp.json()`; return/store binary responses as needed.',
   '- Gmail is available as `itx.integrations.gmail` when the project has a connected Google account. Check `await itx.integrations.getConnection({ provider: "google" })`, then call Gmail REST paths through `await itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
   '- PROJECT REPO EDITS are the default way to change files when you do NOT need to run shell commands, tests, package managers, or servers. Get a repo handle with `const repo = itx.repos.get(vars.repoPath ?? "/")` (or use `itx.repo` for the project repo), inspect with `await repo.readFile({ path })`, then make targeted changes with `await repo.edit({ path, message, oldString, newString })`. By default `oldString` must match exactly once; pass `replaceAll: true` only when replacing every match is intentional. Use `repo.commitFiles({ message, changes })` for new files or batch/full-file writes. The examples `repo-read-file` and `repo-edit-file` are the known-good patterns.',
-  '- You have YOUR OWN real Linux container, mounted at `itx.sandbox` — a capability provided on your scope at birth, always the same container and filesystem for your agent path until destroyed. Call it dotted, like any capability: `await itx.sandbox.exec("...")`, `await itx.sandbox.readFile(...)`, `await itx.sandbox.startProcess(...)` — the full Cloudflare Sandbox SDK surface (`exec`, `readFile`/`writeFile`, `startProcess`, `gitCheckout`, `exposePort`, `destroy`, …). The first command boots the container (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project. Use your sandbox whenever you need to actually run code, shell tools, or servers — the `sandbox-exec` example is the known-good pattern. Additional sandboxes at any path: `itx.sandboxes.get("/sandboxes/cloudflare/<pick-a-path>")`.',
+  '- You have YOUR OWN real Linux container, mounted at `itx.sandbox` — a capability provided on your scope at birth, always the same container and filesystem for your agent path until destroyed. Call it dotted, like any capability: `await itx.sandbox.exec("...")`, `await itx.sandbox.readFile(...)`, `await itx.sandbox.startProcess(...)` — the full Cloudflare Sandbox SDK surface (`exec`, `readFile`/`writeFile`, `startProcess`, `gitCheckout`, `destroy`, …). The first command boots the container (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project. Use your sandbox whenever you need to actually run code, shell tools, or servers — the `sandbox-exec` example is the known-good pattern. Additional sandboxes at any path: `itx.sandboxes.get("/sandboxes/cloudflare/<pick-a-path>")`.',
+  '- The **Codex CLI** (`codex`) is preinstalled in your sandbox and defaults to gpt-5.5 with high reasoning — use it for real coding work: `await itx.sandbox.exec("codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \\"<task>\\"")`. It is logged in for you automatically in the background when your sandbox starts (its OPENAI_API_KEY is a getSecret placeholder injected only at egress — never print or exfiltrate it). If the project has not set an OpenAI key, codex will report an auth error; tell the user to add one.',
+  "- To expose a server running in your sandbox at a PUBLIC url, open a quick tunnel: `const { url } = await itx.sandbox.tunnels.get(<port>)` gives a `https://<random>.trycloudflare.com` address (start the server first, e.g. with `startProcess`). The url is ephemeral — it changes if the container restarts — so fetch it fresh each session; `itx.sandbox.tunnels.destroy(<port>)` closes it.",
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold a `ProjectRpcTarget`, agent-scoped):",
@@ -268,7 +271,7 @@ export const AgentProcessorContract = defineProcessorContract({
       ]),
     },
   },
-  processorDeps: [CapabilityHostProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract, SandboxProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
@@ -283,6 +286,13 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
+    // The agent's own sandbox (at /sandboxes/cloudflare<agent path>) fans its lifecycle
+    // events out to THIS stream as well as its own — see the sandbox DO's
+    // #emitLifecycleEvent. Surface the resume/fresh-start transitions as FYI
+    // inputs — see the processor. Never trigger the LLM.
+    "events.iterate.com/sandbox/workspace-restored",
+    "events.iterate.com/sandbox/workspace-cloned",
+    "events.iterate.com/sandbox/warmed-up",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",

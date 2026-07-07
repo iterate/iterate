@@ -73,10 +73,10 @@ describe("sandbox egress", () => {
         description: "secret processor to fold the material",
       });
 
-      // The sandbox lives at an agent-shaped path — the same primitive an
-      // agent's `itx.sandbox` resolves to. Getting it needs no container; the
-      // curl below boots one.
-      const sandboxPath = `/agents/egress-proof/${crypto.randomUUID()}`;
+      // The sandbox lives at an agent-sandbox-shaped path — the same
+      // primitive an agent's `itx.sandbox` resolves to (agentSandboxPath).
+      // Getting it needs no container; the curl below boots one.
+      const sandboxPath = `/sandboxes/cloudflare/agents/egress-proof/${crypto.randomUUID()}`;
       const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
       const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
       // The issuer of the cert the container is presented for the echo host:

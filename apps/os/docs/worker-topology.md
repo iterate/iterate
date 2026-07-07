@@ -16,7 +16,7 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 Durable Object classes (all same-script bindings — declared by class name in
 wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
 CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
-container-backed CloudflareSandbox (Dockerfile.sandbox, built by
+container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
 `wrangler deploy`).
 
 ## The builder sidecar (the "+1")

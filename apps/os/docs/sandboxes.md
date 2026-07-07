@@ -1,18 +1,26 @@
 # Sandboxes
 
-Project-scoped Cloudflare Sandbox containers, addressed by path like every
-other domain object. A sandbox path may be ANY non-root project path,
-arbitrarily nested: sandboxes live in their own Durable Object namespace, so
-a sandbox path never collides with the stream or agent at the same path — it
-names them. Two spellings of the same primitive:
+> For the platform underneath this — namespace layout, **SSH into an
+> instance**, the full Cloudflare feature inventory, deprecations, and ops —
+> see [Cloudflare Sandboxes & Containers](./cloudflare-sandboxes.md). This doc
+> is how our sandbox itself works.
 
-- **Every agent owns the sandbox at its own path.** `itx.sandbox` in an agent
-  scope is a PROVIDED CAPABILITY, not a built-in: the birth certificate mounts
-  a durable itx-expression (`["sandboxes", ["get", <agent path>]]`) on the
-  agent's capability host, so every `itx.sandbox.<method>(...)` re-evaluates
-  `itx.sandboxes.get(<the agent's /agents/... path>)` at call time and
-  dispatches inside the capability host. The Durable Object + identity are
-  minted (no container) at birth, and the mount replays with the stream.
+Project-scoped Cloudflare Sandbox containers, addressed by path like every
+other domain object. Every sandbox lives under **`/sandboxes/`** — the same
+domain-prefix convention as `/secrets/...`, `/repos/...`, and `/agents/...`,
+so a project path names exactly one kind of object, and every sandbox in a
+project is discoverable as a stream under the prefix. Two spellings of the
+same primitive:
+
+- **Every agent owns the sandbox at its agent path under the prefix**
+  (`/agents/bla` → `/sandboxes/cloudflare/agents/bla`, the `agentSandboxPath` mapping).
+  `itx.sandbox` in an agent scope is a PROVIDED CAPABILITY, not a built-in:
+  the birth certificate mounts a durable itx-expression
+  (`["sandboxes", ["get", "/sandboxes/cloudflare<agent path>"]]`) on the agent's
+  capability host, so every `itx.sandbox.<method>(...)` re-evaluates
+  `itx.sandboxes.get(...)` at call time and dispatches inside the capability
+  host. The Durable Object + identity are minted (no container) at birth, and
+  the mount replays with the stream.
 - **Standalone sandboxes** conventionally live under
   `/sandboxes/cloudflare/<anything>` via `itx.sandboxes.get(path)`.
 
@@ -51,16 +59,23 @@ hung off the SDK's own lifecycle hooks:
   is still running but about to go away; `onStop` is too late, the container
   is already gone) snapshots `/workspace` with
   [`createBackup`](https://developers.cloudflare.com/sandbox/api/backups/) —
-  gitignore-aware and `node_modules`-excluded, so archives stay small — stores
+  `node_modules`-excluded, gitignore-aware inside the repo checkout (the
+  `/workspace` root is not a git repo, so top-level scratch is snapshotted
+  verbatim) — stores
   the returned handle in Durable Object storage, then **destroys** the
   container (not the SDK's stop: a stopped container keeps its instance
   assignment against `max_instances` forever — see the method's docstring; the
   snapshot is what makes destroy loss-free). A backup failure never wedges the
   container alive; the handle keeps pointing at the last good snapshot.
-- **`onStart`** provisions the workspace in the background: restore the newest
-  snapshot (seconds), then clone the repo if the checkout is still missing.
-  `ensureProjectRepo()` is the awaitable guarantee.
-- Backups expire after **90 days idle** (SDK `ttl`): long enough that any
+- The **first guarded command** after a start provisions the workspace:
+  restore the newest snapshot (seconds), then clone the repo if the checkout
+  is still missing. `onStart` itself only resets per-container state — it
+  can't kick provisioning off (see the budget note below), and it doesn't
+  need to: every public op awaits `ensureProjectRepo()`, the awaitable
+  guarantee.
+- Backups expire after **90 days idle** — the SDK checks its `ttl` only at
+  restore time; actual R2 deletion is a bucket lifecycle rule on the
+  `backups/` prefix, set by `ensure-resources`. Long enough that any
   still-wanted workspace comes back intact, short enough that e2e churn
   doesn't accumulate in R2 forever. An expired workspace degrades to a fresh
   clone.
@@ -86,27 +101,39 @@ pushed.
 ## Lifecycle hooks → stream events
 
 The sandbox subclass turns its container lifecycle into ordinary stream
-events, appended to the stream at the sandbox's **own path** — for an agent's
-sandbox that is the agent's own journal, so the agent (and anything tailing
-the stream) sees its sandbox's history. The event catalog is the **sandbox
+events, appended to the stream at the sandbox's **own path** — and, for an
+agent's sandbox (`/sandboxes/cloudflare/agents/...`), fanned out to the **agent's own
+journal** too, so the agent (and anything tailing its stream) sees its
+sandbox's history inline while the `/sandboxes/` stream stays the canonical
+per-sandbox record. The event catalog is the **sandbox
 processor contract** (`sandbox-processor-contract.ts`); the Durable Object
 builds every event through it (`SandboxProcessorContract.buildEvent`), so
 emission and declaration cannot drift. `SandboxProcessor`
 (`sandbox-processor-implementation.ts`) holds the contract and folds the
-events into a small status projection (`running`, `lastBackupId`) — it takes
-no actions and is not yet wired to a processor host.
+events into a small status projection (`running`, `lastBackupId`, `warmedUp`,
+`env`) — it takes no actions and is not yet wired to a processor host.
 
-| Hook / moment                | Event (`events.iterate.com/sandbox/…`)                                                                                                    |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `onStart`                    | `container-started`                                                                                                                       |
-| workspace restored           | `workspace-restored` (with `backupId`)                                                                                                    |
-| workspace freshly cloned     | `workspace-cloned`                                                                                                                        |
-| background provisioning died | `workspace-setup-failed` (with `error`; the next `ensureProjectRepo()` retries from scratch)                                              |
-| `onActivityExpired` backup   | `backup-created` (with `backupId`) / `backup-failed` (with `error`)                                                                       |
-| `onStop`                     | `container-stopped` (may arrive on wake — the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake) |
+| Hook / moment                | Event (`events.iterate.com/sandbox/…`)                                                                                                                                           |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onStart`                    | `container-started`                                                                                                                                                              |
+| workspace restored           | `workspace-restored` (with `backupId`)                                                                                                                                           |
+| workspace freshly cloned     | `workspace-cloned`                                                                                                                                                               |
+| warm-up script ran           | `warmed-up` (keyed tools logged in; overlaps the clone, may precede `workspace-cloned`) / `warmup-failed` (with `error`; re-runs next provision)                                 |
+| `configureEnvVars` called    | `configured` (with the `env` map set in that call — see [Cloudflare Sandboxes → Environment variables](./cloudflare-sandboxes.md#environment-variables--running-a-coding-agent)) |
+| background provisioning died | `workspace-setup-failed` (with `error`; the next `ensureProjectRepo()` retries from scratch)                                                                                     |
+| `onActivityExpired` backup   | `backup-created` (with `backupId`) / `backup-failed` (with `error`)                                                                                                              |
+| `onStop`                     | `container-stopped` (may arrive on wake — the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake)                                        |
 
 Appends are best-effort by design: lifecycle telemetry never blocks or fails a
 container start/stop.
+
+For an **agent's** sandbox, the agent processor turns the resume/fresh-start
+transitions (`workspace-restored`, `workspace-cloned`) and warm-up completion
+(`warmed-up`) into model-visible FYI inputs with `dont-trigger-request` — so the
+agent, next time it acts, knows its `itx.sandbox` was restored (and that
+gitignored paths like `node_modules` were not snapshotted) or freshly cloned,
+and that its baked coding tools are logged in and ready — without those events
+starting an LLM turn.
 
 ## The project repo is always checked out
 
@@ -127,13 +154,15 @@ backup — pays for a full clone. Guarding also closes an integrity window: a
 write that landed before the snapshot restore would be silently clobbered by
 it.
 
-Provisioning cannot run synchronously inside container startup: `onStart`
-executes inside the container framework's `blockConcurrencyWhile`, which has a
-hard ~30s budget, kills the fresh container on cancellation (verified live —
-an over-budget `onStart` resets the Durable Object), and input-gates timer
-events — so nothing in there can even bound itself with a deadline. So
-`onStart` only kicks provisioning off; `ensureProjectRepo()` is the awaitable
-guarantee.
+Provisioning cannot run inside container startup at all: `onStart` executes
+inside the container framework's `blockConcurrencyWhile`, which has a hard
+~30s budget, kills the fresh container on cancellation (an over-budget
+`onStart` resets the Durable Object), and input-gates timer events — so
+nothing in there can even bound itself with a deadline. Nor does `onStart`
+kick provisioning off in the background: that would race the in-flight
+provisioning run of whichever guarded command booted the container. It only
+resets per-container state; the guard (`ensureProjectRepo()`) both starts and
+awaits provisioning.
 
 ### Other persistence mechanisms Cloudflare documents, and why not them
 
@@ -187,9 +216,16 @@ Wiring (three points):
 The domain lives in `src/domains/sandboxes/cloudflare/`; the container class
 is a same-script Durable Object in the os worker
 ([worker topology](./worker-topology.md)) with the image built from
-`Dockerfile.sandbox` (`docker.io/cloudflare/sandbox:<sdk-version>` — keep the
+`sandbox/Dockerfile` (`docker.io/cloudflare/sandbox:<sdk-version>` — keep the
 tag in lockstep with the `@cloudflare/sandbox` version in package.json; the
-SDK logs a version-skew warning otherwise).
+SDK logs a version-skew warning otherwise). Files under `sandbox/root/` are
+copied into `/root/` in the image, which is the sandbox process user's home.
+The image also bakes this monorepo into `/opt/iterate/iterate` with
+`pnpm install` already run; after each workspace restore/start, the sandbox
+exposes it at `/workspace/repos/github.com/iterate/iterate` with a symlink so
+workspace backups cannot hide or prune the installed `node_modules` (replaced
+only if still a symlink — a real checkout an agent put there wins). The baked
+tree is a snapshot: no `.git`, ages until the next image build.
 
 ## Identity: why `get()` is async
 
@@ -216,7 +252,7 @@ Durable Object namespace and any sandbox call fails at the constructor with
 OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev start --detach
 ```
 
-Startup builds the image from `Dockerfile.sandbox` (first run pulls the
+Startup builds the image from `sandbox/Dockerfile` (first run pulls the
 ~500MB base image — a couple of minutes) and vite prints
 `⚡️ Containers successfully built`. Containers are created lazily: the first
 `exec` boots the container, so expect it to take tens of seconds locally
