@@ -1833,7 +1833,7 @@ describe("itx", () => {
     });
   });
 
-  test("Agent scripts can send web-chat messages and call project tools", async () => {
+  test("Agent scripts can send web-chat messages (string and legacy object form) and call project tools", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -1859,6 +1859,11 @@ describe("itx", () => {
       predicate: (event) => event.payload?.message === "project tool saw project-capability",
       timeoutMs: 30_000,
     });
+    const legacyFormReply = agent.stream.waitForEvent({
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) => event.payload?.message === "legacy object form still works",
+      timeoutMs: 30_000,
+    });
 
     await agent.stream.append({
       type: AGENT_OUTPUT_ADDED_TYPE,
@@ -1866,7 +1871,10 @@ describe("itx", () => {
         content: fencedAgentScript(`
           async (itx) => {
             const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.chat.sendMessage({ message });
+            await itx.chat.sendMessage(message);
+            // Live agents' history is full of the legacy object form — it must
+            // keep working alongside the plain-string form.
+            await itx.chat.sendMessage({ message: "legacy object form still works" });
           }
         `),
       },
@@ -1875,6 +1883,10 @@ describe("itx", () => {
     expect(await projectToolReply).toMatchObject({
       type: AGENT_WEB_MESSAGE_SENT_TYPE,
       payload: { message: "project tool saw project-capability" },
+    });
+    expect(await legacyFormReply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: { message: "legacy object form still works" },
     });
 
     const events = await agent.stream.getEvents();
@@ -1903,7 +1915,7 @@ describe("itx", () => {
 
     const content = fencedAgentScript(`
       async (itx) => {
-        await itx.chat.sendMessage({ message: ${JSON.stringify(marker)} });
+        await itx.chat.sendMessage(${JSON.stringify(marker)});
       }
     `);
     const [historicalOutput] = await agent.stream.append({
@@ -2052,14 +2064,12 @@ describe("itx", () => {
             const probe = await itx.agent.agentProbe.inspect("agent-only");
             const first = await itx.agent.agentCounter.increment();
             const current = await itx.agent.agentCounter.current();
-            await itx.chat.sendMessage({
-              message: JSON.stringify({
-                durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
-                current,
-                first,
-                probe,
-              }),
-            });
+            await itx.chat.sendMessage(JSON.stringify({
+              durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
+              current,
+              first,
+              probe,
+            }));
           }
         `),
       },
