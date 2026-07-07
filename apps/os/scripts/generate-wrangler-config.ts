@@ -177,6 +177,15 @@ function workerBindings(input: {
       // default, so opt in now. Independent of container egress interception.
       // See docs/cloudflare-sandboxes.md.
       SANDBOX_TRANSPORT: "rpc",
+      // Container startup budget must cover the IMAGE PULL on a host that
+      // hasn't cached it: the baked-monorepo image is ~3 GB and a cold-host
+      // pull measured 1.5-3.2 min. The SDK default (90s port-ready; dial
+      // budget instanceGet+portReady+30s = 150s) sat mid-pull, so fresh
+      // sandboxes on cold hosts died with OPERATION_INTERRUPTED /
+      // transport_disposed on utils.createSession — the dominant e2e flake
+      // after the image grew. 300s clears the worst observed pull; anything
+      // slower is a genuinely stuck container and should fail.
+      SANDBOX_PORT_TIMEOUT_MS: "300000",
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),

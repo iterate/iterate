@@ -318,6 +318,14 @@ container FAQ <https://developers.cloudflare.com/containers/faq/>.
   2× memory, enterprise-only). Billing is while-running (active-CPU since
   2025-11-21), so idle-destroyed sandboxes keep a large pool cheap.
   [platform-details/limits](https://developers.cloudflare.com/containers/platform-details/limits/).
+- **Startup budget must cover the image pull** (`SANDBOX_PORT_TIMEOUT_MS`,
+  set in `generate-wrangler-config.ts`): the SDK's default dial budget is
+  ~150 s, and a cold-host pull of the ~3 GB image takes 1.5-3.2 min — a pull
+  that outlives the budget kills the control-plane dial mid-startup and every
+  command on that boot dies `OPERATION_INTERRUPTED / transport_disposed`
+  (`utils.createSession`). This was the dominant e2e flake after the image
+  grew; 300 s clears the worst observed pull. If the image grows, grow this
+  with it.
 - **`max_instances`** caps concurrent instances; exceeding it returns HTTP 503.
   Ours is deliberately high (see the comment in `generate-wrangler-config.ts`):
   under e2e churn the platform keeps released slots "assigned" in a warm pool
