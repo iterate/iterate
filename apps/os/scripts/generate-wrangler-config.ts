@@ -144,10 +144,46 @@ const DO_CLASSES = {
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SANDBOX: "CloudflareSandboxDurableObject",
+  SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
 } as const;
+
+// Durable Object migration history. Deployed workers only apply tags NEWER
+// than the one they already passed, so a new class must arrive in a NEW tag —
+// adding it to an existing tag is silently ignored on every existing
+// deployment and the deploy fails at bind time with API error 10061. Fresh
+// workers (local dev, new envs) replay all tags in order.
+const DO_MIGRATIONS = [
+  {
+    tag: "v1",
+    new_sqlite_classes: [
+      "AgentDurableObject",
+      "CapabilityHostDurableObject",
+      "ProjectDurableObject",
+      "RepoDurableObject",
+      "CloudflareSandboxDurableObject",
+      "SecretDurableObject",
+      "StreamDurableObject",
+      "StatefulWorkerDurableObject",
+    ],
+  },
+  { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
+];
+
+// Every bound class needs a migration entry (and nothing else does).
+{
+  const migrated = new Set(DO_MIGRATIONS.flatMap((migration) => migration.new_sqlite_classes));
+  const bound = Object.values(DO_CLASSES);
+  const missing = bound.filter((className) => !migrated.has(className));
+  const stale = [...migrated].filter((className) => !(bound as string[]).includes(className));
+  if (missing.length > 0 || stale.length > 0) {
+    throw new Error(
+      `DO_MIGRATIONS out of sync with DO_CLASSES (missing: ${missing.join(", ") || "none"}; stale: ${stale.join(", ") || "none"})`,
+    );
+  }
+}
 
 /** Binding config identical across local dev and every deployed env, apart from names/ids. */
 function workerBindings(input: {
@@ -385,7 +421,7 @@ export const config = {
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.
-  migrations: [{ tag: "v1", new_sqlite_classes: Object.values(DO_CLASSES) }],
+  migrations: DO_MIGRATIONS,
   // Local dev: containers off by default so `pnpm dev` never requires Docker —
   // sandbox Durable Objects fail at their constructor until you opt in with
   // `OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev`, which builds the sandbox

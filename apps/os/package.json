@@ -63,6 +63,7 @@
     "capnweb": "^0.8.0",
     "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz",
     "comlink": "^4.4.2",
+    "croner": "^10.0.1",
     "lucide-react": "^0.553.0",
     "minimatch": "^10.2.4",
     "react": "^19.2.0",

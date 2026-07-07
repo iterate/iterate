@@ -20,6 +20,7 @@ import {
 } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { agentSandboxPath } from "../sandboxes/utils.ts";
+import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
@@ -52,6 +53,7 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
   'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.integrations.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.request(...)]) — so the thread is never silent while you fetch.',
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  'To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call itx.integrations.slack.chat.postMessage. itx.scheduler.list() / cancel(key) manage schedules.',
   "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
@@ -214,12 +216,32 @@ export class ProjectProcessor extends StreamProcessor<
       }
       case "events.iterate.com/stream/child-stream-created": {
         const childPath = event.payload.childPath;
-        if (!childPath.startsWith("/agents/") && !childPath.startsWith("/secrets/")) return;
+        if (
+          !childPath.startsWith("/agents/") &&
+          !childPath.startsWith("/secrets/") &&
+          !childPath.startsWith("/scheduler/")
+        ) {
+          return;
+        }
         blockProcessorWhile(async () => {
           const durableObjectName = DurableObjectNameCodec.stringify({
             projectId: this.deps.itx.projectId,
             path: childPath,
           });
+          if (childPath.startsWith("/scheduler/")) {
+            // A scheduler stream's birth certificate is just its processor
+            // subscription: the Scheduler Durable Object reduces schedules and
+            // owns the alarm from the first delivered batch onward.
+            await this.deps.itx.streams.get(childPath).append(
+              buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                durableObjectName,
+                idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
+                processorSlug: SchedulerProcessorContract.slug,
+                subscriberType: "scheduler",
+              }),
+            );
+            return;
+          }
           if (childPath.startsWith("/agents/")) {
             // The agent path picks the prompt (agentSystemPromptForPath);
             // Slack agents additionally get the slack-agent processor

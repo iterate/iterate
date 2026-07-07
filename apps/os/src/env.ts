@@ -102,6 +102,9 @@ export interface Env {
    * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
    */
   FILES_BUCKET: R2Bucket;
+  SCHEDULER: DurableObjectNamespace<
+    import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
+  >;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;
