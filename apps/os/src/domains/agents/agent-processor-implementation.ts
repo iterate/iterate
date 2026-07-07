@@ -27,6 +27,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     event,
     previousState,
     runInBackground,
+    state,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
@@ -123,6 +124,42 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             payload: {
               content,
               llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          }),
+        );
+        return;
+      }
+      // A failed request must never brick the stream: the error becomes a
+      // model-visible input, exactly like a thrown script. Below the
+      // consecutive-failure cap the input triggers a retry so the model can
+      // react (fix its request, tell the user what happened); at the cap it
+      // sits in context untriggered so a persistent provider failure (bad key,
+      // outage) cannot retry-loop — the next user message resumes normally.
+      case "events.iterate.com/agent/llm-request-completed": {
+        const result = event.payload.result;
+        if (result.status !== "failure") return;
+        if (
+          previousState.currentRequest?.phase !== "requested" ||
+          previousState.currentRequest.llmRequestId !== event.payload.llmRequestId
+        ) {
+          // Stale completion (e.g. the request was already cancelled) — the
+          // reducer ignored it, so don't render an error input for it either.
+          return;
+        }
+        const retry = state.consecutiveLlmFailures < MAX_CONSECUTIVE_LLM_FAILURES;
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/render-llm-failure@${event.offset}`,
+            payload: {
+              content:
+                `Your LLM request failed (${event.payload.provider}):\n\`\`\`\n${result.error.message}\n\`\`\`` +
+                (retry
+                  ? ""
+                  : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
+              llmRequestPolicy: {
+                behaviour: retry ? "after-current-request" : "dont-trigger-request",
+              },
             },
           }),
         );
@@ -353,7 +390,13 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return state;
       }
-      return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
+      return {
+        ...state,
+        consecutiveLlmFailures:
+          event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        currentRequest: null,
+        requestGeneration: state.requestGeneration + 1,
+      };
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
@@ -423,6 +466,13 @@ function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRe
 }
 
 const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
+
+/**
+ * Failed-request error inputs stop auto-retrying once this many failures land
+ * in a row (counter resets on any success). Two automatic retries, then wait
+ * for the user.
+ */
+const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 
 // The "tool result" half of the codemode loop: a finished script execution
 // renders back into model-visible history so the next turn can look at the

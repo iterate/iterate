@@ -187,6 +187,13 @@ export const AgentProcessorContract = defineProcessorContract({
      * collapses into one scheduled event at the stream's append dedup layer.
      */
     requestGeneration: z.number().int().nonnegative().default(0),
+    /**
+     * Failed llm-request-completed events since the last success. Governs
+     * whether a failure's error input auto-retries (below the cap) or sits in
+     * context untriggered (at the cap) — a persistent provider failure must
+     * not retry-loop forever.
+     */
+    consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     inProgressScriptExecutions: z
       .array(
         z.object({
