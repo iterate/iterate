@@ -39,7 +39,6 @@ function ProjectSettingsContent() {
       <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
       <ProjectCustomDomainsSettings
         projectId={project.id}
-        projectSlug={project.slug}
         projectState={projectState}
         routeConfig={routeConfig}
       />

@@ -19,9 +19,6 @@ export const mutateProjectCustomDomainServerFn: (input: {
       hostname: data.hostname,
       projectHostnameBases: context.config.projectHostnameBases ?? [],
     });
-    if (data.action === "remove") {
-      await assertProjectCustomDomainConfigured(context, data.projectId, hostname);
-    }
     const [event] = await appendProjectCustomDomainEvent(context, data.projectId, {
       type: customDomainEventType(data.action),
       payload: { hostname },
@@ -63,17 +60,4 @@ async function appendProjectCustomDomainEvent(
   const root = session.authenticate({ type: "from-server-cookie" });
   const project = await root.projects.get(projectId);
   return await project.streams.get("/").append(ProjectProcessorContract.buildEvent(event));
-}
-
-async function assertProjectCustomDomainConfigured(
-  context: RequestContext,
-  projectId: string,
-  hostname: string,
-): Promise<void> {
-  const session = engineBatchSession(context);
-  const root = session.authenticate({ type: "from-server-cookie" });
-  const project = await root.projects.get(projectId);
-  const { state } = await project.processor.snapshot();
-  if (state.customDomains.some((domain) => domain.hostname === hostname)) return;
-  throw new Error(`Custom domain "${hostname}" is not configured on this project.`);
 }

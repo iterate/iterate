@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { Identifier } from "@iterate-com/ui/components/identifier";
-import { ProjectHostnameCard } from "~/components/project-hostname-card.tsx";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import type { Project } from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -37,15 +36,27 @@ export function ProjectSettingsPanel({
 
       <SettingsSection title="Hostname routing">
         <SettingsField label="Project slug hostname">
-          <ProjectHostnameCard
-            appHostPattern={(displayHost) => `<app>--${displayHost}`}
-            appRoutingDescription="Apps use double-hyphen hosts on the built-in project hostname."
-            copyLabel="Copy project hostname"
-            description="Built-in project hostname"
-            hostname={projectHostname}
-            openLabel="Open project hostname"
-            url={projectWorkerUrl}
-          />
+          <div className="grid gap-1 text-sm">
+            {projectWorkerUrl ? (
+              <a
+                className="font-medium break-all underline-offset-4 hover:underline"
+                href={projectWorkerUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {new URL(projectWorkerUrl).host}
+              </a>
+            ) : (
+              <p className="font-medium break-all">{projectHostname}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Apps use double-hyphen hosts on the built-in project hostname.
+            </p>
+            <code className="rounded bg-muted px-1.5 py-1 text-xs break-all">
+              {"<app>--"}
+              {projectWorkerUrl ? new URL(projectWorkerUrl).host : projectHostname}
+            </code>
+          </div>
         </SettingsField>
       </SettingsSection>
 

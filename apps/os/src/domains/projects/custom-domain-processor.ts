@@ -94,23 +94,7 @@ export function processCustomDomainEvent({
   state: ProjectProcessEventArgs["state"];
 }): boolean {
   switch (event.type) {
-    case "events.iterate.com/project/custom-domain-add-requested": {
-      blockProcessorWhile(async () => {
-        await appendCustomDomainObservation({
-          append,
-          eventOffset: event.offset,
-          hostname: event.payload.hostname,
-          operation: async () => {
-            const provisioner = assertCustomDomainProvisioner(customDomains);
-            const project =
-              (await provisioner.readProject()) ?? projectRecordFromState(state, projectId);
-            return await provisioner.ensure({ hostname: event.payload.hostname, project });
-          },
-          projectId,
-        });
-      });
-      return true;
-    }
+    case "events.iterate.com/project/custom-domain-add-requested":
     case "events.iterate.com/project/custom-domain-refresh-requested": {
       blockProcessorWhile(async () => {
         await appendCustomDomainObservation({
@@ -121,10 +105,10 @@ export function processCustomDomainEvent({
             const provisioner = assertCustomDomainProvisioner(customDomains);
             const project =
               (await provisioner.readProject()) ?? projectRecordFromState(state, projectId);
-            return await provisioner.refresh({
-              hostname: event.payload.hostname,
-              project,
-            });
+            const input = { hostname: event.payload.hostname, project };
+            return event.type === "events.iterate.com/project/custom-domain-add-requested"
+              ? await provisioner.ensure(input)
+              : await provisioner.refresh(input);
           },
           projectId,
         });
