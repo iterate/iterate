@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -14,19 +15,22 @@ import {
 } from "@iterate-com/ui/components/item";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
+import { AlertCircle, Circle, Github, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { ProjectRpcTarget } from "~/types.ts";
+import type { IntegrationProvider, ProjectRpcTarget } from "~/types.ts";
 
 type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
+  /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
+   * flow on mount, then clears itself so a refresh never re-triggers. */
+  connect: z.string().optional(),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
@@ -50,6 +54,7 @@ function ProjectIntegrationsPage() {
 
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { project } = Route.useLoaderData();
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
@@ -113,6 +118,41 @@ function ProjectIntegrationsContent() {
     },
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
+  const startGithub = useMutation({
+    mutationFn: async () => {
+      if (!userId) throw new Error("You must be signed in to connect GitHub.");
+      return await itx.integrations.startOAuthFlow({
+        // GitHub joins IntegrationProvider server-side in a parallel session;
+        // wiring the button to the same startOAuthFlow path now means it connects
+        // the moment that lands. Cast until "github" is in the union.
+        provider: "github" as unknown as IntegrationProvider,
+        userId,
+        callbackUrl: window.location.href,
+      });
+    },
+    onSuccess: (result) => {
+      window.location.href = result.authorizationUrl;
+    },
+    onError: (error) => toast.error(`Failed to connect GitHub: ${error.message}`),
+  });
+
+  // Deep link: `?connect=<slug>` auto-starts the matching connect flow — the same
+  // mutation a click on that Connect button fires — then clears the param so a
+  // refresh (or landing back here after the OAuth round-trip) never re-triggers it.
+  // `mutate` is stable per mutation, so the effect depends on those rather than the
+  // per-render mutation objects (which would re-run it before the param clears).
+  const connectSlack = startSlack.mutate;
+  const connectGoogle = startGoogle.mutate;
+  const connectGithub = startGithub.mutate;
+  useEffect(() => {
+    const slug = search.connect;
+    if (!slug) return;
+    void navigate({ search: (previous) => ({ ...previous, connect: undefined }), replace: true });
+    if (slug === "slack") connectSlack();
+    else if (slug === "google") connectGoogle();
+    else if (slug === "github") connectGithub();
+    // Unknown slug: ignored.
+  }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
   const panel = (
     <>
@@ -191,6 +231,24 @@ function ProjectIntegrationsContent() {
                 Connect Google
               </Button>
             )}
+          </ItemActions>
+        </Item>
+
+        <Item variant="outline" className="items-start justify-between gap-4 p-4">
+          <ItemMedia variant="icon">
+            <Github className="size-4" />
+          </ItemMedia>
+          <ItemContent className="min-w-0">
+            <ItemTitle>GitHub</ItemTitle>
+            <ItemDescription>
+              Connect GitHub to give agents repository access and receive repo webhooks.
+            </ItemDescription>
+          </ItemContent>
+          <ItemActions>
+            <Button size="sm" disabled={startGithub.isPending} onClick={() => startGithub.mutate()}>
+              {startGithub.isPending ? <Spinner /> : null}
+              Connect GitHub
+            </Button>
           </ItemActions>
         </Item>
       </ItemGroup>
