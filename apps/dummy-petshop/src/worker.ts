@@ -2,10 +2,11 @@
  * dummy-petshop — a deliberately fake third-party service ("the pet shop")
  * for exercising Iterate's integrations & secrets system end to end
  * (apps/os/docs/integrations-and-secrets-design.md §7 S0, "Petshop ×2" §3):
- * an OAuth 2.0 provider with Basic client auth at the token endpoint and
- * short-TTL sealed tokens, a Waitrose-shaped legacy email+password login,
- * a small bearer-protected API, HMAC-signed outbound webhooks, and a test
- * backdoor. GET / documents the whole surface.
+ * ONE pets API behind many authentication doors — an OAuth 2.0 provider with
+ * Basic client auth at the token endpoint and short-TTL sealed tokens, a
+ * legacy email+password login, a GraphQL session-login door, MCP, typed
+ * RPC/OpenAPI surfaces, three WebSocket gateways — plus HMAC-signed outbound
+ * webhooks and a test backdoor. GET / documents the whole surface.
  *
  * The worker is stateless: durable state is one JSON blob in the
  * PetshopStateDurableObject (state.ts) and every code/token is a sealed
@@ -30,10 +31,11 @@ import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
 import { hmacSha256Hex, nowSeconds, seal, unseal } from "./seal.ts";
 import {
-  handleWaitroseGraphql,
-  WAITROSE_PASSWORD,
-  WAITROSE_SESSION_TTL_SECONDS,
-} from "./waitrose.ts";
+  GRAPHQL_LOGIN_PASSWORD,
+  GRAPHQL_SESSION_TTL_SECONDS,
+  graphqlSessionFromBearer,
+  handleGraphqlLogin,
+} from "./graphql-login.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_APP_ID,
@@ -169,9 +171,9 @@ const INDEX = dedent`
   POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
   POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
-  POST /graphql             Waitrose-shaped GraphQL (also served at the app's live path, /api/graphql-prod/graph/live):
-                            NewSession (any username, password "${WAITROSE_PASSWORD}") → sealed ~${WAITROSE_SESSION_TTL_SECONDS}s session token;
-                            GetShoppingContext + GetTrolley want it as Authorization: Bearer; expired/revoked → 401
+  POST /graphql             GraphQL session-login door: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
+                            → sealed ~${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
+                            (one more way into the ONE pets API); expired/revoked → 401; no refresh grant — re-login is the refresh
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
   GET  /api/pets            the account's (entirely fictional) pets
 
@@ -398,9 +400,9 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
 }
 
 /**
- * The Waitrose stand-in (design R8): email+password → short-TTL bearer
- * token, no refresh token — re-minting through this endpoint IS the refresh
- * path. Deterministic for e2e: any email, password "correct-horse".
+ * The legacy email+password login (design R8): email+password → short-TTL
+ * bearer token, no refresh token — re-minting through this endpoint IS the
+ * refresh path. Deterministic for e2e: any email, password "correct-horse".
  */
 async function legacyLogin(request: Request, deps: PetshopDeps): Promise<Response> {
   const body = await readJson(request);
@@ -492,8 +494,27 @@ async function appInstallationAccessToken(
 async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant | null> {
   const header = request.headers.get("authorization") ?? "";
   if (!/^bearer /i.test(header)) return null;
-  const grant = await unseal<Grant>(header.slice(7).trim(), deps.sealKey);
-  if (!grant || (grant.t !== "access" && grant.t !== "installation")) return null;
+  const token = header.slice(7).trim();
+  const grant = await unseal<Grant>(token, deps.sealKey);
+  if (!grant) return null;
+  if ((grant as { t?: string }).t === "graphql-session") {
+    // The GraphQL login door's session is one more way in to the SAME API:
+    // adapt it to an access-shaped grant (its "client" is the auth style —
+    // this login flow has no OAuth client).
+    const session = await graphqlSessionFromBearer(token, {
+      sealKey: deps.sealKey,
+      getAccessTokenEpoch: () => deps.state.getState().then((state) => state.accessTokenEpoch),
+    });
+    if (!session) return null;
+    return {
+      t: "access",
+      sub: session.sub,
+      clientId: "graphql-session-login",
+      epoch: session.epoch,
+      exp: session.exp,
+    };
+  }
+  if (grant.t !== "access" && grant.t !== "installation") return null;
   if (grant.exp < nowSeconds()) return null;
   if (grant.epoch !== (await deps.state.getState()).accessTokenEpoch) return null;
   return grant;
@@ -842,12 +863,10 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     }
   }
   if (key === "POST /api/legacy-login") return legacyLogin(request, deps);
-  // The Waitrose-shaped GraphQL fixture (waitrose.ts). /graphql is the
-  // canonical spec-facing path; the real app's live path is an alias so the
-  // vendored template client's URL derivation (`${baseUrl}` + the real path)
-  // works against petshop unchanged.
-  if (key === "POST /graphql" || key === "POST /api/graphql-prod/graph/live") {
-    return handleWaitroseGraphql(request, {
+  // The GraphQL session-login door (graphql-login.ts): one more way to
+  // authenticate against the same pets API.
+  if (key === "POST /graphql") {
+    return handleGraphqlLogin(request, {
       sealKey: deps.sealKey,
       getAccessTokenEpoch: () => deps.state.getState().then((state) => state.accessTokenEpoch),
     });

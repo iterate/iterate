@@ -165,10 +165,12 @@ project egress door, so **even the project's own integration code never holds
 its tokens**. The connection secret holds only `{ username, password }` plus
 the `waitrose-session` refresh strategy — Waitrose has no refresh grant, so
 the Secret DO re-runs the login itself: mint on first use, re-mint on 401.
-Exercised end-to-end in `e2e/vitest/integrations-userspace.e2e.test.ts`: the
-echo lane (two connections, substitution proof, negative controls) plus the
-seeded-template lane live against petshop's Waitrose-shaped GraphQL fixture
-(`apps/dummy-petshop/src/waitrose.ts`).
+Exercised in `e2e/vitest/integrations-userspace.e2e.test.ts`: the echo lane
+(two connections, substitution proof, negative controls), the strategy lane
+against petshop's GraphQL session-login door (`apps/dummy-petshop/src/graphql-login.ts`
+— the same wire shape the strategy speaks; the session is an ordinary petshop bearer), and a
+build+mount+dispatch check of the seeded files that never dials the vendor.
+The integration itself talks to the real Waitrose.
 
 The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at
