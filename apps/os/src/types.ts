@@ -546,26 +546,24 @@ export interface Agent {
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
   /**
-   * Store a file AND make it part of this agent's conversation in one call.
+   * Store files AND make them part of this agent's conversation in one call.
    * The bytes land in project file storage under the agent's own path
-   * (`<agent path>/<short id>-<filename>`), and an input event carrying the
-   * attachment (with a signed public `url`) is appended to the agent stream —
-   * so the file shows up in the conversation UI, and images become visible to
-   * vision-capable models on following turns. Pass
-   * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record a
-   * file WITHOUT starting an LLM turn (the right choice for files the agent
+   * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all
+   * attachments (each with a signed public `url`) is appended to the agent
+   * stream — so the files show up as a single conversation message, and
+   * images become visible to vision-capable models on following turns. Pass
+   * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files
+   * WITHOUT starting an LLM turn (the right choice for files the agent
    * itself generated, e.g. `itx.ai.run` images).
    */
-  addFile(input: {
-    contentType: string;
-    data: FileData;
-    filename: string;
-    /** Conversation text accompanying the file. Defaults to a short attachment note. */
+  addFiles(input: {
+    files: Array<{ contentType: string; data: FileData; filename: string }>;
+    /** Conversation text accompanying the files. Defaults to a short attachment note. */
     message?: string;
     llmRequestPolicy?: {
       behaviour: "dont-trigger-request" | "after-current-request" | "interrupt-current-request";
     };
-  }): Promise<{ event: StreamEvent; file: AgentFileAttachment }>;
+  }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /**
    * Send-and-wait convenience: appends a user message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not

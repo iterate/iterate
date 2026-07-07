@@ -22,6 +22,25 @@ import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
+/**
+ * Create-if-missing for one R2 bucket. Exported for deploy.ts prepare():
+ * wrangler validates R2 bindings at upload time, so — like the worker events
+ * queue — a bound bucket must exist before the deploy, not just after this
+ * script has been run by hand. Name-addressed, so no envs.ts ID to reconcile.
+ */
+export async function ensureR2Bucket(
+  cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>,
+  name: string,
+): Promise<void> {
+  const r2 = await cf<{ buckets: { name: string }[] }>(`/r2/buckets?per_page=1000`);
+  if (r2.buckets.some((bucket) => bucket.name === name)) {
+    console.log(`R2 bucket ${name} exists`);
+    return;
+  }
+  await cf(`/r2/buckets`, { method: "POST", body: JSON.stringify({ name }) });
+  console.log(`created R2 bucket ${name}`);
+}
+
 /** Ensure apps/os's Cloudflare resources exist for an environment (create-only, idempotent). */
 export default async function ensureResources(
   options: {
@@ -65,19 +84,11 @@ export default async function ensureResources(
   // reconcile into envs.ts; create-if-missing is the whole story. Wiping a
   // sandbox's data is erase-data's job, never this create-only script's.
   const r2BucketName = `${env.osWorkerName}-sandboxes`;
-  const r2 = await cf<{ buckets: { name: string }[] }>(`/r2/buckets?per_page=1000`);
-  const ensureBucket = async (name: string) => {
-    if (r2.buckets.some((bucket) => bucket.name === name)) {
-      console.log(`R2 bucket ${name} exists`);
-      return;
-    }
-    await cf(`/r2/buckets`, { method: "POST", body: JSON.stringify({ name }) });
-    console.log(`created R2 bucket ${name}`);
-  };
-  await ensureBucket(r2BucketName);
+  await ensureR2Bucket(cf, r2BucketName);
   // Project file storage (FILES_BUCKET, domains/files/project-files.ts). No
-  // lifecycle rule: files live until deleted.
-  await ensureBucket(`${env.osWorkerName}-files`);
+  // lifecycle rule: files live until deleted. Also ensured by deploy.ts
+  // prepare() so existing envs pick the bucket up on their next deploy.
+  await ensureR2Bucket(cf, `${env.osWorkerName}-files`);
   // The Sandbox SDK checks its backup ttl only at RESTORE time and never
   // deletes expired objects from R2 — without a lifecycle rule the bucket
   // grows forever under e2e churn (a fresh sandbox per test). Expire the
