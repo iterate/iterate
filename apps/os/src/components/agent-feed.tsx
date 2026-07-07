@@ -277,6 +277,7 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
           <MessageResponse className="min-w-0 max-w-full overflow-hidden">
             {item.text}
           </MessageResponse>
+          <MessageAttachments files={item.files} hasText={item.text !== ""} />
         </MessageContent>
       </Message>
     );
@@ -441,12 +442,12 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
       {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
-      <UserMessageAttachments files={item.files} hasText={item.text !== ""} />
+      <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
   );
 }
 
-function UserMessageAttachments({
+function MessageAttachments({
   files,
   hasText,
 }: {
@@ -457,13 +458,13 @@ function UserMessageAttachments({
   return (
     <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
       {files.map((file) => (
-        <UserMessageAttachment key={file.path} file={file} />
+        <MessageAttachment key={file.path} file={file} />
       ))}
     </div>
   );
 }
 
-function UserMessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   if (file.contentType.startsWith("image/")) {
     return (
       <a href={file.url} target="_blank" rel="noreferrer" className="block max-w-full">

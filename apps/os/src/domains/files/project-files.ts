@@ -34,6 +34,7 @@ import {
   buildSignedFileUrl,
   checkSignedFileRequest,
   projectFileDataToBytes,
+  sanitizeFileFilename as sanitizeName,
   type ProjectFileData,
 } from "./file-url-signing.ts";
 
@@ -133,6 +134,40 @@ export async function mintProjectFileUrl(input: {
     projectId: input.projectId,
     secret: itxEnv.SECRET_ENCRYPTION_KEY,
   });
+}
+
+/**
+ * Stores files under an agent's own path and returns the attachment records
+ * (path + signed url + wire facts) that ride on agent stream events. The one
+ * storage recipe behind every attachment surface — `agent.addFiles` (inputs)
+ * and `chat.sendMessage({ files })` (agent replies). A short random prefix
+ * keeps two same-named uploads in one conversation from overwriting each
+ * other under last-write-wins paths.
+ */
+export async function storeAgentFileAttachments(input: {
+  agentPath: string;
+  config: AppConfig;
+  files: Array<{ contentType: string; data: ProjectFileData; filename: string }>;
+  projectId: string;
+}): Promise<Array<ProjectFileMetadata & { filename: string; url: string }>> {
+  return await Promise.all(
+    input.files.map(async (file) => {
+      const filename = sanitizeName(file.filename);
+      const path = `${input.agentPath}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
+      const metadata = await putProjectFile({
+        contentType: file.contentType,
+        data: file.data,
+        path,
+        projectId: input.projectId,
+      });
+      const url = await mintProjectFileUrl({
+        config: input.config,
+        path,
+        projectId: input.projectId,
+      });
+      return { ...metadata, filename, url };
+    }),
+  );
 }
 
 /**
