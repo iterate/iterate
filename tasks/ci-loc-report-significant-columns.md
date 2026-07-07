@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-review
 size: small
 follows-up: https://github.com/iterate/iterate/pull/1715
 ---
@@ -8,9 +8,8 @@ follows-up: https://github.com/iterate/iterate/pull/1715
 
 ## Status summary
 
-Spec fleshed out, implementation starting. Follow-up to #1715/#1718: the report currently shows
-only significant lines (blank lines and JS comments excluded), which hides how much of a change
-is comments. Show both counts per group so the gap is visible.
+Implemented (PR #1723). Each group row now shows raw Lines and Significant counts side by
+side, with the five-square bar on Significant.
 
 ## Motivation
 
@@ -20,12 +19,12 @@ difference legible at a glance.
 
 ## Spec
 
-- [ ] Each group row shows two diff cells: **Lines** (plain `git diff --numstat` counts) and
+- [x] Each group row shows two diff cells: **Lines** (plain `git diff --numstat` counts) and
       **Significant** (existing SLOC counts: blank lines never count, JS comments stripped).
-- [ ] The five-square bar stays on the Significant column only (it's the primary signal); a
+- [x] The five-square bar stays on the Significant column only (it's the primary signal); a
       comment-only change renders `+N -M` under Lines with an all-empty bar under Significant.
-- [ ] Footnote explains the two columns.
-- [ ] Local mode prints the same table.
+- [x] Footnote explains the two columns.
+- [x] Local mode prints the same table.
 
 ## Decisions / assumptions (made while AFK)
 
@@ -40,4 +39,9 @@ difference legible at a glance.
 
 ## Implementation log
 
-(append as work proceeds)
+- `ChangedFile`/`GroupRow` carry both raw (`added`/`removed`, straight from numstat) and
+  `significantAdded`/`significantRemoved` (stripped-content diff) - the SLOC counts no longer
+  overwrite the raw ones.
+- Sanity check on merged sandbox PR (3296aa87a): raw Total +1,939 -315 matches the original
+  pre-SLOC report exactly; significant Total +1,316 -200 matches the SLOC-only report.
+  CI & scripts shows the comment gap nicely: +156 raw vs +66 significant.
