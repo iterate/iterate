@@ -8,7 +8,13 @@ import {
   type ReactNode,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BanIcon, ChevronRightIcon, CodeIcon, PaperclipIcon } from "lucide-react";
+import {
+  BanIcon,
+  ChevronRightIcon,
+  CircleQuestionMarkIcon,
+  CodeIcon,
+  PaperclipIcon,
+} from "lucide-react";
 import type {
   AgentUiActivity,
   AgentUiCodeStep,
@@ -28,6 +34,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
@@ -295,13 +302,35 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
       data-kind="stream-woken"
     >
       <div className="h-px flex-1 bg-purple-500/45" />
-      <time
-        className="font-mono text-xs font-medium text-purple-700 dark:text-purple-300"
-        dateTime={dateTime}
-        title={formatDateTime(item.timestampMs)}
-      >
-        {item.text}
-      </time>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <time
+          className="font-mono text-xs font-medium text-purple-700 dark:text-purple-300"
+          dateTime={dateTime}
+          title={formatDateTime(item.timestampMs)}
+        >
+          {item.text}
+        </time>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Why did this stream Durable Object wake?"
+                className="inline-flex size-4 items-center justify-center rounded-full text-purple-700/75 transition-colors hover:text-purple-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/60 dark:text-purple-300/75 dark:hover:text-purple-200"
+              />
+            }
+          >
+            <CircleQuestionMarkIcon className="size-3.5" aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-80 text-left leading-snug">
+            <p>
+              This can happen when the Durable Object is evicted or crashed, and most often when we
+              do a production deployment. All Durable Objects currently crash and do not recover
+              cleanly; we will fix that in the future.
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      </div>
       <div className="h-px flex-1 bg-purple-500/45" />
     </div>
   );
