@@ -1,5 +1,5 @@
 ---
-status: in-review
+status: done
 size: small
 follows-up: https://github.com/iterate/iterate/pull/1715
 ---
