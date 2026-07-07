@@ -38,6 +38,7 @@ export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconn
 
 export const GITHUB_CONNECTED_EVENT_TYPE = "events.iterate.com/github/connected";
 export const GITHUB_DISCONNECTED_EVENT_TYPE = "events.iterate.com/github/disconnected";
+export const GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/github/webhook-received";
 
 export function readRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)

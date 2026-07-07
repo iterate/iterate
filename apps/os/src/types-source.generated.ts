@@ -510,10 +510,6 @@ export interface ProjectIntegrations extends Describable {
   }): Promise<{ authorizationUrl: string }>;
 }
 
-export type RouteSlackWebhookResult =
-  | { connection: string; ok: true; projectId: string }
-  | { ignored: "team-not-claimed"; ok: true };
-
 /** Agent catalog within one project. */
 export interface AgentCollection extends Describable {
   get(path: string): Agent;

@@ -29,10 +29,10 @@ export async function handleIntegrationApiRequest(input: {
   if (url.pathname === "/api/integrations/github/callback") {
     return await handleOAuthCallback({ ...input, provider: "github" });
   }
-  // The Slack webhook lanes (/api/integrations/slack/webhook,
-  // .../interactivity-webhook) are NOT here: they are served by the api
-  // worker (src/domains/integrations/slack-webhook-api.ts), which has the
-  // engine bindings and routes events directly — no RPC round trip.
+  // The webhook lanes (/api/integrations/<slug>/webhook, + slack's
+  // interactivity lane) are NOT here: they are served by the api worker
+  // (src/domains/integrations/integration-webhook-api.ts), which has the engine
+  // bindings and routes events directly — no RPC round trip.
   return null;
 }
 

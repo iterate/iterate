@@ -23,7 +23,6 @@ import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
-  RouteSlackWebhookResult,
   StatelessDynamicWorkerRef,
 } from "../../types.ts";
 import { itxEnv } from "../../env.ts";
@@ -56,7 +55,6 @@ import {
   GOOGLE_OAUTH_TOKEN_URL,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
-  SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
   githubConnectionSecretPath,
   googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
@@ -793,42 +791,6 @@ export async function listIntegrationConnections(
   return entries;
 }
 
-// ---------------------------------------------------------------------------
-// Webhook routing (deployment-wide, admin/internal only)
-// ---------------------------------------------------------------------------
-
-/**
- * Routes one validly-signed Slack webhook body to the project + connection
- * that claimed its team, by appending it to that connection's
- * `/integrations/slack/{connection}` stream. The unclaimed case reports
- * `ignored` so the webhook route can ACK-and-drop — see
- * handleVerifiedSlackWebhook in integration-api.ts for why that MUST be a
- * 200.
- */
-export async function routeSlackWebhook(input: {
-  headers: { slackEventId: string | null; slackRequestTimestamp: string | null };
-  payload: Record<string, unknown>;
-  teamId: string;
-}): Promise<RouteSlackWebhookResult> {
-  const claim = await lookupConnectionClaim("slack", input.teamId);
-  if (claim === null) return { ignored: "team-not-claimed", ok: true };
-
-  await integrationStreamStub(
-    claim.projectId,
-    integrationConnectionStreamPath("slack", claim.connection),
-  ).append({
-    type: SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
-    idempotencyKey:
-      typeof input.payload.event_id === "string"
-        ? `slack-webhook:${input.payload.event_id}`
-        : typeof input.payload.trigger_id === "string"
-          ? `slack-webhook:${input.payload.trigger_id}`
-          : `slack-webhook:${crypto.randomUUID()}`,
-    payload: {
-      headers: input.headers,
-      slackTeamId: input.teamId,
-      body: input.payload,
-    },
-  });
-  return { connection: claim.connection, ok: true, projectId: claim.projectId };
-}
+// Webhook routing moved to the generic door: integration-webhook-api.ts (the
+// HTTP entrypoint + per-provider verify/extract) over routeIntegrationWebhook
+// (integration-streams.ts, the shared (slug, externalId) routing).

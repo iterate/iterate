@@ -12,6 +12,7 @@ import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,
   INTEGRATION_DIRECTORY_STREAM_PATH,
+  integrationConnectionStreamPath,
 } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
@@ -122,6 +123,35 @@ export async function lookupConnectionClaim(
 ): Promise<ConnectionClaim | null> {
   const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
   return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
+}
+
+/**
+ * Route one validly-signed webhook to the project + connection that claimed its
+ * `(slug, externalId)`, by appending a provider-shaped event to that
+ * connection's stream. `ignored` (no live claim) lets the door ACK-and-drop.
+ * This is the generic core of the webhook door (D4): per-provider code does
+ * only the signature verify, external-id extract, and event shaping; routing is
+ * one function for every integration.
+ */
+/** The outcome of routing one inbound webhook: delivered to a connection, or
+ * `ignored` because no project has claimed its external id (the caller ACKs the
+ * ignored case with a 200 — see the webhook handlers' cardinal rule). */
+type RouteIntegrationWebhookResult =
+  | { connection: string; ok: true; projectId: string }
+  | { ignored: string; ok: true };
+
+export async function routeIntegrationWebhook(input: {
+  event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
+  externalId: string;
+  slug: string;
+}): Promise<RouteIntegrationWebhookResult> {
+  const claim = await lookupConnectionClaim(input.slug, input.externalId);
+  if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
+  await integrationStreamStub(
+    claim.projectId,
+    integrationConnectionStreamPath(input.slug, claim.connection),
+  ).append(input.event);
+  return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 
 /**
