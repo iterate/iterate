@@ -517,11 +517,6 @@ function ProjectSidebarGroup({
                   to: "/projects/$projectSlug/settings",
                   params: { projectSlug },
                   fuzzy: false,
-                }) ||
-                matchRoute({
-                  to: "/projects/$projectSlug",
-                  params: { projectSlug },
-                  fuzzy: false,
                 }),
               )}
             />

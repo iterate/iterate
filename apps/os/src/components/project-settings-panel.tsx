@@ -1,6 +1,6 @@
 import type { FormEvent, ReactNode } from "react";
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CopyIcon, ExternalLinkIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -15,6 +15,7 @@ import {
   type Project,
 } from "~/lib/project-server-fns.ts";
 import { primaryActiveCustomDomainHostname } from "~/lib/project-custom-domains.ts";
+import { projectsListQueryKey } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   buildProjectWorkerUrl,
@@ -162,6 +163,7 @@ function CustomDomainsEditor({
   projectHostnameBase: string;
   projectId: string;
 }) {
+  const queryClient = useQueryClient();
   const [hostname, setHostname] = useState("");
   const cnameTarget = isValidCustomHostname(projectHostnameBase)
     ? `cname.${projectHostnameBase}`
@@ -170,6 +172,9 @@ function CustomDomainsEditor({
     () => new Set((domains ?? []).map((domain) => domain.hostname)),
     [domains],
   );
+  const invalidateProjectsList = async () => {
+    await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
+  };
   const addDomain = useMutation({
     mutationFn: async (domainHostname: string) => {
       const result = await addProjectCustomDomainServerFn({
@@ -177,9 +182,10 @@ function CustomDomainsEditor({
       });
       return result.hostname;
     },
-    onSuccess: (addedHostname) => {
+    onSuccess: async (addedHostname) => {
       setHostname("");
       toast.success(`Custom domain queued: ${addedHostname}`);
+      await invalidateProjectsList();
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -190,17 +196,26 @@ function CustomDomainsEditor({
       });
       return result.hostname;
     },
-    onSuccess: (refreshedHostname) => toast.success(`Refresh queued: ${refreshedHostname}`),
+    onSuccess: async (refreshedHostname) => {
+      toast.success(`Refresh queued: ${refreshedHostname}`);
+      await invalidateProjectsList();
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
   const removeDomain = useMutation({
     mutationFn: async (domainHostname: string) => {
+      if (!existingHostnames.has(domainHostname)) {
+        throw new Error(`Custom domain "${domainHostname}" is not configured on this project.`);
+      }
       const result = await removeProjectCustomDomainServerFn({
         data: { hostname: domainHostname, projectId },
       });
       return result.hostname;
     },
-    onSuccess: (removedHostname) => toast.success(`Removal queued: ${removedHostname}`),
+    onSuccess: async (removedHostname) => {
+      toast.success(`Removal queued: ${removedHostname}`);
+      await invalidateProjectsList();
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 

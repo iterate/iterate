@@ -196,6 +196,7 @@ describe("custom domain provisioning", () => {
   it("allows same-project hostnames covered by an existing custom-domain route", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
     await primeProjectHostname(directory, "garple.com", project);
+    await primeProjectHostname(directory, "counter.garple.com", project);
     const createdBodies: unknown[] = [];
     let customHostname: Record<string, unknown> | null = null;
     const provisioner = createCloudflareCustomDomainProvisioner({
@@ -276,9 +277,90 @@ describe("custom domain provisioning", () => {
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
     );
-    await expect(readProjectHostnameRegistration(directory, "counter.garple.com")).resolves.toEqual(
+    await expect(
+      readProjectHostnameRegistration(directory, "counter.garple.com"),
+    ).resolves.toBeNull();
+    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual({
+      appSlug: "counter",
+      record: project,
+    });
+  });
+
+  it("registers active custom subdomains when no parent domain route exists", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+
+        if (url.pathname === "/client/v4/zones") {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "iterate.app" }],
+          });
+        }
+
+        if (
+          url.pathname === "/client/v4/zones/zone-1/custom_hostnames" &&
+          request.method === "GET"
+        ) {
+          return Response.json({
+            success: true,
+            result: [
+              {
+                custom_metadata: {
+                  projectId: "prj_garple",
+                  projectSlug: "garple",
+                  source: "iterate-os",
+                },
+                hostname: "www.garple.com",
+                id: "custom-hostname-www",
+                ssl: { status: "active", wildcard: true },
+                status: "active",
+              },
+            ],
+          });
+        }
+
+        if (url.pathname === "/client/v4/zones/zone-1/dcv_delegation/uuid") {
+          return Response.json({
+            success: true,
+            result: { uuid: "248299803bb79c97" },
+          });
+        }
+
+        return Response.json(
+          { success: false, errors: [{ message: "not found" }] },
+          { status: 404 },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(
+      provisioner.refresh({ hostname: "www.garple.com", project }),
+    ).resolves.toMatchObject({
+      hostname: "www.garple.com",
+      status: "active",
+    });
+    await expect(readProjectHostnameRegistration(directory, "www.garple.com")).resolves.toEqual(
       project,
     );
+    await expect(readProjectByHostname(directory, "www.garple.com")).resolves.toEqual({
+      appSlug: null,
+      record: project,
+    });
   });
 
   it("refreshes an existing Cloudflare hostname and heals missing routing KV", async () => {
