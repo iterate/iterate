@@ -32,8 +32,9 @@ export class EmailAgentProcessor extends StreamProcessor<typeof EmailAgentProces
           ...(event.payload.subject === undefined ? {} : { subject: event.payload.subject }),
         };
       case "events.iterate.com/email/received": {
-        // Our own looped-back mail must not become the thread counterpart.
-        if (isOwnProjectMail(event.payload)) return state;
+        // Neither our own looped-back mail nor automated mail (bounces,
+        // Auto-Submitted) may become the thread counterpart.
+        if (isOwnProjectMail(event.payload) || event.payload.automated) return state;
         const counterpart = replyCounterpart(event.payload);
         return {
           ...state,

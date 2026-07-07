@@ -1459,7 +1459,12 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       });
       for (const event of page) {
         const parsed = schema.safeParse(event.payload);
-        if (parsed.success && !isOwnProjectMail(parsed.data)) last = parsed.data;
+        // Skip our own looped-back mail AND automated mail (bounces,
+        // Auto-Submitted): a mailer-daemon arriving after the human's message
+        // must never become the reply target.
+        if (parsed.success && !isOwnProjectMail(parsed.data) && !parsed.data.automated) {
+          last = parsed.data;
+        }
       }
       if (page.length < 500) return last;
       afterOffset = page[page.length - 1]!.offset;

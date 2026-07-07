@@ -430,6 +430,23 @@ describe("EmailAgentProcessor", () => {
     });
   });
 
+  it("never lets automated mail become the thread counterpart", async () => {
+    const { cursors, processor, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/email/received",
+      payload: receivedPayload({}),
+    });
+    await stream.append({
+      type: "events.iterate.com/email/received",
+      payload: receivedPayload({ automated: true, from: "mailer-daemon@example.com" }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    // The human sender stays the counterpart even after a later bounce.
+    expect(processor.state.counterpart).toBe("jonas@example.com");
+  });
+
   it("ignores the project's own mail looping back, including for counterpart state", async () => {
     const { cursors, processor, stream } = setup();
 
