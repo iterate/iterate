@@ -35,15 +35,14 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 const TAIL_PREFETCH_ROWS = 32;
 
 /**
- * The clean agent chat feed: user message → activity ("Ran code 2× · 3
- * requests · 7.4 s") → assistant message.
+ * The clean agent chat feed: user and assistant messages plus archived
+ * activity rows ("Ran code 2× · 3 requests · 7.4 s").
  *
  * Settled items are `agent_feed_items` rows written by the agent-ui
  * processor; the TanStack virtual list windows over them with reactive
- * SQLite queries. The in-flight activity — with live-streaming thinking and
- * response text — is the list's trailing virtual item, rendered straight from
- * the processor's reduced state, so the virtualizer's end anchoring tracks its
- * growth natively.
+ * SQLite queries. Active LLM/script work is the list's trailing virtual item,
+ * rendered straight from the processor's reduced state, so the virtualizer's
+ * end anchoring tracks its growth natively.
  *
  * Callers must remount this component when pointing it at a different
  * database (key it by the database identity): the virtualizer's measurement
@@ -565,13 +564,13 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
 }
 
 // ---------------------------------------------------------------------------
-// The live element: streaming thinking and code with a blinking cursor
+// The live element: active requests and running code with expandable detail
 // ---------------------------------------------------------------------------
 
 /**
- * Rendered below the virtual list whenever an activity is in flight. Receives
- * the live reduced state on every chunk: finished steps collapse upward into
- * quiet rows while the current step streams its thinking or code.
+ * Rendered below the virtual list whenever work is in flight. Receives the
+ * live reduced state on every chunk: finished steps collapse upward into quiet
+ * rows while current requests or scripts keep the busy indicator visible.
  */
 function AgentLiveActivity({
   live,
@@ -607,7 +606,7 @@ function AgentLiveActivity({
         <div className="flex h-7 items-center gap-2 self-start px-0.5">
           <Spinner className="size-3 shrink-0 text-amber-600" />
           <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
-            {liveActivityLabel(live, liveStep)}
+            {liveActivityLabel(runningSteps)}
           </span>
         </div>
       ) : null}
@@ -648,15 +647,17 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
   return step.thinkingText !== "" || step.responseText !== "";
 }
 
-function liveActivityLabel(live: AgentUiActivity, liveStep: AgentUiStep | undefined): string {
-  // Steps exist but none is running: the turn is between steps (or waiting to
-  // settle) — "Working…", not "Thinking…".
-  if (liveStep == null) return live.steps.length > 0 ? "Working…" : "Thinking…";
-  if (liveStep.kind === "code") return "Running code…";
-  if (liveStep.responseText !== "") {
-    return looksLikeCode(liveStep.responseText) ? "Writing code…" : "Responding…";
+function liveActivityLabel(runningSteps: AgentUiStep[]): string {
+  const scriptCount = runningSteps.filter((step) => step.kind === "code").length;
+  const llmCount = runningSteps.length - scriptCount;
+  const parts: string[] = [];
+  if (scriptCount > 0) {
+    parts.push(`Running ${scriptCount} script${scriptCount === 1 ? "" : "s"}`);
   }
-  return "Thinking…";
+  if (llmCount > 0) {
+    parts.push(`Making ${llmCount} LLM request${llmCount === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ") || "Working…";
 }
 
 /** Code-mode agents stream itx code as their response; chat agents stream prose. */
