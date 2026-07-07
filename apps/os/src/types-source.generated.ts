@@ -212,10 +212,15 @@ export interface ProjectRpcTarget {
   examples: ItxExampleCatalog;
   /** Project file storage (R2-backed): \`files.get(path)\` → put/bytes/url/delete. */
   files: Files;
-  /** Slack/Google connections + the connection-scoped API proxies (\`integrations.gmail\`, \`integrations.slack\`). */
+  /** The integrations collection: built-in integrations as dispatch branches
+   * on the dotted-call surface (\`itx.integrations.slack["main-slack"].chat
+   * .postMessage(...)\`), provided integrations through the capability table,
+   * management verbs, \`list()\`. */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
+  /** Parallel API, preconfigured with Iterate's platform API key. */
+  parallel: OpenApiRpc;
   processor: StreamProcessorRpc<ProjectProcessorState>;
   /**
    * This project's stable id (\`prj_…\`). Handy inside scripts: \`await
@@ -466,24 +471,22 @@ export interface EmailCapability extends Describable {
 }
 
 // -----------------------------------------------------------------------------
-// Integrations (Slack + Google) — the Phase 12 surface.
+// Integrations. The unit is a CONNECTION at a fully qualified path
+// \`/integrations/<slug>/<connection>\` — one integration (slack) can hold many
+// connections (main-slack, support-slack). Built-in integrations (code shipped
+// with the OS deployment) are named members of the collection; any other name
+// resolves through the ordinary ITX capability table, so a project adds its
+// own integration with \`provideCapability({ path: ["integrations", ...] })\` —
+// data, not deployment.
 // -----------------------------------------------------------------------------
 
-export type IntegrationProvider = "google" | "slack";
+/** The integration slugs whose call surfaces ship with the OS deployment
+ * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
+export type BuiltinIntegrationSlug = "github" | "google" | "slack";
 
-/**
- * Slack Web API proxy. \`request\` is the explicit form; dotted Web API method
- * paths (\`itx.integrations.slack.chat.postMessage({...})\`) resolve through the dynamic
- * path-call fallback onto \`invokeCapability\`.
- */
-export interface SlackCapability extends Describable {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  request(input: {
-    body?: Record<string, unknown>;
-    method: string;
-  }): Promise<Record<string, unknown>>;
-}
-
+/** Input to \`itx.integrations.google["<connection>"].gmail.request(...)\` — a
+ * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
+ * response is \`{ data, headers, status, statusText }\`. */
 export type GmailRequestInput = {
   body?: unknown;
   headers?: Record<string, string>;
@@ -492,16 +495,6 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
-/** Gmail REST proxy (\`itx.integrations.gmail.request({ path: "/users/me/messages" })\`). */
-export interface GmailCapability extends Describable {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
-    headers: Record<string, string>;
-    status: number;
-    statusText: string;
-  }>;
-}
-
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -509,47 +502,90 @@ export type IntegrationConnectionStatus = {
   metadata: Record<string, unknown>;
 };
 
+/**
+ * One entry of {@link ProjectIntegrations.list}. Discriminated on \`source\`:
+ * built-in entries always name a concrete connection (they come from
+ * \`/integrations/<slug>/<connection>\` journals); provided entries may be
+ * integration-level mounts (\`connection: null\` — one recipe serving every
+ * connection name beneath it, path \`/integrations/<slug>\`).
+ */
+export type IntegrationConnectionListEntry =
+  | {
+      connection: string;
+      integration: BuiltinIntegrationSlug;
+      /** The fully qualified connection path, e.g. \`/integrations/slack/main-slack\`. */
+      path: string;
+      source: "builtin";
+    }
+  | {
+      connection: string | null;
+      integration: string;
+      path: string;
+      source: "provided";
+    };
+
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
 
 /**
- * Project-scoped integration management (connection status, OAuth, disconnect)
- * plus the connection-scoped API proxies: \`integrations.gmail\` and
- * \`integrations.slack\` live here because they only work through the project's
- * connected accounts.
+ * The \`itx.integrations\` collection.
+ *
+ * Connection-yielding dotted calls are \`{slug}.{connection}.{...method}\`.
+ * Built-in slugs (\`slack\`, \`google\`, \`github\`) dispatch to deployment code —
+ * \`itx.integrations.slack["main-slack"].chat.postMessage({...})\` reaches any
+ * Slack Web API method, \`itx.integrations.google["jonas"].gmail.request({...})\`
+ * the Gmail REST proxy, and \`itx.integrations.github["jonas"].api.request(...)\`
+ * the GitHub REST proxy — and every other slug resolves through the ITX
+ * capability table under the \`integrations\` prefix. The exception is
+ * \`itx.integrations.parallel\`: a first-party API-key RPC target, not a
+ * connection and not returned by \`list()\`. For provided integrations,
+ * \`itx.integrations.waitrose.mum.searchProducts("milk")\` reaches whatever the
+ * project mounted at \`["integrations", "waitrose", "mum"]\`. There is no
+ * implicit connection: a built-in call without a connection name is an error.
+ * Management verbs (OAuth, disconnect) are connection-scoped.
  */
 export interface ProjectIntegrations extends Describable {
-  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media Transformations. */
+  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
+   * Transformations. Like \`parallel\`, these ride the deployment's own
+   * Cloudflare account — not a per-project connection. */
   cf: CloudflareIntegrations;
-  /** Gmail REST proxy for the project's connected Google account. */
-  gmail: GmailCapability;
-  /** Slack Web API proxy for the connected workspace (\`integrations.slack.chat.postMessage(...)\`). */
-  slack: SlackCapability;
-  completeGoogleConnect(input: {
-    code: string;
+  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  parallel: OpenApiRpc;
+  /** Every connection the project holds: \`/integrations/<slug>/<connection>\`
+   * journals plus provided mounts from the capability table (deduped by path;
+   * a mount over its own webhook journal is one entry). */
+  list(): Promise<IntegrationConnectionListEntry[]>;
+  /** The dotted-call surface. Slack methods are unary — one body object:
+   * \`itx.integrations.slack["<connection>"].chat.postMessage({ ... })\`. */
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  /** Called by the app worker's OAuth callback route; authority is the
+   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  completeConnect(input: {
+    /** OAuth authorization code (slack/google). */
+    code?: string;
+    /** GitHub App installation id — github's callback carries this, not a code. */
+    installationId?: string;
+    provider: BuiltinIntegrationSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
-  completeSlackConnect(input: {
-    code: string;
-    state: string;
-    userId: string | null;
-  }): Promise<CompleteConnectResult>;
-  disconnect(input: { provider: IntegrationProvider }): Promise<{ success: true }>;
-  getConnection(input: { provider: IntegrationProvider }): Promise<IntegrationConnectionStatus>;
+  disconnect(input: {
+    connection: string;
+    provider: BuiltinIntegrationSlug;
+  }): Promise<{ success: true }>;
+  getConnection(input: {
+    connection: string;
+    provider: BuiltinIntegrationSlug;
+  }): Promise<IntegrationConnectionStatus>;
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: IntegrationProvider;
+    provider: BuiltinIntegrationSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
   }): Promise<{ authorizationUrl: string }>;
 }
-
-export type RouteSlackWebhookResult =
-  | { ok: true; projectId: string }
-  | { ignored: "team-not-claimed"; ok: true };
 
 /** Agent catalog within one project. */
 export interface AgentCollection extends Describable {
@@ -837,7 +873,9 @@ export interface SecretCollection extends Describable {
   list(): Promise<StreamListItem[]>;
 }
 
-/** Path-addressed secret capability. Secret material has no public read API. */
+/** Path-addressed secret capability. Secret material has no public read API:
+ * material never leaves the Secret Durable Object except substituted into a
+ * request bound for one of the secret's pinned egress hosts. */
 export interface Secret extends Describable {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
@@ -847,8 +885,68 @@ export interface Secret extends Describable {
 
 export type SecretUpdateInput = {
   egress?: { urls: string[] };
-  material?: string;
+  /** Any serializable value (write-only, one JSON blob). A plain string keeps
+   * the whole-material placeholder working; structured material is addressed
+   * by \`field\` in placeholders (design §2.1). */
+  material?: unknown;
+  /** A named refresh strategy the secret runs in trusted DO code when a
+   * substituted request 401s (or a referenced field is missing), or \`null\` to
+   * clear it. Omitted leaves any configured strategy unchanged. */
+  refresh?: SecretRefresh | null;
 };
+
+/**
+ * A reference to a deployment-owned platform credential, resolved from typed
+ * AppConfig in trusted platform code — never stored in project material, never
+ * readable. Each known config path carries its own allowed-origin list
+ * (platform-secrets.ts), so a credential can only ever be sent to the hosts it
+ * belongs to, no matter who configured the reference.
+ */
+export type PlatformCredsRef = { platform: string };
+
+/**
+ * A named credential-refresh strategy a secret runs in its own trusted DO
+ * code — one shared implementation per protocol instead of a worker copied
+ * into every secret. Client credentials come from the secret's own material
+ * (\`"material"\`, the bring-your-own-app case) or a platform config reference
+ * (built-ins). Exchange endpoints must fall within the secret's pinned egress
+ * hosts, so refresh preserves the cell invariant: bytes only ever leave toward
+ * pinned hosts.
+ */
+export type SecretRefresh =
+  | {
+      kind: "oauth-refresh-token";
+      /** RFC 6749 refresh_token grant target (e.g. the provider's /token URL).
+       * Its origin must be within the secret's pinned egress hosts. */
+      tokenEndpoint: string;
+      /** Where the Basic client credential comes from: \`"material"\` reads
+       * clientId/clientSecret fields of this secret's own material. */
+      clientCreds: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "github-app-installation";
+      /** GitHub API origin (or a stand-in in e2e). Its origin must be within
+       * the secret's pinned egress hosts. */
+      apiBase: string;
+      /** The App id — the JWT issuer (public). */
+      appId: string;
+      /** The installation this connection acts as (public — it is the
+       * connection's external id, not secret material). */
+      installationId: string;
+      /** Where the App's RS256 private key comes from: \`"material"\` reads the
+       * privateKey field of this secret's own material (bring-your-own-App). */
+      privateKey: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "waitrose-session";
+      /** The Waitrose GraphQL endpoint (or a stand-in in e2e) the \`NewSession\`
+       * mutation is POSTed to. Its origin must be within the secret's pinned
+       * egress hosts. Waitrose has no token-refresh grant — re-login IS the
+       * refresh — so this strategy re-runs the login with \`username\`/\`password\`
+       * from this secret's own material and stores the returned \`accessToken\`.
+       * Material-only by nature: a Waitrose account is always the user's own. */
+      graphqlUrl: string;
+    };
 
 export type SecretDescription = {
   audit: {
@@ -859,6 +957,8 @@ export type SecretDescription = {
   };
   egress: { urls: string[] };
   hasMaterial: boolean;
+  /** The configured refresh strategy's kind, or null when none is configured. */
+  refresh: SecretRefresh["kind"] | null;
 };
 
 export type StreamListItem = {

@@ -1,4 +1,5 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real sandbox names carry the caller's
@@ -72,4 +73,25 @@ export function normalizeSandboxPath(path: string): string {
     );
   }
   return normalized;
+}
+
+/**
+ * The `GH_TOKEN` value a sandbox plants for a project's GitHub connections,
+ * or null when there is none: a `getSecret` placeholder for the connection
+ * secret's `accessToken` field, so `gh` (which reads GH_TOKEN natively) and
+ * the warm-up script's git extraheader authenticate against github.com while
+ * the installation token itself is minted and substituted only at the egress
+ * door. Several connections: the lexicographically first connection name wins
+ * — arbitrary but deterministic, so a container restart can't silently flip
+ * which installation a sandbox acts as; `configureEnvVars({ GH_TOKEN })`
+ * overrides the pick. Pure so the choice is testable without a container.
+ */
+export function githubTokenEnvForConnections(
+  connections: readonly { connection: string; integration: string }[],
+): string | null {
+  const [first] = connections
+    .filter((entry) => entry.integration === "github")
+    .map((entry) => entry.connection)
+    .sort();
+  return first === undefined ? null : githubAccessTokenPlaceholder(first);
 }

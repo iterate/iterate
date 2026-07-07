@@ -2,13 +2,18 @@ import type { OutboundHandler } from "@cloudflare/containers";
 import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
+import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
 import {
   SandboxProcessorContract,
   type SandboxLifecycleEventInput,
 } from "../sandbox-processor-contract.ts";
-import { agentPathForSandbox, normalizeSandboxPath } from "../utils.ts";
+import {
+  agentPathForSandbox,
+  githubTokenEnvForConnections,
+  normalizeSandboxPath,
+} from "../utils.ts";
 
 /**
  * The workspace root inside every sandbox container: what the backup/restore
@@ -92,16 +97,16 @@ type SandboxEnvVars = Record<string, string>;
 
 /**
  * Env vars every sandbox gets by default so a coding agent works out of the
- * box: the provider keys the baked CLIs read, pointed at conventional project
- * secret paths as `getSecret(...)` placeholders (substituted only at egress).
- * A project that seeds a key at one of these paths lets its agents code
- * immediately; if the path has no secret, the var is harmless until used (the
- * egress substitution then fails loudly). `configureEnvVars` overrides any of
- * these per sandbox.
+ * box. `OPENAI_API_KEY` — what the baked Codex CLI reads — is a platform
+ * reference to the deployment's own OpenAI key (`openAiApiKey` is required
+ * config), so Codex works in every project with zero seeding; the egress door
+ * substitutes it and pins it to `api.openai.com`
+ * (platform-secrets.ts), so the container only ever holds the placeholder.
+ * `configureEnvVars` overrides any of these per sandbox — a project wanting
+ * its own key sets a `getSecret({ path })` ref instead.
  */
 const DEFAULT_SANDBOX_ENV: SandboxEnvVars = {
-  OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai-api-key" })',
-  ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic-api-key" })',
+  OPENAI_API_KEY: 'getSecret({ platform: "openAiApiKey" })',
 };
 
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
@@ -563,7 +568,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * The intended value shape is a `getSecret({ path })` placeholder: the
    * material then stays in the secret system and is substituted only at egress
    * (the project egress path already does this for any header carrying the
-   * placeholder), so a coding agent can read e.g. `ANTHROPIC_API_KEY` from the
+   * placeholder), so a coding agent can read e.g. `OPENAI_API_KEY` from the
    * environment and call the provider, yet the real key never enters the
    * container. Plain non-secret values are fine too. NEVER pass raw secret
    * material — it would sit in the container's environment and the container
@@ -597,15 +602,38 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   }
 
   async #applyStoredEnvVars(): Promise<void> {
-    // Defaults first, explicit config last — so a project that seeds the
-    // conventional provider secrets gets a code-ready sandbox with no setup,
-    // while configureEnvVars still wins for anything it sets.
+    // Defaults first, discovered connections next, explicit config last — so
+    // every sandbox is code-ready with no setup, while configureEnvVars still
+    // wins for anything it sets.
     const stored = this.ctx.storage.kv.get<SandboxEnvVars>(SANDBOX_ENV_STORAGE_KEY) ?? {};
+    const discovered = await this.#discoverGithubTokenEnv();
     // Redial like every command: setEnvVars is idempotent, and during a cold
     // boot its session dial is as exposed to client churn as any exec.
     await this.#redialOnInterruptedSessionSetup(() =>
-      super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...stored }),
+      super.setEnvVars({ ...DEFAULT_SANDBOX_ENV, ...discovered, ...stored }),
     );
+  }
+
+  /**
+   * `GH_TOKEN` for the project's GitHub connection, when one exists — a
+   * `getSecret` placeholder (see {@link githubTokenEnvForConnections}), never
+   * token bytes, so `gh` and the warm-up script's git config work against
+   * github.com out of the box. Computed fresh per container start rather than
+   * stored: a connection made after this container booted is picked up on the
+   * next start, and a disconnected one stops being planted the same way.
+   * Failure-tolerant by design — discovery dials the project processor, and a
+   * hiccup there must never block provisioning (log, start without GH_TOKEN,
+   * the next container start retries).
+   */
+  async #discoverGithubTokenEnv(): Promise<SandboxEnvVars> {
+    try {
+      const connections = await listIntegrationConnections(this.#identity().projectId);
+      const placeholder = githubTokenEnvForConnections(connections);
+      return placeholder === null ? {} : { GH_TOKEN: placeholder };
+    } catch (error) {
+      console.warn("sandbox GH_TOKEN discovery failed; starting without it", error);
+      return {};
+    }
   }
 
   /**

@@ -1,4 +1,5 @@
 import { normalizePath } from "../durable-object-names.ts";
+import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
 
 type DisposableLike = {
   [Symbol.dispose]?(): void;
@@ -146,13 +147,36 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 }
 
 /**
+/**
  * Guards `provideCapability` against shadowing the itx surface: a capability
  * path's root segment may not be a reserved RPC segment nor an existing member
  * name of the itx-facing surfaces (e.g. `streams`, `agents`). Runs in the
  * isolate because the member names come from RpcTarget prototypes, which the
  * capability-host Durable Object can't see (ITX_SURFACE_MEMBER_NAMES in
  * rpc-targets.ts).
+ *
+ * Namespace exception: some surface members are NAMESPACES whose children are
+ * the supported extension point. `integrations` is the exemplar — mounting at
+ * depth >= 2 under it is how a project adds its own integration — EXCEPT under
+ * the names the collection's own dispatch claims (built-in slugs and the
+ * collection's verbs), where a mount would be durable, journaled, and silently
+ * unreachable; those are rejected loudly at provide time.
  */
+const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [
+    "integrations",
+    new Set([
+      ...BUILTIN_INTEGRATION_SLUGS,
+      "list",
+      "getConnection",
+      "startOAuthFlow",
+      "completeConnect",
+      "disconnect",
+      "invokeCapability",
+    ]),
+  ],
+]);
+
 export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path: string[]): void {
   const root = path[0];
   if (!root) return;
@@ -160,6 +184,16 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
   if (surfaceMembers.has(root)) {
+    const reservedChildren = NAMESPACE_BUILTIN_ROOTS.get(root);
+    if (reservedChildren && path.length >= 2) {
+      const child = path[1]!;
+      if (reservedChildren.has(child)) {
+        throw new Error(
+          `cannot provide capability "${root}.${child}": "${child}" is a built-in ${root} member and would shadow deployment code`,
+        );
+      }
+      return;
+    }
     throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
   }
 }

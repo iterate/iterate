@@ -95,7 +95,6 @@ export const AppConfig = z.object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
           webhookSigningSecret: redacted(z.string().trim().min(1)),
-          botToken: redacted(z.string().trim().min(1)).optional(),
           scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
         })
         .optional(),
@@ -104,6 +103,54 @@ export const AppConfig = z.object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
           scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
+        })
+        .optional(),
+      /** The deployment's first-party GitHub App. `appId` + `appSlug` are
+       * public (JWT issuer, install URL); `privateKey` (PKCS#8 PEM) signs App
+       * JWTs — never revealed, only signed with via the platform secret's
+       * sign() (ADR 0006); `webhookSecret` verifies inbound App webhooks at the
+       * door. `oauth*` remain for any user-authorization flow. All optional so
+       * a deployment without a GitHub App still parses. */
+      github: z
+        .object({
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+          // First-party GitHub App fields (optional): `appSlug` is the App's URL
+          // handle (public) — the connect flow deep-links to
+          // github.com/apps/<appSlug>/installations/new; `appId` is the JWT
+          // issuer (public); `privateKey` (PKCS#8 PEM) signs App JWTs — never
+          // revealed, only signed with via the platform secret's sign() (ADR
+          // 0006); `webhookSecret` verifies inbound App webhooks at the door.
+          // The installation-token minting mechanism is proven via a userspace
+          // App; these wire the first-party App once one is registered.
+          appSlug: publicValue(z.string().trim().min(1)).optional(),
+          appId: publicValue(z.string().trim().min(1)).optional(),
+          privateKey: redacted(z.string().trim().min(1)).optional(),
+          webhookSecret: redacted(z.string().trim().min(1)).optional(),
+        })
+        .optional(),
+      /** The dummy third-party used to prove the integrations model end to end
+       * (apps/dummy-petshop). Its client credentials back the FIRST-PARTY
+       * petshop lane's `{ platform: "integrations.petshop" }` clientCreds ref
+       * (resolved by the Secret DO's oauth-refresh-token strategy). */
+      petshop: z
+        .object({
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+        })
+        .optional(),
+      /** First-party Parallel API access. This is an Iterate-owned API key,
+       * not a per-project connection secret. */
+      parallel: z
+        .object({
+          apiKey: redacted(z.string().trim().min(1)),
+        })
+        .optional(),
+      /** First-party Exa API access. Optional because Exa also exposes a
+       * public MCP server that does not require deployment credentials. */
+      exa: z
+        .object({
+          apiKey: redacted(z.string().trim().min(1)),
         })
         .optional(),
     })
