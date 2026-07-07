@@ -39,6 +39,8 @@ Local dev servers rejected forge-minted bearer tokens with "missing or invalid a
 
 ## Handoff — the one manual pass (needs Misha's phone)
 
+**Progress (2026-07-07 PM):** steps 1–2 done on-device — Expo Go boots the app (after the SDK 54 + metro-runtime pins) and the full OAuth flow completes against production (the missing `maybeCompleteAuthSession()` was the last blocker, caught via Metro-streamed `[auth]` logs). Remaining: step 3 (new chat → agent reply on the phone) and step 4 (captun).
+
 1. `pnpm --dir apps/mobile start` in this worktree, install **Expo Go** from the App Store, scan the QR (same wifi).
 2. Sign in against **Production** (default preset) — in-app browser, Google/OTP. This is the first live test of the dynamic-registration + PKCE flow from Expo Go's `exp://` redirect URI (verified for custom schemes on the voice branch; the exp:// variant is the untested delta).
 3. Pick a project → New chat → send something → watch for "working…" then the reply.
