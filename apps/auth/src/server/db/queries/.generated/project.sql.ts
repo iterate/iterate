@@ -246,11 +246,11 @@ VALUES (
   ?
 )
 RETURNING id,
-  organization_id AS organizationId,
+  organization_id,
   name,
   slug,
   metadata,
-  archived_at AS archivedAt;
+  archived_at;
 `.trim();
 const insertProjectReturningQuery = (params: insertProjectReturning.Params) => ({
   name: "insertProjectReturning",
@@ -334,11 +334,11 @@ SET name = ?,
   updated_at = ?
 WHERE id = ?
 RETURNING id,
-  organization_id AS organizationId,
+  organization_id,
   name,
   slug,
   metadata,
-  archived_at AS archivedAt;
+  archived_at;
 `.trim();
 const updateProjectReturningQuery = (
   data: updateProjectReturning.Data,
