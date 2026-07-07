@@ -144,6 +144,7 @@ import {
   buildProjectEmailMessage,
   emailAddressForProject,
   EMAIL_INTEGRATION_STREAM_PATH,
+  EMAIL_SEND_FAILED_EVENT_TYPE,
   EMAIL_SENT_EVENT_TYPE,
 } from "./domains/email/utils.ts";
 
@@ -1023,10 +1024,33 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       request: input,
     });
 
-    const result = (await env.EMAIL.send(message)) as { messageId?: string } | null | undefined;
-    const messageId = result?.messageId ?? null;
-
     const from = typeof message.from === "string" ? message.from : message.from.email;
+    const threading = {
+      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
+      ...(input.references && input.references.length > 0 ? { references: input.references } : {}),
+    };
+
+    let result: { messageId?: string } | null | undefined;
+    try {
+      result = (await env.EMAIL.send(message)) as { messageId?: string } | null | undefined;
+    } catch (error) {
+      // The attempt itself is audit-worthy (and what e2e asserts on
+      // deployments whose email domain is not yet onboarded for sending).
+      await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+        type: EMAIL_SEND_FAILED_EVENT_TYPE,
+        idempotencyKey: `email-send-failed:${this.props.projectId}:${crypto.randomUUID()}`,
+        payload: {
+          error: error instanceof Error ? error.message : String(error),
+          from,
+          projectId: this.props.projectId,
+          subject: input.subject,
+          to: input.to,
+          ...threading,
+        },
+      });
+      throw error;
+    }
+    const messageId = result?.messageId ?? null;
     await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
       type: EMAIL_SENT_EVENT_TYPE,
       idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
@@ -1039,10 +1063,7 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
         projectId: this.props.projectId,
         subject: input.subject,
         to: input.to,
-        ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
-        ...(input.references && input.references.length > 0
-          ? { references: input.references }
-          : {}),
+        ...threading,
       },
     });
 

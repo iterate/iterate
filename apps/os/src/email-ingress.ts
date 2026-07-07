@@ -31,7 +31,6 @@ import {
   handleInboundEmail,
   MAX_INBOUND_EMAIL_BYTES,
   type InboundEmailDeps,
-  type InboundEmailResult,
 } from "./domains/email/inbound.ts";
 import {
   EMAIL_INTEGRATION_STREAM_PATH,

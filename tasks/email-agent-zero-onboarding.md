@@ -117,31 +117,31 @@ noreply, no-reply, mailer-daemon, root, info, contact, team, hello` as
 
 ### Slice 1 — one-shot flow (the acceptance bar)
 
-- [ ] Shared email ingress core: `handleInboundEmail({envelopeFrom, envelopeTo, rawMime}, config)` in `apps/os/src/domains/email/` — MIME parsing (postal-mime or smallest workers-compatible equivalent), Authentication-Results alignment check, size cap, loop guard, idempotency key
-- [ ] `email()` entrypoint on the OS worker default export (`apps/os/src/worker.ts`) as a thin `ForwardableEmailMessage` adapter (stream drain, `.setReject()` on drop)
-- [ ] Admin-secret-gated `POST /api/integrations/email/inject` route calling the same `handleInboundEmail` (same trust tier as the existing admin API secret); doubles as the local-dev story
-- [ ] `emailZeroOnboardingEnabled` in `envs.ts` (on: dev/preview_N; off: prd) + plumbed into OS config
-- [ ] Bot-address constant + recipient parsing (`bot` before slug fallthrough) in the email address codec (`apps/os/src/domains/email/utils.ts`)
-- [ ] Reserved local-parts/slugs constant; enforce in auth slug resolution for projects and orgs
-- [ ] Email sender directory stream (`EMAIL_SENDER_DIRECTORY_STREAM_PATH`, global, Slack-directory pattern) with a single atomic get-or-provision method on the owning DO
-- [ ] Provisioning chain via `createAuthWorkerServiceClient`: `upsertVerifiedEmail` → `createForUser` → `createForOrganization`; claim event appended last
-- [ ] `email/received` events on the project's `/integrations/email` stream
-- [ ] Email router processor: Message-ID → agent path (`/agents/email/thread-<hash>`), In-Reply-To/References reuse; records outbound Message-IDs too
-- [ ] Email agent processor: `email/received` → `agent/input-added` (YAML dump of parsed email incl. attachment metadata)
-- [ ] Reply-channel mechanism: mirror Slack's, or the documented preamble fallback
-- [ ] Extend `EmailCapability.send` + `EmailRpcTarget` + `buildProjectEmailMessage` with `inReplyTo`/`references` and a generated, returned, recorded outbound `Message-ID`
-- [ ] Unit tests: alignment predicate, address normalization, recipient parsing incl. reserved words, idempotency key, loop/size guards
-- [ ] Processor tests: new sender provisions once (incl. concurrent duplicate delivery), known sender routes straight in, thread reuse, malformed mail dropped
-- [ ] E2E (preview-N / dev, template `slack-agent.e2e.test.ts`): inject synthetic email from `zero-onboarding-<unique>@example.test` (non-deliverable TLD on purpose — assert the attempt, deliver nothing) with crafted passing Authentication-Results → poll directory claim → `agent/input-added` → outbound reply attempt (`email/sent` event) threaded to the inbound Message-ID
-- [ ] E2E idempotency: second inject from the same fixed sender → same projectId, no second user/org
-- [ ] No test cleanup (matches `create-test-project.ts` documented no-op convention)
-- [ ] Docs: flow description + ops note on attaching real Email Routing later (`email()` is the only untested-by-e2e code by design)
+- [x] Shared email ingress core: `handleInboundEmail({envelopeFrom, envelopeTo, rawMime}, config)` in `apps/os/src/domains/email/` — MIME parsing (postal-mime or smallest workers-compatible equivalent), Authentication-Results alignment check, size cap, loop guard, idempotency key — _`apps/os/src/domains/email/inbound.ts`, fully DI'd; postal-mime added to apps/os_
+- [x] `email()` entrypoint on the OS worker default export (`apps/os/src/worker.ts`) as a thin `ForwardableEmailMessage` adapter (stream drain, `.setReject()` on drop) — _worker.ts `email()` → `handleInboundEmailMessage` in `src/email-ingress.ts`; setReject only for oversize, everything else accept-and-drop (no bounce oracle)_
+- [x] Admin-secret-gated `POST /api/integrations/email/inject` route calling the same `handleInboundEmail` (same trust tier as the existing admin API secret); doubles as the local-dev story — _`handleEmailInjectApiRequest` in `src/email-ingress.ts`, dispatched from `apiFetch` next to the Slack webhook_
+- [x] `emailZeroOnboardingEnabled` in `envs.ts` (on: dev/preview*N; off: prd) + plumbed into OS config — \_envs.ts field → `APP_CONFIG_EMAIL_ZERO_ONBOARDING_ENABLED` env-shaped var; local dev gets a hardcoded `"true"` var so shared Doppler configs need no new entry*
+- [x] Bot-address constant + recipient parsing (`bot` before slug fallthrough) in the email address codec (`apps/os/src/domains/email/utils.ts`) — _`ZERO_ONBOARDING_LOCAL_PART` + `parseEmailRecipient` (bot / project / reserved / unroutable)_
+- [x] Reserved local-parts/slugs constant; enforce in auth slug resolution for projects and orgs — _`RESERVED_PLATFORM_SLUGS` in `packages/shared/src/slug.ts`; project create rejects (CONFLICT), org create routes around via resolveUniqueSlug isTaken_
+- [x] Email sender directory stream (`EMAIL_SENDER_DIRECTORY_STREAM_PATH`, global, Slack-directory pattern) with a single atomic get-or-provision method on the owning DO — _implemented WITHOUT new DO surface: claim events are idempotency-keyed on the normalized address and the fold is first-claim-wins, so concurrent first contact converges deterministically (loser adopts the winner, logs its orphan). See `resolveSenderProject` in `src/email-ingress.ts`_
+- [x] Provisioning chain via `createAuthWorkerServiceClient`: `upsertVerifiedEmail` → `createForUser` → `createForOrganization`; claim event appended last — _the project step goes through `ProjectCollectionRpcTarget.create` as the provisioned user (new `provisionedUserAuthContext` in auth.ts) so the full bootstrap saga runs; project slug pre-probed via `internal.project.bySlug` + one suffixed retry (auth does NOT auto-suffix project slugs — spec assumption corrected)_
+- [x] `email/received` events on the project's `/integrations/email` stream — _`EmailProcessorContract` owns received/sent/thread-route-configured_
+- [x] Email router processor: Message-ID → agent path (`/agents/email/thread-<hash>`), In-Reply-To/References reuse; records outbound Message-IDs too — _`email-processor-implementation.ts`; routing decision lives in the pure reduce fold (same-batch replies stay consistent) with a deterministic references-root fallback_
+- [x] Email agent processor: `email/received` → `agent/input-added` (YAML dump of parsed email incl. attachment metadata) — _`email-agent-processor-implementation.ts`; also folds reply context (sender, subject, references chain) into state_
+- [x] Reply-channel mechanism: mirror Slack's, or the documented preamble fallback — _mirrored exactly: `EMAIL_AGENT_SYSTEM_PROMPT` + `agentSystemPromptForPath` branch + birth-certificate `email-agent` subscription in project-processor-implementation.ts; no preamble fallback needed_
+- [x] Extend `EmailCapability.send` + `EmailRpcTarget` + `buildProjectEmailMessage` with `inReplyTo`/`references` and a generated, returned, recorded outbound `Message-ID` — _Cloudflare structured send allows both headers (Message-ID itself is platform-generated and returned; recorded in `email/sent`). Added `email/send-failed` audit fact so the attempt is observable even where the domain is not onboarded for sending_
+- [x] Unit tests: alignment predicate, address normalization, recipient parsing incl. reserved words, idempotency key, loop/size guards — _`inbound.test.ts` + extended `utils.test.ts`_
+- [x] Processor tests: new sender provisions once (incl. concurrent duplicate delivery), known sender routes straight in, thread reuse, malformed mail dropped — _`email-processors.test.ts` on the shared in-memory stream harness (extracted to `domains/streams/memory-stream-test-support.ts`); replay-dedupe covered; concurrent-first-contact convergence covered at the fold level in `utils.test.ts`_
+- [x] E2E (preview-N / dev, template `slack-agent.e2e.test.ts`): inject synthetic email from `zero-onboarding-<unique>@example.test` (non-deliverable TLD on purpose — assert the attempt, deliver nothing) with crafted passing Authentication-Results → poll directory claim → `agent/input-added` → outbound reply attempt (`email/sent` event) threaded to the inbound Message-ID — _`apps/os/e2e/vitest/email-agent.e2e.test.ts`; outbound assert accepts `email/sent` OR `email/send-failed` (deployments without Email Sending onboarding still prove the attempt)_
+- [x] E2E idempotency: second inject from the same fixed sender → same projectId, no second user/org — _second test in the same file; asserts exactly one sender-claim event_
+- [x] No test cleanup (matches `create-test-project.ts` documented no-op convention)
+- [x] Docs: flow description + ops note on attaching real Email Routing later (`email()` is the only untested-by-e2e code by design) — _`apps/os/docs/email.md`, linked from apps/os AGENTS.md_
 
 ### Slice 2 — stretch: reply-back continuation
 
-- [ ] Inbound to `<slug>@<domain>` whose In-Reply-To/References matches a known thread routes to that thread's agent path (thin layer over the slice-1 router)
-- [ ] Unmatched `<slug>@` mail: drop + log (full inbox semantics stay with the sibling task)
-- [ ] E2E: inject a reply to the bot's outbound Message-ID → same agent path gets a second `agent/input-added`
+- [x] Inbound to `<slug>@<domain>` whose In-Reply-To/References matches a known thread routes to that thread's agent path (thin layer over the slice-1 router) — _`parseEmailRecipient` project lane + router `resolveThreadPath` (project mail never opens fresh threads)_
+- [x] Unmatched `<slug>@` mail: drop + log (full inbox semantics stay with the sibling task) — _router processEvent warn-and-drop; unit-tested_
+- [x] E2E: inject a reply to the bot's outbound Message-ID → same agent path gets a second `agent/input-added` — _e2e injects a same-thread reply (In-Reply-To the root) and asserts a second `email/received` on the same agent stream; the reply-to-OUTBOUND-id lane is unit-tested (the outbound Message-ID is only knowable in e2e when real sending is onboarded)_
 
 ## Out of scope / follow-ups
 
@@ -172,4 +172,34 @@ noreply, no-reply, mailer-daemon, root, info, contact, team, hello` as
 
 ## Implementation log
 
-_(empty — implementation not started)_
+- 2026-07-07: Slice 1 + slice 2 implemented (commit "email zero-onboarding:
+  inbound ingress, provisioning, thread routing, agent kickoff"). Notable
+  deviations from the spec, each explained inline in the checklist above:
+  - **No atomic DO method** for get-or-provision: idempotency-keyed claim
+    appends + a first-claim-wins fold achieve the same convergence without
+    adding email-specific surface to the generic Stream DO. Worst case under
+    a concurrent first contact is one orphaned org/project (logged), the same
+    accepted class as partial-failure orphans.
+  - **Project slugs are NOT auto-uniquified by auth** (spec guessed they
+    were): `resolveProjectCreateTarget` hard-CONFLICTs on cross-org slug
+    collisions. Provisioning pre-probes `internal.project.bySlug` via
+    `resolveUniqueSlug` and retries once with a random suffix on a
+    probe-to-create race.
+  - **Routing decisions live in the router's reduce fold**, not just
+    processEvent, so two related emails in one delivery batch resolve
+    consistently; `email/thread-route-configured` remains as an audit fact.
+  - **`email/send-failed` audit event** added so the e2e can observe the
+    outbound reply attempt on deployments whose domain isn't onboarded for
+    Email Sending yet (preview slots, probably).
+- Verified: 66+ unit tests green, apps/os + apps/auth + packages/shared
+  typecheck clean.
+- 2026-07-07: **e2e verified against a live local dev environment** (`pnpm
+dev` + shared dev auth worker + real LLM): both tests in
+  `e2e/vitest/email-agent.e2e.test.ts` pass in ~16s — spoofed mail dropped
+  with no side effects; verified mail provisions user/org/project; router +
+  agent processors fire; the agent's codemode script calls `email.send`; the
+  outbound attempt lands an audit event; a same-thread reply reaches the same
+  agent stream; a second contact reuses the project with exactly one sender
+  claim. Found during verification: the inject route needed registering in
+  `isApiWorkerLanePath` (src/ingress.ts) — `/api/*` paths are exact-match
+  routed to the api pipeline.

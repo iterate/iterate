@@ -9,6 +9,9 @@ import { RESERVED_PLATFORM_SLUGS } from "@iterate-com/shared/slug";
 /** Stream that receives the project's email audit trail + inbound mail events. */
 export const EMAIL_INTEGRATION_STREAM_PATH = "/integrations/email";
 export const EMAIL_SENT_EVENT_TYPE = "events.iterate.com/email/sent";
+/** Audit fact for a send whose EMAIL binding call failed (e.g. domain not yet
+ * onboarded for Email Sending) — the attempt is still observable. */
+export const EMAIL_SEND_FAILED_EVENT_TYPE = "events.iterate.com/email/send-failed";
 export const EMAIL_RECEIVED_EVENT_TYPE = "events.iterate.com/email/received";
 export const EMAIL_THREAD_ROUTE_CONFIGURED_EVENT_TYPE =
   "events.iterate.com/email/thread-route-configured";
