@@ -133,6 +133,7 @@ export class ProjectProcessor extends StreamProcessor<
           return upsertCustomDomain(state, {
             ...existingDomain,
             error: null,
+            status: existingDomain.status === "active" ? "active" : "requested",
             updatedAt: event.createdAt,
           });
         }

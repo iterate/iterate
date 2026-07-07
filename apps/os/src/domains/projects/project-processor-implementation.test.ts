@@ -417,4 +417,79 @@ describe("ProjectProcessor custom domains", () => {
       },
     ]);
   });
+
+  it("marks an existing failed custom domain as requested when re-added", async () => {
+    const stream = new MemoryStream();
+    const failedSnapshot = {
+      certificateDelegationCname: {
+        name: "_acme-challenge.garple.com",
+        value: "garple.com.248299803bb79c97.dcv.cloudflare.com",
+      },
+      cloudflareHostnameId: "custom-hostname-1",
+      error: "Validation timed out",
+      hostname: "garple.com",
+      hostnameStatus: "validation_timed_out",
+      ownershipVerification: {
+        name: "_cf-custom-hostname.garple.com",
+        value: "ownership-token",
+      },
+      sslStatus: "validation_timed_out",
+      status: "failed" as const,
+      validationRecords: [
+        {
+          name: "_acme-challenge.garple.com",
+          status: "pending",
+          value: "ssl-token",
+        },
+      ],
+      wildcard: true,
+    };
+    const customDomains = {
+      ensure: vi.fn(async () => ({
+        ...failedSnapshot,
+        error: null,
+        hostnameStatus: "pending",
+        sslStatus: "pending_validation",
+        status: "pending_validation" as const,
+      })),
+      readProject: vi.fn(async () => project),
+      refresh: vi.fn(),
+      remove: vi.fn(),
+    };
+    const processor = new ProjectProcessor({
+      customDomains,
+      defaultLlmProvider: "openai-ws",
+      itx: {
+        projectId: project.id,
+        worker: { processEvent: vi.fn() },
+      } as unknown as ConstructorParameters<typeof ProjectProcessor>[0]["itx"],
+      stream,
+    });
+    const cursor = { offset: 0 };
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+        payload: failedSnapshot,
+      }),
+    );
+    await deliverNewEvents({ cursor, processor, stream });
+
+    await stream.append(
+      ProjectProcessorContract.buildEvent({
+        type: "events.iterate.com/project/custom-domain-add-requested",
+        payload: { hostname: "garple.com" },
+      }),
+    );
+    await deliverNewEvents({ cursor, processor, stream });
+
+    expect(customDomains.ensure).toHaveBeenCalledWith({ hostname: "garple.com", project });
+    expect(processor.state.customDomains).toMatchObject([
+      {
+        error: null,
+        hostname: "garple.com",
+        status: "requested",
+      },
+    ]);
+  });
 });

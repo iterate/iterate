@@ -30,7 +30,7 @@ function ProjectSettingsContent() {
   const { project, routeConfig } = Route.useLoaderData();
   const projectState = useItxState<ProjectProcessorState>(
     (itx, setState) => itx.processor.onStateChange(setState),
-    [],
+    [project.id],
   ).state;
 
   return (
