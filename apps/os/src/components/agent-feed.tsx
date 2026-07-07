@@ -513,11 +513,16 @@ function llmStepRawSummary(step: AgentUiLlmStep) {
 }
 
 function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
+  const startedAtDateTime = formatDateTimeAttribute(step.startedAtMs);
+
   return (
     <>
-      <div className="px-1.5 font-mono text-xs text-muted-foreground">
+      <time
+        className="block px-1.5 font-mono text-xs text-muted-foreground"
+        dateTime={startedAtDateTime}
+      >
         Started {formatDateTime(step.startedAtMs)}
-      </div>
+      </time>
       {step.code === "" ? null : (
         <SourceCodeBlock
           code={step.code}
@@ -753,6 +758,12 @@ function formatDateTime(timestampMs: number): string {
     dateStyle: "medium",
     timeStyle: "medium",
   });
+}
+
+function formatDateTimeAttribute(timestampMs: number): string | undefined {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
 }
 
 function stringifyResult(result: unknown): string {

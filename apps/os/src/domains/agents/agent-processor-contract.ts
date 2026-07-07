@@ -131,7 +131,7 @@ const LlmRequestPolicy = z
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.3.0",
+  version: "0.3.1",
   description:
     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
   stateSchema: z.object({
