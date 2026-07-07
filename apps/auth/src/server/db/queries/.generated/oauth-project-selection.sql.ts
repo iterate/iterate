@@ -95,19 +95,33 @@ const upsertOAuthProjectSelectionReturningQuery = (
   ],
 });
 
+function upsertOAuthProjectSelectionReturningMapResult(
+  row: upsertOAuthProjectSelectionReturning.RawResult,
+): upsertOAuthProjectSelectionReturning.Result {
+  return {
+    sessionId: row.session_id,
+    clientId: row.client_id,
+    userId: row.user_id,
+    projectIds: row.project_ids,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export const upsertOAuthProjectSelectionReturning = Object.assign(
   async function upsertOAuthProjectSelectionReturning(
     client: Client,
     params: upsertOAuthProjectSelectionReturning.Params,
   ): Promise<upsertOAuthProjectSelectionReturning.Result> {
-    const rows = await client.all<upsertOAuthProjectSelectionReturning.Result>(
+    const rows = await client.all<upsertOAuthProjectSelectionReturning.RawResult>(
       upsertOAuthProjectSelectionReturningQuery(params),
     );
-    return rows[0];
+    return upsertOAuthProjectSelectionReturningMapResult(rows[0]!);
   },
   {
     sql: upsertOAuthProjectSelectionReturningSql,
     query: upsertOAuthProjectSelectionReturningQuery,
+    mapResult: upsertOAuthProjectSelectionReturningMapResult,
   },
 );
 
@@ -120,13 +134,21 @@ export namespace upsertOAuthProjectSelectionReturning {
     createdAt: number;
     updatedAt: number;
   };
-  export type Result = {
+  export type RawResult = {
     session_id: string;
     client_id: string;
     user_id: string;
     project_ids: string;
     created_at: number;
     updated_at: number;
+  };
+  export type Result = {
+    sessionId: string;
+    clientId: string;
+    userId: string;
+    projectIds: string;
+    createdAt: number;
+    updatedAt: number;
   };
 }
 
