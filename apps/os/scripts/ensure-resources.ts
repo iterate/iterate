@@ -145,13 +145,17 @@ export default async function ensureResources(
   }
 
   // ---- Email Routing: inbound project email -------------------------------
-  // Inbound mail for every project hostname base (<slug>@<base>, thread tags
-  // <slug>+t<id>@<base>) is delivered to the OS worker's email() handler
-  // through a zone catch-all rule. Enabling Email Routing adds and locks the
+  // Inbound mail (<slug>@<base>, thread tags <slug>+t<id>@<base>) is delivered
+  // to the OS worker's email() handler through a zone catch-all rule. ONLY the
+  // first hostname base gets routing: it is the deployment's email domain —
+  // the ingress door rejects every other domain and all outbound From/Reply-To
+  // addresses are built from it. Enabling Email Routing adds and locks the
   // zone's MX + SPF records; both calls are idempotent. NOTE: Email SENDING
   // (the itx.email outbound half) is onboarded separately in the dashboard —
   // there is no public API for sending onboarding yet.
-  for (const base of env.projectHostnameBases) {
+  const emailBase = env.projectHostnameBases[0];
+  const emailZones = emailBase === undefined ? [] : [emailBase];
+  for (const base of emailZones) {
     const zone = zones.find((candidate) => candidate.name === base);
     if (!zone) {
       console.warn(`no zone named ${base} in account ${env.cloudflareAccountId}; skipping email`);

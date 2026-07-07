@@ -5,6 +5,7 @@ import {
   decodeBase64Attachment,
   dmarcPasses,
   emailAddressForProject,
+  fallbackInboundMessageKey,
   emailAgentPath,
   emailThreadIdFromAgentPath,
   emailThreadReplyAddress,
@@ -113,6 +114,31 @@ describe("dmarcPasses", () => {
     );
     expect(dmarcPasses("mx.cloudflare.net; spf=pass; dmarc=fail")).toBe(false);
     expect(dmarcPasses(null)).toBe(false);
+  });
+});
+
+describe("fallbackInboundMessageKey", () => {
+  const message = {
+    envelopeFrom: "Jonas@Example.com",
+    date: "Tue, 07 Jul 2026 12:00:00 +0000",
+    subject: "Hello",
+    body: "Same body",
+  };
+
+  it("is deterministic across retries of the same message", async () => {
+    const first = await fallbackInboundMessageKey(message);
+    const second = await fallbackInboundMessageKey({
+      ...message,
+      envelopeFrom: "jonas@example.com",
+    });
+    expect(first).toBe(second);
+    expect(first).toMatch(/^sha256-[0-9a-f]{32}$/);
+  });
+
+  it("differs for different messages", async () => {
+    const first = await fallbackInboundMessageKey(message);
+    const second = await fallbackInboundMessageKey({ ...message, body: "Different body" });
+    expect(first).not.toBe(second);
   });
 });
 

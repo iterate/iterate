@@ -30,6 +30,7 @@ import {
   EMAIL_RECEIVED_EVENT_TYPE,
   EMAIL_REJECTED_EVENT_TYPE,
   dmarcPasses,
+  fallbackInboundMessageKey,
   normalizeMessageId,
   parseInboundRecipient,
   parseMessageIdList,
@@ -90,11 +91,23 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     return;
   }
 
+  // Message identity for dedupe: the Message-ID when present, else a stable
+  // content hash — never a random value, or every MTA retry of the same
+  // message would append a fresh event and spawn a duplicate thread/agent.
+  const messageKey =
+    normalizeMessageId(parsed.messageId) ??
+    (await fallbackInboundMessageKey({
+      envelopeFrom: message.from,
+      date: parsed.date,
+      subject: parsed.subject,
+      body: parsed.text ?? parsed.html,
+    }));
+
   const receivedEvent = {
     type: EMAIL_RECEIVED_EVENT_TYPE,
     // The recipient is part of the key: one message delivered to two of the
     // project's addresses (To + Cc'd thread tag) is two routing decisions.
-    idempotencyKey: `email-received:${normalizeMessageId(parsed.messageId) ?? crypto.randomUUID()}:${message.to.toLowerCase()}`,
+    idempotencyKey: `email-received:${messageKey}:${message.to.toLowerCase()}`,
     payload: {
       envelope: { from: message.from, to: message.to },
       recipient: { slug: recipient.slug, threadId: recipient.threadId },

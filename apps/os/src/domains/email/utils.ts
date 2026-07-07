@@ -157,6 +157,28 @@ export function dmarcPasses(authenticationResults: string | null): boolean {
   return /\bdmarc=pass\b/i.test(authenticationResults);
 }
 
+/**
+ * Deterministic stand-in for a missing Message-ID, so idempotency keys stay
+ * stable across MTA retries and worker replays: the same physical message
+ * always hashes to the same key, instead of minting a fresh UUID per attempt
+ * (which would duplicate events and spawn duplicate threads).
+ */
+export async function fallbackInboundMessageKey(input: {
+  envelopeFrom: string;
+  date: string | undefined;
+  subject: string | undefined;
+  body: string | undefined;
+}): Promise<string> {
+  const basis = JSON.stringify([
+    input.envelopeFrom.toLowerCase(),
+    input.date ?? "",
+    input.subject ?? "",
+    (input.body ?? "").slice(0, 4096),
+  ]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(basis));
+  return `sha256-${[...new Uint8Array(digest).slice(0, 16)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** Strip whitespace and angle brackets from an RFC 5322 Message-ID. */
 export function normalizeMessageId(value: string | null | undefined): string | null {
   if (value == null) return null;
