@@ -53,6 +53,7 @@ function ProjectStreamDetailContent() {
         placeholder: "Message this stream",
       }}
       projectId={project.id}
+      projectSlug={project.slug}
       streamPath={streamPath}
     />
   );

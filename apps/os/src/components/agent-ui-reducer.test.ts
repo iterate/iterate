@@ -371,6 +371,24 @@ describe("agent-ui reducer", () => {
     expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
   });
 
+  it("shows child stream creation events in the agent feed", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/stream/child-stream-created",
+        payload: { childPath: "/agents/test/child" },
+      },
+    ]);
+
+    expect(state.items).toEqual([
+      {
+        kind: "child-stream-created",
+        id: "child-stream-created-1",
+        childPath: "/agents/test/child",
+        timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
+      },
+    ]);
+  });
+
   it("settles a completed LLM request even without an assistant message", () => {
     const state = reduceAll([
       {
