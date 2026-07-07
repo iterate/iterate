@@ -200,6 +200,22 @@ type InboundMailIdentitySlice = {
 };
 
 /**
+ * True when `address` (bare, lowercased) belongs to the project receiving
+ * this mail: the project inbox or any `+`-tagged variant of it. THE one
+ * self-address predicate — the counterpart chain and the loop filter both use
+ * it, so "what counts as our own address" can never diverge between them.
+ */
+function isProjectOwnedInboundAddress(address: string, payload: InboundMailIdentitySlice): boolean {
+  const recipient = parseInboundRecipient(payload.envelope.to);
+  if (recipient === null) return false;
+  const slug = payload.recipient.slug.toLowerCase();
+  return (
+    address === `${slug}@${recipient.domain}` ||
+    (address.startsWith(`${slug}+`) && address.endsWith(`@${recipient.domain}`))
+  );
+}
+
+/**
  * THE reply-target chain for one inbound mail: Reply-To when set, else the
  * header From, else the SMTP envelope from (the address ingress
  * authenticated). Candidates owned by the receiving project itself (the
@@ -210,19 +226,15 @@ type InboundMailIdentitySlice = {
  * function so they can never disagree.
  */
 export function emailCounterpart(payload: InboundMailIdentitySlice): string | null {
-  const recipient = parseInboundRecipient(payload.envelope.to);
-  const slug = payload.recipient.slug.toLowerCase();
-  const isProjectOwned = (address: string) =>
-    recipient !== null &&
-    (address === `${slug}@${recipient.domain}` ||
-      (address.startsWith(`${slug}+`) && address.endsWith(`@${recipient.domain}`)));
   for (const candidate of [
     payload.message.replyToAddress ?? undefined,
     payload.message.from.address,
     payload.envelope.from,
   ]) {
     const normalized = normalizeBareAddress(candidate);
-    if (normalized !== null && !isProjectOwned(normalized)) return normalized;
+    if (normalized !== null && !isProjectOwnedInboundAddress(normalized, payload)) {
+      return normalized;
+    }
   }
   return null;
 }
@@ -232,11 +244,9 @@ export function isOwnProjectMail(payload: InboundMailIdentitySlice): boolean {
   // counterpart fallback chain so the loop filter sees the same identity.
   const from = normalizeBareAddress(payload.message.from.address ?? payload.envelope.from);
   if (from === null) return false;
-  // Parse the envelope recipient the same way ingress routing does
-  // (angle-bracket and case tolerant), instead of a bare split("@").
-  const recipient = parseInboundRecipient(payload.envelope.to);
-  if (recipient === null) return false;
-  return from === `${payload.recipient.slug.toLowerCase()}@${recipient.domain}`;
+  // Same predicate as the counterpart chain: the bare inbox AND any +tagged
+  // variant count as our own mail.
+  return isProjectOwnedInboundAddress(from, payload);
 }
 
 /**

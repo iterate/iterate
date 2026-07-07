@@ -481,6 +481,21 @@ describe("EmailAgentProcessor", () => {
     expect(processor.state.counterpart).toBe("jonas@example.com");
   });
 
+  it("filters mail from the project's own tagged addresses as loop-back", async () => {
+    const { cursors, processor, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/email/received",
+      payload: receivedPayload({ from: "acme+t42@iterate.app" }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(0);
+    expect(processor.state.counterpart).toBeUndefined();
+  });
+
   it("skips a Reply-To pointing back at the project itself (never mail ourselves)", async () => {
     const { cursors, processor, stream } = setup();
 
