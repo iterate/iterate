@@ -221,17 +221,48 @@ The default Project Egress capability used for `itx.fetch(...)` and bare
 secret placeholders are substituted.
 _Avoid_: Raw Dynamic Worker fetch, untraced public fetch
 
-**D1-backed Secrets Capability**:
-The current project-bound capability authority for storing, listing, reading, updating, and deleting Project Secrets in D1.
-_Avoid_: Secret Durable Object, separate secrets service
+**Secrets Capability**:
+The project-bound itx capability (`itx.secrets`) over path-addressed Secret
+Durable Objects. Secrets are identified by normalized paths under `/secrets/`;
+there is no separate secret ID or key.
+_Avoid_: D1-backed secrets, Secret ID, Secret Key, separate secrets service
 
-**Secret ID**:
-The stable TypeID-prefixed identifier for one Project Secret.
-_Avoid_: Secret Key, Secret Slug
+**Secret Material**:
+The single serializable value one Secret holds — write-only, encrypted at rest
+as one blob. Writes replace the whole value through the one update verb; there
+are no field-level writes and no per-field metadata. Placeholder references may
+select into structured material (`getSecret({ path, field: "field" })`), which is
+read addressing, not a storage concept.
+_Avoid_: material fields, store(), partial secret writes, per-field expiry
 
-**Secret Key**:
-The project-local arbitrary Key used by Secret References to resolve one Project Secret.
-_Avoid_: Secret ID, Secret Slug, hostname-safe name
+**Secret Cell Invariant**:
+The one property of a Secret: material goes in; nothing comes out except a
+request to a pinned host. No read lane, no reveal lane, no compute methods,
+no cross-secret chaining — the Secret Durable Object's only material-touching
+verb is `fetch()` (substitute header placeholders, dispatch under the egress
+pin). See ADR 0005.
+_Avoid_: revealForPlatformUse, secret read API, hmac/sign/matches on secrets
+
+**Secret Refresh Strategy**:
+The named credential-refresh behavior a Secret optionally runs in its own
+trusted DO code on a 401 or a missing field — `oauth-refresh-token` (RFC 6749
+refresh grant) or `github-app-installation` (App-JWT mint). One shared
+implementation per protocol, parameterized per secret; exchange endpoints
+must fall within the Secret's own egress pin. Configuring it is the trust
+event.
+_Avoid_: secret worker, refresh worker, per-secret refresh code, refresh
+convention
+
+**Platform Credential**:
+A deployment-owned credential (OAuth client, GitHub App key, first-party API
+key) resolved from typed AppConfig by ordinary trusted code against the
+closed registry in `platform-secrets.ts`, each entry pinned to its provider
+origins. Referenced from untrusted-composed requests as
+`getSecret({ platform: "<configPath>" })` (API keys, resolved at the project
+egress door) or from refresh strategies as `{ platform: "<configPath>" }`.
+Never a Durable Object, never project material, never readable.
+_Avoid_: platform secret path, /secrets/platform/\*\*, virtual secret,
+revealable platform credential
 
 **OS MCP Handler**:
 The app worker's stateless `/api/mcp` handler that exposes the inbound MCP
@@ -598,7 +629,15 @@ _Avoid_: Project MCP route, inbound MCP
   not raw Secret material.
 - A **Project Secret** is addressed by a normalized path under `/secrets/`.
 - **Secret References** resolve by path, such as
-  `getSecret({ path: "/secrets/openai-api-key" })`.
+  `getSecret({ path: "/secrets/openai-api-key" })`, optionally selecting a field of
+  structured material: `getSecret({ path: "/secrets/foo", field: "tokens.access" })`.
+- Secret substitution is header-only, everywhere; request bodies and
+  WebSocket frames are never scanned or substituted (ADR 0005).
+- A request's headers may reference several Secrets; substitution chains
+  through each referenced Secret's resolver, and every hop enforces its own
+  host pin against the terminal destination.
+- **Platform Secret** material never enters a **Secret Jail**; jails hold
+  only project-tier material.
 - The app worker's **OS MCP Handler** owns MCP protocol paths, OAuth
   protected-resource metadata paths, and 404s for unsupported paths below
   `/api/mcp`.

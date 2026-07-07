@@ -95,7 +95,7 @@ must bundle it.
 - [x] `emailZeroOnboardingEnabled` in envs.ts → `APP_CONFIG_EMAIL__ZERO_ONBOARDING_ENABLED` → `config.email.zeroOnboardingEnabled` — _env-shaped var; local dev gets a hardcoded "true" var. Exposed a pre-existing #1711 bug: the shared config walker could not see through `.prefault()`, so ANY nested APP_CONFIG_EMAIL\_\_\* override crashed parseConfig — fixed in packages/shared/src/config.ts with a regression test_
 - [x] `verifySenderAlignment` + `normalizeEmailAddress` + sender-directory constants/fold in `domains/email/utils.ts` (+ unit tests) — _appended to #1711 utils; clause parser with RFC 7489 relaxed alignment_
 - [x] `domains/email/zero-onboarding.ts`: directory lookup + provisioning chain (+ `provisionedUserAuthContext` in auth.ts) — _first-claim-wins fold + idempotent claim appends; project slug probe + one suffixed retry_
-- [x] `bot@` lane in `email-ingress.ts`; `handleInboundEmail` returns a result and takes ctx — _plus the claimed-sender bypass on the project-inbox lane so zero-onboarding senders can reply to `<slug>+t<id>@` (no allowlist knows them); auth-results now read from parsed MIME headers so the inject fake stays thin_
+- [x] `bot@` lane in `email-ingress.ts`; `handleInboundEmail` returns a result and takes ctx — _auth-results read from parsed MIME headers so the inject fake stays thin. Originally added a claimed-sender bypass on the project-inbox lane; after merging main (post-#1711 improvements), that is replaced by seeding the provisioned project's own sender allowlist via the principal email (main's `email/sender-allowed` mechanism)_
 - [x] `POST /api/integrations/email/inject` (admin-gated) + ingress.ts api-lane registration + worker.ts dispatch — _domains/email/email-inject-api.ts_
 - [x] `email/send-failed` audit in EmailRpcTarget `#deliver` — _rethrows after appending_
 - [x] Prompt: zero-onboarding additions to `EMAIL_AGENT_SYSTEM_PROMPT` (self-contained for strangers, ship built things as URLs) — _two lines added_
@@ -125,8 +125,20 @@ must bundle it.
   Design intersection found during implementation: thread continuation
   replies go to `<slug>+t<id>@` (the #1711 Reply-To token), which the
   project-inbox allowlist would reject for zero-onboarding senders — solved
-  with the claimed-sender bypass (a project's own Email Sender Claim may
-  always mail it, under strict verification). Also fixed a pre-existing
+  with a claimed-sender bypass (later replaced — see the merge note below).
+  Also fixed a pre-existing
   #1711 bug: `.prefault()` config fields broke nested env overrides
   (packages/shared/src/config.ts), which would have crashed every request on
   any deployment that set APP_CONFIG_EMAIL\_\_ALLOWED_SENDERS.
+- 2026-07-07 (post-#1711-merge): merged main into this branch. Main had
+  moved: named Slack connections, custom domains, a generic connection
+  directory, per-project email sender allowlists (`email/sender-allowed`,
+  seeded from the creating principal's email), deterministic reject dedupe
+  keys, and `emailDomainForDeployment`. Adaptations: the provisioned
+  principal now carries the sender's email so `create()` seeds the new
+  project's allowlist natively — the claimed-sender bypass was deleted in
+  favor of that mechanism; the sender directory reads through the exported
+  `streamEventsNewestFirst` (kept its own first-claim-wins stream — main's
+  connection directory is latest-claim-wins, wrong convergence semantics for
+  provisioning); `provisionedUserAuthContext` dropped for the now-exported
+  `itxAuthFromPrincipal`.

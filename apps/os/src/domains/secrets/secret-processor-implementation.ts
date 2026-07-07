@@ -16,6 +16,8 @@ export class SecretProcessor extends StreamProcessor<typeof SecretProcessorContr
           ...(event.payload.encryptedMaterial === undefined
             ? {}
             : { encryptedMaterial: event.payload.encryptedMaterial }),
+          // `refresh` present (incl. null-to-clear) replaces; omitted leaves it.
+          ...(event.payload.refresh === undefined ? {} : { refresh: event.payload.refresh }),
         };
       case "events.iterate.com/secret/used":
         return {

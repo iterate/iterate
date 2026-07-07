@@ -123,21 +123,6 @@ export function trustedInternalAuthContext(): ItxAuthContext {
   return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
 }
 
-/**
- * A non-admin auth context for a user the platform itself just provisioned
- * (email zero-onboarding: the sender address was verified by the ingress, and
- * the auth worker created the user/org moments ago — no session exists yet).
- * Same shape a signed-in session would produce, so project creation flows
- * through the ordinary user lane (org-owned directory row, claims catch up on
- * the user's first real sign-in).
- */
-export function provisionedUserAuthContext(
-  config: AppConfig,
-  userPrincipal: UserPrincipal,
-): ItxAuthContext {
-  return contextFromPrincipal(config, userPrincipal);
-}
-
 export function userPrincipalOf(auth: ItxAuth): UserPrincipal | undefined {
   return auth instanceof ItxAuthContext ? auth.userPrincipal : undefined;
 }
@@ -198,7 +183,7 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new Error("missing or invalid auth");
-    return contextFromPrincipal(config, principalFromAccessToken(accessToken));
+    return itxAuthFromPrincipal(config, principalFromAccessToken(accessToken));
   }
 
   // from-server-cookie: the admin cookie wins (browser REPL admin + Playwright
@@ -213,7 +198,7 @@ export async function resolveItxAuth(input: {
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
   if (!result.session) throw new Error("missing or invalid auth");
-  return contextFromPrincipal(config, principalFromSession(result.session));
+  return itxAuthFromPrincipal(config, principalFromSession(result.session));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
@@ -224,7 +209,14 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
   if (!admin) throw new Error("missing or invalid auth");
 }
 
-function contextFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
+/**
+ * The itx auth context for an already-authenticated principal — the in-process
+ * lane. Server-side code that already holds the request middleware's principal
+ * (server functions, server routes) builds its session objects through this
+ * instead of re-presenting credentials to the `/api` door: same confinement
+ * (claims + directory fallback), no loopback HTTP round trip.
+ */
+export function itxAuthFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
   if (principal.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }

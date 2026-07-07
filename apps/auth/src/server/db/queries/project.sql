@@ -82,11 +82,11 @@ VALUES (
   :updatedAt
 )
 RETURNING id,
-  organization_id AS organizationId,
+  organization_id,
   name,
   slug,
   metadata,
-  archived_at AS archivedAt;
+  archived_at;
 
 /** @name updateProjectReturning */
 UPDATE project
@@ -96,11 +96,11 @@ SET name = :name,
   updated_at = :updatedAt
 WHERE id = :id
 RETURNING id,
-  organization_id AS organizationId,
+  organization_id,
   name,
   slug,
   metadata,
-  archived_at AS archivedAt;
+  archived_at;
 
 /** @name deleteProjectById */
 DELETE FROM project

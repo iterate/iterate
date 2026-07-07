@@ -16,12 +16,12 @@ without MX). Both run one `handleInboundEmail`
 
 - **`<slug>@<domain>` — a project's inbox.** Closed by default: the sender
   must match the deployment allowlist (`APP_CONFIG_EMAIL__ALLOWED_SENDERS`)
-  AND pass DMARC (`requireDmarc`, opt-out for local dev). One exception: the
-  sender a project was zero-onboarding-provisioned for (its Email Sender
-  Claim) may always mail it, under the strict verification below — that is
-  how thread replies keep working for senders no allowlist knows.
-  Unauthorized mail gets a real SMTP reject plus an envelope-only
-  `email/rejected` audit event.
+  or the project's own allowlist (`email/sender-allowed` events, seeded with
+  the creating principal's email at project birth — for zero-onboarding
+  projects that is the provisioned sender, which is how thread replies keep
+  working for senders no deployment allowlist knows), AND pass DMARC
+  (`requireDmarc`, opt-out for local dev). Unauthorized mail gets a real SMTP
+  reject plus an envelope-only `email/rejected` audit event.
 - **`bot@<domain>` — the zero-onboarding inbox.** Open-world, gated by
   `emailZeroOnboardingEnabled` (envs.ts: dev/preview on, prd off) plus
   **unconditional** sender verification: `verifySenderAlignment` parses

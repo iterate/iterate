@@ -3,7 +3,7 @@ import { Identifier } from "@iterate-com/ui/components/identifier";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import type { Project } from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { buildProjectWorkerUrl, normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
 export function ProjectSettingsPanel({
   project,
@@ -13,7 +13,12 @@ export function ProjectSettingsPanel({
   routeConfig: PublicRouteConfig;
 }) {
   const base = normalizeProjectHostnameBase(routeConfig.projectHostnameBases[0] ?? "");
-  const defaultHostname = base ? `${project.slug}.${base}` : project.slug;
+  const projectHostname = base ? `${project.slug}.${base}` : project.slug;
+  const projectWorkerUrl = buildProjectWorkerUrl({
+    appBaseUrl: routeConfig.baseUrl,
+    projectHostnameBases: routeConfig.projectHostnameBases,
+    projectSlug: project.slug,
+  });
 
   return (
     <section className="flex flex-col gap-6" data-testid="project-settings-panel">
@@ -30,13 +35,28 @@ export function ProjectSettingsPanel({
       </SettingsSection>
 
       <SettingsSection title="Hostname routing">
-        {/* TODO(tasks/os-project-archival.md): custom hostnames (updateConfig/ensureCustomHostname)
-            have no itx surface yet — restore this section when they do. */}
-        <SettingsField label="Custom hostname">
-          <p className="text-xs text-muted-foreground">
-            Custom hostnames return soon (tasks/os-project-archival.md). This project is served at{" "}
-            <code className="text-xs">{defaultHostname}</code>.
-          </p>
+        <SettingsField label="Project slug hostname">
+          <div className="grid gap-1 text-sm">
+            {projectWorkerUrl ? (
+              <a
+                className="font-medium break-all underline-offset-4 hover:underline"
+                href={projectWorkerUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {new URL(projectWorkerUrl).host}
+              </a>
+            ) : (
+              <p className="font-medium break-all">{projectHostname}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Apps use double-hyphen hosts on the built-in project hostname.
+            </p>
+            <code className="rounded bg-muted px-1.5 py-1 text-xs break-all">
+              {"<app>--"}
+              {projectWorkerUrl ? new URL(projectWorkerUrl).host : projectHostname}
+            </code>
+          </div>
         </SettingsField>
       </SettingsSection>
 

@@ -9,7 +9,7 @@ import {
   type EmailProcessorState,
   type InboundEmailPayload,
 } from "./email-processor-contract.ts";
-import { emailAgentPath, normalizeMessageId } from "./utils.ts";
+import { emailAgentPath, emailCounterpart, normalizeMessageId } from "./utils.ts";
 
 /** Where one inbound email belongs: an existing thread or a brand-new one. */
 type EmailThreadResolution = {
@@ -77,12 +77,18 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
         });
         const messageId = normalizeMessageId(event.payload.message.messageId);
         return {
+          ...state,
           threads: { ...state.threads, [resolution.threadId]: resolution.streamPath },
           threadByMessageId:
             messageId === null
               ? state.threadByMessageId
               : { ...state.threadByMessageId, [messageId]: resolution.threadId },
         };
+      }
+      case "events.iterate.com/email/sender-allowed": {
+        const pattern = event.payload.pattern.trim().toLowerCase();
+        if (pattern.length === 0 || state.allowedSenders.includes(pattern)) return state;
+        return { ...state, allowedSenders: [...state.allowedSenders, pattern] };
       }
       case "events.iterate.com/email/sent": {
         // Outbound mail sent inside a thread: index its messageId so replies
@@ -128,15 +134,16 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     };
 
     if (resolution.isNew) {
+      // Same reply-target chain as everywhere else (emailCounterpart), so the
+      // durable route event never disagrees with the agent's reply door.
+      const counterpart = emailCounterpart(event.payload);
       const routeEvent = {
         type: "events.iterate.com/email/thread-route-configured" as const,
         idempotencyKey: `email-route:${resolution.threadId}`,
         payload: {
           threadId: resolution.threadId,
           streamPath: resolution.streamPath,
-          ...(event.payload.message.from.address === undefined
-            ? {}
-            : { counterpart: event.payload.message.from.address }),
+          ...(counterpart === null ? {} : { counterpart }),
           ...(event.payload.message.subject === undefined
             ? {}
             : { subject: event.payload.message.subject }),

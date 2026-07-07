@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Box,
   Bug,
+  CalendarClock,
   Check,
   ChevronsLeft,
   ChevronsUpDown,
@@ -384,15 +385,14 @@ function authWorkerOrigin(config: PublicConfig) {
 function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
-  const activeProjectSlug = getActiveProjectSlug(matches);
+  const activeRouteProject = getActiveRouteProject(matches);
+  const activeProjectSlug = activeRouteProject?.slug ?? getActiveProjectSlug(matches);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
   // project that isn't in the cached list still shows its nav.
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        // Custom hostnames don't exist yet (tasks/os-project-archival.md): the list carries none.
-        customHostname={null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
@@ -460,13 +460,24 @@ function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
     .at(-1);
 }
 
+type ActiveRouteProject = Pick<ProjectListEntry, "id" | "slug">;
+
+function getActiveRouteProject(matches: ReturnType<typeof useMatches>): ActiveRouteProject | null {
+  return (
+    matches
+      .map((match) => (match.context as { project?: ActiveRouteProject } | undefined)?.project)
+      .filter((project): project is ActiveRouteProject =>
+        Boolean(project && typeof project.id === "string" && typeof project.slug === "string"),
+      )
+      .at(-1) ?? null
+  );
+}
+
 function ProjectSidebarGroup({
-  customHostname,
   projectHostnameBases,
   projectSlug,
   appBaseUrl,
 }: {
-  customHostname: string | null;
   projectHostnameBases: readonly string[];
   projectSlug: string;
   appBaseUrl?: string;
@@ -479,9 +490,8 @@ function ProjectSidebarGroup({
       fuzzy: false,
     }),
   );
-  const customWorkerUrl = buildProjectWorkerUrl({
+  const projectWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
-    customHostname,
     projectHostnameBases,
     appBaseUrl,
   });
@@ -502,10 +512,12 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
-              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
+              render={
+                <Link to="/projects/$projectSlug/settings" params={{ projectSlug }} search={{}} />
+              }
               isActive={Boolean(
                 matchRoute({
-                  to: "/projects/$projectSlug",
+                  to: "/projects/$projectSlug/settings",
                   params: { projectSlug },
                   fuzzy: false,
                 }),
@@ -525,14 +537,14 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
-            {customWorkerUrl ? (
+            {projectWorkerUrl ? (
               <ProjectSidebarMenuItem
                 icon={ExternalLink}
                 label="Homepage"
                 render={
                   <a
                     aria-label={`Open ${projectSlug} project homepage`}
-                    href={customWorkerUrl}
+                    href={projectWorkerUrl}
                     target="_blank"
                     rel="noreferrer"
                   />
@@ -590,6 +602,7 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/agents"
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/sandboxes"
+    | "/projects/$projectSlug/scheduler"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
@@ -630,6 +643,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/sandboxes",
     streamPath: StreamPath.parse("/sandboxes"),
     to: "/projects/$projectSlug/sandboxes",
+  },
+  {
+    fuzzy: true,
+    icon: CalendarClock,
+    label: "/scheduler",
+    streamPath: StreamPath.parse("/scheduler"),
+    to: "/projects/$projectSlug/scheduler",
   },
   {
     fuzzy: true,

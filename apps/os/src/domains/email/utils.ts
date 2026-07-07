@@ -4,6 +4,8 @@
 // "email" processor on `/integrations/email` into one agent stream per email
 // thread (`/agents/email/t<threadId>`); see email-processor-contract.ts.
 
+import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
+
 /** Stream that receives the project's email traffic: `email/sent` audit
  * events, inbound `email/received`/`email/rejected` events, and the email
  * router's `email/thread-route-configured` facts. */
@@ -62,6 +64,21 @@ type EmailParty = {
   email: string;
   name?: string;
 };
+
+/**
+ * THE deployment's email domain: the first project hostname base, normalized
+ * exactly the way host routing normalizes bases (lowercase, `*.` wildcard and
+ * port stripped — see normalizeProjectHostnameBase). Inbound acceptance and
+ * every outbound From/Reply-To derive from this one function, so a config
+ * value like `*.iterate-preview-3.app` can never make the door and the sender
+ * identity disagree. Null when the deployment has no hostname base.
+ */
+export function emailDomainForDeployment(projectHostnameBases: readonly string[]): string | null {
+  const base = projectHostnameBases[0];
+  if (base === undefined) return null;
+  const normalized = normalizeProjectHostnameBase(base);
+  return normalized === "" ? null : normalized;
+}
 
 /** The project's own sending identity: `<slug>@<sender domain>`. */
 export function emailAddressForProject(input: { slug: string; domain: string }): string {
@@ -155,6 +172,81 @@ export function senderMatchesAllowlist(input: { address: string; patterns: strin
 export function dmarcPasses(authenticationResults: string | null): boolean {
   if (authenticationResults === null) return false;
   return /\bdmarc=pass\b/i.test(authenticationResults);
+}
+
+/**
+ * True when an inbound mail's author is the receiving project's own address —
+ * our outbound looping back (e.g. the counterpart auto-forwards into the same
+ * inbox). Shared by the email-agent processor (must not wake the agent to
+ * talk to itself) and email.reply's counterpart selection (must not reply to
+ * ourselves). Structural input: the slice of an email/received payload both
+ * callers hold.
+ */
+/** One bare, lowercased address from a possibly angle-bracketed value. */
+function normalizeBareAddress(value: string | undefined): string | null {
+  const trimmed = value?.trim().toLowerCase().replace(/^<|>$/g, "") ?? "";
+  return trimmed.includes("@") ? trimmed : null;
+}
+
+/**
+ * The slice of an email/received payload the counterpart/loop helpers below
+ * read. Structural so the router, agent processor, and reply door can all
+ * pass their parsed payloads without import cycles.
+ */
+type InboundMailIdentitySlice = {
+  envelope: { from: string; to: string };
+  recipient: { slug: string };
+  message: { from: { address?: string }; replyToAddress?: string | null };
+};
+
+/**
+ * True when `address` (bare, lowercased) belongs to the project receiving
+ * this mail: the project inbox or any `+`-tagged variant of it. THE one
+ * self-address predicate — the counterpart chain and the loop filter both use
+ * it, so "what counts as our own address" can never diverge between them.
+ */
+function isProjectOwnedInboundAddress(address: string, payload: InboundMailIdentitySlice): boolean {
+  const recipient = parseInboundRecipient(payload.envelope.to);
+  if (recipient === null) return false;
+  const slug = payload.recipient.slug.toLowerCase();
+  return (
+    address === `${slug}@${recipient.domain}` ||
+    (address.startsWith(`${slug}+`) && address.endsWith(`@${recipient.domain}`))
+  );
+}
+
+/**
+ * THE reply-target chain for one inbound mail: Reply-To when set, else the
+ * header From, else the SMTP envelope from (the address ingress
+ * authenticated). Candidates owned by the receiving project itself (the
+ * project inbox or a `+`-tagged variant) are skipped — a Reply-To pointing
+ * back at us must never make the agent mail itself instead of the human.
+ * Every consumer — the router's route event, the email-agent processor's
+ * state, email.reply's target — derives the counterpart from this one
+ * function so they can never disagree.
+ */
+export function emailCounterpart(payload: InboundMailIdentitySlice): string | null {
+  for (const candidate of [
+    payload.message.replyToAddress ?? undefined,
+    payload.message.from.address,
+    payload.envelope.from,
+  ]) {
+    const normalized = normalizeBareAddress(candidate);
+    if (normalized !== null && !isProjectOwnedInboundAddress(normalized, payload)) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+export function isOwnProjectMail(payload: InboundMailIdentitySlice): boolean {
+  // Header From when parsed, else the SMTP envelope from — mirrors the
+  // counterpart fallback chain so the loop filter sees the same identity.
+  const from = normalizeBareAddress(payload.message.from.address ?? payload.envelope.from);
+  if (from === null) return false;
+  // Same predicate as the counterpart chain: the bare inbox AND any +tagged
+  // variant count as our own mail.
+  return isProjectOwnedInboundAddress(from, payload);
 }
 
 /**

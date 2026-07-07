@@ -1,16 +1,11 @@
 // The /api/integrations/* HTTP surface, mounted under the Start catch-all
-// route (src/routes/api.$.ts) in the app worker.
-//
-// Resurrected from the pre-migration integration-api.ts (git history). The app
-// worker has no itx bindings, so every itx effect goes through a
-// one-shot pipelined capnweb HTTP batch against this deployment's own
-// /api surface using the admin API secret — the same request-scoped
-// pattern the inbound MCP exec_js tool uses.
-
-// oxlint-disable-next-line iterate/no-capnweb-http-batch -- integration callbacks/webhooks are one-shot request-scoped calls: a single pipelined batch (authenticate -> route/complete) with no socket lifecycle to manage.
-import { newHttpBatchRpcSession } from "capnweb";
-import type { UnauthenticatedOs } from "../../types.ts";
+// route (src/routes/api.$.ts). Everything runs in the one OS worker, so itx
+// effects call the session RpcTargets in-process (first-party authority, the
+// same lane worker.ts uses for project ingress) — no loopback HTTP round trip
+// to this deployment's own /api.
 import { parseOAuthStateUnverified } from "./oauth-state.ts";
+import { trustedInternalAuthContext } from "~/auth.ts";
+import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
 
@@ -26,38 +21,24 @@ export async function handleIntegrationApiRequest(input: {
   if (url.pathname === "/api/integrations/google/callback") {
     return await handleOAuthCallback({ ...input, provider: "google" });
   }
-  // The Slack webhook lanes (/api/integrations/slack/webhook,
-  // .../interactivity-webhook) are NOT here: they are served by the api
-  // worker (src/domains/integrations/slack-webhook-api.ts), which has the
-  // engine bindings and routes events directly — no RPC round trip.
+  if (url.pathname === "/api/integrations/github/callback") {
+    return await handleOAuthCallback({ ...input, provider: "github" });
+  }
+  // The webhook lanes (/api/integrations/<slug>/webhook, + slack's
+  // interactivity lane) are NOT here: they are served by the api worker
+  // (src/domains/integrations/integration-webhook-api.ts), which has the engine
+  // bindings and routes events directly — no RPC round trip.
   return null;
-}
-
-/** One-shot pipelined capnweb batch against this deployment's own itx surface. */
-function engineBatchSession(context: RequestContext) {
-  const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
-  if (!baseUrl) throw new Error("baseUrl is not configured");
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per integration request; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedOs>(
-    new Request(`${baseUrl}/api`, { method: "POST" }),
-  );
-}
-
-function requireAdminSecret(context: RequestContext): string {
-  const secret = context.config.adminApiSecret?.exposeSecret();
-  if (!secret) throw new Error("Admin API secret is not configured.");
-  return secret;
 }
 
 async function handleOAuthCallback(input: {
   auth: Principal | null | undefined;
   context: RequestContext;
-  provider: "google" | "slack";
+  provider: "github" | "google" | "slack";
   request: Request;
 }): Promise<Response> {
   const url = new URL(input.request.url);
   const error = url.searchParams.get("error");
-  const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
 
   if (!state) return Response.json({ error: "Missing OAuth state." }, { status: 400 });
@@ -67,7 +48,16 @@ async function handleOAuthCallback(input: {
   }
   const callbackUrl = unverified.callbackUrl ?? null;
   if (error) return redirectWithError(callbackUrl, `${input.provider}_oauth_denied`);
-  if (!code) return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
+
+  // GitHub connects via App installation: the callback carries `installation_id`
+  // (+ setup_action), not an OAuth `code`. slack/google carry a code.
+  const code = url.searchParams.get("code") ?? undefined;
+  const installationId = url.searchParams.get("installation_id") ?? undefined;
+  if (input.provider === "github") {
+    if (!installationId) return redirectWithError(callbackUrl, "github_missing_installation_id");
+  } else if (!code) {
+    return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
+  }
 
   // The signed-state userId binding: the user completing the flow must be the
   // user who started it. The state signature itself is verified itx-side;
@@ -75,16 +65,21 @@ async function handleOAuthCallback(input: {
   const userId = input.auth?.type === "user" ? input.auth.userId : null;
   if (userId === null) return new Response("OAuth callback user mismatch.", { status: 403 });
 
-  const session = engineBatchSession(input.context);
-  const root = session.authenticate({
-    type: "admin-secret",
-    secret: requireAdminSecret(input.context),
+  // First-party authority: the caller's session was checked above, and the
+  // state signature is verified itx-side; completing the connect is this
+  // worker's own doing, not something the browser is authorized for.
+  const project = await new ProjectCollectionRpcTarget({
+    auth: trustedInternalAuthContext(),
+    config: input.context.config,
+    ctx: input.context.executionCtx,
+  }).get(unverified.projectId);
+  const result = await project.integrations.completeConnect({
+    code,
+    installationId,
+    provider: input.provider,
+    state,
+    userId,
   });
-  const project = root.projects.get(unverified.projectId);
-  const result =
-    input.provider === "slack"
-      ? await project.integrations.completeSlackConnect({ code, state, userId })
-      : await project.integrations.completeGoogleConnect({ code, state, userId });
 
   if (!result.ok) {
     if (result.error.endsWith("_user_mismatch")) {

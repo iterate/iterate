@@ -59,6 +59,13 @@ type ReducedEvent<Contract> = {
   state: ProcessorState<Contract>;
 };
 
+/**
+ * A consumed-type event whose shape failed the contract parse. Distinguished
+ * from `undefined` (type not consumed at all) so ingest can skip the event
+ * AND record the skip durably instead of silently dropping it.
+ */
+type ConsumedEventParseFailure = { parseError: z.ZodError };
+
 /** What `reduce` receives: one consumed event and the state to fold it into. */
 type ReduceArgs<Contract> = {
   event: ConsumedEvent<Contract>;
@@ -458,12 +465,15 @@ export abstract class StreamProcessor<
   /**
    * Reduce one raw stream event against explicit state, without touching the
    * processor's own state or checkpoint. Returns `undefined` for events this
-   * processor does not consume.
+   * processor does not consume, and a {@link ConsumedEventParseFailure} for
+   * events of a consumed TYPE whose shape fails the contract parse — streams
+   * accept raw appends by design, so a malformed event is a fact of the log,
+   * not an exception: throwing here would wedge the checkpoint on it forever.
    */
   #reduceRawEvent(args: {
     event: StreamEvent;
     state: ProcessorState<Contract>;
-  }): ReducedEvent<Contract> | undefined {
+  }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined {
     const eventDefinition = getConsumedEventDefinition({
       contract: this.contract,
       eventType: args.event.type,
@@ -472,10 +482,12 @@ export abstract class StreamProcessor<
 
     // Rebuilding the parser from the catalog key and payload schema keeps replay
     // and live delivery on the same validation path.
-    const event = getEventSchema({
+    const parsed = getEventSchema({
       type: args.event.type,
       payloadSchema: eventDefinition.payloadSchema,
-    }).parse(args.event) as ConsumedEvent<Contract>;
+    }).safeParse(args.event);
+    if (!parsed.success) return { parseError: parsed.error };
+    const event = parsed.data as ConsumedEvent<Contract>;
 
     const state = this.reduce({ event, state: args.state }) ?? args.state;
     assertObjectProcessorState({ processorSlug: this.contract.slug, value: state });
@@ -498,6 +510,7 @@ export abstract class StreamProcessor<
     let checkpointOffset = this.#checkpointOffset;
     const events: StreamEvent[] = [];
     const reducedEvents: ReducedEvent<Contract>[] = [];
+    const parseFailures: { event: StreamEvent; error: z.ZodError }[] = [];
 
     for (const event of args.events) {
       if (event.offset <= checkpointOffset) continue;
@@ -506,6 +519,10 @@ export abstract class StreamProcessor<
 
       const reduction = this.#reduceRawEvent({ event, state });
       if (reduction === undefined) continue;
+      if ("parseError" in reduction) {
+        parseFailures.push({ event, error: reduction.parseError });
+        continue;
+      }
       reducedEvents.push(reduction);
       state = reduction.state;
     }
@@ -549,6 +566,27 @@ export abstract class StreamProcessor<
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
     this.#resolveEventWaiters(events);
+
+    // Record skipped unparseable events AFTER the checkpoint commits, in the
+    // background: the raw event in the log is the authoritative record and the
+    // idempotency key dedupes redelivery, so a failing record append can never
+    // re-poison the batch it just rescued.
+    for (const { event, error } of parseFailures) {
+      const message =
+        `stream processor "${this.contract.slug}" skipped event at offset ` +
+        `${event.offset} ("${event.type}"): it fails the contract's schema`;
+      console.error(message, error);
+      this.runInBackground(() =>
+        this.stream.append({
+          type: "events.iterate.com/stream/error-occurred",
+          idempotencyKey: `processor-event-parse-failed:${this.contract.slug}:${event.offset}`,
+          payload: {
+            message,
+            error: { name: error.name, message: error.message },
+          },
+        }),
+      );
+    }
   }
 
   #appendEmitted(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {

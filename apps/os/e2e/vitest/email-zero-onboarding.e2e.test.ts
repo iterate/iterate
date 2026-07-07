@@ -5,8 +5,9 @@
 // email-agent transcription -> LLM -> itx.email.reply attempt, observable as
 // an email/sent (or, where the domain is not onboarded for Email Sending,
 // email/send-failed) audit event. Thread continuation rides the +t Reply-To
-// token through the project-inbox lane's claimed-sender bypass. We stop at
-// the outbound attempt.
+// token through the project-inbox lane, whose per-project allowlist was
+// seeded with the provisioned sender at project birth. We stop at the
+// outbound attempt.
 //
 // Senders use the reserved non-deliverable `.test` TLD on purpose: if a reply
 // send DOES fire for real, nothing leaves the building. Sender verification
@@ -231,9 +232,10 @@ test(
     );
 
     // --- Thread continuation: Joe replies to the thread's +t Reply-To
-    // address. That rides the project-inbox lane — no allowlist knows this
-    // sender, so this exercises the claimed-sender bypass — and the +t token
-    // routes it to the SAME agent stream with no new provisioning.
+    // address. That rides the project-inbox lane — no DEPLOYMENT allowlist
+    // knows this sender, so this exercises the per-project allowlist that
+    // provisioning seeded with Joe's address — and the +t token routes it to
+    // the SAME agent stream with no new provisioning.
     const continuation = await injectEmail({
       from: sender,
       fromName: "Joe Bloggs",

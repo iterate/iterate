@@ -54,7 +54,7 @@ The project Durable Object is the egress decision point:
 
 1. If a live egress interceptor is installed, it handles the request before
    secret substitution.
-2. Otherwise, the project DO scans request headers for `getSecret({ path })`
+2. Otherwise, the project DO scans request headers for `getSecret(path)`
    placeholders.
 3. If no secret is referenced, the request is fetched directly.
 4. If exactly one secret is referenced, the request is forwarded to that

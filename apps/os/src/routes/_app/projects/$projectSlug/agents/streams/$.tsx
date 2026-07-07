@@ -88,6 +88,7 @@ function ProjectAgentDetailContent() {
         placeholder: "Message this agent",
       }}
       projectId={project.id}
+      projectSlug={project.slug}
       streamPath={streamPath}
     />
   );

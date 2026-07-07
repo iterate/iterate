@@ -8,9 +8,9 @@
  * code; secrets live in Doppler (one config per env per app, named below).
  *
  * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, tunnelsEnvs,
- * streamsExampleEnvs) because apps deploy to different subsets of
- * environments — forcing them into one record would mean optional fields
- * that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
+ * streamsExampleEnvs, dummyPetshopEnvs) because apps deploy to different
+ * subsets of environments — forcing them into one record would mean optional
+ * fields that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
  * resource IDs are Cloudflare-assigned and must be spelled out.
  *
  * Consumers: each app's scripts/{generate-wrangler-config,deploy,
@@ -67,12 +67,17 @@ export interface DeployedEnv {
   /** Auth app origin, e.g. https://auth.iterate.com */
   authBaseUrl: string;
   /**
-   * Base domains for deployed project hosts (`<slug>.<base>`). Routes are
-   * generated as `base/*`, `*.base/*` and `*base/*` (the last because the
-   * preview zone only reliably invoked the worker once the broad catch-all
-   * existed).
+   * Base domains for deployed project hosts (`<slug>.<base>`). Worker routes are
+   * generated for the built-in project host patterns.
    */
   projectHostnameBases: string[];
+  /**
+   * Project hostname bases that are Cloudflare for SaaS enabled. These get the
+   * provider-zone catch-all route required for custom hostnames using the worker
+   * as origin. Keep this a subset of `projectHostnameBases`; preview zones have
+   * no SSL-for-SaaS quota unless Cloudflare explicitly provisions it.
+   */
+  cloudflareForSaasProjectHostnameBases: string[];
   /**
    * Whether inbound mail to `bot@<projectHostnameBases[0]>` may auto-provision
    * a user/org/project for a brand-new verified sender (the zero-onboarding
@@ -108,6 +113,7 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     eventDocsBaseUrl: `https://events.iterate-preview-${n}.com`,
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
+    cloudflareForSaasProjectHostnameBases: [],
     emailZeroOnboardingEnabled: true,
     resources,
   };
@@ -124,6 +130,7 @@ export const envs = {
     eventDocsBaseUrl: "https://events.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
+    cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     emailZeroOnboardingEnabled: false,
     resources: {
       projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
@@ -305,6 +312,49 @@ export interface StreamsExampleEnv {
    */
   authBaseUrl: string;
 }
+
+/**
+ * apps/dummy-petshop — the fake third-party "Pet Shop" service that
+ * integration e2e tests connect to (OAuth 2.0 provider, legacy login, pets
+ * API, signed webhooks, test backdoor). S0 of
+ * apps/os/docs/integrations-and-secrets-design.md §7. Deploys everywhere os
+ * does so every environment's integration specs have a real third party to
+ * talk to. No Cloudflare resources beyond DNS — state is one Durable Object.
+ */
+export interface DummyPetshopEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `dummy-petshop`) supplying this env's secrets. */
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+}
+
+function dummyPetshopPreviewSlot(n: number): DummyPetshopEnv {
+  return {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: `preview_${n}`,
+    workerName: `dummy-petshop-preview-${n}`,
+    baseUrl: `https://dummy-petshop.iterate-preview-${n}.com`,
+  };
+}
+
+export const dummyPetshopEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "dummy-petshop-prd",
+    baseUrl: "https://dummy-petshop.iterate.com",
+  },
+  preview_1: dummyPetshopPreviewSlot(1),
+  preview_2: dummyPetshopPreviewSlot(2),
+  preview_3: dummyPetshopPreviewSlot(3),
+  preview_4: dummyPetshopPreviewSlot(4),
+  preview_5: dummyPetshopPreviewSlot(5),
+  preview_6: dummyPetshopPreviewSlot(6),
+  preview_7: dummyPetshopPreviewSlot(7),
+  preview_8: dummyPetshopPreviewSlot(8),
+  preview_9: dummyPetshopPreviewSlot(9),
+} satisfies Record<string, DummyPetshopEnv>;
 
 function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
   return {

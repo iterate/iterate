@@ -5,6 +5,7 @@
 import { stringify as stringifyYaml } from "yaml";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
+import { emailCounterpart, isOwnProjectMail } from "./utils.ts";
 import {
   EmailAgentProcessorContract,
   type EmailAgentProcessorState,
@@ -31,7 +32,10 @@ export class EmailAgentProcessor extends StreamProcessor<typeof EmailAgentProces
           ...(event.payload.subject === undefined ? {} : { subject: event.payload.subject }),
         };
       case "events.iterate.com/email/received": {
-        const counterpart = replyCounterpart(event.payload);
+        // Neither our own looped-back mail nor automated mail (bounces,
+        // Auto-Submitted) may become the thread counterpart.
+        if (isOwnProjectMail(event.payload) || event.payload.automated) return state;
+        const counterpart = emailCounterpart(event.payload);
         return {
           ...state,
           ...(counterpart === null ? {} : { counterpart }),
@@ -76,19 +80,6 @@ export class EmailAgentProcessor extends StreamProcessor<typeof EmailAgentProces
       });
     });
   }
-}
-
-/** The address a reply should go to: the inbound Reply-To when set, else From. */
-function replyCounterpart(payload: InboundEmailPayload): string | null {
-  return payload.message.replyToAddress ?? payload.message.from.address ?? null;
-}
-
-/** True when the mail's author is the receiving project's own address. */
-function isOwnProjectMail(payload: InboundEmailPayload): boolean {
-  const from = payload.message.from.address?.toLowerCase();
-  if (from === undefined) return false;
-  const recipientDomain = payload.envelope.to.split("@").pop()?.toLowerCase();
-  return from === `${payload.recipient.slug}@${recipientDomain}`;
 }
 
 /** The model-visible transcription of one inbound email. Curated rather than

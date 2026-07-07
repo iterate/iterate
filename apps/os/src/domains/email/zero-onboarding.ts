@@ -8,14 +8,17 @@ import {
   resolveUniqueSlug,
   slugifyWithSuffix,
 } from "@iterate-com/shared/slug";
-import { provisionedUserAuthContext } from "../../auth.ts";
+import { itxAuthFromPrincipal } from "../../auth.ts";
 import { createUserPrincipal } from "../../auth/principal.ts";
 import { createAuthWorkerServiceClient } from "../../auth/auth-worker-service.ts";
 import type { AppConfig } from "../../config.ts";
 import { itxEnv } from "../../env.ts";
 import { readProjectById } from "../../project-directory.ts";
 import { ProjectCollectionRpcTarget } from "../../rpc-targets.ts";
-import { integrationStreamStub, readAllStreamEvents } from "../integrations/integration-streams.ts";
+import {
+  integrationStreamStub,
+  streamEventsNewestFirst,
+} from "../integrations/integration-streams.ts";
 import {
   EMAIL_SENDER_CLAIMED_EVENT_TYPE,
   EMAIL_SENDER_DIRECTORY_STREAM_PATH,
@@ -45,10 +48,9 @@ export async function resolveSenderProject(input: {
   allowProvision: boolean;
 }): Promise<{ projectId: string; slug: string; provisioned: boolean } | null> {
   const address = normalizeEmailAddress(input.address);
-  const directory = () => readAllStreamEvents(null, EMAIL_SENDER_DIRECTORY_STREAM_PATH);
   const authClient = createAuthWorkerServiceClient({ config: input.config });
 
-  const claimed = foldEmailSenderDirectory(await directory()).get(address);
+  const claimed = (await readSenderDirectory()).get(address);
   if (claimed !== undefined) {
     return { projectId: claimed, slug: await slugOf(claimed), provisioned: false };
   }
@@ -77,10 +79,15 @@ export async function resolveSenderProject(input: {
       (await authClient.internal.project.bySlug({ projectSlug: candidate })) !== null,
   });
 
-  const auth = provisionedUserAuthContext(
+  const auth = itxAuthFromPrincipal(
     input.config,
     createUserPrincipal({
       userId: user.id,
+      // The principal's email seeds the new project's own sender allowlist
+      // (ProjectCollectionRpcTarget.create appends email/sender-allowed for
+      // the creator), which is what lets this sender's thread replies to
+      // `<slug>+t<id>@` pass the project-inbox lane later.
+      email: address,
       organizations: [
         { id: organization.id, name: organization.name, slug: organization.slug, role: "owner" },
       ],
@@ -127,7 +134,7 @@ export async function resolveSenderProject(input: {
     },
   });
 
-  const winner = foldEmailSenderDirectory(await directory()).get(address);
+  const winner = (await readSenderDirectory()).get(address);
   if (winner !== undefined && winner !== created.projectId) {
     console.warn(
       `[email-zero-onboarding] lost sender-claim race for ${address}: provisioned ${created.projectId}, adopting ${winner} (orphaned org ${organization.slug})`,
@@ -135,6 +142,19 @@ export async function resolveSenderProject(input: {
     return { projectId: winner, slug: await slugOf(winner), provisioned: false };
   }
   return { ...created, provisioned: true };
+}
+
+/**
+ * The folded sender directory. The stream is small (one claim per unique
+ * sender), so collect it fully and fold oldest-first — that is the order
+ * foldEmailSenderDirectory's first-claim-wins semantics are defined over.
+ */
+async function readSenderDirectory(): Promise<Map<string, string>> {
+  const newestFirst = [];
+  for await (const event of streamEventsNewestFirst(null, EMAIL_SENDER_DIRECTORY_STREAM_PATH)) {
+    newestFirst.push(event);
+  }
+  return foldEmailSenderDirectory(newestFirst.reverse());
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   decodeBase64Attachment,
   dmarcPasses,
   emailAddressForProject,
+  emailDomainForDeployment,
   fallbackInboundMessageKey,
   emailAgentPath,
   emailThreadIdFromAgentPath,
@@ -22,6 +23,16 @@ import {
   EMAIL_MAX_MESSAGE_BYTES,
   type OutboundEmailAttachment,
 } from "./utils.ts";
+
+describe("emailDomainForDeployment", () => {
+  it("normalizes the first hostname base the way host routing does", () => {
+    expect(emailDomainForDeployment(["*.Iterate-Preview-3.App", "iterate.app"])).toBe(
+      "iterate-preview-3.app",
+    );
+    expect(emailDomainForDeployment(["iterate.app"])).toBe("iterate.app");
+    expect(emailDomainForDeployment([])).toBeNull();
+  });
+});
 
 describe("emailAddressForProject", () => {
   it("is <slug>@<domain>", () => {

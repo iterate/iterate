@@ -20,7 +20,8 @@ import { withEvlog } from "@iterate-com/shared/evlog";
 import { trustedInternalAuthContext } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
-import { readProjectByHostname, resolveProjectIdBySlug } from "./project-directory.ts";
+import { readProjectByHostname } from "./project-hostname-directory.ts";
+import { resolveProjectIdBySlug } from "./project-directory.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import {
   defaultProjectWorkerRef,
@@ -28,7 +29,7 @@ import {
   UnauthenticatedOsRpcTarget,
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
-import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
+import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { handleEmailInjectApiRequest } from "./domains/email/email-inject-api.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
@@ -158,6 +159,7 @@ async function appFetch(
 
       const context: RequestContext = {
         config: requestConfig,
+        executionCtx: ctx,
         isEventDocsHost: host.isEventDocsHost,
         log,
         rawRequest: request,
@@ -231,11 +233,11 @@ async function apiFetch(
     return await handleCapnwebAdminCookieRequest({ config, request });
   }
 
-  // Slack webhook ingress lives here (not the app lane): this pipeline has
-  // the engine bindings, so a signed event routes straight into the claiming
-  // project's stream without a capnweb round trip.
-  const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
-  if (slackWebhookResponse !== null) return slackWebhookResponse;
+  // Integration webhook ingress (Slack, GitHub, …) lives here (not the app
+  // lane): this pipeline has the engine bindings, so a signed event routes
+  // straight into the claiming project's stream without a capnweb round trip.
+  const webhookResponse = await handleIntegrationWebhookApiRequest({ config, request });
+  if (webhookResponse !== null) return webhookResponse;
 
   // Synthetic inbound email (admin-secret gated): the e2e/dev stand-in for
   // the email() entrypoint above, sharing its entire pipeline.

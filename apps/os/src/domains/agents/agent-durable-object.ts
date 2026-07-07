@@ -10,6 +10,7 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
+import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
@@ -58,9 +59,24 @@ export class AgentDurableObject extends DurableObject<Env> {
       new SlackAgentProcessor({
         ...deps,
         callSlackApi: async (method, body) => {
+          // Only best-effort UX side effects (reactions, thread status) ride
+          // this dep — the agent's actual REPLY goes through
+          // itx.integrations.slack in its script, which fails loudly on its
+          // own. The agent path carries the named connection
+          // (/agents/slack/{connection}/{channel}/ts-{ts}); without it there
+          // is no bot token, so skip rather than wedge the checkpoint.
+          const connection = slackConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            console.error("[slack-agent] agent path carries no connection; skipping Slack call", {
+              method,
+              path: this.#name.path,
+            });
+            return;
+          }
           try {
             await callProjectSlackWebApi({
               body,
+              connection,
               method,
               projectId: this.#name.projectId,
             });
@@ -72,13 +88,21 @@ export class AgentDurableObject extends DurableObject<Env> {
             });
           }
         },
-        storeSlackFiles: (input) =>
-          storeSlackFilesForAgent({
+        storeSlackFiles: (input) => {
+          // Downloads ride the named connection's bot-token secret, exactly
+          // like the side-effect calls above — same no-connection skip rule.
+          const connection = slackConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            throw new Error(`agent path carries no Slack connection: ${this.#name.path}`);
+          }
+          return storeSlackFilesForAgent({
             agentPath: this.#name.path,
+            connection,
             files: input.files,
             projectId: this.#name.projectId,
             storageKey: input.storageKey,
-          }),
+          });
+        },
       }),
   );
 

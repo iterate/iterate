@@ -11,11 +11,10 @@
 // Two recipient lanes share this door:
 //
 //   `<slug>@<domain>` — an existing project's inbox, closed behind the
-//   deployment sender allowlist + DMARC (config.email). The one exception:
-//   the sender a project was zero-onboarding-provisioned FOR (its Email
-//   Sender Claim) may always mail it, subject to strict sender verification —
-//   that is how thread replies to `<slug>+t<id>@` keep working for senders no
-//   allowlist knows about.
+//   deployment sender allowlist + the project's own allowlist (seeded with
+//   the creator's email at birth — for zero-onboarding projects that is the
+//   provisioned sender, which is how thread replies to `<slug>+t<id>@` keep
+//   working for senders no deployment allowlist knows) + DMARC.
 //
 //   `bot@<domain>` — the zero-onboarding inbox
 //   (tasks/email-agent-zero-onboarding.md): open-world, gated by
@@ -39,7 +38,7 @@ import { parseConfig } from "../../config.ts";
 import { readProjectBySlug } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { integrationStreamStub, readAllStreamEvents } from "../integrations/integration-streams.ts";
+import { integrationStreamStub } from "../integrations/integration-streams.ts";
 import { EmailProcessorContract } from "./email-processor-contract.ts";
 import {
   EMAIL_BODY_TRUNCATE_CHARS,
@@ -47,11 +46,10 @@ import {
   EMAIL_MAX_RAW_SIZE_BYTES,
   EMAIL_RECEIVED_EVENT_TYPE,
   EMAIL_REJECTED_EVENT_TYPE,
-  EMAIL_SENDER_DIRECTORY_STREAM_PATH,
   ZERO_ONBOARDING_LOCAL_PART,
   dmarcPasses,
+  emailDomainForDeployment,
   fallbackInboundMessageKey,
-  foldEmailSenderDirectory,
   normalizeEmailAddress,
   normalizeMessageId,
   parseInboundRecipient,
@@ -89,14 +87,18 @@ export async function handleInboundEmail(
   const config = parseConfig(itxEnv);
 
   const recipient = parseInboundRecipient(message.to);
-  // Only the FIRST hostname base — the same one every outbound From/Reply-To
-  // is built from (EmailRpcTarget senderIdentity) — accepts inbound mail, so
-  // a thread's reply address always lives on the domain the mail arrived on.
-  if (recipient === null || recipient.domain !== config.projectHostnameBases[0]) {
+  // Only the deployment's email domain — the same normalized first hostname
+  // base every outbound From/Reply-To is built from (EmailRpcTarget
+  // senderIdentity) — accepts inbound mail, so a thread's reply address
+  // always lives on the domain the mail arrived on.
+  const emailDomain = emailDomainForDeployment(config.projectHostnameBases);
+  if (recipient === null || emailDomain === null || recipient.domain !== emailDomain) {
     message.setReject("No such address.");
     return { outcome: "rejected", reason: "no-such-address" };
   }
 
+  // Pre-parse for memory safety, which also means no email/rejected audit
+  // fact for oversize mail — the addressed project is not resolved yet.
   if (message.rawSize > EMAIL_MAX_RAW_SIZE_BYTES) {
     message.setReject("Message too large.");
     return { outcome: "rejected", reason: "message-too-large" };
@@ -107,28 +109,6 @@ export async function handleInboundEmail(
   const authenticationResults = parsed.headers
     .filter((header) => header.key === "authentication-results")
     .map((header) => header.value);
-
-  const resolved =
-    recipient.slug === ZERO_ONBOARDING_LOCAL_PART
-      ? await resolveZeroOnboardingProject({ config, ctx, fromAddress, authenticationResults })
-      : await resolveProjectInboxDelivery({
-          config,
-          recipient,
-          fromAddress,
-          authenticationResults,
-          envelope: { from: message.from, to: message.to },
-        });
-  if (resolved.outcome === "dropped") {
-    // Accept-and-drop: no bounce, no provisioning — answering unverified mail
-    // in any form would make this door an oracle for spoofed senders.
-    console.warn(`[email-ingress] dropped: ${resolved.reason}`, { to: message.to });
-    return resolved;
-  }
-  if (resolved.outcome === "rejected") {
-    message.setReject(resolved.rejectMessage);
-    return { outcome: "rejected", reason: resolved.reason };
-  }
-  const project = resolved.project;
 
   // Message identity for dedupe: the Message-ID when present, else a stable
   // content hash — never a random value, or every MTA retry of the same
@@ -141,6 +121,29 @@ export async function handleInboundEmail(
       subject: parsed.subject,
       body: parsed.text ?? parsed.html,
     }));
+
+  const resolved =
+    recipient.slug === ZERO_ONBOARDING_LOCAL_PART
+      ? await resolveZeroOnboardingProject({ config, ctx, fromAddress, authenticationResults })
+      : await resolveProjectInboxDelivery({
+          config,
+          recipient,
+          fromAddress,
+          authenticationResults,
+          envelope: { from: message.from, to: message.to },
+          messageKey,
+        });
+  if (resolved.outcome === "dropped") {
+    // Accept-and-drop: no bounce, no provisioning — answering unverified mail
+    // in any form would make this door an oracle for spoofed senders.
+    console.warn(`[email-ingress] dropped: ${resolved.reason}`, { to: message.to });
+    return resolved;
+  }
+  if (resolved.outcome === "rejected") {
+    message.setReject(resolved.rejectMessage);
+    return { outcome: "rejected", reason: resolved.reason };
+  }
+  const project = resolved.project;
 
   const receivedEvent = {
     type: EMAIL_RECEIVED_EVENT_TYPE,
@@ -202,7 +205,10 @@ type ResolvedDelivery =
  * craft a passing Authentication-Results header through the inject route
  * instead of an off switch), then resolve-or-provision by sender. The
  * enablement flag gates NEW provisioning only — a sender already claimed in
- * the directory keeps working if the flag is later turned off.
+ * the directory keeps working if the flag is later turned off. Provisioning
+ * seeds the new project's own sender allowlist with this sender (the
+ * creator), so thread replies to `<slug>+t<id>@` pass the project-inbox lane
+ * below without any deployment allowlist entry.
  */
 async function resolveZeroOnboardingProject(input: {
   config: ReturnType<typeof parseConfig>;
@@ -244,10 +250,13 @@ async function resolveZeroOnboardingProject(input: {
 }
 
 /**
- * The project-inbox lane: allowlist + DMARC (the #1711 policy, unchanged),
- * with one addition — the project's own claimed zero-onboarding sender
- * bypasses the allowlist under strict verification, so thread replies to
- * `<slug>+t<id>@` keep working for senders no allowlist knows about.
+ * The project-inbox lane: allowlisted AND DMARC-authenticated. Matching the
+ * From header against the allowlist authenticates nothing by itself — anyone
+ * can write any From — so a DMARC pass from Cloudflare's inbound MX is
+ * required unless the deployment explicitly opts out (local dev, tests). The
+ * allowlist is the deployment-wide config plus the project's own patterns
+ * (seeded with the creator's email at project birth — the provisioned sender
+ * for zero-onboarding projects).
  */
 async function resolveProjectInboxDelivery(input: {
   config: ReturnType<typeof parseConfig>;
@@ -255,6 +264,7 @@ async function resolveProjectInboxDelivery(input: {
   fromAddress: string;
   authenticationResults: string[];
   envelope: { from: string; to: string };
+  messageKey: string;
 }): Promise<ResolvedDelivery> {
   const { config, recipient, fromAddress } = input;
   const project = await readProjectBySlug(config, itxEnv.PROJECT_DIRECTORY, recipient.slug);
@@ -264,10 +274,12 @@ async function resolveProjectInboxDelivery(input: {
 
   const rejectUnauthorized = async (reason: string): Promise<ResolvedDelivery> => {
     // Envelope-sized audit fact — the project can see someone knocked, but
-    // rejected bodies are never stored.
+    // rejected bodies are never stored. Deterministic key, same rationale as
+    // the received-mail key: a redelivery of the same message (worker crash
+    // between append and setReject) must dedupe, not double-append.
     await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append({
       type: EMAIL_REJECTED_EVENT_TYPE,
-      idempotencyKey: `email-rejected:${crypto.randomUUID()}`,
+      idempotencyKey: `email-rejected:${input.messageKey}:${input.envelope.to.toLowerCase()}:${reason}`,
       payload: { envelope: input.envelope, projectId: project.id, reason },
     });
     return {
@@ -277,39 +289,39 @@ async function resolveProjectInboxDelivery(input: {
     };
   };
 
-  // The sender policy: allowlisted AND DMARC-authenticated. Matching the From
-  // header against the allowlist authenticates nothing by itself — anyone can
-  // write any From — so a DMARC pass from Cloudflare's inbound MX is required
-  // unless the deployment explicitly opts out (local dev, tests).
+  const projectPatterns = await readProjectAllowedSenders(project.id);
+  const patterns = [...config.email.allowedSenders, ...projectPatterns];
+  if (!senderMatchesAllowlist({ address: fromAddress, patterns })) {
+    return await rejectUnauthorized("sender-not-allowed");
+  }
   const combinedAuthenticationResults =
     input.authenticationResults.length === 0 ? null : input.authenticationResults.join(", ");
-  if (senderMatchesAllowlist({ address: fromAddress, patterns: config.email.allowedSenders })) {
-    if (config.email.requireDmarc && !dmarcPasses(combinedAuthenticationResults)) {
-      return await rejectUnauthorized("dmarc-fail");
-    }
-    return { outcome: "accepted", project, provisioned: false };
+  if (config.email.requireDmarc && !dmarcPasses(combinedAuthenticationResults)) {
+    return await rejectUnauthorized("dmarc-fail");
   }
+  return { outcome: "accepted", project, provisioned: false };
+}
 
-  // Not allowlisted: the one exception is this project's own claimed
-  // zero-onboarding sender, under the strict aligned check (never the
-  // requireDmarc opt-out — there is no allowlist in front of it here).
-  const address = normalizeEmailAddress(fromAddress);
-  const atIndex = address.lastIndexOf("@");
-  if (atIndex > 0) {
-    const claims = foldEmailSenderDirectory(
-      await readAllStreamEvents(null, EMAIL_SENDER_DIRECTORY_STREAM_PATH),
+/**
+ * The project's own sender allowlist: the email router's reduced
+ * `allowedSenders` (seeded with the creator's email at project birth, grown
+ * by `email/sender-allowed` events). Read failures degrade to [] — the
+ * deployment-wide config allowlist still applies and closed-by-default holds.
+ */
+async function readProjectAllowedSenders(projectId: string): Promise<string[]> {
+  try {
+    const project = itxEnv.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({ projectId, path: EMAIL_INTEGRATION_STREAM_PATH }),
     );
-    if (claims.get(address) === project.id) {
-      const verification = verifySenderAlignment({
-        authenticationResults: input.authenticationResults,
-        fromDomain: address.slice(atIndex + 1),
-      });
-      if (verification.verified) return { outcome: "accepted", project, provisioned: false };
-      return { outcome: "dropped", reason: `sender-not-verified: ${verification.reason}` };
-    }
+    const { state } = await (await project.emailProcessor).snapshot();
+    const allowedSenders = (state as { allowedSenders?: unknown }).allowedSenders;
+    return Array.isArray(allowedSenders)
+      ? allowedSenders.filter((pattern): pattern is string => typeof pattern === "string")
+      : [];
+  } catch (error) {
+    console.error("[email] failed to read project sender allowlist", { error, projectId });
+    return [];
   }
-
-  return await rejectUnauthorized("sender-not-allowed");
 }
 
 /** The address of a postal-mime Address, which may be a mailbox or a group. */
