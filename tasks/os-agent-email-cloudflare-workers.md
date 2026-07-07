@@ -16,6 +16,15 @@ base>`, enforced in OS. Remaining: everything inbound below, plus onboarding
 `iterate.app` for Email Sending in the prd Cloudflare account and miniflare
 send_email simulation for local dev (the binding is deploy-only for now).
 
+**Coordination note (2026-07-07):** `tasks/email-agent-zero-onboarding.md` is
+building the shared inbound foundation — the `email()` worker entrypoint, a
+shared `handleInboundEmail` (MIME parsing, Authentication-Results checks,
+size/loop guards, idempotency), an email sender directory stream, a
+Message-ID thread router, threading params on `itx.email.send`, and a
+reserved local-part list. The `<slug>@`/agent-path inbox work below MUST
+reuse those pieces rather than reinvent them; only unmatched-recipient inbox
+semantics remain uniquely this task's scope.
+
 ## Goal
 
 Let OS projects and agents receive and send first-party email through

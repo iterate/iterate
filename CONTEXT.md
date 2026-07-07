@@ -87,6 +87,10 @@ _Avoid_: organization ID, project slug, connection name
 A mutually exclusive Connection from one Slack team to one ProjectId for inbound Slack webhook forwarding.
 _Avoid_: Slack secret, Slack app config
 
+**Email Sender Claim**:
+A Provider Claim from one DMARC/DKIM-aligned verified From address to one ProjectId, auto-created (not user-initiated) on first zero-onboarding contact by provisioning a User/Organization/Project and recording the claim in the same directory-stream mechanism as a Slack Team Claim.
+_Avoid_: sender directory, email connection, verified sender
+
 **Processor Subscription**:
 A durable registration that asks the Stream Runtime to deliver one Event Stream Path to a hosted stream processor.
 _Avoid_: afterAppend callback, ad hoc WebSocket listener
@@ -149,6 +153,7 @@ _Avoid_: cron API, scheduler client
 - Organizations (in the Iterate Auth Worker, which replaced Clerk) do not scope **Provider Claims**; claims bind to a **ProjectId** directly.
 - A **Webhook Provider Identifier** must not resolve to more than one **ProjectId**.
 - A **Slack Team Claim** is the lookup record for routing inbound Slack webhooks to the claimed ProjectId.
+- An **Email Sender Claim** differs from a **Slack Team Claim** in how it's created: a Slack Team Claim is claimed by an existing project through an OAuth connect flow, while an Email Sender Claim is created by the ingress path itself the first time an unclaimed, alignment-verified sender is seen — there is no pre-existing project to do the claiming.
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
 - In OS, **Processor Subscriptions** deliver events to processors hosted inside the relevant domain Durable Object through `createStreamProcessorHost`; domain Durable Objects remain command and capability owners and inject runtime dependencies.
