@@ -1,4 +1,4 @@
 **/pnpm-lock.yaml linguist-generated=true
 **/db/migrations/meta/* linguist-generated=true
 .github/workflows/* linguist-generated=true
-**/routeTree.gen.ts linguist-generated=true
+**/routeTree.gen.ts linguist-generated=true**/stream-repros/*.events.json linguist-generated=true
