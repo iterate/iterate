@@ -114,6 +114,10 @@ import type {
   AgentProcessorState,
   ProcessorSnapshot,
   ProcessorStateSubscriptionHandle,
+  CfBrowserCapability,
+  CfImagesCapability,
+  CfVideosCapability,
+  CloudflareIntegrations,
   ProjectProcessorState,
   RepoProcessorState,
   StreamProcessorRpc,
@@ -620,8 +624,14 @@ type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
 class AiRpcTarget extends RpcTarget implements Ai {
   async __describe() {
     return describeNode({
-      instructions: "Workers AI: run(model, body) executes a model, models() lists the catalog.",
-      children: { models: "List available models.", run: "Run one model invocation." },
+      instructions:
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+      children: {
+        models: "List available models.",
+        run: "Run one model invocation.",
+        toMarkdown:
+          "Convert one document or an array of { name, blob } to Markdown; call with no args for supported formats.",
+      },
       parent: "a project itx (itx.ai)",
     });
   }
@@ -638,6 +648,134 @@ class AiRpcTarget extends RpcTarget implements Ai {
     const options: AiRunOptions | undefined =
       this.props.gateway === undefined ? undefined : { gateway: this.props.gateway };
     return env.AI.run(model, body as Record<string, unknown>, options);
+  }
+
+  toMarkdown(...args: Parameters<Ai["toMarkdown"]>) {
+    if (args.length === 0) {
+      return env.AI.toMarkdown().supported();
+    }
+    const [documents, options] = args;
+    return env.AI.toMarkdown(documents as never, options as never) as Promise<
+      Awaited<ReturnType<Ai["toMarkdown"]>>
+    >;
+  }
+}
+
+class BrowserRpcTarget extends RpcTarget implements CfBrowserCapability {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Cloudflare Browser Run binding. Use quickAction(action, options) for simple browser tasks: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. Example: const resp = await itx.browser.quickAction("markdown", { url }); return await resp.json(). Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Quick Actions https://developers.cloudflare.com/browser-run/quick-actions/ ; Workers binding quickAction https://developers.cloudflare.com/changelog/post/2026-05-28-use-browser-run-quick-actions-directly-from-workers/ .',
+      children: {
+        fetch: "Raw Browser Run binding fetch for CDP/library use.",
+        quickAction:
+          'Run a Browser Run quick action: quickAction("markdown", { url }) or quickAction("screenshot", { url, screenshotOptions }).',
+      },
+      parent: "a project itx (itx.browser / itx.integrations.cf.browser)",
+    });
+  }
+
+  fetch(...[input, init]: Parameters<CfBrowserCapability["fetch"]>) {
+    return env.BROWSER.fetch(input, init);
+  }
+
+  quickAction(...[action, options]: Parameters<CfBrowserCapability["quickAction"]>) {
+    return (
+      env.BROWSER as BrowserRun & {
+        quickAction(action: string, options: Record<string, unknown>): Promise<Response>;
+      }
+    ).quickAction(action, options);
+  }
+}
+
+class ImagesRpcTarget extends RpcTarget implements CfImagesCapability {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Cloudflare Images binding one-call helpers. Use info(imageStream) to inspect, or transform({ image, transforms, draws, output }) to resize/convert/watermark and receive a Response. First-party docs: Images binding https://developers.cloudflare.com/images/optimization/binding/ ; transformation features https://developers.cloudflare.com/images/optimization/features/ ; draw overlays https://developers.cloudflare.com/images/optimization/draw-overlays/ .",
+      children: {
+        info: "Inspect an image stream for format/dimensions/file size.",
+        transform:
+          "Apply ordered image transforms/draws and output a Response, e.g. transform({ image: resp.body, transforms: [{ width: 800 }], output: { format: 'image/webp' } }).",
+      },
+      parent: "itx.integrations.cf.images",
+    });
+  }
+
+  info(image: Parameters<CfImagesCapability["info"]>[0]) {
+    return env.IMAGES.info(image);
+  }
+
+  async transform(input: Parameters<CfImagesCapability["transform"]>[0]) {
+    let image = env.IMAGES.input(input.image);
+    for (const transform of input.transforms ?? []) {
+      image = image.transform(transform as ImageTransform);
+    }
+    for (const draw of input.draws ?? []) {
+      let overlay = env.IMAGES.input(draw.image);
+      for (const transform of draw.transforms ?? []) {
+        overlay = overlay.transform(transform as ImageTransform);
+      }
+      image = image.draw(overlay, draw.options as ImageDrawOptions | undefined);
+    }
+    return (await image.output(input.output as ImageOutputOptions)).response();
+  }
+}
+
+class VideosRpcTarget extends RpcTarget implements CfVideosCapability {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Cloudflare Media Transformations binding one-call helper for video. Use transform({ video, transform, output: { mode } }) to resize/crop and output video, frame, spritesheet, or audio as a Response. First-party docs: Media Transformations binding https://developers.cloudflare.com/stream/transform-videos/bindings/ ; transform videos https://developers.cloudflare.com/stream/transform-videos/ .",
+      children: {
+        transform:
+          "Transform a video stream and return a Response, e.g. transform({ video: resp.body, transform: { width: 640, fit: 'scale-down' }, output: { mode: 'frame' } }).",
+      },
+      parent: "itx.integrations.cf.videos",
+    });
+  }
+
+  async transform(input: Parameters<CfVideosCapability["transform"]>[0]) {
+    const media = env.MEDIA.input(input.video);
+    const result =
+      input.transform === undefined
+        ? media.output(input.output as MediaTransformationOutputOptions)
+        : media
+            .transform(input.transform as MediaTransformationInputOptions)
+            .output(input.output as MediaTransformationOutputOptions);
+    return await result.response();
+  }
+}
+
+class CloudflareIntegrationsRpcTarget extends RpcTarget implements CloudflareIntegrations {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Cloudflare first-party platform bindings grouped for agents: ai, browser, images, videos. These wrap env.AI, env.BROWSER, env.IMAGES, and env.MEDIA with project-scoped ITX discovery. Each child __describe() links to the relevant Cloudflare docs.",
+      children: {
+        ai: "Workers AI: run(), models(), toMarkdown().",
+        browser: "Browser Run: quickAction() and raw fetch().",
+        images: "Images binding: info(), transform().",
+        videos: "Media Transformations binding: transform().",
+      },
+      parent: "itx.integrations.cf",
+    });
+  }
+
+  get ai(): Ai {
+    return new AiRpcTarget();
+  }
+
+  get browser(): CfBrowserCapability {
+    return new BrowserRpcTarget();
+  }
+
+  get images(): CfImagesCapability {
+    return new ImagesRpcTarget();
+  }
+
+  get videos(): CfVideosCapability {
+    return new VideosRpcTarget();
   }
 }
 
@@ -673,6 +811,13 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
       parent: "a project itx (itx.integrations.parallel)",
     });
+  }
+
+  // Cloudflare first-party platform bindings (Workers AI, Browser Run, Images,
+  // Media Transformations) grouped under `cf`. Like `parallel`, these ride the
+  // deployment's own Cloudflare account, not a per-project connection.
+  get cf(): CloudflareIntegrations {
+    return new CloudflareIntegrationsRpcTarget();
   }
 
   /** The dotted call surface: built-in slugs dispatch here; unknown slugs
@@ -831,6 +976,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "type Parallel = OpenApiRpc;",
       ].join("\n"),
       children: {
+        cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
         disconnect: "Disconnect one connection: { provider, connection }.",
@@ -1663,7 +1809,8 @@ class CapabilityHostCollectionRpcTarget extends RpcTarget implements CapabilityH
  */
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
-  ai: "Workers AI: run(model, body), models().",
+  ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
+  browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
   capabilityHosts:
@@ -1674,7 +1821,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     "First-party outbound email: send({ to, subject, text, html }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it.",
   examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
   integrations:
-    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].api.request({ path }); other slugs resolve through the project capability table.',
+    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].api.request({ path }); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
@@ -1811,6 +1958,10 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   get ai() {
     return new AiRpcTarget();
+  }
+
+  get browser(): CfBrowserCapability {
+    return new BrowserRpcTarget();
   }
 
   // `agent` and `chat` exist only when this itx is scoped under `/agents/` — i.e.

@@ -161,6 +161,9 @@ function workerBindings(input: {
       { binding: "BUILDER", service: builderWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
+    browser: { binding: "BROWSER" },
+    images: { binding: "IMAGES" },
+    media: { binding: "MEDIA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
     queues: {

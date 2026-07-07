@@ -186,6 +186,7 @@ export interface ProjectRpcTarget {
   __describe(): Promise<ProjectDescription>;
   ai: Ai;
   agents: AgentCollection;
+  browser: CfBrowserCapability;
   /**
    * This scope's own capability host: the durable capability table behind
    * this itx (\`provideCapability\`, \`revokeCapability\`, \`runScript\`,
@@ -254,6 +255,123 @@ export interface AgentChat extends Describable {
 export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
+  toMarkdown(
+    ...args: CfMarkdownConversionArgs
+  ): Promise<
+    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
+  >;
+}
+
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
+};
+
+export type CfMarkdownConversionResult = {
+  name: string;
+  format: "markdown" | "error";
+  mimeType?: string;
+  tokens?: number;
+  data?: string;
+  error?: string;
+};
+
+export type CfMarkdownSupportedFormat = {
+  extension: string;
+  mimeType: string;
+};
+
+export type CfMarkdownConversionArgs =
+  | []
+  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
+
+export type CfBrowserQuickAction =
+  | "content"
+  | "screenshot"
+  | "pdf"
+  | "markdown"
+  | "snapshot"
+  | "scrape"
+  | "json"
+  | "links"
+  | "crawl";
+
+export type CfBrowserQuickActionOptions = Record<string, unknown> &
+  ({ url: string } | { html: string });
+
+/** Cloudflare Browser Run binding exposed through ITX. */
+export interface CfBrowserCapability extends Describable {
+  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  /** Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. */
+  quickAction(
+    action: CfBrowserQuickAction,
+    options: CfBrowserQuickActionOptions,
+  ): Promise<Response>;
+}
+
+export type CfImageTransformOptions = Record<string, unknown>;
+
+export type CfImageOutputOptions = { format: string } & Record<string, unknown>;
+
+export type CfImageDrawOptions = Record<string, unknown>;
+
+export type CfImageTransformInput = {
+  image: ReadableStream<Uint8Array>;
+  transforms?: CfImageTransformOptions[];
+  draws?: Array<{
+    image: ReadableStream<Uint8Array>;
+    options?: CfImageDrawOptions;
+    transforms?: CfImageTransformOptions[];
+  }>;
+  output: CfImageOutputOptions;
+};
+
+/** Cloudflare Images binding exposed through ITX as one-call helpers. */
+export interface CfImagesCapability extends Describable {
+  info(image: ReadableStream<Uint8Array>): Promise<unknown>;
+  transform(input: CfImageTransformInput): Promise<Response>;
+}
+
+export type CfVideoTransformOptions = Record<string, unknown>;
+
+export type CfVideoOutputOptions = {
+  mode: "video" | "spritesheet" | "frame" | "audio";
+} & Record<string, unknown>;
+
+export type CfVideoTransformInput = {
+  video: ReadableStream<Uint8Array>;
+  transform?: CfVideoTransformOptions;
+  output: CfVideoOutputOptions;
+};
+
+/** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */
+export interface CfVideosCapability extends Describable {
+  transform(input: CfVideoTransformInput): Promise<Response>;
+}
+
+/** Grouped first-party Cloudflare platform bindings under integrations.cf. */
+export interface CloudflareIntegrations extends Describable {
+  ai: Ai;
+  browser: CfBrowserCapability;
+  images: CfImagesCapability;
+  videos: CfVideosCapability;
 }
 
 /**
@@ -362,6 +480,10 @@ export type CompleteConnectResult =
  * Management verbs (OAuth, disconnect) are connection-scoped.
  */
 export interface ProjectIntegrations extends Describable {
+  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
+   * Transformations. Like \`parallel\`, these ride the deployment's own
+   * Cloudflare account — not a per-project connection. */
+  cf: CloudflareIntegrations;
   /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
   parallel: OpenApiRpc;
   /** Every connection the project holds: \`/integrations/<slug>/<connection>\`
