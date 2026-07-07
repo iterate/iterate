@@ -388,17 +388,14 @@ function AgentActivityRow({
       </Button>
       {expanded ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {activity.steps.map((step, index) => {
+          {activity.steps.map((step) => {
             // Expanding the activity shows what happened directly — code and
             // results are the point of expanding, not a second disclosure.
             // The activity header already says "Ran code 1×", so a lone code
             // step renders its detail bare instead of repeating a "Ran code"
             // header row underneath (multiple code steps keep their headers:
             // the start times tell the runs apart). Steps whose detail would
-            // show nothing (e.g. an LLM step whose whole response is the very
-            // script the next code step renders anyway) stay collapsed behind
-            // their slim header row.
-            const hideDuplicateResponse = llmResponseDuplicatesCode(activity.steps, index);
+            // show nothing stay collapsed behind their slim header row.
             if (step.kind === "code" && codeStepCount(activity) === 1) {
               return (
                 <div key={step.id} className="flex flex-col gap-2 pb-1 pt-0.5">
@@ -406,13 +403,12 @@ function AgentActivityRow({
                 </div>
               );
             }
-            const defaultExpanded = stepDetailHasContent(step, hideDuplicateResponse);
+            const defaultExpanded = stepDetailHasContent(step);
             return (
               <AgentActivityStep
                 key={step.id}
                 step={step}
                 expanded={toggledIds.has(step.id) !== defaultExpanded}
-                hideDuplicateResponse={hideDuplicateResponse}
                 onToggle={onToggle}
               />
             );
@@ -584,12 +580,10 @@ function activitySummary(activity: AgentUiActivity): string {
 function AgentActivityStep({
   step,
   expanded,
-  hideDuplicateResponse,
   onToggle,
 }: {
   step: AgentUiStep;
   expanded: boolean;
-  hideDuplicateResponse: boolean;
   onToggle: (id: string) => void;
 }) {
   return (
@@ -617,11 +611,7 @@ function AgentActivityStep({
       </Button>
       {expanded ? (
         <div className="flex flex-col gap-2 pb-2.5 pl-5 pt-0.5">
-          {step.kind === "llm" ? (
-            <LlmStepDetail step={step} hideResponse={hideDuplicateResponse} />
-          ) : (
-            <CodeStepDetail step={step} />
-          )}
+          {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
         </div>
       ) : null}
     </div>
@@ -633,35 +623,21 @@ function AgentActivityStep({
  * empty details default to collapsed so an expanded activity reads as code →
  * results without blank sections (their headers still carry timing/tokens).
  */
-function stepDetailHasContent(step: AgentUiStep, hideDuplicateResponse: boolean): boolean {
+function stepDetailHasContent(step: AgentUiStep): boolean {
   if (step.kind === "code") return true;
-  return (
-    step.thinkingText !== "" ||
-    step.errorMessage != null ||
-    (step.responseText !== "" && !hideDuplicateResponse)
-  );
+  return step.thinkingText !== "" || step.errorMessage != null || llmResponseVisible(step);
 }
 
-// In code-mode turns the LLM response *is* the script that a following code
-// step executes — rendering the same code twice buries the results the reader
-// is after. Compares against code steps up to the next LLM step.
-function llmResponseDuplicatesCode(steps: AgentUiStep[], index: number): boolean {
-  const step = steps[index];
-  if (step == null || step.kind !== "llm" || step.responseText === "") return false;
-  const response = stripCodeFence(step.responseText);
-  for (const later of steps.slice(index + 1)) {
-    if (later.kind === "llm") return false;
-    if (later.code !== "" && stripCodeFence(later.code) === response) return true;
-  }
-  return false;
-}
-
-function stripCodeFence(text: string): string {
-  return text
-    .trim()
-    .replace(/^```[a-z]*\n?/i, "")
-    .replace(/\n?```$/, "")
-    .trim();
+// In code-mode the LLM's response *is* the script that a code step executes
+// and renders with its results — showing the fenced-code variant here too
+// just duplicates it (the raw event view has it for anyone who wants it).
+// It only appears when the request was cancelled or failed, i.e. the code
+// likely never ran and this partial response is the only copy (the activity
+// summary promises "click to see partial response"). Prose always renders.
+function llmResponseVisible(step: AgentUiLlmStep): boolean {
+  if (step.responseText === "") return false;
+  if (!looksLikeCode(step.responseText)) return true;
+  return step.outcome === "cancelled" || step.outcome === "failed";
 }
 
 function stepLabel(step: AgentUiStep): string {
@@ -684,8 +660,8 @@ function stepMeta(step: AgentUiStep): string {
   return parts.join(" · ");
 }
 
-function LlmStepDetail({ step, hideResponse }: { step: AgentUiLlmStep; hideResponse: boolean }) {
-  const showResponse = step.responseText !== "" && !hideResponse;
+function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
+  const showResponse = llmResponseVisible(step);
   const hasContent = step.thinkingText !== "" || showResponse || step.errorMessage != null;
   return (
     <>
@@ -839,7 +815,6 @@ function AgentLiveActivity({
               key={step.id}
               step={step}
               expanded={toggledIds.has(`live:${step.id}`)}
-              hideDuplicateResponse={false}
               onToggle={toggleLive}
             />
           ))}
@@ -849,7 +824,6 @@ function AgentLiveActivity({
                 key={step.id}
                 step={step}
                 expanded={toggledIds.has(`live:${step.id}`)}
-                hideDuplicateResponse={false}
                 onToggle={toggleLive}
               />
             ) : step === liveStep && liveStepHasVisibleContent(step) ? (

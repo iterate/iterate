@@ -139,3 +139,9 @@ Looking at a slack agent chat like
   showed a nested "Ran code Started …" header under the "Ran code 1×" summary.
   Lone code steps now render their detail bare inside the expanded activity;
   multiple code steps keep headers (start times tell runs apart).
+- Second follow-up from Misha: the LLM step's fenced-code response duplicated
+  the code step's code whenever the two landed in different activities (the
+  same-activity dedupe heuristic missed it). Replaced the heuristic entirely:
+  code-shaped LLM responses never render in the step detail (raw view has
+  them) except when the request was cancelled/failed and the partial response
+  is the only copy. Prose responses render as before.
