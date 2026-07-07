@@ -23,6 +23,7 @@ import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { resolveProjectIdBySlug } from "./project-directory.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
+import { WORKER_FETCH_DISPATCH_HEADER } from "./domains/workers/worker-fetch-dispatch.ts";
 import {
   defaultProjectWorkerRef,
   ProjectCollectionRpcTarget,
@@ -268,6 +269,7 @@ function stripInternalHeaders(request: Request) {
   headers.delete("x-iterate-host-kind");
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
+  headers.delete(WORKER_FETCH_DISPATCH_HEADER);
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   return new Request(request, { headers });

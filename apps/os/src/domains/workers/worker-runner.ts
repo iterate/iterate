@@ -9,6 +9,10 @@ import type {
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import {
+  isWebSocketUpgradeRequest,
+  withWorkerFetchDispatchHeader,
+} from "./worker-fetch-dispatch.ts";
+import {
   loadResolvedWorker,
   resolveCachedArtifact,
   resolveWorkerSource,
@@ -117,6 +121,37 @@ export class DynamicWorkerRunner {
     return klass as T;
   }
 
+  /**
+   * Fetch-native dispatch into a dynamic worker.
+   *
+   * WebSocket upgrades cannot ride method replay: a 101 response carrying
+   * `webSocket` fails to serialize across RPC method-call boundaries
+   * (workerd DataCloneError). This lane keeps every hop a real `fetch()` —
+   * stateless refs hit the loaded entrypoint's fetch handler directly, and
+   * stateful refs ride the Durable Object stub's fetch into
+   * StatefulWorkerDurableObject, which forwards to the facet's fetch. Both
+   * channels tunnel upgrades natively.
+   */
+  async fetch({
+    buildBudgetMs,
+    ref,
+    request,
+  }: {
+    /** Give up on a cold build after this long (see resolveWorkerSource). */
+    buildBudgetMs?: number;
+    ref: DynamicWorkerRef;
+    request: Request;
+  }): Promise<Response> {
+    if (ref.type === "stateful") {
+      const stub = env.WORKER.getByName(
+        statefulWorkerDurableObjectName(this.#projectId, ref),
+      ) as unknown as Fetcher;
+      return await stub.fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
+    }
+    const entrypoint = await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs);
+    return await entrypoint.fetch(request);
+  }
+
   async invokeCapability({
     args = [],
     buildBudgetMs,
@@ -131,6 +166,22 @@ export class DynamicWorkerRunner {
     path: string[];
     ref: DynamicWorkerRef;
   }): Promise<unknown> {
+    // A dotted `worker.fetch(request)` carrying a WebSocket upgrade must not
+    // go through method replay — its response cannot cross the RPC hops
+    // replay uses. Same target, but via the fetch-native lane above. Only
+    // helps callers in-process with this runner (project ingress); a caller
+    // on the far side of an RPC boundary (a userspace router) must dispatch
+    // through its ITX binding's fetch handler instead.
+    const [firstArg] = args;
+    if (
+      path.length === 1 &&
+      path[0] === "fetch" &&
+      firstArg instanceof Request &&
+      isWebSocketUpgradeRequest(firstArg)
+    ) {
+      return await this.fetch({ buildBudgetMs, ref, request: firstArg });
+    }
+
     if (ref.type === "stateful") {
       // Method replay must happen inside StatefulWorkerDurableObject. Returning
       // a dynamic facet stub through one DO and then invoking it from another RPC

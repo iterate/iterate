@@ -5,7 +5,12 @@ import { slackConfig } from "./slack.config.ts";
 
 /** Bindings the platform supplies to every project worker. */
 type ProjectWorkerEnv = {
-  ITX: { get(): Promise<ProjectRpcTarget> };
+  ITX: {
+    get(): Promise<ProjectRpcTarget>;
+    /** Fetch-native dispatch into a dynamic worker — see the WebSocket
+     * branch in the router below for why and how. */
+    fetch(req: Request): Promise<Response>;
+  };
 };
 
 // The root project worker is a small ROUTER over the project's apps. Each app
@@ -33,6 +38,16 @@ const APPS = {
       options: { entryPoint: "apps/counter/worker.ts" },
     },
   },
+  websocket: {
+    type: "stateful",
+    path: "/",
+    className: "WebsocketEchoApp",
+    durableWorkerKey: "app-websocket",
+    source: {
+      files: { type: "repo", repoPath: "/", include: ["apps/websocket/**"] },
+      options: { entryPoint: "apps/websocket/worker.ts" },
+    },
+  },
 } satisfies Record<string, DynamicWorkerRef>;
 
 export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
@@ -41,6 +56,20 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     if (appSlug) {
       const ref = Object.hasOwn(APPS, appSlug) ? APPS[appSlug as keyof typeof APPS] : undefined;
       if (!ref) return new Response(`unknown app: ${appSlug}`, { status: 404 });
+
+      // WebSocket upgrades must NOT go through `app.fetch(req)` below: that is
+      // an RPC method call, and a 101 response carrying a socket cannot
+      // serialize back across it. The ITX binding itself is a real fetch hop,
+      // so upgrades dispatch through its fetch handler with the target ref in
+      // the x-iterate-worker-dispatch header (JSON { ref, buildBudgetMs? } —
+      // same ref shape as project.workers.get). A cold build answers 503; the
+      // client's reconnect retries into the finished build.
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const headers = new Headers(req.headers);
+        headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
+        return await this.env.ITX.fetch(new Request(req, { headers }));
+      }
+
       const project = await this.env.ITX.get();
       try {
         // Workers RPC: await the capability before calling through it.

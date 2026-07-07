@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import WebSocket from "ws";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 test("project ingress serves the static seeded homepage at the root", async () => {
@@ -122,4 +123,84 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const unknown = await fetchApp(`nope--${slug}`);
   expect(unknown.status).toBe(404);
   expect(await unknown.text()).toContain("unknown app");
+});
+
+// WebSocket upgrades through project ingress into the seeded stateful
+// websocket app. This is the regression proof for the fetch-native dispatch
+// lane: an upgrade's 101 response cannot cross RPC method calls (workerd
+// DataCloneError on the socket), so ingress, the userspace router
+// (env.ITX.fetch + x-iterate-worker-dispatch), the stateful worker DO, and
+// the facet must all forward it over real fetch hops. Locally the app host
+// rides on the HTTP Host header (Node cannot resolve *.localhost); against a
+// deployed preview the real wildcard hostname is dialed directly.
+test("websocket app: upgrade flows through ingress into the seeded stateful app", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  const slug = `ws-app-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug });
+  await project.__describe();
+
+  const base = new URL(buildUrl({ path: "/" }));
+  const isLocal = base.hostname === "localhost" || base.hostname.endsWith(".localhost");
+  const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
+  const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
+  const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
+  const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
+  const appHost = `websocket--${slug}`;
+
+  const connect = () =>
+    isLocal
+      ? new WebSocket(`ws://${base.host}/ws`, {
+          headers: { host: `${appHost}.localhost${base.port ? `:${base.port}` : ""}` },
+        })
+      : new WebSocket(`wss://${appHost}.${projectBase}/ws`);
+
+  const openSocket = (ws: WebSocket) =>
+    new Promise<WebSocket>((resolve, reject) => {
+      ws.once("open", () => resolve(ws));
+      ws.once("error", reject);
+    });
+
+  const nextMessage = (ws: WebSocket) =>
+    new Promise<string>((resolve, reject) => {
+      ws.once("message", (data) => resolve(String(data)));
+      ws.once("error", reject);
+      ws.once("close", (code) => reject(new Error(`socket closed (${code})`)));
+    });
+
+  // The app's first use is a cold build; the router answers upgrades with a
+  // retryable 503 until the artifact lands, so "the socket opens" means
+  // "eventually opens through the building responses" — the same reconnect
+  // loop a browser client runs.
+  const openSocketReady = async () => {
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      try {
+        return await openSocket(connect());
+      } catch (error) {
+        if (Date.now() > deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    }
+  };
+
+  const first = await openSocketReady();
+  const second = await openSocketReady();
+  try {
+    // One frame proves the whole lane; the peer copy proves both sockets
+    // terminate in the SAME Durable Object instance (shared live state).
+    const echoed = nextMessage(first);
+    const relayed = nextMessage(second);
+    first.send("ping");
+    expect(await echoed).toBe("echo:ping");
+    expect(await relayed).toBe("peer:ping");
+  } finally {
+    first.close();
+    second.close();
+  }
 });
