@@ -7,11 +7,12 @@ size: medium
 
 ## Status summary
 
-Implementation done: slack webhooks render as user/assistant bubbles with a
-"slack · <sender>" label, and expanding a "Ran code" activity shows code +
-results directly (steps default-expanded, duplicate LLM-response code
-suppressed, redundant metadata dropped). Unit tests added and passing;
-typecheck/lint/format clean. Remaining: browser verification + PR screenshots.
+Implementation done and verified end-to-end in a local dev browser: slack
+webhooks render as user/assistant bubbles with a "slack · <sender>" label,
+and expanding a "Ran code" activity shows code + results directly (steps
+default-expanded, duplicate LLM-response code suppressed, redundant metadata
+dropped). Unit tests added and passing; typecheck/lint/format clean.
+Remaining: nothing known — PR review.
 
 ## Problem
 
@@ -115,4 +116,21 @@ Looking at a slack agent chat like
 
 ## Implementation log
 
-(append notes here while implementing)
+- Reducer + UI changes as per checklist; `AGENT_UI_SCHEMA_VERSION` 6 → 7.
+- Verified end-to-end on local dev (worktree `pnpm dev`): created a
+  `feed-demo` project, appended a real `slack/webhook-received` human message
+  via `pnpm cli itx run`, and let the real processors do the rest — the
+  slack-agent processor turned it into agent input, the agent ran an actual
+  LLM request and executed `itx.integrations.slack.chat.postMessage` code.
+  Appended the bot-echo + a reaction webhook manually. The feed showed: user
+  bubble (mrkdwn cleaned, link clickable, entities decoded), two activity
+  rows, assistant bubble "391", reaction ignored; expanding "Ran code" showed
+  the code immediately with the slim step header.
+- Two fixes came out of browser verification: slack user bubbles render via
+  `MessageResponse` (markdown) so converted links are clickable, and settled
+  bubbles pass `parseIncompleteMarkdown={false}` — streamdown's streaming
+  affordance otherwise appends a phantom `*` to balance text like "17 \* 23".
+- Gotcha for future agents: hand-seeding synthetic `agent/llm-request-*`
+  events crashes real server processors (payload schema validation) and
+  wedges the stream DO — seed only genuinely-external events (webhooks) and
+  let the real processor chain produce the rest.

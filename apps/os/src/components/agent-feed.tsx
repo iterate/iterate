@@ -278,7 +278,12 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
           {item.via == null ? null : (
             <MessageViaLabel via={item.via} className="text-muted-foreground" />
           )}
-          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+          {/* Settled messages never stream, so skip streamdown's unpaired-
+              marker balancing — it appends a phantom `*` to text like "17 * 23". */}
+          <MessageResponse
+            className="min-w-0 max-w-full overflow-hidden"
+            parseIncompleteMarkdown={false}
+          >
             {item.text}
           </MessageResponse>
           <MessageAttachments files={item.files} hasText={item.text !== ""} />
@@ -456,7 +461,20 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
       {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
-      {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
+      {item.text === "" ? null : item.via == null ? (
+        <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+      ) : (
+        // Slack text is converted to markdown-ish (mentions, [label](url)
+        // links) by the reducer — render it through the markdown path so
+        // links come out clickable instead of as raw syntax. Settled text
+        // never streams, so skip the unpaired-marker balancing.
+        <MessageResponse
+          className="min-w-0 max-w-full overflow-hidden"
+          parseIncompleteMarkdown={false}
+        >
+          {item.text}
+        </MessageResponse>
+      )}
       <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
   );
