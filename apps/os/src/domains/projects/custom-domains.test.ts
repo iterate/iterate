@@ -530,6 +530,79 @@ describe("custom domain provisioning", () => {
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
   });
 
+  it("uses a live Cloudflare hostname id instead of stale project state when removing", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    await primeProjectHostname(directory, "garple.com", project);
+    const deletedIds: string[] = [];
+    const provisioner = createCloudflareCustomDomainProvisioner({
+      config: parseConfig({
+        APP_CONFIG: JSON.stringify({
+          cloudflare: {
+            accountId: "account-1",
+            apiToken: "cf-token",
+          },
+          openAiApiKey: "openai-key",
+          projectHostnameBases: ["iterate.app"],
+        }),
+      }),
+      directory,
+      fetch: (async (...args: Parameters<typeof fetch>) => {
+        const [input, init] = args;
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+
+        if (url.pathname === "/client/v4/zones") {
+          return Response.json({
+            success: true,
+            result: [{ id: "zone-1", name: "iterate.app" }],
+          });
+        }
+
+        if (
+          url.pathname === "/client/v4/zones/zone-1/custom_hostnames" &&
+          request.method === "GET"
+        ) {
+          return Response.json({
+            success: true,
+            result: [
+              {
+                custom_metadata: {
+                  projectId: "prj_garple",
+                  projectSlug: "garple",
+                  source: "iterate-os",
+                },
+                hostname: "garple.com",
+                id: "fresh-id",
+                ssl: { status: "active", wildcard: true },
+                status: "active",
+              },
+            ],
+          });
+        }
+
+        if (
+          url.pathname.startsWith("/client/v4/zones/zone-1/custom_hostnames/") &&
+          request.method === "DELETE"
+        ) {
+          deletedIds.push(decodeURIComponent(url.pathname.split("/").at(-1) ?? ""));
+          return Response.json({ success: true, result: {} });
+        }
+
+        return Response.json(
+          { success: false, errors: [{ message: "not found" }] },
+          { status: 404 },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(
+      provisioner.remove({ cloudflareHostnameId: "stale-id", hostname: "garple.com", project }),
+    ).resolves.toBeUndefined();
+
+    expect(deletedIds).toEqual(["fresh-id"]);
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
+  });
+
   it("maps active Cloudflare hostname and SSL status to an active project domain", () => {
     expect(
       toProjectCustomDomainCloudflareSnapshot(

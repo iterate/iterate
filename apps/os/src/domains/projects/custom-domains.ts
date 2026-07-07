@@ -168,7 +168,7 @@ export function createCloudflareCustomDomainProvisioner(options: {
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
       const customHostname = await client.findCustomHostname(normalized);
       if (customHostname) assertCloudflareHostnameBelongsToProject(customHostname, project);
-      const id = cloudflareHostnameId ?? customHostname?.id ?? null;
+      const id = customHostname?.id ?? cloudflareHostnameId ?? null;
       if (id) await client.deleteCustomHostname(id);
       const registeredProject = await readProjectHostnameRegistration(
         options.directory,
