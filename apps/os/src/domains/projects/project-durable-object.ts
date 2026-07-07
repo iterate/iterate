@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
+import { parseConfig } from "../../config.ts";
 import type { Env } from "../../env.ts";
 import {
   itxForScope,
@@ -15,10 +16,19 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
-import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
+import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
+import {
+  platformReferencesFromHeaders,
+  secretErrorResponse,
+  secretReferencePathsFromHeaders,
+  SecretSubstitutionError,
+} from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
+import { EmailProcessor } from "../email/email-processor-implementation.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -55,18 +65,29 @@ export class ProjectDurableObject extends DurableObject<Env> {
   );
 
   // The Slack webhook router. It only ever WAKES on the Durable Object
-  // instance addressed at `/integrations/slack` (the host stream is this DO's
-  // own path stream), where the OAuth connect / project bootstrap configured
+  // instances addressed at `/integrations/slack/{connection}` (the host stream
+  // is this DO's own path stream), where the OAuth connect flow configured
   // its subscription; registering it on every instance is harmless.
-  readonly #slackProcessor = this.#processorHost.add((deps) => {
+  // Registration is the point: the host wakes the router by slug; nothing
+  // dials the facet handle directly anymore (status is a journal fold).
+  protected readonly slackRouterRegistration = this.#processorHost.add((deps) => {
+    // This DO instance hosts one connection's router stream
+    // (/integrations/slack/{connection}): the name IS the connection, for both
+    // routing and the bot-token secret path. Null (a non-connection path) is
+    // passed through — the processor errors loudly if a mis-armed subscription
+    // ever wakes it there.
+    const connection = connectionFromIntegrationStreamPath(this.#name.path);
     return new SlackProcessor({
       ...deps,
+      connection,
       acknowledgeRoutedWebhook: async ({ payload }) => {
+        if (connection === null) return;
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
         try {
           await callProjectSlackWebApi({
             body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
+            connection,
             method: "reactions.add",
             projectId: this.#name.projectId,
           });
@@ -84,12 +105,23 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   });
 
+  // The email thread router — same hosting shape as the Slack router: it only
+  // ever WAKES on the Durable Object instance addressed at
+  // `/integrations/email`, where project bootstrap (or the email ingress
+  // door's belt-and-braces append) configured its subscription.
+  readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
+
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
-  get slackProcessor() {
-    return new StreamProcessorRpcTarget(this.#slackProcessor);
+  get emailProcessor() {
+    return new StreamProcessorRpcTarget(this.#emailProcessor, {
+      // The ingress door reads the sender allowlist from this snapshot; it
+      // must reflect a policy event appended moments ago (e.g. the birth
+      // seed) even when push delivery is lagging or a wake was dropped.
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(EmailProcessorContract.slug),
+    });
   }
 
   describe() {
@@ -119,12 +151,30 @@ export class ProjectDurableObject extends DurableObject<Env> {
     try {
       secretPaths = secretReferencePathsFromHeaders(request.headers);
     } catch {
-      return secretErrorResponse("secret_reference_required", 400);
+      return secretErrorResponse("secret_reference_required");
     }
+    const platformReferences = platformReferencesFromHeaders(request.headers);
+
+    // Platform API-key references (`getSecret({ platform: ... })`) resolve
+    // HERE, from typed deployment config against a known origin-pinned
+    // allowlist — no Durable Object, no synthetic secret. They do not mix
+    // with project-secret references in one request.
+    if (platformReferences.length > 0) {
+      if (secretPaths.length > 0) return secretErrorResponse("secret_reference_foreign");
+      try {
+        return await fetch(
+          substitutePlatformApiKeyReferences({ config: parseConfig(this.env), request }),
+        );
+      } catch (error) {
+        if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
+        throw error;
+      }
+    }
+
     if (secretPaths.length === 0) return fetch(request);
-    if (secretPaths.length > 1) {
-      return secretErrorResponse("multiple_secret_paths_not_supported", 400);
-    }
+    // One request, one secret: the referenced Secret DO substitutes its own
+    // placeholders under its own host pin (cross-secret chaining is gone).
+    if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
 
     return this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -14,7 +15,19 @@ import {
 } from "@iterate-com/ui/components/item";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
+import {
+  AlertCircle,
+  Brain,
+  Circle,
+  Cloud,
+  ExternalLink,
+  Github,
+  KeyRound,
+  Mail,
+  MessageSquare,
+  Search as SearchIcon,
+  Sparkles,
+} from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -25,9 +38,57 @@ import type { ProjectRpcTarget } from "~/types.ts";
 
 type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
+/** One list() entry enriched with the built-in connection status (null for
+ * provided integrations, whose status lives in project code). */
+type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list"]>>[number] & {
+  status: Connection | null;
+};
+
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
+  /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
+   * flow on mount, then clears itself so a refresh never re-triggers. */
+  connect: z.string().optional(),
 });
+
+const BUILTIN_API_INTEGRATIONS = [
+  {
+    description:
+      "First-party OpenAPI RPC target for Parallel Search, Extract, Task, FindAll, Monitor, and Chat.",
+    docsUrl: "https://docs.parallel.ai/",
+    icon: Brain,
+    keyReference: 'x-api-key: getSecret({ platform: "integrations.parallel.apiKey" })',
+    name: "Parallel",
+    namespace: "itx.integrations.parallel",
+  },
+  {
+    description:
+      "Built-in Exa MCP client for web search and page fetch; API-key egress can use the Exa platform key when configured.",
+    docsUrl: "https://exa.ai/docs/reference/getting-started",
+    icon: SearchIcon,
+    keyReference: 'x-api-key: getSecret({ platform: "integrations.exa.apiKey" })',
+    name: "Exa",
+    namespace: "itx.mcp.exa",
+  },
+  {
+    description:
+      "Workers AI binding for model calls at the edge. No secret placeholder is needed for the built-in target.",
+    docsUrl: "https://developers.cloudflare.com/workers-ai/",
+    icon: Cloud,
+    keyReference: "Call itx.ai.run(model, body)",
+    name: "Cloudflare Edge AI",
+    namespace: "itx.ai",
+  },
+  {
+    description:
+      "OpenAI API calls through project egress or workers without storing a project-owned OpenAI key.",
+    docsUrl: "https://platform.openai.com/docs/api-reference",
+    icon: Sparkles,
+    keyReference: 'Authorization: Bearer getSecret({ platform: "openAiApiKey" })',
+    name: "OpenAI",
+    namespace: "itx.egress.fetch",
+  },
+] as const;
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
@@ -50,6 +111,7 @@ function ProjectIntegrationsPage() {
 
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { project } = Route.useLoaderData();
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
@@ -57,16 +119,32 @@ function ProjectIntegrationsContent() {
   const queryClient = useQueryClient();
   const connections = useItxQuery({
     key: ["integrations", project.slug],
-    query: async (itx): Promise<{ slack: Connection; google: Connection }> => {
-      const [slack, google] = await Promise.all([
-        itx.integrations.getConnection({ provider: "slack" }),
-        itx.integrations.getConnection({ provider: "google" }),
-      ]);
-      return { slack, google };
+    query: async (itx): Promise<ConnectionEntry[]> => {
+      const entries = await itx.integrations.list();
+      return await Promise.all(
+        entries.map(async (entry) => ({
+          ...entry,
+          status:
+            entry.source === "builtin"
+              ? await itx.integrations.getConnection({
+                  connection: entry.connection,
+                  provider: entry.integration,
+                })
+              : null,
+        })),
+      );
     },
   });
-  const slackConnection = connections.slack;
-  const googleConnection = connections.google;
+  // Narrow on `source` so the union guarantees a concrete connection name for
+  // every row the built-in cards render.
+  const builtinConnections = (connections ?? []).filter(
+    (entry): entry is ConnectionEntry & { connection: string; source: "builtin" } =>
+      entry.source === "builtin",
+  );
+  const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
+  const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
+  const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
+  const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation({
@@ -84,7 +162,8 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to connect Slack: ${error.message}`),
   });
   const disconnectSlack = useMutation({
-    mutationFn: async () => await itx.integrations.disconnect({ provider: "slack" }),
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "slack" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success("Slack disconnected");
@@ -105,8 +184,32 @@ function ProjectIntegrationsContent() {
     },
     onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
   });
+  const startGithub = useMutation({
+    mutationFn: async () => {
+      if (!userId) throw new Error("You must be signed in to connect GitHub.");
+      return await itx.integrations.startOAuthFlow({
+        provider: "github",
+        userId,
+        callbackUrl: window.location.href,
+      });
+    },
+    onSuccess: (result) => {
+      window.location.href = result.authorizationUrl;
+    },
+    onError: (error) => toast.error(`Failed to connect GitHub: ${error.message}`),
+  });
+  const disconnectGithub = useMutation({
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "github" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
+      toast.success("GitHub disconnected");
+    },
+    onError: (error) => toast.error(`Failed to disconnect GitHub: ${error.message}`),
+  });
   const disconnectGoogle = useMutation({
-    mutationFn: async () => await itx.integrations.disconnect({ provider: "google" }),
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "google" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success("Google disconnected");
@@ -114,8 +217,26 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
 
+  // Deep link: `?connect=<slug>` auto-starts the matching connect flow — the same
+  // mutation a click on that Connect button fires — then clears the param so a
+  // refresh (or landing back here after the OAuth round-trip) never re-triggers it.
+  // `mutate` is stable per mutation, so the effect depends on those rather than the
+  // per-render mutation objects (which would re-run it before the param clears).
+  const connectSlack = startSlack.mutate;
+  const connectGoogle = startGoogle.mutate;
+  const connectGithub = startGithub.mutate;
+  useEffect(() => {
+    const slug = search.connect;
+    if (!slug) return;
+    void navigate({ search: (previous) => ({ ...previous, connect: undefined }), replace: true });
+    if (slug === "slack") connectSlack();
+    else if (slug === "google") connectGoogle();
+    else if (slug === "github") connectGithub();
+    // Unknown slug: ignored.
+  }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
+
   const panel = (
-    <>
+    <div className="space-y-4">
       {oauthErrorLabel ? (
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
@@ -123,6 +244,21 @@ function ProjectIntegrationsContent() {
           <AlertDescription>{oauthErrorLabel}</AlertDescription>
         </Alert>
       ) : null}
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-sm font-medium">Built-in API integrations</h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Iterate-managed keys stay server-side. Use the first-party target where one exists, or
+            an allowlisted <code>getSecret(...)</code> header reference through project egress.
+            Usage is charged to this project.
+          </p>
+        </div>
+        <ItemGroup className="space-y-3">
+          {BUILTIN_API_INTEGRATIONS.map((integration) => (
+            <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+          ))}
+        </ItemGroup>
+      </section>
       <ItemGroup className="space-y-3">
         <Item variant="outline" className="items-start justify-between gap-4 p-4">
           <ItemMedia variant="icon">
@@ -131,29 +267,25 @@ function ProjectIntegrationsContent() {
           <ItemContent className="min-w-0">
             <ItemTitle>Slack</ItemTitle>
             <ItemDescription>
-              {slackConnection?.connected
-                ? `Connected to ${slackConnection.displayName ?? slackConnection.externalId}`
+              {connectedCount(slackConnections) > 0
+                ? `${connectedCount(slackConnections)} connected workspace${connectedCount(slackConnections) === 1 ? "" : "s"}`
                 : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
             </ItemDescription>
-            <IntegrationMetadata connection={slackConnection} provider="slack" />
+            {slackConnections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                entry={entry}
+                provider="slack"
+                disconnecting={disconnectSlack.isPending}
+                onDisconnect={() => disconnectSlack.mutate(entry.connection)}
+              />
+            ))}
           </ItemContent>
           <ItemActions>
-            {slackConnection?.connected ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disconnectSlack.isPending}
-                onClick={() => disconnectSlack.mutate()}
-              >
-                {disconnectSlack.isPending ? <Spinner /> : null}
-                Disconnect
-              </Button>
-            ) : (
-              <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
-                {startSlack.isPending ? <Spinner /> : null}
-                Connect Slack
-              </Button>
-            )}
+            <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
+              {startSlack.isPending ? <Spinner /> : null}
+              Connect Slack
+            </Button>
           </ItemActions>
         </Item>
 
@@ -164,37 +296,81 @@ function ProjectIntegrationsContent() {
           <ItemContent className="min-w-0">
             <ItemTitle>Google</ItemTitle>
             <ItemDescription>
-              {googleConnection?.connected
-                ? `Connected as ${googleConnection.displayName ?? googleConnection.externalId}`
-                : "Connect Google for Gmail, Calendar, Docs, Sheets, and Drive API tools."}
+              {connectedCount(googleConnections) > 0
+                ? `${connectedCount(googleConnections)} connected account${connectedCount(googleConnections) === 1 ? "" : "s"}`
+                : "Connect Google for Gmail API tools."}
             </ItemDescription>
-            <IntegrationMetadata connection={googleConnection} provider="google" />
+            {googleConnections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                entry={entry}
+                provider="google"
+                disconnecting={disconnectGoogle.isPending}
+                onDisconnect={() => disconnectGoogle.mutate(entry.connection)}
+              />
+            ))}
           </ItemContent>
           <ItemActions>
-            {googleConnection?.connected ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disconnectGoogle.isPending}
-                onClick={() => disconnectGoogle.mutate()}
-              >
-                {disconnectGoogle.isPending ? <Spinner /> : null}
-                Disconnect
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={startGoogle.isPending}
-                onClick={() => startGoogle.mutate()}
-              >
-                {startGoogle.isPending ? <Spinner /> : null}
-                Connect Google
-              </Button>
-            )}
+            <Button size="sm" disabled={startGoogle.isPending} onClick={() => startGoogle.mutate()}>
+              {startGoogle.isPending ? <Spinner /> : null}
+              Connect Google
+            </Button>
           </ItemActions>
         </Item>
+
+        <Item variant="outline" className="items-start justify-between gap-4 p-4">
+          <ItemMedia variant="icon">
+            <Github className="size-4" />
+          </ItemMedia>
+          <ItemContent className="min-w-0">
+            <ItemTitle>GitHub</ItemTitle>
+            <ItemDescription>
+              {connectedCount(githubConnections) > 0
+                ? `${connectedCount(githubConnections)} connected account${connectedCount(githubConnections) === 1 ? "" : "s"}`
+                : "Connect GitHub for the REST API and repo webhooks, plus gh/git inside sandboxes."}
+            </ItemDescription>
+            {githubConnections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                entry={entry}
+                provider="github"
+                disconnecting={disconnectGithub.isPending}
+                onDisconnect={() => disconnectGithub.mutate(entry.connection)}
+              />
+            ))}
+          </ItemContent>
+          <ItemActions>
+            <Button size="sm" disabled={startGithub.isPending} onClick={() => startGithub.mutate()}>
+              {startGithub.isPending ? <Spinner /> : null}
+              Connect GitHub
+            </Button>
+          </ItemActions>
+        </Item>
+
+        {providedConnections.length > 0 ? (
+          <Item variant="outline" className="items-start justify-between gap-4 p-4">
+            <ItemMedia variant="icon">
+              <Circle className="size-4" />
+            </ItemMedia>
+            <ItemContent className="min-w-0">
+              <ItemTitle>Project integrations</ItemTitle>
+              <ItemDescription>
+                Mounted by this project through provideCapability; manage them in project code.
+              </ItemDescription>
+              <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
+                {providedConnections.map((entry) => (
+                  <IntegrationMetadataRow
+                    key={entry.path}
+                    label={entry.integration}
+                    value={entry.path}
+                  />
+                ))}
+              </div>
+            </ItemContent>
+          </Item>
+        ) : null}
       </ItemGroup>
-    </>
+    </div>
   );
 
   return (
@@ -207,12 +383,85 @@ function ProjectIntegrationsContent() {
   );
 }
 
+/** Journals persist after disconnect; only status-connected entries count. */
+function connectedCount(entries: ConnectionEntry[]): number {
+  return entries.filter((entry) => entry.status?.connected).length;
+}
+
+function BuiltInApiIntegrationRow({
+  integration,
+}: {
+  integration: (typeof BUILTIN_API_INTEGRATIONS)[number];
+}) {
+  const Icon = integration.icon;
+
+  return (
+    <Item variant="outline" className="items-start justify-between gap-4 p-4">
+      <ItemMedia variant="icon">
+        <Icon className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>{integration.name}</ItemTitle>
+        <code className="block w-fit max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          {integration.namespace}
+        </code>
+        <ItemDescription>{integration.description}</ItemDescription>
+        <div className="mt-2 flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+          <KeyRound className="mt-0.5 size-3.5 shrink-0" />
+          <code className="min-w-0 break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-relaxed text-foreground">
+            {integration.keyReference}
+          </code>
+        </div>
+      </ItemContent>
+      <ItemActions>
+        <a
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium whitespace-nowrap hover:bg-muted hover:text-foreground"
+          href={integration.docsUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <ExternalLink className="size-3.5" />
+          Docs
+        </a>
+      </ItemActions>
+    </Item>
+  );
+}
+
+function ConnectionRow({
+  disconnecting,
+  entry,
+  onDisconnect,
+  provider,
+}: {
+  disconnecting: boolean;
+  entry: ConnectionEntry;
+  onDisconnect: () => void;
+  provider: "github" | "google" | "slack";
+}) {
+  return (
+    <div className="mt-2 flex items-start justify-between gap-2 rounded-md border p-2">
+      <div className="min-w-0">
+        <div className="truncate text-xs font-medium">{entry.connection}</div>
+        <div className="truncate text-xs text-muted-foreground">{entry.path}</div>
+        <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
+      </div>
+      {entry.status?.connected ? (
+        <Button size="sm" variant="outline" disabled={disconnecting} onClick={onDisconnect}>
+          {disconnecting ? <Spinner /> : null}
+          Disconnect
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function IntegrationMetadata({
   connection,
   provider,
 }: {
   connection?: Connection;
-  provider: "google" | "slack";
+  provider: "github" | "google" | "slack";
 }) {
   if (!connection?.connected) return null;
 

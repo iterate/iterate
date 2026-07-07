@@ -12,7 +12,7 @@
 //      owning project's Durable Object (the same decision point dynamic
 //      workers' `globalOutbound` uses), because...
 //   3. Secret substitution — the echo sees the real secret MATERIAL in place of
-//      the `getSecret({ path })` placeholder the container sent. Substitution
+//      the `getSecret(path)` placeholder the container sent. Substitution
 //      only happens server-side in the Project DO's egress path; the container
 //      never holds the material.
 //

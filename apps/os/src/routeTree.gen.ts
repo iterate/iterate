@@ -39,6 +39,7 @@ import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/p
 import { Route as DocsStreamsProcessorsProcessorSlugRouteImport } from './routes/docs.streams.processors.$processorSlug'
 import { Route as AdminStreamsProjectIdSplatRouteImport } from './routes/admin/streams/$projectId/$'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
+import { Route as AppProjectsProjectSlugSchedulerRouteImport } from './routes/_app/projects/$projectSlug/scheduler'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugReactivityRouteImport } from './routes/_app/projects/$projectSlug/reactivity'
 import { Route as AppProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/projects/$projectSlug/integrations'
@@ -213,6 +214,12 @@ const AppProjectsProjectSlugSettingsRoute =
     path: '/settings',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
+const AppProjectsProjectSlugSchedulerRoute =
+  AppProjectsProjectSlugSchedulerRouteImport.update({
+    id: '/scheduler',
+    path: '/scheduler',
+    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
+  } as any)
 const AppProjectsProjectSlugReplRoute =
   AppProjectsProjectSlugReplRouteImport.update({
     id: '/repl',
@@ -331,6 +338,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
+  '/projects/$projectSlug/scheduler': typeof AppProjectsProjectSlugSchedulerRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
@@ -371,6 +379,7 @@ export interface FileRoutesByTo {
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
+  '/projects/$projectSlug/scheduler': typeof AppProjectsProjectSlugSchedulerRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
@@ -418,6 +427,7 @@ export interface FileRoutesById {
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
+  '/_app/projects/$projectSlug/scheduler': typeof AppProjectsProjectSlugSchedulerRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
@@ -466,6 +476,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
+    | '/projects/$projectSlug/scheduler'
     | '/projects/$projectSlug/settings'
     | '/admin/streams/$projectId/$'
     | '/docs/streams/processors/$processorSlug'
@@ -506,6 +517,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
+    | '/projects/$projectSlug/scheduler'
     | '/projects/$projectSlug/settings'
     | '/admin/streams/$projectId/$'
     | '/projects/$projectSlug'
@@ -552,6 +564,7 @@ export interface FileRouteTypes {
     | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/reactivity'
     | '/_app/projects/$projectSlug/repl'
+    | '/_app/projects/$projectSlug/scheduler'
     | '/_app/projects/$projectSlug/settings'
     | '/admin/streams/$projectId/$'
     | '/docs/streams/processors/$processorSlug'
@@ -798,6 +811,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugSettingsRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
+    '/_app/projects/$projectSlug/scheduler': {
+      id: '/_app/projects/$projectSlug/scheduler'
+      path: '/scheduler'
+      fullPath: '/projects/$projectSlug/scheduler'
+      preLoaderRoute: typeof AppProjectsProjectSlugSchedulerRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRouteRoute
+    }
     '/_app/projects/$projectSlug/repl': {
       id: '/_app/projects/$projectSlug/repl'
       path: '/repl'
@@ -924,6 +944,7 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugIntegrationsRoute: typeof AppProjectsProjectSlugIntegrationsRoute
   AppProjectsProjectSlugReactivityRoute: typeof AppProjectsProjectSlugReactivityRoute
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
+  AppProjectsProjectSlugSchedulerRoute: typeof AppProjectsProjectSlugSchedulerRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
   AppProjectsProjectSlugAgentsNewRoute: typeof AppProjectsProjectSlugAgentsNewRoute
@@ -945,6 +966,7 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
     AppProjectsProjectSlugReactivityRoute:
       AppProjectsProjectSlugReactivityRoute,
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
+    AppProjectsProjectSlugSchedulerRoute: AppProjectsProjectSlugSchedulerRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
     AppProjectsProjectSlugAgentsNewRoute: AppProjectsProjectSlugAgentsNewRoute,

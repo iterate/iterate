@@ -49,9 +49,11 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   Personal `dev_<you>` configs may still carry personal integration secrets,
   but they should not carry app/MCP/project-host URL overrides.
 
-  Don't add old flat auth OAuth/JWKS vars in these configs: an explicit JWKS in
-  Doppler overrides the deploy-time fetch from the auth worker, and a stale one
-  makes OS silently reject every session — login just bounces back to
+  Don't add old flat auth OAuth/JWKS vars in these configs. Local dev derives
+  its forge JWKS binding from `AUTH_FORGE_PRIVATE_JWK`, and deployed OS fetches
+  the live auth worker JWKS during deploy. Doppler
+  `APP_CONFIG_ITERATE_AUTH__JWKS` snapshots should be absent: a stale one makes
+  older worker/dev paths reject every session — login just bounces back to
   `/sign-in` with no error. This broke all `dev_<user>` and preview logins
   once; the stale keys were cleaned out on 2026-06-12.
 
@@ -131,10 +133,11 @@ your env or Doppler branch config.
 
 ## Acting as users and admins
 
-OS trusts JWTs signed by any key in its baked JWKS. Dev and preview configs
-include the **forge** public key, whose private half is in Doppler
-(`AUTH_FORGE_PRIVATE_JWK`, inherited from `_shared/dev` / `_shared/preview`).
-Minting is offline and instant — no auth worker involved:
+OS trusts JWTs signed by any key in its baked JWKS. Deploys merge the **forge**
+public key into that baked JWKS; local dev derives the same public key from the
+private half in Doppler (`AUTH_FORGE_PRIVATE_JWK`, inherited from `_shared/dev`
+/ `_shared/preview`) when generating Wrangler config. Minting is offline and
+instant — no auth worker involved:
 
 `pnpm auth:mint` lives in the **repo root** package (`pnpm cli` lives in
 `apps/os` — don't mix them up; pnpm's "command not found" error when you run
@@ -309,6 +312,14 @@ invariants:
   `preview deploy` / `preview test` run renews the lease for 24h; closing the
   PR tears the apps down and releases it. Lease expiry is only the safety
   valve for abandoned PRs (no pushes for >24h).
+- **Draft PRs don't claim a slot unless they ask.** Drafts are the default
+  for agent-opened PRs, and nine slots don't survive a busy night of them. A
+  draft asks by wearing the `preview` label (durable — previews then behave
+  as for a ready PR), being marked ready for review, or a one-shot explicit
+  run (dispatching the `Cloudflare Previews` workflow, or
+  `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
+  A draft that holds a slot without asking — e.g. a ready PR converted back
+  to draft — gives it back on the next lifecycle run.
 - **Nothing steals a live lease without a human `--force`.** Before running
   tests or destroying anything, the tooling re-asserts that the PR still
   holds the slot, and refuses (with an explanation naming the current holder)

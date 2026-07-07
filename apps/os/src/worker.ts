@@ -29,7 +29,8 @@ import {
   UnauthenticatedOsRpcTarget,
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
-import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
+import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
+import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
@@ -124,6 +125,14 @@ export default {
 
     console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
   },
+
+  // Inbound project email: Cloudflare Email Routing's catch-all rule for each
+  // project hostname base (e.g. `*@iterate.app`) delivers here. setReject is
+  // the permanent-failure channel; a thrown error is a temporary failure the
+  // sending MTA retries — so infra errors deliberately propagate.
+  async email(message: ForwardableEmailMessage) {
+    await handleInboundEmail(message);
+  },
 };
 
 /**
@@ -149,6 +158,7 @@ async function appFetch(
 
       const context: RequestContext = {
         config: requestConfig,
+        executionCtx: ctx,
         isEventDocsHost: host.isEventDocsHost,
         log,
         rawRequest: request,
@@ -222,11 +232,11 @@ async function apiFetch(
     return await handleCapnwebAdminCookieRequest({ config, request });
   }
 
-  // Slack webhook ingress lives here (not the app lane): this pipeline has
-  // the engine bindings, so a signed event routes straight into the claiming
-  // project's stream without a capnweb round trip.
-  const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
-  if (slackWebhookResponse !== null) return slackWebhookResponse;
+  // Integration webhook ingress (Slack, GitHub, …) lives here (not the app
+  // lane): this pipeline has the engine bindings, so a signed event routes
+  // straight into the claiming project's stream without a capnweb round trip.
+  const webhookResponse = await handleIntegrationWebhookApiRequest({ config, request });
+  if (webhookResponse !== null) return webhookResponse;
 
   if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
   const unauthenticated = new UnauthenticatedOsRpcTarget({
@@ -255,6 +265,7 @@ function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
 function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
   headers.delete("x-iterate-app");
+  headers.delete("x-iterate-host-kind");
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete("x-forwarded-host");

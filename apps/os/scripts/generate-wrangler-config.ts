@@ -49,14 +49,19 @@ export const REQUIRED_SECRETS = [
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
+  // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
+  // entries) — collectSecrets ships only names listed here, so a key absent
+  // from this list never reaches a deployed worker even when Doppler has it.
+  "APP_CONFIG_INTEGRATIONS__EXA",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
+  "APP_CONFIG_INTEGRATIONS__PARALLEL",
+  // The first-party dummy-petshop client credentials (integration proofs);
+  // backs /secrets/platform/integrations/petshop. Optional — only preview/dev
+  // envs running the petshop e2e carry it.
+  "APP_CONFIG_INTEGRATIONS__PETSHOP",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
-  // Local dev must load the baked auth JWKS too; otherwise forge-minted
-  // browser sessions from `pnpm auth:mint --browser-url` fail with
-  // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
-  "APP_CONFIG_ITERATE_AUTH__JWKS",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
@@ -364,10 +369,12 @@ function envBlock(env: DeployedEnv) {
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
-    // against account memory quota at deploy time. The old preview cap of 500
-    // was viable for lite instances because it reserved 128000 MiB; 31
-    // standard-1 instances reserve 126976 MiB and fit that same quota.
-    maxContainerInstances: isProduction ? 50 : 31,
+    // against account memory quota at deploy time. Cap 500 blocked deploys once
+    // several preview slots existed, and cap 200 only fits while not every
+    // preview slot has an OS sandbox app. Cap 100 previously wedged sustained
+    // e2e churn at assigned == max_instances, so 150 is the fleet-wide
+    // compromise until Cloudflare changes assigned-slot accounting.
+    maxContainerInstances: isProduction ? 50 : 150,
   });
   return {
     name: env.osWorkerName,
@@ -388,16 +395,35 @@ function envBlock(env: DeployedEnv) {
  */
 function localDevBindings() {
   const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  const localAuthJwks = localDevAuthJwks();
   return {
     ...bindings,
     vars: {
       ...bindings.vars,
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev trusts forge-minted sessions by deriving the public key from
+      // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
+      // Doppler here: stale snapshots caused login verification failures.
+      ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
     },
   };
 }
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
+
+function localDevAuthJwks() {
+  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  if (!forgePrivateJwk) return undefined;
+
+  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
+    string,
+    unknown
+  > & { d?: string };
+  if (!publicJwk.kid || !publicJwk.kty) {
+    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
+  }
+  return JSON.stringify({ keys: [publicJwk] });
+}
 
 export const config = {
   $schema: "node_modules/wrangler/config-schema.json",

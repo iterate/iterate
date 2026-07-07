@@ -75,6 +75,7 @@ export async function decideIngressRoute(input: {
       return projectRoute({
         appSlug: null,
         headers,
+        hostKind: "path",
         method: input.method,
         projectId: head,
         url: workerUrl.toString(),
@@ -91,6 +92,7 @@ export async function decideIngressRoute(input: {
     return projectRoute({
       appSlug: candidate.appSlug,
       headers,
+      hostKind: "platform",
       method: input.method,
       projectId,
       url: input.url,
@@ -102,6 +104,7 @@ export async function decideIngressRoute(input: {
     return projectRoute({
       appSlug: custom.appSlug,
       headers,
+      hostKind: "custom",
       method: input.method,
       projectId: custom.projectId,
       url: input.url,
@@ -114,6 +117,7 @@ export async function decideIngressRoute(input: {
 function projectRoute(input: {
   appSlug: string | null;
   headers: Headers;
+  hostKind: "custom" | "path" | "platform";
   method: string;
   projectId: string;
   url: string;
@@ -125,6 +129,7 @@ function projectRoute(input: {
   // world cannot pick an app or fake a path prefix the lane didn't produce.
   headers.delete("x-iterate-app");
   if (input.appSlug) headers.set("x-iterate-app", input.appSlug);
+  headers.set("x-iterate-host-kind", input.hostKind);
   headers.delete("x-iterate-url-prefix");
   if (input.urlPrefix) headers.set("x-iterate-url-prefix", input.urlPrefix);
   return {

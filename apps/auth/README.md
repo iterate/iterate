@@ -130,9 +130,11 @@ authorization server.
 **(b) JWT verification — a JWKS baked at OS deploy time.** OS verifies
 auth-issued tokens against a JWKS. To avoid a runtime round-trip on every cold
 isolate, `apps/os/scripts/deploy.ts` fetches `${issuer}/jwks` at _deploy_ time and
-bakes it into OS's config (falling back to a runtime remote-JWKS fetch if that
-fails). **Consequence: rotating auth's signing keys requires an OS redeploy.**
-The forge public key (for `pnpm auth:mint`) is merged into this baked JWKS.
+bakes it into OS's config; if the deploy-time fetch keeps failing, the OS
+deploy fails closed. The verifier can still fall back to the issuer's live
+JWKS when a token kid is missing from an already-baked set, which bridges
+auth-issued tokens across key drift until the next deploy. The forge public
+key (for `pnpm auth:mint`) is merged into the baked JWKS.
 
 **(c) The project directory — HTTP oRPC behind a KV cache.** OS ingress resolves
 every project host (`<slug>.iterate.app`) to a project id. The

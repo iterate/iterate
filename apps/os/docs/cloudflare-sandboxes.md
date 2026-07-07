@@ -107,25 +107,34 @@ Every sandbox carries a durable env-var map — a `Record<string,string>` applie
 to every command (`exec`, `startProcess`, …), conventionally ALL_CAPS keys.
 
 **Defaults for code-out-of-the-box:** every sandbox starts with
-`OPENAI_API_KEY` and `ANTHROPIC_API_KEY` pointed at conventional project secret
-paths (`/secrets/openai-api-key`, `/secrets/anthropic-api-key`) as `getSecret`
-placeholders. Seed a provider key at one of those paths and an agent's sandbox
-can run Codex immediately — the sandbox DO runs the **warm-up script**
+`OPENAI_API_KEY` set to `getSecret({ platform: "openAiApiKey" })` — a platform
+reference to the deployment's own OpenAI key (required config), substituted at
+the egress door and pinned there to `api.openai.com` — so Codex works in every
+project with zero seeding. The sandbox DO runs the **warm-up script**
 (`sandbox/warmup.sh`, baked into the image at `/opt/iterate/warmup.sh`) **in the
 background during provisioning**, memoized per container, which does
 `codex login --with-api-key` (reading the env placeholder) so it's ready by the
 time the sandbox is used and callers never write a login line (Codex 0.142 won't
 use the env key directly). Warm-up completion is a `sandbox/warmed-up` event on
 the sandbox's stream (see the lifecycle saga below); add container-side setup by
-editing the script, not the DO. Nothing seeded → the var is harmless until a
-call actually uses it (egress substitution then fails loudly).
+editing the script, not the DO.
 
-Override or add to the defaults with `configureEnvVars` (explicit config wins):
+**`GH_TOKEN` for connected projects:** when the project has a GitHub
+connection, the sandbox DO also plants `GH_TOKEN` — a `getSecret` placeholder
+for the connection secret's `accessToken` (minted/substituted only at egress).
+`gh` reads it from the environment natively, and the warm-up script sets a
+`git http."https://github.com/".extraheader` with a raw Bearer placeholder (a
+credential helper would send Basic auth — base64 — hiding the placeholder from
+header substitution), so `git` against github.com works too. Discovery runs per
+container start (a new connection is picked up on the next start); with several
+connections the lexicographically first connection name wins.
+
+Override or add to the defaults with `configureEnvVars` (explicit config wins —
+e.g. a project wanting its own OpenAI key points the var at a project secret):
 
 ```ts
 await itx.sandbox.configureEnvVars({
   // value is a getSecret placeholder — the material never enters the container
-  ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic-api-key" })',
   OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai-api-key" })',
 });
 ```
@@ -140,14 +149,15 @@ to journal — **never pass raw secret material as a value**, since it would lan
 on the durable stream.
 
 **The secret never enters the container.** A value like
-`getSecret({ path: "…" })` is set verbatim as the env var; when the coding
-agent puts it in a request header to the model API, the project egress path
-substitutes the real material on the way out (the same
-allowlist + substitution used for all sandbox egress — see
-[Sandboxes → Egress](./sandboxes.md)). So an agent reads `ANTHROPIC_API_KEY`
-from its environment and calls Claude, but the key lives only in the secret
-system. The secret at that path must allow the provider host (e.g.
-`api.anthropic.com` / `api.openai.com`) in its egress allowlist.
+`getSecret({ path: "…" })` or `getSecret({ platform: "…" })` is set verbatim as
+the env var; when the coding agent puts it in a request header to the model
+API, the project egress path substitutes the real material on the way out (the
+same allowlist + substitution used for all sandbox egress — see
+[Sandboxes → Egress](./sandboxes.md)). So an agent reads `OPENAI_API_KEY` from
+its environment and calls the provider, but the key lives only in config / the
+secret system. A path-referenced secret must allow the provider host (e.g.
+`api.openai.com`) in its egress allowlist; a platform reference carries its own
+origin pin (platform-secrets.ts).
 
 **The coding agent** is baked into our own image (`sandbox/Dockerfile`), not a
 Cloudflare image variant (what else the image bakes — `root/`, the platform
@@ -159,7 +169,7 @@ ship the **Codex CLI** (`codex`, on PATH), which uses `OPENAI_API_KEY`:
 // OPENAI_API_KEY env placeholder) in the background during provisioning. Both
 // that login and the model call egress through project policy, which
 // substitutes the real key for the placeholder, so `codex exec` uses the
-// project's secret without the key ever entering the container.
+// platform's OpenAI key without it ever entering the container.
 const r = await itx.sandbox.exec(
   "codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox" +
     ' "summarize README.md in one line"', // defaults to gpt-5.5/high

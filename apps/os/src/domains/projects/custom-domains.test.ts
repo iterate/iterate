@@ -257,6 +257,26 @@ describe("custom domain provisioning", () => {
     await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toBeNull();
   });
 
+  it("calls Cloudflare fetch without binding the client input as this", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const cloudflare = createCloudflareFetchMock();
+    let fetchCalls = 0;
+    const fetchWithThisAssertion = async function (
+      this: unknown,
+      ...args: Parameters<typeof fetch>
+    ) {
+      fetchCalls += 1;
+      expect(this).toBeUndefined();
+      return await cloudflare.fetch(...args);
+    } as typeof fetch;
+    const provisioner = createProvisioner({ directory, fetch: fetchWithThisAssertion });
+
+    await expect(provisioner.ensure({ hostname: "garple.com", project })).resolves.toMatchObject({
+      hostname: "garple.com",
+    });
+    expect(fetchCalls).toBeGreaterThan(0);
+  });
+
   it("rejects apex domains that would cover another project's explicit subdomain", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
     await primeProjectHostname(directory, "www.garple.com", otherProject);

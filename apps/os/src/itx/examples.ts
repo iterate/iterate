@@ -466,7 +466,13 @@ await repo.commitFiles({
   changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
 });
 
-const before = await repo.readFile({ path });
+// commitFiles is durable when it returns, but a freshly-created repo's first
+// reads can race its bootstrap; poll briefly rather than flake.
+let before = await repo.readFile({ path });
+for (let attempt = 0; attempt < 25 && before === null; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  before = await repo.readFile({ path });
+}
 if (before === null) throw new Error("Expected seeded file to exist.");
 
 const edit = await repo.edit({
@@ -476,7 +482,13 @@ const edit = await repo.edit({
   newString: afterText,
 });
 
-const after = await repo.readFile({ path });
+// The same bootstrap race can serve a pre-edit snapshot right after the
+// commit; poll until the read reflects the edit.
+let after = await repo.readFile({ path });
+for (let attempt = 0; attempt < 25 && (after === null || after.content === before.content); attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  after = await repo.readFile({ path });
+}
 if (after === null) throw new Error("Expected edited file to exist.");
 
 return {
@@ -491,7 +503,7 @@ return {
     id: "secrets-lifecycle",
     title: "Store a secret; describe() never shows the material",
     description:
-      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret({ path }) placeholders; substitution happens server-side.",
+      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret(path) placeholders; substitution happens server-side.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -520,7 +532,7 @@ return described;
     id: "secret-postman-echo",
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret({ path }) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -770,6 +782,205 @@ const list = Array.isArray(models) ? models : [];
 return {
   count: list.length,
   sample: list.slice(0, 5).map((model) => model?.name ?? model),
+};
+`.trim(),
+  },
+  {
+    id: "github-list-repos",
+    title: "List repositories through the built-in GitHub integration",
+    description:
+      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const repos = await itx.integrations.github[github.connection].rest.repos.listForAuthenticatedUser({
+  per_page: Number(vars.count ?? 5),
+  sort: "updated",
+});
+
+return repos.data.map((repo) => ({ fullName: repo.full_name, updatedAt: repo.updated_at }));
+`.trim(),
+  },
+  {
+    id: "github-read-file",
+    title: "Read a file from a repo through the built-in GitHub integration",
+    description:
+      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const owner = vars.owner ?? "octocat";
+const repo = vars.repo ?? "hello-world";
+// README shortcut; use "GET /repos/{owner}/{repo}/contents/{path}" with a path param for any file.
+const readme = await itx.integrations.github[github.connection].request(
+  "GET /repos/{owner}/{repo}/readme",
+  { owner, repo, headers: { accept: "application/vnd.github.raw+json" } },
+);
+
+return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo };
+`.trim(),
+  },
+  {
+    id: "gmail-search-inbox",
+    title: "Search the inbox through the built-in Gmail integration",
+    description:
+      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const google = connections.find((entry) => entry.integration === "google");
+if (!google) return { error: "No Google connection — connect one from the dashboard integrations page." };
+
+const gmail = itx.integrations.google[google.connection].gmail;
+const inbox = await gmail.request({
+  path: "/users/me/messages",
+  query: { maxResults: 5, q: vars.q ?? "in:inbox is:unread" },
+});
+
+const messages = await Promise.all(
+  (inbox.data.messages ?? []).map((message) =>
+    gmail.request({
+      path: "/users/me/messages/" + message.id,
+      query: { format: "metadata", metadataHeaders: "Subject" },
+    }),
+  ),
+);
+
+return {
+  resultSizeEstimate: inbox.data.resultSizeEstimate,
+  subjects: messages.map((m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value),
+};
+`.trim(),
+  },
+  {
+    id: "slack-post-message",
+    title: "Post a message through the built-in Slack integration",
+    description:
+      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const slack = connections.find((entry) => entry.integration === "slack");
+if (!slack) return { error: "No Slack connection — connect one from the dashboard integrations page." };
+
+const client = itx.integrations.slack[slack.connection];
+// Find a channel to talk in; vars.channel (an id like C0123...) skips the lookup.
+const channels = await client.conversations.list({ exclude_archived: true, limit: 20, types: "public_channel" });
+const channel = vars.channel ?? channels.channels?.[0]?.id;
+if (!channel) return { error: "No channel found", channels };
+
+const posted = await client.chat.postMessage({ channel, text: vars.text ?? "Hello from itx!" });
+return { channel, ok: posted.ok, ts: posted.ts };
+`.trim(),
+  },
+  {
+    id: "github-mcp-connect",
+    title: "GitHub's MCP server as a provided integration",
+    description:
+      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.',
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const connection = vars.connection ?? "main";
+const tokenPath = \`/secrets/integrations/github-mcp/\${connection}/token\`;
+
+// 1. The PAT lives in a Secret DO with a GitHub-only egress allowlist.
+const secret = itx.secrets.get(tokenPath);
+await secret.update({
+  egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
+  material: vars.githubPat,
+});
+let described = await secret.describe();
+for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  described = await secret.describe();
+}
+
+// 2. One durable mount makes GitHub part of the integrations collection. The
+// itx-expression is a journaled recipe: replayed per call, revocable,
+// enumerated by itx.integrations.list().
+await itx.provideCapability({
+  path: ["integrations", "github-mcp", connection],
+  type: "itx-expression",
+  instructions:
+    "GitHub via the official MCP server: create_issue({ owner, repo, title }), list_pull_requests, get_file_contents, search_code, ...",
+  expression: [
+    "mcp",
+    [
+      "connect",
+      {
+        url: "https://api.githubcopilot.com/mcp/",
+        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
+      },
+    ],
+  ],
+});
+
+// 3. Same address shape as a builtin — {slug}.{connection}.{method}.
+const me = await itx.integrations["github-mcp"][connection].get_me({});
+return { login: me?.login ?? me, listed: await itx.integrations.list() };
+`.trim(),
+  },
+  {
+    id: "github-webhooks-project-worker",
+    title: "GitHub webhooks land on the project's own host",
+    description:
+      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const connection = vars.connection ?? "main";
+const urlToken = vars.urlToken ?? crypto.randomUUID();
+const journalPath = \`/integrations/github/\${connection}\`;
+
+await itx.repo.commitFiles({
+  message: "Receive GitHub webhooks on the project host",
+  changes: [
+    {
+      path: "worker.ts",
+      content: \`
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export default class ProjectWorker extends WorkerEntrypoint {
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname === "/webhooks/github/\${urlToken}" && req.method === "POST") {
+      const project = await this.env.ITX.get();
+      await project.streams.get("\${journalPath}").append({
+        type: "events.iterate.com/github/webhook-received",
+        idempotencyKey: "github:" + (req.headers.get("x-github-delivery") ?? crypto.randomUUID()),
+        payload: {
+          delivery: req.headers.get("x-github-delivery"),
+          event: req.headers.get("x-github-event"),
+          body: await req.json(),
+        },
+      });
+      return Response.json({ ok: true });
+    }
+    return new Response("not found", { status: 404 });
+  }
+
+  processEvent() {}
+}
+\`,
+    },
+  ],
+});
+
+return {
+  webhookPathOnProjectHost: \`/webhooks/github/\${urlToken}\`,
+  journalPath,
+  note: "Set the GitHub webhook URL to the project host + that path; deliveries land on the journal, where itx.integrations.list() enumerates the connection.",
 };
 `.trim(),
   },

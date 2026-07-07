@@ -22,6 +22,12 @@ export interface RequestContext {
   rawRequest?: Request;
   /** `ExecutionContext.waitUntil`, for work that should outlive the response. */
   waitUntil: (promise: Promise<unknown>) => void;
+  /**
+   * The invocation's full `ExecutionContext` — what in-process itx
+   * construction (`itxForScope`, `ProjectCollectionRpcTarget`) needs beyond
+   * `waitUntil`: the loopback entrypoints on `ctx.exports`.
+   */
+  executionCtx: ExecutionContext;
   // Set by the iterate auth request middleware (src/auth/middleware.ts).
   principal?: Principal | null;
   iterateAuthSession?: AuthenticatedSession | null;

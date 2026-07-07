@@ -48,6 +48,11 @@ export function linkOptionsForStreamPath(projectSlug: string, path: string) {
   if (streamPath === "/sandboxes") {
     return linkOptions({ to: "/projects/$projectSlug/sandboxes", params, search: {} });
   }
+  // The scheduler page shows the primary Scheduler; other /scheduler/**
+  // streams fall through to the generic stream page below.
+  if (streamPath === "/scheduler" || streamPath === "/scheduler/primary") {
+    return linkOptions({ to: "/projects/$projectSlug/scheduler", params, search: {} });
+  }
   if (streamPath === "/agents") {
     return linkOptions({ to: "/projects/$projectSlug/agents", params, search: {} });
   }

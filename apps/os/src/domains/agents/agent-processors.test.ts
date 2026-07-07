@@ -6,7 +6,11 @@ import {
   flattenMessageToText,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
-import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
 import {
@@ -70,6 +74,9 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
+      'itx.integrations.google["<connection>"].gmail.request',
+    );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("PROJECT REPO EDITS");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
       'const repo = itx.repos.get(vars.repoPath ?? "/")',
@@ -79,7 +86,6 @@ describe("minimal web-chat agent processors", () => {
     );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-read-file");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-edit-file");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');
@@ -178,6 +184,46 @@ describe("minimal web-chat agent processors", () => {
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
     ).toEqual([]);
+  });
+
+  it("stops the agent loop instead of scheduling past the autonomous turn limit", async () => {
+    const stream = new MemoryStream();
+    await stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: "existing" },
+    });
+    const state = AgentProcessorContract.stateSchema.parse({
+      autonomousTurnCount: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+      pendingTriggerOffset: 1,
+      pendingTriggerSource: "agent-loop",
+    });
+    const agent = new AgentProcessor({
+      stream,
+      readState: async () => ({ offset: 1, state }),
+    });
+
+    await stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: "next" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const stopped = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/loop-stopped",
+    );
+    expect(stopped?.payload).toMatchObject({
+      maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+      reason: expect.stringContaining(`${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS}`),
+      triggerOffset: 1,
+    });
+    expect(stream.events.some((event) => event.type === "events.iterate.com/stream/paused")).toBe(
+      false,
+    );
+    expect(
+      stream.events.some(
+        (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+      ),
+    ).toBe(false);
   });
 
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
@@ -865,6 +911,71 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append(...failureTurn(7, { status: "success" }));
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
+  });
+
+  it("fails orphaned requests a dead incarnation left behind (recovery sweep)", async () => {
+    // Regression for the 2026-07-07 prd email-thread wedge: an incarnation
+    // accepted a request (runInBackground advanced the checkpoint), got
+    // evicted before completing it, and the agent queued every later input
+    // behind the never-completing request forever.
+    const stream = new MemoryStream();
+    // Incarnation 1: accepted the request and appended started, then died —
+    // simulated by writing the events directly, never running a processor.
+    const [requested] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-1" },
+    });
+    await stream.append({
+      type: "events.iterate.com/openai-ws/llm-request-started",
+      payload: { llmRequestId: requested!.offset, model: "gpt-test" },
+    });
+
+    // Incarnation 2: fresh processor (empty #liveExecutions), catching up.
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => {
+        throw new Error("should not dial during orphan recovery");
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+    // Deliver only the STARTED event (the requested event is before the
+    // checkpoint of a caught-up-but-restarted instance in the real incident;
+    // any batch works — the sweep reads folded state, not the batch).
+    await openAiWs.ingest({
+      events: stream.events.filter((event) => event.offset > requested!.offset),
+      streamMaxOffset: stream.events.length,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const completions = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+    );
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.payload).toMatchObject({
+      llmRequestId: requested!.offset,
+      provider: "openai-ws",
+      result: { status: "failure", error: { message: expect.stringContaining("orphaned") } },
+    });
+
+    // A LIVE request in this incarnation is never swept: accept a new request
+    // (execution registers synchronously) and deliver the batch — no failure
+    // completion appears for it while it runs.
+    const [second] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-2" },
+    });
+    await openAiWs.ingest({
+      events: [second!],
+      streamMaxOffset: stream.events.length,
+    });
+    const sweptSecond = stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/llm-request-completed" &&
+        (event.payload as { llmRequestId: number }).llmRequestId === second!.offset &&
+        JSON.stringify(event.payload).includes("orphaned"),
+    );
+    expect(sweptSecond).toHaveLength(0);
   });
 });
 

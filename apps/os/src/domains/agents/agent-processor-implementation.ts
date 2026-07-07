@@ -4,6 +4,7 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+  DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 
@@ -235,6 +236,21 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     const { state } = args;
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
+      if (
+        state.pendingTriggerSource === "agent-loop" &&
+        state.autonomousTurnCount >= DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS
+      ) {
+        await args.append({
+          type: "events.iterate.com/agent/loop-stopped",
+          idempotencyKey: `agent/autonomous-turn-limit:${state.pendingTriggerOffset}`,
+          payload: {
+            maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+            reason: `Agent circuit breaker stopped after ${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS} consecutive autonomous turns.`,
+            triggerOffset: state.pendingTriggerOffset,
+          },
+        });
+        return;
+      }
       await args.append({
         type: "events.iterate.com/agent/llm-request-scheduled",
         idempotencyKey: `agent/llm-request-scheduled@generation:${state.requestGeneration}`,
@@ -334,7 +350,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
     case "events.iterate.com/agent/input-added": {
-      const shouldTrigger = event.payload.llmRequestPolicy.behaviour !== "dont-trigger-request";
+      const triggerSource = agentInputTriggerSource(event);
       const files = event.payload.files;
       return {
         ...state,
@@ -346,7 +362,9 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
             ...(files === undefined || files.length === 0 ? {} : { files }),
           },
         ],
-        pendingTriggerOffset: shouldTrigger ? event.offset : state.pendingTriggerOffset,
+        pendingTriggerOffset: triggerSource === null ? state.pendingTriggerOffset : event.offset,
+        pendingTriggerSource: triggerSource === null ? state.pendingTriggerSource : triggerSource,
+        autonomousTurnCount: triggerSource === "user" ? 0 : state.autonomousTurnCount,
       };
     }
     case "events.iterate.com/agent/output-added":
@@ -371,6 +389,9 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           scheduledOffset: event.offset,
         },
         pendingTriggerOffset: null,
+        pendingTriggerSource: null,
+        autonomousTurnCount:
+          state.pendingTriggerSource === "agent-loop" ? state.autonomousTurnCount + 1 : 0,
       };
     case "events.iterate.com/agent/llm-request-requested":
       if (
@@ -413,6 +434,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
       return state;
+    case "events.iterate.com/agent/loop-stopped":
+      return {
+        ...state,
+        pendingTriggerOffset: null,
+        pendingTriggerSource: null,
+      };
     case "events.iterate.com/capability-host/script-execution-requested":
       return {
         ...state,
@@ -439,6 +466,15 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
     default:
       return state;
   }
+}
+
+function agentInputTriggerSource(
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/input-added" }>,
+): "user" | "agent-loop" | null {
+  if (event.payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
+  return event.idempotencyKey?.startsWith("agent/render-script-result@") === true
+    ? "agent-loop"
+    : "user";
 }
 
 function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
