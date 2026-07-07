@@ -447,12 +447,41 @@ export interface CloudflareIntegrations extends Describable {
 }
 
 /**
- * First-party outbound email through Cloudflare Email Service. Mail is sent
- * from the project's own address — `<slug>@<project hostname base>`, e.g.
+ * First-party email through Cloudflare Email Service. Mail is sent from the
+ * project's own address — `<slug>@<project hostname base>`, e.g.
  * `acme@iterate.app` — and an explicit `from` must match it: a project can
  * never send as another project or an arbitrary address. Requires the
  * deployment's sender domain to be onboarded for Email Sending in Cloudflare.
+ *
+ * Inbound mail routes into one agent stream per email thread
+ * (`/agents/email/t<threadId>`); inside such an agent scope, `reply` is the
+ * thread's reply door — it derives the counterpart, `Re:` subject, threading
+ * headers, and the thread's `<slug>+t<threadId>@…` Reply-To address from the
+ * thread stream, so agents never assemble threading by hand.
  */
+/**
+ * One outbound email attachment: either a stored project file addressed by
+ * its `itx.files` path, or inline base64 content for bytes the caller already
+ * holds. Any file type works (PDFs, images, archives, …) within the Email
+ * Service limits: 32 attachments, 5 MiB total message size.
+ */
+export type EmailAttachmentInput =
+  | {
+      /** Project file path (`itx.files.get(path)`) to attach. */
+      path: string;
+      /** Override the attachment filename; defaults to the path's last segment. */
+      filename?: string;
+      /** Override the MIME type; defaults to the stored file's contentType. */
+      contentType?: string;
+    }
+  | {
+      filename: string;
+      /** Base64-encoded content. */
+      data: string;
+      /** MIME type; defaults to application/octet-stream. */
+      contentType?: string;
+    };
+
 export interface EmailCapability extends Describable {
   send(input: {
     to: string | string[];
@@ -462,7 +491,28 @@ export interface EmailCapability extends Describable {
     html?: string;
     /** Optional explicit sender; must equal the project's own address. */
     from?: string;
+    /** Optional Reply-To; must be the project address or a +tagged variant. */
+    replyTo?: string;
+    /** RFC 5322 threading: the message id this send replies to. */
+    inReplyTo?: string;
+    /** RFC 5322 threading: the References chain, oldest first. */
+    references?: string[];
+    /** Attachments: project files by path and/or inline base64 content. */
+    attachments?: EmailAttachmentInput[];
   }): Promise<{ from: string; messageId: string | null }>;
+  /**
+   * Reply within this email thread (email agent scopes only). Sends to the
+   * thread counterpart with correct subject and threading headers derived
+   * from the thread stream. At least one of text/html is required.
+   */
+  reply(input: {
+    text?: string;
+    html?: string;
+    /** Optional subject override; defaults to `Re: <thread subject>`. */
+    subject?: string;
+    /** Attachments: project files by path and/or inline base64 content. */
+    attachments?: EmailAttachmentInput[];
+  }): Promise<{ from: string; to: string; messageId: string | null }>;
 }
 
 // -----------------------------------------------------------------------------

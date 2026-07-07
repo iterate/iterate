@@ -27,6 +27,8 @@ import { SlackProcessor } from "../integrations/slack-processor-implementation.t
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
+import { EmailProcessor } from "../email/email-processor-implementation.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -103,8 +105,23 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   });
 
+  // The email thread router — same hosting shape as the Slack router: it only
+  // ever WAKES on the Durable Object instance addressed at
+  // `/integrations/email`, where project bootstrap (or the email ingress
+  // door's belt-and-braces append) configured its subscription.
+  readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
+
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  get emailProcessor() {
+    return new StreamProcessorRpcTarget(this.#emailProcessor, {
+      // The ingress door reads the sender allowlist from this snapshot; it
+      // must reflect a policy event appended moments ago (e.g. the birth
+      // seed) even when push delivery is lagging or a wake was dropped.
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(EmailProcessorContract.slug),
+    });
   }
 
   describe() {

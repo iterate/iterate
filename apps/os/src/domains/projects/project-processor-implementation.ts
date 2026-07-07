@@ -24,6 +24,9 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
@@ -62,6 +65,26 @@ export function slackAgentSystemPrompt(connection: string): string {
     "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
   ].join("\n");
 }
+
+/**
+ * Agents under `/agents/email/**` are email-thread agents: the email router
+ * forwards inbound mail to their stream, the `email-agent` processor
+ * transcribes it, and replies go out through itx.email.reply — which derives
+ * the counterpart, subject, and threading headers from the thread stream.
+ */
+export const EMAIL_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent handling one email conversation.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "Inbound emails on this thread arrive as your inputs (from, subject, body, attachment names).",
+  "To answer, use await itx.email.reply({ text }) (or { html }). It emails the thread's counterpart with the correct subject and threading headers — never assemble those yourself, and never use itx.chat.sendMessage or itx.email.send to answer this thread.",
+  'To attach files (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
+  "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
+  "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
 
 /**
  * Agents under `/agents/mcp/**` are inbound MCP session agents: one stream per
@@ -191,6 +214,38 @@ export class ProjectProcessor extends StreamProcessor<
                 },
               ),
             ),
+            // Arm the email thread router on `/integrations/email` from birth
+            // (Slack routers are per-connection and armed by the connect
+            // flow); the email ingress door repeats the subscription append
+            // (same idempotency key) for projects born before the router
+            // existed. The creator's email seeds the project sender allowlist
+            // so the owner can email their project from day one without any
+            // config.
+            timedStep("create-timing", timing, "email-router-append", () =>
+              this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: EMAIL_INTEGRATION_STREAM_PATH,
+                  }),
+                  idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: EmailProcessorContract.slug,
+                  subscriberType: "project",
+                }),
+                ...(event.payload.creatorEmail === undefined
+                  ? []
+                  : [
+                      {
+                        type: "events.iterate.com/email/sender-allowed" as const,
+                        idempotencyKey: `email-sender-allowed:${this.deps.itx.projectId}:${event.payload.creatorEmail.toLowerCase()}`,
+                        payload: {
+                          pattern: event.payload.creatorEmail,
+                          reason: "project-owner",
+                        },
+                      },
+                    ]),
+              ),
+            ),
             // The user can already be sitting on /agents/onboarding while repo
             // bootstrap and the project worker warm up. Birth the normal agent
             // stream immediately; the repo-created lane below repeats this with
@@ -234,7 +289,7 @@ export class ProjectProcessor extends StreamProcessor<
           }
           if (childPath.startsWith("/agents/")) {
             // The agent path picks the prompt (agentSystemPromptForPath);
-            // Slack agents additionally get the slack-agent processor
+            // Slack/email agents additionally get their domain processor
             // subscription.
             // Slack-agent wiring requires the full thread shape — the
             // connection segment is what replies authenticate with.
@@ -244,6 +299,7 @@ export class ProjectProcessor extends StreamProcessor<
               // certificate, so whichever lane runs second dedupes cleanly.
               ...agentBirthCertificateEvents({
                 childPath,
+                email: isEmailAgentPath(childPath),
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
@@ -337,6 +393,7 @@ function agentSystemPromptForPath(agentPath: string) {
   if (slackConnection !== null) {
     return slackAgentSystemPrompt(slackConnection);
   }
+  if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
@@ -371,6 +428,7 @@ const DEFAULT_MODEL_BY_LLM_PROVIDER = {
 
 function agentBirthCertificateEvents(input: {
   childPath: string;
+  email?: boolean;
   llmProvider: AgentLlmProvider;
   projectId: string;
   slack?: boolean;
@@ -395,6 +453,7 @@ function agentBirthCertificateEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,

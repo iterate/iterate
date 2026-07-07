@@ -80,6 +80,9 @@ export const ProjectProcessorContract = defineProcessorContract({
         onboardingActive: z.boolean().optional(),
         projectId: z.string(),
         slug: z.string(),
+        /** The creating user's login email, when known. Seeds owner-scoped
+         * project state (e.g. the inbound email sender allowlist). */
+        creatorEmail: z.string().optional(),
       }),
     },
     "events.iterate.com/project/created": {

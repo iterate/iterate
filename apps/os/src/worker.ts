@@ -30,6 +30,7 @@ import {
 } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
+import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
@@ -123,6 +124,14 @@ export default {
     }
 
     console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+  },
+
+  // Inbound project email: Cloudflare Email Routing's catch-all rule for each
+  // project hostname base (e.g. `*@iterate.app`) delivers here. setReject is
+  // the permanent-failure channel; a thrown error is a temporary failure the
+  // sending MTA retries — so infra errors deliberately propagate.
+  async email(message: ForwardableEmailMessage) {
+    await handleInboundEmail(message);
   },
 };
 
