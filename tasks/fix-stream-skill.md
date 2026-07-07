@@ -38,13 +38,20 @@ should be able to:
 
 Deliverables:
 
-- [ ] `.agents/skills/fix-stream/SKILL.md` — the skill, written caveman-style
+- [x] `.agents/skills/fix-stream/SKILL.md` — the skill, written caveman-style
       (mattpocock's caveman compression: terse, no filler, technical substance
-      intact).
+      intact). _Committed; may still be updated after the trial run._
 - [ ] Trial run of the skill against `/agents/1648` in project `misha2` (prd):
-  - [ ] Fixture: real events dumped from the stream (bulk payloads no
+  - [x] Fixture: real events dumped from the stream (bulk payloads no
         processor consumes stripped at dump time; noted in the test).
-  - [ ] Failing test committed + pushed (CI red) before the fix.
+        _`stream-repros/misha2-1648.events.json`, 338 events, 340K._
+  - [x] Failing test committed + pushed (CI red) before the fix.
+        _`stream-repros/misha2-1648-heic-image-silence.test.ts`; replay
+        reproduces prod exactly, down to `llmRequestId: 3010` and the 400
+        error chunk. Required extracting the in-memory harness from
+        `agent-processors.test.ts` into `test-helpers.ts` (with a fix:
+        MemoryStream.append now assigns `last offset + 1`, not `length + 1`,
+        so gap-y seeded histories don't collide)._
   - [ ] Fix committed + pushed (CI green).
   - [ ] Simplification pass: revert fix locally → minimise feed → confirm
         still red → push → unrevert → push.
@@ -100,5 +107,5 @@ response). Before the fix the LLM request fails and no output ever arrives.
 
 - 2026-07-07: dumped stream via
   `doppler run --project os --config prd -- pnpm --dir apps/os cli itx run
-  --context prj_e44b80bc88414d309a5aa5fb808fd962 --file dump-all.ts` (paged
+--context prj_e44b80bc88414d309a5aa5fb808fd962 --file dump-all.ts` (paged
   `getEvents` loop). Diagnosed HEIC/vision failure at offsets 3008–3014.
