@@ -101,7 +101,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     vars: ({ marker }) => ({ schedulerKey: `examples/agent-checkin-${marker}` }),
     assert: (result, _ctx, expect) => {
       // { every: 3600 } anchored at set time: the next occurrence is ahead.
-      expect(Date.parse(result as string)).toBeGreaterThan(Date.now());
+      const shaped = result as { nextTriggerAt: string | null };
+      expect(Date.parse(shaped.nextTriggerAt ?? "")).toBeGreaterThan(Date.now());
     },
   },
   "describe-project": {

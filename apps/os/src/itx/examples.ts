@@ -1020,7 +1020,7 @@ const view = await itx.scheduler.set({
 
 // Keep this example inert:
 await itx.scheduler.cancel(key);
-return view.nextTriggerAt;
+return { nextTriggerAt: view.nextTriggerAt };
 `.trim(),
   },
 ];
