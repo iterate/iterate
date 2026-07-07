@@ -202,6 +202,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const text = readString(event, "content");
       const files = readFileAttachments(event);
       if (text == null || files.length === 0) return state;
+      // Reflections of the agent's own sent messages (the processor's
+      // "The assistant sent this visible web-chat message" inputs, keyed
+      // agent/render-web-response@<offset>) carry the SAME attachments the
+      // web-message-sent event already rendered as an assistant bubble —
+      // they exist for the model's eyes, not the user's.
+      if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-file-${event.offset}`,
@@ -215,10 +221,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case "events.iterate.com/agents/tui-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
+      const files = readFileAttachments(event);
       const item: AgentUiMessageItem = {
         kind: "assistant",
         id: `assistant-${event.offset}`,
         text,
+        ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
       return emitItem(state, ops, item);

@@ -52,7 +52,7 @@ import {
   mintProjectFileUrl,
   putProjectFile,
   readProjectFile,
-  sanitizeFileFilename,
+  storeAgentFileAttachments,
 } from "./domains/files/project-files.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
@@ -1052,8 +1052,11 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   async __describe() {
     return describeNode({
       instructions:
-        "An agent's web-chat door: sendMessage({ message }) appends the agent's reply to its stream (what the user sees).",
-      children: { sendMessage: "Say something to the user." },
+        "An agent's web-chat door: sendMessage({ message, files? }) appends the agent's reply " +
+        "to its stream (what the user sees). `files` attaches generated files — base64 " +
+        "strings (itx.ai.run image output), Uint8Array, Blob, or a stream — which render " +
+        "inline in the chat and stay model-visible on later turns.",
+      children: { sendMessage: "Say something to the user (optionally with file attachments)." },
       parent: "agent.chat / itx.chat (agent scopes only)",
     });
   }
@@ -1074,9 +1077,18 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   async sendMessage(input: Parameters<AgentChat["sendMessage"]>[0]) {
     const message = input.message.trim();
     if (message === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
+    const files =
+      input.files === undefined || input.files.length === 0
+        ? undefined
+        : await storeAgentFileAttachments({
+            agentPath: this.props.path,
+            config: parseConfig(env),
+            files: input.files,
+            projectId: this.props.projectId,
+          });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: { message },
+      payload: { message, ...(files === undefined ? {} : { files }) },
     });
     return event;
   }
@@ -1172,33 +1184,12 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   async addFiles(input: Parameters<Agent["addFiles"]>[0]) {
     if (input.files.length === 0) throw new Error("agent.addFiles requires at least one file.");
-    const config = parseConfig(env);
-    const files = await Promise.all(
-      input.files.map(async (file) => {
-        const filename = sanitizeFileFilename(file.filename);
-        // A short random prefix keeps two same-named uploads in one
-        // conversation from overwriting each other under last-write-wins paths.
-        const path = `${this.#path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
-        const metadata = await putProjectFile({
-          contentType: file.contentType,
-          data: file.data,
-          path,
-          projectId: this.#props.projectId,
-        });
-        const url = await mintProjectFileUrl({
-          config,
-          path,
-          projectId: this.#props.projectId,
-        });
-        return {
-          contentType: metadata.contentType,
-          filename,
-          path: metadata.path,
-          size: metadata.size,
-          url,
-        };
-      }),
-    );
+    const files = await storeAgentFileAttachments({
+      agentPath: this.#path,
+      config: parseConfig(env),
+      files: input.files,
+      projectId: this.#props.projectId,
+    });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agent/input-added",
       payload: {
