@@ -53,7 +53,7 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   600s watchdog — sandbox starts degraded as the instance pool saturated at
   `assigned == 100` even with destroy-on-idle (see the marathon5 addendum
   under flake 23). Preview cap raised 100 → 500 for the marathon, then reset
-  to 31 after Cloudflare rejected 500 against the preview account memory quota.
+  to 150 after Cloudflare rejected 500 against the preview account memory quota.
 - **marathon6** `gb1g4sg7rs`: 25 clean at a steady ~60-90s/run — cap 500
   eliminated the saturation slowdown entirely (pool rode at `assigned: 491`
   with NO latency growth, where cap-100 marathons were at 3-5min/run by run
@@ -62,10 +62,13 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
   attempts, each with a fresh session + project, matching the vitest lane's
   `retry: 2` policy; a broken slot still fails all three inside ~5min.
-- **2026-07-07 quota correction**: the preview cap was reduced 500 → 31.
+- **2026-07-07 quota correction**: the preview cap was reduced 500 → 150.
   Cap 500 helped a single marathon slot, but multiple preview slots at
   `standard-1` exceeded the dev/preview account memory quota and blocked new
-  deploys.
+  deploys. Cap 200 fits a partially populated preview fleet, but not all nine
+  preview slots once each carries the OS sandbox app. Cap 100 previously
+  wedged at `assigned == max_instances`; 150 is the fleet-wide compromise
+  until Cloudflare changes assigned-slot accounting.
 - **marathon7** `pvtfkq146g`: 21 clean, run 22 failed in
   `streams-example-app`'s vitest lane: `Network connection lost.` on a
   392ms-old fresh WebSocket (edge blip) — and that suite had NO retry config
@@ -581,14 +584,14 @@ sandbox-exec went ~20-40s (runs 1-10) → 2.1-2.8min (runs 30-32, shaving the
 happened at exactly `assigned == max_instances` (20, then 100). Response:
 preview cap raised 100 → **500** (`generate-wrangler-config.ts`) so a whole
 50-run marathon's cumulative creations (~3-8 sandboxes/run) never saturate
-the pool. On 2026-07-07 this was reduced to **31** because several preview
+the pool. On 2026-07-07 this was reduced to **150** because several preview
 slots at 500 `standard-1` instances exceeded the dev/preview account memory
-quota and blocked deploys; 31 standard-1 instances fit the same quota as the
-old 500-lite cap. Destroy remains correct — it is what lets an idle fleet drain
-back to zero instead of holding slots forever. If sustained-churn claim latency
-reproduces near the deployable cap, this becomes a Cloudflare Containers
-escalation (pool-manager degradation under DO-binding churn), not an app-side
-fix.
+quota and blocked deploys; 200 fit the currently populated fleet but did not
+leave room for all nine preview slots to carry OS sandbox apps. Destroy
+remains correct — it is what lets an idle fleet drain back to zero instead of
+holding slots forever. If sustained-churn claim latency reproduces at 150,
+this becomes a Cloudflare Containers escalation (pool-manager degradation
+under DO-binding churn), not an app-side fix.
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 
