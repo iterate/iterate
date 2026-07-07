@@ -54,6 +54,16 @@ describe("normalizeSlackError", () => {
     expect(err.message).toMatch(/use itx\.integrations\.list\(\) to see connections/);
   });
 
+  // A MID-path miss (an invented namespace like `.api.postMessage`) dies on
+  // `api` being undefined, not on the leaf — same grammar answer.
+  test("a mid-path miss (hit undefined) becomes the call grammar", () => {
+    const err = normalizeSlackError(
+      new Error("Capability path api.postMessage hit undefined."),
+      "main",
+    );
+    expect(err.message).toBe(SLACK_CALL_GRAMMAR);
+  });
+
   test("an unrecognized Slack error passes through verbatim", () => {
     const err = normalizeSlackError({ message: "channel_not_found" }, "main");
     expect(err.message).toBe("channel_not_found");

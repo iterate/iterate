@@ -146,6 +146,7 @@ export async function replayPathCall(
 
   // A replay MISS on a known capability points the caller back at discovery
   // — the suffix is only honest when a name exists for describe() to show.
+  // Wording changes here must keep isPathMissMessage matching.
   const miss = (message: string) =>
     new Error(
       context?.capability
@@ -174,4 +175,19 @@ export async function replayPathCall(
     throw miss(`Capability path ${call.path.join(".")} did not resolve to a function.`);
   }
   return await holder[method](...call.args);
+}
+
+/**
+ * True when `message` is a replayPathCall traversal miss — the caller drove a
+ * dotted path that does not exist on the replayed target (mid-path `hit
+ * undefined`, leaf `did not resolve to a function`, or a non-callable root).
+ * Error normalizers use this to answer with their surface's calling-convention
+ * grammar instead of passing through a generic failure, so the caller's next
+ * attempt is shaped right.
+ */
+export function isPathMissMessage(message: string): boolean {
+  return (
+    message.includes("Capability path") ||
+    message.includes("Capability invoked as a function but the target is not callable")
+  );
 }

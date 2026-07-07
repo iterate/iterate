@@ -19,7 +19,37 @@ vi.mock("../../env.ts", () => ({
   },
 }));
 
-const { connectionOctokit } = await import("./github-api.ts");
+const { connectionOctokit, normalizeGithubError, GITHUB_CALL_GRAMMAR } =
+  await import("./github-api.ts");
+
+describe("normalizeGithubError", () => {
+  // Both replayPathCall miss shapes must answer with the grammar: a live
+  // agent invented `.api.request(...)` (a MID-path miss — "hit undefined"),
+  // got a generic failure, and burned turns rediscovering the surface.
+  test("mid-path miss (hit undefined) gets the call grammar", () => {
+    const error = normalizeGithubError(
+      new Error("Capability path api.request hit undefined."),
+      "acme",
+    );
+    expect(error.message).toBe(GITHUB_CALL_GRAMMAR);
+  });
+
+  test("leaf miss (did not resolve to a function) gets the call grammar", () => {
+    const error = normalizeGithubError(
+      new Error("Capability path repos.list did not resolve to a function."),
+      "acme",
+    );
+    expect(error.message).toBe(GITHUB_CALL_GRAMMAR);
+  });
+
+  test("real API failures keep their status and message", () => {
+    const error = normalizeGithubError(
+      Object.assign(new Error("Not Found"), { status: 404 }),
+      "acme",
+    );
+    expect(error.message).toBe("GitHub API failed with HTTP 404: Not Found");
+  });
+});
 
 describe("connectionOctokit", () => {
   test(".request() rides the connection secret's fetch with a placeholder auth header", async () => {

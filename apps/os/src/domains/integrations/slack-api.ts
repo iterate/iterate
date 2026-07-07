@@ -11,6 +11,7 @@
 
 import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { itxEnv } from "../../env.ts";
+import { isPathMissMessage } from "../../itx/path-proxy.ts";
 import { projectStub } from "../projects/egress.ts";
 import {
   mintProjectFileUrl,
@@ -114,7 +115,9 @@ export function normalizeSlackError(error: unknown, connection: string): Error {
       `Slack connection "${connection}" has no usable bot token (${slackError}). Use itx.integrations.list() to see connections.`,
     );
   }
-  if (typeof e.message === "string" && e.message.includes("did not resolve to a function")) {
+  if (typeof e.message === "string" && isPathMissMessage(e.message)) {
+    // Covers mid-path misses too (`.api.postMessage(...)` dies on `api` being
+    // undefined, not on the leaf) — every miss gets the grammar.
     return new Error(SLACK_CALL_GRAMMAR);
   }
   return new Error(e.message ?? String(error));
