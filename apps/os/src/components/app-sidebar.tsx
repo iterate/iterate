@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Box,
   Bug,
+  CalendarClock,
   Check,
   ChevronsLeft,
   ChevronsUpDown,
@@ -590,6 +591,7 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/agents"
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/sandboxes"
+    | "/projects/$projectSlug/scheduler"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
@@ -630,6 +632,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/sandboxes",
     streamPath: StreamPath.parse("/sandboxes"),
     to: "/projects/$projectSlug/sandboxes",
+  },
+  {
+    fuzzy: true,
+    icon: CalendarClock,
+    label: "/scheduler",
+    streamPath: StreamPath.parse("/scheduler"),
+    to: "/projects/$projectSlug/scheduler",
   },
   {
     fuzzy: true,
