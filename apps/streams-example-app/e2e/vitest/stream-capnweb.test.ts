@@ -43,17 +43,39 @@ describe("stream capnweb protocol", () => {
   });
 
   e2eIt("appends events after the stream-created event over capnweb @preview", async () => {
-    const path = e2eStreamPathLabel("stream-capnweb-append");
-    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
+    // Deployed previews ride workers.dev (envs.ts: deliberately no custom
+    // domain), and that edge intermittently kills fresh authenticated
+    // websockets for minutes at a time: the upgrade succeeds, the socket dies
+    // within ~1s ("Network connection lost"), the worker's own invocation
+    // logs "Ok", and custom-domain websockets in the same minutes are fine
+    // (diagnosed live 2026-07-07, window 01:32-01:43 UTC; 3 CI/marathon
+    // sightings before that). Re-dial ONCE on a fresh path after a pause:
+    // nothing was appended when the socket dies mid-first-call, and a fresh
+    // path per attempt means a late duplicate could only land on an abandoned
+    // stream. A window longer than the pause still fails the test — correct,
+    // because that's an outage, not a blip. The durable fix is a custom
+    // domain for the playground.
+    const dialAndAppend = async () => {
+      const path = e2eStreamPathLabel("stream-capnweb-append");
+      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
+      const [appended] = await stream.stream.append({
+        type: "test.stream.capnweb-append",
+        payload: { path },
+      });
+      return { appended, path };
+    };
+    let result: Awaited<ReturnType<typeof dialAndAppend>>;
+    try {
+      result = await dialAndAppend();
+    } catch (error) {
+      if (!/Network connection lost|WebSocket connection failed/i.test(String(error))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      result = await dialAndAppend();
+    }
 
-    const [appended] = await stream.stream.append({
+    expect(result.appended).toMatchObject({
       type: "test.stream.capnweb-append",
-      payload: { path },
-    });
-
-    expect(appended).toMatchObject({
-      type: "test.stream.capnweb-append",
-      payload: { path },
+      payload: { path: result.path },
       offset: 3,
       createdAt: expect.any(String),
     });
