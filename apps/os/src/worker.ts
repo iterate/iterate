@@ -20,7 +20,8 @@ import { withEvlog } from "@iterate-com/shared/evlog";
 import { trustedInternalAuthContext } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
-import { readProjectByHostname, resolveProjectIdBySlug } from "./project-directory.ts";
+import { readProjectByHostname } from "./project-hostname-directory.ts";
+import { resolveProjectIdBySlug } from "./project-directory.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import {
   defaultProjectWorkerRef,
