@@ -91,7 +91,7 @@ export async function callProjectSlackWebApi(input: {
  * Slack answers unauthorized downloads with a 200 HTML login page, so HTML
  * responses count as auth failures.
  */
-export async function downloadProjectSlackFile(input: {
+async function downloadProjectSlackFile(input: {
   projectId: string;
   url: string;
 }): Promise<{ bytes: Uint8Array; contentType: string | undefined }> {

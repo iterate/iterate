@@ -37,8 +37,7 @@ import {
   type ProjectFileData,
 } from "./file-url-signing.ts";
 
-export { projectFileDataToBytes, sanitizeFileFilename } from "./file-url-signing.ts";
-export type { ProjectFileData } from "./file-url-signing.ts";
+export { sanitizeFileFilename } from "./file-url-signing.ts";
 
 /**
  * The reserved platform app slug that serves project file bytes. Ingress
@@ -49,10 +48,10 @@ export const FILES_APP_SLUG = "iterate-files";
 
 /** Default signed-URL lifetime: long enough that a link pasted into Slack
  * still works next week, short enough that leaked links eventually die. */
-export const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /** What a stored file looks like from the outside: address + wire facts. */
-export type ProjectFileMetadata = {
+type ProjectFileMetadata = {
   contentType: string;
   path: string;
   size: number;

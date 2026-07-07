@@ -29,7 +29,7 @@ import {
 } from "./slack-agent-processor-contract.ts";
 
 /** One file shared on a Slack message, as the webhook carries it. */
-export type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
+type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
 
 export class SlackAgentProcessor extends StreamProcessor<
   typeof SlackAgentProcessorContract,
