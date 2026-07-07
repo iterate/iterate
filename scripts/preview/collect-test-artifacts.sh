@@ -57,8 +57,17 @@ shopt -s nullglob
 os_e2e_roots=(/tmp/os-e2e-*)
 os_preview_logs=(/tmp/os-preview-*.log)
 
-copy_files "$artifact_root/os-e2e" "${os_e2e_roots[@]}"
-copy_files "$artifact_root/os-preview-logs" "${os_preview_logs[@]}"
+if ((${#os_e2e_roots[@]} == 0)); then
+  copy_files "$artifact_root/os-e2e"
+else
+  copy_files "$artifact_root/os-e2e" "${os_e2e_roots[@]}"
+fi
+
+if ((${#os_preview_logs[@]} == 0)); then
+  copy_files "$artifact_root/os-preview-logs"
+else
+  copy_files "$artifact_root/os-preview-logs" "${os_preview_logs[@]}"
+fi
 
 echo >> "$manifest"
 echo "Collected files:" >> "$manifest"

@@ -360,12 +360,15 @@ export class StreamDurableObject extends DurableObject<Env> {
             "events.iterate.com/stream/created must be the first event and have offset 1",
           );
         }
-        return {
-          ...next,
-          projectId: event.payload.projectId,
-          path: event.payload.path,
-          createdAt: event.createdAt,
-        };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            projectId: event.payload.projectId,
+            path: event.payload.path,
+            createdAt: event.createdAt,
+          },
+        });
       }
 
       case "events.iterate.com/stream/woken": {
@@ -379,16 +382,46 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       case "events.iterate.com/stream/paused": {
         const event = parse("events.iterate.com/stream/paused", args.event);
-        return { ...next, paused: true, pauseReason: event.payload.reason ?? null };
+        return {
+          ...next,
+          paused: true,
+          pauseReason: event.payload.reason ?? null,
+          circuitBreaker: resetCircuitBreaker(next.circuitBreaker, event.createdAt),
+        };
       }
 
-      case "events.iterate.com/stream/resumed":
-        parse("events.iterate.com/stream/resumed", args.event);
-        return { ...next, paused: false, pauseReason: null };
+      case "events.iterate.com/stream/resumed": {
+        const event = parse("events.iterate.com/stream/resumed", args.event);
+        return {
+          ...next,
+          paused: false,
+          pauseReason: null,
+          circuitBreaker: resetCircuitBreaker(next.circuitBreaker, event.createdAt),
+        };
+      }
 
       case "events.iterate.com/stream/metadata-updated": {
         const event = parse("events.iterate.com/stream/metadata-updated", args.event);
-        return { ...next, metadata: event.payload.metadata };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, metadata: event.payload.metadata },
+        });
+      }
+
+      case "events.iterate.com/stream/configured": {
+        const event = parse("events.iterate.com/stream/configured", args.event);
+        const circuitBreaker = event.payload.config.circuitBreaker;
+        if (circuitBreaker === undefined) return next;
+        return {
+          ...next,
+          circuitBreaker: {
+            availableTokens: circuitBreaker.burstCapacity,
+            lastRefillAtMs: Date.parse(event.createdAt),
+            burstCapacity: circuitBreaker.burstCapacity,
+            refillRatePerMinute: circuitBreaker.refillRatePerMinute,
+            trippedAtOffset: null,
+          },
+        };
       }
 
       case "events.iterate.com/stream/subscriber-connected": {
@@ -417,59 +450,78 @@ export class StreamDurableObject extends DurableObject<Env> {
             },
           };
         }
-        return next;
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
       }
 
       case "events.iterate.com/stream/subscriber-disconnected": {
         const event = parse("events.iterate.com/stream/subscriber-disconnected", args.event);
         const { [event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
           next.connectionsByKey;
-        return { ...next, connectionsByKey };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, connectionsByKey },
+        });
       }
 
       case "events.iterate.com/stream/subscription-configured": {
         const event = parse("events.iterate.com/stream/subscription-configured", args.event);
-        return {
-          ...next,
-          configuredSubscribersByKey: {
-            ...next.configuredSubscribersByKey,
-            [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            configuredSubscribersByKey: {
+              ...next.configuredSubscribersByKey,
+              [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+            },
           },
-        };
+        });
       }
 
       case "events.iterate.com/stream/subscription-removed": {
         const event = parse("events.iterate.com/stream/subscription-removed", args.event);
         const { [event.payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
           next.configuredSubscribersByKey;
-        return { ...next, configuredSubscribersByKey };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, configuredSubscribersByKey },
+        });
       }
 
       case "events.iterate.com/stream/rule-configured": {
         const event = parse("events.iterate.com/stream/rule-configured", args.event);
-        return {
-          ...next,
-          rulesById: {
-            ...next.rulesById,
-            [event.payload.ruleId]: latestConfiguredEvent(event),
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            rulesById: {
+              ...next.rulesById,
+              [event.payload.ruleId]: latestConfiguredEvent(event),
+            },
           },
-        };
+        });
       }
 
       case "events.iterate.com/stream/child-stream-created": {
         const event = parse("events.iterate.com/stream/child-stream-created", args.event);
-        if (next.path === undefined) return next;
+        if (next.path === undefined) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
         const childPath = immediateChildPath(next.path, event.payload.childPath);
-        if (childPath === null || next.childPaths.includes(childPath)) return next;
-        return { ...next, childPaths: [...next.childPaths, childPath] };
+        if (childPath === null || next.childPaths.includes(childPath)) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, childPaths: [...next.childPaths, childPath] },
+        });
       }
 
       case "events.iterate.com/stream/error-occurred":
         parse("events.iterate.com/stream/error-occurred", args.event);
-        return next;
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       default:
-        return next;
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
     }
   }
 
@@ -479,6 +531,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `#runInBackground`, so nothing here can fail the append that triggered it.
    */
   #processEvent(args: ReducedCoreEvent): void {
+    this.#pauseIfCircuitBreakerTripped(args);
+
     switch (args.event.type) {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/subscription-configured":
@@ -494,6 +548,52 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#crossPostMatchingRules(args);
         return;
     }
+  }
+
+  #reduceCircuitBreaker(args: {
+    event: StreamEvent;
+    state: CoreProcessorState;
+  }): CoreProcessorState {
+    if (args.event.type === "events.iterate.com/stream/woken") return args.state;
+
+    const timestampMs = Date.parse(args.event.createdAt);
+    if (!Number.isFinite(timestampMs)) return args.state;
+    const elapsedMs =
+      args.state.circuitBreaker.lastRefillAtMs === null
+        ? 0
+        : Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs);
+    const tokens =
+      Math.min(
+        args.state.circuitBreaker.burstCapacity,
+        args.state.circuitBreaker.availableTokens +
+          elapsedMs * (args.state.circuitBreaker.refillRatePerMinute / 60_000),
+      ) - 1;
+
+    return {
+      ...args.state,
+      circuitBreaker: {
+        ...args.state.circuitBreaker,
+        availableTokens: tokens,
+        lastRefillAtMs: timestampMs,
+        trippedAtOffset:
+          tokens < 0 && !args.state.paused && args.state.circuitBreaker.trippedAtOffset === null
+            ? args.event.offset
+            : args.state.circuitBreaker.trippedAtOffset,
+      },
+    };
+  }
+
+  #pauseIfCircuitBreakerTripped(args: ReducedCoreEvent): void {
+    if (args.state.circuitBreaker.trippedAtOffset !== args.event.offset) return;
+    if (args.previousState.circuitBreaker.trippedAtOffset === args.event.offset) return;
+    if (args.event.type === "events.iterate.com/stream/paused") return;
+    this.append({
+      type: "events.iterate.com/stream/paused",
+      idempotencyKey: `stream-paused:${args.event.offset}`,
+      payload: {
+        reason: "circuit breaker tripped: burst rate limit exceeded",
+      },
+    });
   }
 
   /** Tell every ancestor stream (up to the root) that this stream exists. */
@@ -1113,6 +1213,19 @@ function latestConfiguredEvent<
       payload: event.payload,
       createdAt: event.createdAt,
     } as Pick<Event, "offset" | "type" | "payload" | "createdAt">,
+  };
+}
+
+function resetCircuitBreaker(
+  circuitBreaker: CoreProcessorState["circuitBreaker"],
+  createdAt: string,
+): CoreProcessorState["circuitBreaker"] {
+  const createdAtMs = Date.parse(createdAt);
+  return {
+    ...circuitBreaker,
+    availableTokens: circuitBreaker.burstCapacity,
+    lastRefillAtMs: Number.isFinite(createdAtMs) ? createdAtMs : circuitBreaker.lastRefillAtMs,
+    trippedAtOffset: null,
   };
 }
 

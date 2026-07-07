@@ -1,5 +1,15 @@
-import { ChevronDownIcon, FilterIcon } from "lucide-react";
+import { ChevronDownIcon, FilterIcon, MoreHorizontalIcon, PauseIcon, PlayIcon } from "lucide-react";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -26,11 +36,18 @@ const MAX_PRESENCE_AVATARS = 4;
  */
 export function StreamViewHeader({
   agentBusy,
+  agentPause,
   metrics,
   presence,
   streamPath,
 }: {
   agentBusy: boolean;
+  agentPause?: {
+    paused: boolean;
+    pending: boolean;
+    reason: string | null;
+    setPaused: (paused: boolean) => Promise<void>;
+  };
   metrics: RttMetrics;
   presence: readonly AgentUiPresenceEntry[];
   streamPath: string;
@@ -60,6 +77,14 @@ export function StreamViewHeader({
       </button>
 
       <div className="ml-auto flex items-center gap-3">
+        {agentPause == null ? null : (
+          <Badge
+            variant={agentPause.paused ? "destructive" : "secondary"}
+            title={agentPause.reason ?? (agentPause.paused ? "Agent paused" : "Agent running")}
+          >
+            {agentPause.paused ? "Paused" : "Running"}
+          </Badge>
+        )}
         {presence.length === 0 ? null : (
           <div className="flex items-center pl-1.5">
             {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
@@ -147,7 +172,50 @@ export function StreamViewHeader({
             />
           ) : null}
         </Button>
+        {agentPause == null ? null : <AgentActionMenu pause={agentPause} />}
       </div>
     </header>
+  );
+}
+
+function AgentActionMenu({
+  pause,
+}: {
+  pause: {
+    paused: boolean;
+    pending: boolean;
+    setPaused: (paused: boolean) => Promise<void>;
+  };
+}) {
+  const Icon = pause.paused ? PlayIcon : PauseIcon;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Agent actions"
+            className="rounded-full text-muted-foreground"
+          />
+        }
+      >
+        <MoreHorizontalIcon className="size-3.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
+          <DropdownMenuItem
+            closeOnClick
+            disabled={pause.pending}
+            onClick={() => void pause.setPaused(!pause.paused)}
+          >
+            {pause.pending ? <Spinner /> : <Icon />}
+            {pause.paused ? "Resume agent" : "Pause agent"}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

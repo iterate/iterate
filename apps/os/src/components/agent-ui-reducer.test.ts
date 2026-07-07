@@ -389,6 +389,36 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
+  it("shows stream pause and resume events in the agent feed", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/stream/paused",
+        payload: { reason: "Agent circuit breaker tripped." },
+      },
+      {
+        type: "events.iterate.com/stream/resumed",
+        payload: { reason: "Operator resumed the agent." },
+      },
+    ]);
+
+    expect(state.items).toEqual([
+      {
+        kind: "stream-paused",
+        id: "stream-paused-1",
+        text: "Agent paused",
+        reason: "Agent circuit breaker tripped.",
+        timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
+      },
+      {
+        kind: "stream-resumed",
+        id: "stream-resumed-2",
+        text: "Agent resumed",
+        reason: "Operator resumed the agent.",
+        timestampMs: Date.parse("2026-06-11T00:00:02.000Z"),
+      },
+    ]);
+  });
+
   it("settles a completed LLM request even without an assistant message", () => {
     const state = reduceAll([
       {
