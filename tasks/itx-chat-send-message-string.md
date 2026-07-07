@@ -71,7 +71,7 @@ position is much easier to pre-parse than an object literal.
 - [x] `apps/os/project-repo-template/sdk.ts` chat interface types the string form
       (union with the legacy object form)
       _mirrors types.ts: `sendMessage(message: string | { message; files? },
-  options?: AgentChatSendOptions)`; also gained the previously-missing
+options?: AgentChatSendOptions)`; also gained the previously-missing
       files surface_
 - [x] Regenerate: ~~`itx-api.generated.ts`~~, `types-source.generated.ts`,
       `project-repo-template.generated.ts` (freshness tests enforce these)
