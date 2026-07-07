@@ -51,7 +51,7 @@ import {
 import { connectionOctokit, normalizeGithubError } from "./domains/integrations/github-api.ts";
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
-import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
+import { connectionSlackClient, normalizeSlackError } from "./domains/integrations/slack-api.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
@@ -827,24 +827,20 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     const [slug, connection, ...method] = path;
 
     if (slug === "slack") {
-      // Every Slack Web API method path has two segments (chat.postMessage,
-      // auth.test), so fewer than two after the connection means the caller
-      // skipped the connection — the pre-connections address shape.
-      if (!connection || method.length < 2) {
+      if (!connection || method.length === 0) {
         throw new Error(
-          'itx.integrations.slack expected `<connection>.<two-segment Web API method>` (e.g. itx.integrations.slack["main-slack"].chat.postMessage({...})); use itx.integrations.list() to see connections.',
+          'itx.integrations.slack expected `<connection>.<Web API method>` (e.g. itx.integrations.slack["main-slack"].chat.postMessage({ channel, text })); use itx.integrations.list() to see connections.',
         );
       }
-      const methodName = method.join(".");
-      if (args.length > 1) {
-        throw new Error(`Slack calls are unary; ${methodName} received ${args.length} args.`);
+      // The connection's wrapped Slack WebClient: replay the caller's dotted Web
+      // API path onto it (chat.postMessage, conversations.list, …) — the real
+      // SDK, its transport riding the connection's jailed egress (slack-api.ts).
+      const slack = connectionSlackClient({ connection, projectId: this.props.projectId });
+      try {
+        return await replayPathCall(slack, { args, path: method });
+      } catch (error) {
+        throw normalizeSlackError(error, connection);
       }
-      return await callProjectSlackWebApi({
-        body: (args[0] ?? {}) as Record<string, unknown>,
-        connection,
-        method: methodName,
-        projectId: this.props.projectId,
-      });
     }
 
     if (slug === "google") {
@@ -969,8 +965,8 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         "  request(route: string, params?: Record<string, unknown>): Promise<{ data: unknown; headers: Record<string, string>; status: number; url: string }>;",
         "  graphql(query: string, variables?: Record<string, unknown>): Promise<unknown>;",
         "}",
-        '// itx.integrations.slack["<connection>"] takes any Slack Web API method as a',
-        "// dotted path with ONE body argument; there is no request() wrapper:",
+        '// itx.integrations.slack["<connection>"] IS a wrapped Slack WebClient',
+        "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
         "interface SlackConnection {",
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
