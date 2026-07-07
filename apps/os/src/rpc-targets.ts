@@ -264,7 +264,7 @@ class ProjectStreamCollectionRpcTarget
  * on the DO so every write returns read-your-writes visible and alarm-armed;
  * this target only normalizes input sugar before dialing.
  */
-export class SchedulerRpcTarget extends RpcTarget implements Scheduler {
+class SchedulerRpcTarget extends RpcTarget implements Scheduler {
   async __describe() {
     return describeNode({
       instructions:

@@ -28,7 +28,7 @@ import type {
  * (`every`), or a cron expression with optional IANA timezone (`cron`).
  * Sub-minute rates belong to `every`; calendar points belong to `cron`.
  */
-export const SchedulerRecurrence = z.union([
+const SchedulerRecurrence = z.union([
   z.looseObject({ at: z.iso.datetime({ offset: true }) }),
   z.looseObject({ every: z.number().int().positive() }),
   z.looseObject({ cron: z.string().trim().min(1), timezone: z.string().min(1).optional() }),
@@ -40,7 +40,7 @@ export const SchedulerRecurrence = z.union([
  * function-expression string invoked as `fn(itx, schedule, trigger)` with
  * project-root itx authority.
  */
-export const SchedulerAction = z.discriminatedUnion("kind", [
+const SchedulerAction = z.discriminatedUnion("kind", [
   z.looseObject({ kind: z.literal("itx-script"), script: z.string().trim().min(1) }),
 ]) satisfies z.ZodType<SchedulerActionType, unknown>;
 
@@ -54,7 +54,7 @@ export const ScheduleSetPayload = z.looseObject({
 export type ScheduleSetPayload = z.infer<typeof ScheduleSetPayload>;
 
 /** Payload of `trigger-requested`: one due occurrence, code-free by design. */
-export const TriggerRequestedPayload = z.looseObject({
+const TriggerRequestedPayload = z.looseObject({
   executionId: z.string().min(1),
   key: z.string().trim().min(1),
   /** When this occurrence was actually requested (alarm wake or manual trigger). */
@@ -64,10 +64,10 @@ export const TriggerRequestedPayload = z.looseObject({
   /** When this occurrence was due. Equals `requestedAt` for manual triggers. */
   scheduledFor: z.iso.datetime({ offset: true }),
 });
-export type TriggerRequestedPayload = z.infer<typeof TriggerRequestedPayload>;
+type TriggerRequestedPayload = z.infer<typeof TriggerRequestedPayload>;
 
 /** Payload of `trigger-completed`: the outcome of one Trigger's execution. */
-export const TriggerCompletedPayload = z.looseObject({
+const TriggerCompletedPayload = z.looseObject({
   /** The `schedule-set` offset whose code actually ran; absent when skipped. */
   definedAtOffset: z.number().int().nonnegative().optional(),
   error: z.string().optional(),
@@ -77,7 +77,7 @@ export const TriggerCompletedPayload = z.looseObject({
   outcome: z.enum(["succeeded", "failed", "skipped"]),
   result: z.unknown().optional(),
 });
-export type TriggerCompletedPayload = z.infer<typeof TriggerCompletedPayload>;
+type TriggerCompletedPayload = z.infer<typeof TriggerCompletedPayload>;
 
 /**
  * One reduced Schedule: everything the alarm computation, the executing side,
@@ -101,7 +101,7 @@ const ScheduleEntry = z.looseObject({
   /** `createdAt` of the defining `schedule-set` event. */
   setAt: z.iso.datetime({ offset: true }),
 });
-export type ScheduleEntry = z.infer<typeof ScheduleEntry>;
+type ScheduleEntry = z.infer<typeof ScheduleEntry>;
 
 /** One requested-but-not-completed Trigger, keyed by executionId in state. */
 const PendingTrigger = z.looseObject({
@@ -110,7 +110,7 @@ const PendingTrigger = z.looseObject({
   runCount: z.number().int().positive(),
   scheduledFor: z.iso.datetime({ offset: true }),
 });
-export type PendingTrigger = z.infer<typeof PendingTrigger>;
+type PendingTrigger = z.infer<typeof PendingTrigger>;
 
 export const SchedulerProcessorContract = defineProcessorContract({
   slug: "scheduler",
