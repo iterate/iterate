@@ -16,6 +16,14 @@ Developer account:
 Day-to-day JS changes hot-reload through Metro. (A dev-client/native build
 only becomes necessary when a native module lands — e.g. push notifications.)
 
+**The Expo SDK is deliberately pinned to 54**, not latest: the App Store's
+Expo Go (54.0.2, unchanged since 2025-09) only runs SDK 54 projects — newer
+SDKs error with "Project is incompatible with this version of Expo Go".
+Before bumping `expo`, check what the store actually ships
+(`curl -s "https://itunes.apple.com/lookup?bundleId=host.exp.Exponent" | jq -r '.results[0].version'`);
+if it's still 54.x, a bump means abandoning Expo Go for dev builds (EAS or
+local Xcode).
+
 ## Pointing it at a deployment
 
 The sign-in screen has an editable server field with one-tap presets:

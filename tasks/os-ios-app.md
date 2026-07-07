@@ -66,3 +66,7 @@ Local dev servers rejected forge-minted bearer tokens with "missing or invalid a
 - Markdown rendering (Streamdown equivalent for RN)
 - Push notifications on agent replies (needs a dev build / EAS — leaves Expo Go)
 - Reconcile with PR #1605 when its chain merges (voice screen onto this trunk)
+
+## Implementation log
+
+- 2026-07-07 PM: on-device pass hit "Project is incompatible with this version of Expo Go" — the App Store ships Expo Go 54.0.2 (SDK 54 only, unchanged since 2025-09) while the app inherited SDK 57 from the voice branch (which never used Expo Go — it built a dev client). Downgraded to SDK 54 (`pnpm add expo@sdk-54` + `expo install --fix`; RN 0.81.5, expo-router 6, react 19.1) and documented the pin in the README. All lanes re-verified green after the downgrade: typecheck, 6 unit tests, expo export, Metro manifest now `exposdk:54.0.0`, live e2e round-trip 9s.
