@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-review
 size: small
 follows-up: https://github.com/iterate/iterate/pull/1715
 ---
@@ -8,9 +8,9 @@ follows-up: https://github.com/iterate/iterate/pull/1715
 
 ## Status summary
 
-Spec fleshed out, implementation starting. Follow-up to #1715: any file marked
-`linguist-generated=true` via `.gitattributes` should land in the "Generated" group of the
-LOC report, without maintaining a parallel glob list.
+Implemented (PR #1718). Follow-up to #1715: files marked `linguist-generated=true` via
+`.gitattributes` land in the "Generated" group, queried from git at runtime - no glob list to
+keep in sync.
 
 ## Motivation
 
@@ -21,14 +21,14 @@ GitHub collapse them in diffs). The report should agree with that single source 
 
 ## Spec
 
-- [ ] Files with the `linguist-generated` attribute set land in the "Generated" group,
+- [x] Files with the `linguist-generated` attribute set land in the "Generated" group,
       regardless of glob matching order (generated beats every other group, including Tests).
-- [ ] No sync step to forget: query git at runtime with one batched
+- [x] No sync step to forget: query git at runtime with one batched
       `git check-attr linguist-generated --stdin -z` call for all changed files.
-- [ ] Drop `pnpm-lock.yaml` from the Generated glob — it's covered by `.gitattributes` now.
+- [x] Drop `pnpm-lock.yaml` from the Generated glob — it's covered by `.gitattributes` now.
       Keep `**/.generated/**`, `**/generated/**`, `**/*.generated.*` since those aren't marked
       in `.gitattributes`.
-- [ ] Local mode (`pnpm tsx scripts/ci/loc-report.ts [base] [head]`) behaves identically.
+- [x] Local mode (`pnpm tsx scripts/ci/loc-report.ts [base] [head]`) behaves identically.
 
 ## Decisions / assumptions (made while AFK)
 
@@ -46,4 +46,9 @@ GitHub collapse them in diffs). The report should agree with that single source 
 
 ## Implementation log
 
-(append as work proceeds)
+- `getChangedFiles` marks each file via one `git check-attr --stdin -z linguist-generated`
+  call; `computeReport` routes marked files straight to the Generated group before glob
+  matching. `ChangedFile` gained a required `generated` boolean.
+- Verified against real merged commits: `fd0793b74` (routeTree.gen.ts -> Generated, previously
+  Product) and `b35a93f0a` (pnpm-lock.yaml still Generated via the attribute after removing it
+  from the glob).
