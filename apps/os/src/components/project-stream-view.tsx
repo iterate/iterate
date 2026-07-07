@@ -73,6 +73,7 @@ export function ProjectStreamView({
   messageComposer,
   panel,
   projectId,
+  projectSlug,
   streamSource,
   streamPath,
 }: {
@@ -89,6 +90,7 @@ export function ProjectStreamView({
    */
   panel?: ReactNode;
   projectId: string | null;
+  projectSlug?: string;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -252,6 +254,7 @@ export function ProjectStreamView({
                 search={feedSearch}
                 emptyLabel={connectionLabel}
                 isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
+                projectSlug={projectSlug}
                 // The reduced-state row only exists once the processor has
                 // checkpointed; an already-subscribed empty stream is "nothing
                 // here yet", not "connecting".
