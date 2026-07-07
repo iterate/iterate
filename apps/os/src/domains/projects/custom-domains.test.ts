@@ -317,6 +317,50 @@ describe("custom domain provisioning", () => {
     });
   });
 
+  it("refreshes a recorded Cloudflare hostname id even when metadata is missing", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const cloudflare = createCloudflareFetchMock({
+      hostnames: [cloudflareHostname({ id: "custom-hostname-1" })],
+    });
+    cloudflare.hostnames.get("garple.com")!.custom_metadata = null;
+    const provisioner = createProvisioner({ directory, fetch: cloudflare.fetch });
+
+    const snapshot = await provisioner.refresh({
+      cloudflareHostnameId: "custom-hostname-1",
+      hostname: "garple.com",
+      project,
+    });
+
+    expect(snapshot.status).toBe("active");
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
+  });
+
+  it("falls back to hostname lookup when the recorded Cloudflare hostname id is stale", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const cloudflare = createCloudflareFetchMock({
+      hostnames: [cloudflareHostname({ id: "custom-hostname-2" })],
+    });
+    cloudflare.hostnames.get("garple.com")!.custom_metadata = null;
+    const provisioner = createProvisioner({ directory, fetch: cloudflare.fetch });
+
+    const snapshot = await provisioner.refresh({
+      cloudflareHostnameId: "stale-custom-hostname-id",
+      hostname: "garple.com",
+      project,
+    });
+
+    expect(snapshot).toMatchObject({
+      cloudflareHostnameId: "custom-hostname-2",
+      hostname: "garple.com",
+      status: "active",
+    });
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
+      project,
+    );
+  });
+
   it("removes same-project routing KV when a refreshed hostname is no longer active", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
     const cloudflare = createCloudflareFetchMock({
