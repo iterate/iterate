@@ -150,6 +150,7 @@ import {
   EMAIL_INTEGRATION_STREAM_PATH,
   EMAIL_RECEIVED_EVENT_TYPE,
   EMAIL_SENT_EVENT_TYPE,
+  isOwnProjectMail,
   replySubject,
   type OutboundEmailAttachment,
   type SendEmailBinding,
@@ -1195,7 +1196,11 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
     return { from, messageId };
   }
 
-  /** The latest email/received payload on this scope's thread stream. */
+  /**
+   * The latest counterpart-authored email/received payload on this scope's
+   * thread stream. Skips the project's own looped-back mail (the same filter
+   * the email-agent processor applies) so reply never targets ourselves.
+   */
   async #lastReceivedOnThread() {
     const schema = EmailProcessorContract.events[EMAIL_RECEIVED_EVENT_TYPE].payloadSchema;
     const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
@@ -1209,7 +1214,7 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       });
       for (const event of page) {
         const parsed = schema.safeParse(event.payload);
-        if (parsed.success) last = parsed.data;
+        if (parsed.success && !isOwnProjectMail(parsed.data)) last = parsed.data;
       }
       if (page.length < 500) return last;
       afterOffset = page[page.length - 1]!.offset;
@@ -1738,6 +1743,12 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
             onboardingActive: true,
             projectId: registered.projectId,
             slug: registered.slug,
+            // The creating user's email seeds owner-scoped project state (the
+            // inbound email sender allowlist). Admin/CLI creates have no user
+            // email; nothing is seeded and the deployment allowlist governs.
+            ...(userPrincipalOf(this.props.auth)?.email === undefined
+              ? {}
+              : { creatorEmail: userPrincipalOf(this.props.auth)!.email }),
           },
         },
       );

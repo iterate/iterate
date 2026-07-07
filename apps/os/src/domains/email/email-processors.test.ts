@@ -285,6 +285,31 @@ describe("EmailProcessor (thread router)", () => {
     ).toHaveLength(2);
   });
 
+  it("folds sender-allowed patterns into the project allowlist, deduped and case-folded", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/integrations/email");
+    const processor = new EmailProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/email/sender-allowed",
+        payload: { pattern: "Jonas@Example.com", reason: "project-owner" },
+      },
+      {
+        type: "events.iterate.com/email/sender-allowed",
+        payload: { pattern: "jonas@example.com" },
+      },
+      {
+        type: "events.iterate.com/email/sender-allowed",
+        payload: { pattern: "*@iterate.com" },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(processor.state.allowedSenders).toEqual(["jonas@example.com", "*@iterate.com"]);
+  });
+
   it("starts a new thread when an unknown +t tag arrives (no attacker-minted ids)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
@@ -405,9 +430,13 @@ describe("EmailAgentProcessor", () => {
     });
   });
 
-  it("ignores the project's own mail looping back", async () => {
+  it("ignores the project's own mail looping back, including for counterpart state", async () => {
     const { cursors, processor, stream } = setup();
 
+    await stream.append({
+      type: "events.iterate.com/email/received",
+      payload: receivedPayload({}),
+    });
     await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ from: "acme@iterate.app" }),
@@ -416,7 +445,10 @@ describe("EmailAgentProcessor", () => {
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
+    // Our own looped-back mail never becomes the thread counterpart — the
+    // human sender stays the reply target.
+    expect(processor.state.counterpart).toBe("jonas@example.com");
   });
 
   it("prefers Reply-To over From as the thread counterpart", async () => {

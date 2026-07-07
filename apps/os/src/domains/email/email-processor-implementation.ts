@@ -77,12 +77,18 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
         });
         const messageId = normalizeMessageId(event.payload.message.messageId);
         return {
+          ...state,
           threads: { ...state.threads, [resolution.threadId]: resolution.streamPath },
           threadByMessageId:
             messageId === null
               ? state.threadByMessageId
               : { ...state.threadByMessageId, [messageId]: resolution.threadId },
         };
+      }
+      case "events.iterate.com/email/sender-allowed": {
+        const pattern = event.payload.pattern.trim().toLowerCase();
+        if (pattern.length === 0 || state.allowedSenders.includes(pattern)) return state;
+        return { ...state, allowedSenders: [...state.allowedSenders, pattern] };
       }
       case "events.iterate.com/email/sent": {
         // Outbound mail sent inside a thread: index its messageId so replies

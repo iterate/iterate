@@ -79,6 +79,13 @@ export const EmailProcessorContract = defineProcessorContract({
     /** Normalized RFC 5322 Message-ID -> threadId, for inbound AND outbound
      * mail, so replies land in their thread via In-Reply-To/References. */
     threadByMessageId: z.record(z.string(), z.string()).default({}),
+    /**
+     * Per-project sender allowlist (exact addresses or `*@domain`), checked by
+     * the ingress door IN ADDITION to the deployment-wide config allowlist.
+     * Seeded with the project creator's email at birth; grown by appending
+     * `email/sender-allowed` events.
+     */
+    allowedSenders: z.array(z.string()).default([]),
   }),
   events: {
     "events.iterate.com/email/received": {
@@ -112,6 +119,14 @@ export const EmailProcessorContract = defineProcessorContract({
         })
         .loose(),
     },
+    "events.iterate.com/email/sender-allowed": {
+      description:
+        "Adds one pattern (exact address or `*@domain`) to the project's inbound sender allowlist. Seeded with the project creator's email at project birth.",
+      payloadSchema: z.object({
+        pattern: z.string(),
+        reason: z.string().optional(),
+      }),
+    },
     "events.iterate.com/email/thread-route-configured": {
       description:
         "Declares that an email thread id maps to a stream path. The email processor reduces this into its routing table on `/integrations/email`; the routed stream receives a copy as thread context.",
@@ -125,6 +140,7 @@ export const EmailProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/email/received",
+    "events.iterate.com/email/sender-allowed",
     "events.iterate.com/email/sent",
     "events.iterate.com/email/thread-route-configured",
   ],

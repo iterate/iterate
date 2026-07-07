@@ -158,6 +158,25 @@ export function dmarcPasses(authenticationResults: string | null): boolean {
 }
 
 /**
+ * True when an inbound mail's author is the receiving project's own address —
+ * our outbound looping back (e.g. the counterpart auto-forwards into the same
+ * inbox). Shared by the email-agent processor (must not wake the agent to
+ * talk to itself) and email.reply's counterpart selection (must not reply to
+ * ourselves). Structural input: the slice of an email/received payload both
+ * callers hold.
+ */
+export function isOwnProjectMail(payload: {
+  envelope: { to: string };
+  recipient: { slug: string };
+  message: { from: { address?: string } };
+}): boolean {
+  const from = payload.message.from.address?.toLowerCase();
+  if (from === undefined) return false;
+  const recipientDomain = payload.envelope.to.split("@").pop()?.toLowerCase();
+  return from === `${payload.recipient.slug}@${recipientDomain}`;
+}
+
+/**
  * Deterministic stand-in for a missing Message-ID, so idempotency keys stay
  * stable across MTA retries and worker replays: the same physical message
  * always hashes to the same key, instead of minting a fresh UUID per attempt

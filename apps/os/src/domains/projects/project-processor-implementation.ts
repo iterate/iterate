@@ -225,8 +225,10 @@ export class ProjectProcessor extends StreamProcessor<
               ),
             ),
             // Same for the email thread router on `/integrations/email`; the
-            // email ingress door repeats this append (same idempotency key)
-            // for projects born before the router existed.
+            // email ingress door repeats the subscription append (same
+            // idempotency key) for projects born before the router existed.
+            // The creator's email seeds the project sender allowlist so the
+            // owner can email their project from day one without any config.
             timedStep("create-timing", timing, "email-router-append", () =>
               this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
@@ -238,6 +240,18 @@ export class ProjectProcessor extends StreamProcessor<
                   processorSlug: EmailProcessorContract.slug,
                   subscriberType: "project",
                 }),
+                ...(event.payload.creatorEmail === undefined
+                  ? []
+                  : [
+                      {
+                        type: "events.iterate.com/email/sender-allowed" as const,
+                        idempotencyKey: `email-sender-allowed:${this.deps.itx.projectId}:${event.payload.creatorEmail.toLowerCase()}`,
+                        payload: {
+                          pattern: event.payload.creatorEmail,
+                          reason: "project-owner",
+                        },
+                      },
+                    ]),
               ),
             ),
             // The user can already be sitting on /agents/onboarding while repo

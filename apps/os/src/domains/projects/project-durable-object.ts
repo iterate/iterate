@@ -20,6 +20,7 @@ import { SlackProcessor } from "../integrations/slack-processor-implementation.t
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -95,7 +96,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   get emailProcessor() {
-    return new StreamProcessorRpcTarget(this.#emailProcessor);
+    return new StreamProcessorRpcTarget(this.#emailProcessor, {
+      // The ingress door reads the sender allowlist from this snapshot; it
+      // must reflect a policy event appended moments ago (e.g. the birth
+      // seed) even when push delivery is lagging or a wake was dropped.
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(EmailProcessorContract.slug),
+    });
   }
 
   describe() {

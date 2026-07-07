@@ -81,8 +81,12 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   // The sender policy: allowlisted AND DMARC-authenticated. Matching the From
   // header against the allowlist authenticates nothing by itself — anyone can
   // write any From — so a DMARC pass from Cloudflare's inbound MX is required
-  // unless the deployment explicitly opts out (local dev, tests).
-  if (!senderMatchesAllowlist({ address: fromAddress, patterns: config.email.allowedSenders })) {
+  // unless the deployment explicitly opts out (local dev, tests). The
+  // allowlist is the deployment-wide config plus the project's own patterns
+  // (seeded with the creator's email at project birth).
+  const projectPatterns = await readProjectAllowedSenders(project.id);
+  const patterns = [...config.email.allowedSenders, ...projectPatterns];
+  if (!senderMatchesAllowlist({ address: fromAddress, patterns })) {
     await rejectMail("sender-not-allowed", "Sender not authorized for this address.");
     return;
   }
@@ -148,6 +152,28 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     }),
     receivedEvent,
   );
+}
+
+/**
+ * The project's own sender allowlist: the email router's reduced
+ * `allowedSenders` (seeded with the creator's email at project birth, grown
+ * by `email/sender-allowed` events). Read failures degrade to [] — the
+ * deployment-wide config allowlist still applies and closed-by-default holds.
+ */
+async function readProjectAllowedSenders(projectId: string): Promise<string[]> {
+  try {
+    const project = itxEnv.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({ projectId, path: EMAIL_INTEGRATION_STREAM_PATH }),
+    );
+    const { state } = await (await project.emailProcessor).snapshot();
+    const allowedSenders = (state as { allowedSenders?: unknown }).allowedSenders;
+    return Array.isArray(allowedSenders)
+      ? allowedSenders.filter((pattern): pattern is string => typeof pattern === "string")
+      : [];
+  } catch (error) {
+    console.error("[email] failed to read project sender allowlist", { error, projectId });
+    return [];
+  }
 }
 
 /** The address of a postal-mime Address, which may be a mailbox or a group. */
