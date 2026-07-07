@@ -104,6 +104,14 @@ export const AppConfig = z.object({
        * write a From header. Only disable for local dev/synthetic tests.
        */
       requireDmarc: z.boolean().default(true),
+      /**
+       * Allows inbound mail to `bot@<projectHostnameBases[0]>` to auto-provision
+       * a user/org/project for a brand-new verified sender, bypassing
+       * `allowedSenders` (sender verification on that lane is unconditional).
+       * Set per environment in envs.ts (dev/preview: true, prd: false) — see
+       * tasks/email-agent-zero-onboarding.md.
+       */
+      zeroOnboardingEnabled: z.boolean().default(false),
     })
     .prefault({}),
   integrations: z

@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: implemented, awaiting review
+pr: https://github.com/iterate/iterate/pull/1717
 size: medium
 branch: email-zero-onboarding-v2
 baseBranch: dour-clavicle (PR #1711 — stacked)
@@ -90,18 +91,18 @@ must bundle it.
 
 ## Checklist
 
-- [ ] `RESERVED_PLATFORM_SLUGS` in shared + auth enforcement (project create rejects, org create routes around)
-- [ ] `emailZeroOnboardingEnabled` in envs.ts → `APP_CONFIG_EMAIL__ZERO_ONBOARDING_ENABLED` → `config.email.zeroOnboardingEnabled`
-- [ ] `verifySenderAlignment` + `normalizeEmailAddress` + sender-directory constants/fold in `domains/email/utils.ts` (+ unit tests)
-- [ ] `domains/email/zero-onboarding.ts`: directory lookup + provisioning chain (+ `provisionedUserAuthContext` in auth.ts)
-- [ ] `bot@` lane in `email-ingress.ts`; `handleInboundEmail` returns a result and takes ctx
-- [ ] `POST /api/integrations/email/inject` (admin-gated) + ingress.ts api-lane registration + worker.ts dispatch
-- [ ] `email/send-failed` audit in EmailRpcTarget `#deliver`
-- [ ] Prompt: zero-onboarding additions to `EMAIL_AGENT_SYSTEM_PROMPT` (self-contained for strangers, ship built things as URLs)
-- [ ] CONTEXT.md: Email Sender Claim entries
-- [ ] E2E: spoofed-drop, provision→agent→reply-attempt, thread continuation (header + `+t` token lanes), idempotent second contact
-- [ ] Docs: `apps/os/docs/email.md` describing the merged design
-- [ ] Verify e2e green against local dev; unit suites + typecheck green
+- [x] `RESERVED_PLATFORM_SLUGS` in shared + auth enforcement (project create rejects, org create routes around) — _packages/shared/src/slug.ts + project-slugs.ts/internal.ts_
+- [x] `emailZeroOnboardingEnabled` in envs.ts → `APP_CONFIG_EMAIL__ZERO_ONBOARDING_ENABLED` → `config.email.zeroOnboardingEnabled` — _env-shaped var; local dev gets a hardcoded "true" var. Exposed a pre-existing #1711 bug: the shared config walker could not see through `.prefault()`, so ANY nested APP_CONFIG_EMAIL\_\_\* override crashed parseConfig — fixed in packages/shared/src/config.ts with a regression test_
+- [x] `verifySenderAlignment` + `normalizeEmailAddress` + sender-directory constants/fold in `domains/email/utils.ts` (+ unit tests) — _appended to #1711 utils; clause parser with RFC 7489 relaxed alignment_
+- [x] `domains/email/zero-onboarding.ts`: directory lookup + provisioning chain (+ `provisionedUserAuthContext` in auth.ts) — _first-claim-wins fold + idempotent claim appends; project slug probe + one suffixed retry_
+- [x] `bot@` lane in `email-ingress.ts`; `handleInboundEmail` returns a result and takes ctx — _plus the claimed-sender bypass on the project-inbox lane so zero-onboarding senders can reply to `<slug>+t<id>@` (no allowlist knows them); auth-results now read from parsed MIME headers so the inject fake stays thin_
+- [x] `POST /api/integrations/email/inject` (admin-gated) + ingress.ts api-lane registration + worker.ts dispatch — _domains/email/email-inject-api.ts_
+- [x] `email/send-failed` audit in EmailRpcTarget `#deliver` — _rethrows after appending_
+- [x] Prompt: zero-onboarding additions to `EMAIL_AGENT_SYSTEM_PROMPT` (self-contained for strangers, ship built things as URLs) — _two lines added_
+- [x] CONTEXT.md: Email Sender Claim entries — _glossary term + facts entry_
+- [x] E2E: spoofed-drop, provision→agent→reply-attempt, thread continuation (header + `+t` token lanes), idempotent second contact — _e2e/vitest/email-zero-onboarding.e2e.test.ts_
+- [x] Docs: `apps/os/docs/email.md` describing the merged design — _linked from the OS readme_
+- [x] Verify e2e green against local dev; unit suites + typecheck green — _both e2e tests passed against live dev (~17s, real dev auth worker + real LLM turn); 442 os / 6 auth / 38 shared unit tests, lint + typecheck clean_
 
 ## Guesses and assumptions
 
@@ -120,4 +121,12 @@ must bundle it.
 
 ## Implementation log
 
-_(started 2026-07-07 — see commits)_
+- 2026-07-07: implemented and e2e-verified in one pass (all checklist items).
+  Design intersection found during implementation: thread continuation
+  replies go to `<slug>+t<id>@` (the #1711 Reply-To token), which the
+  project-inbox allowlist would reject for zero-onboarding senders — solved
+  with the claimed-sender bypass (a project's own Email Sender Claim may
+  always mail it, under strict verification). Also fixed a pre-existing
+  #1711 bug: `.prefault()` config fields broke nested env overrides
+  (packages/shared/src/config.ts), which would have crashed every request on
+  any deployment that set APP_CONFIG_EMAIL\_\_ALLOWED_SENDERS.

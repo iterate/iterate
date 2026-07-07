@@ -149,6 +149,7 @@ import {
   emailThreadReplyAddress,
   EMAIL_INTEGRATION_STREAM_PATH,
   EMAIL_RECEIVED_EVENT_TYPE,
+  EMAIL_SEND_FAILED_EVENT_TYPE,
   EMAIL_SENT_EVENT_TYPE,
   replySubject,
   type OutboundEmailAttachment,
@@ -1163,13 +1164,30 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
       attachments?: OutboundEmailAttachment[];
     };
   }) {
-    const result = (await env.EMAIL.send(input.message)) as
-      | { messageId?: string }
-      | null
-      | undefined;
-    const messageId = result?.messageId ?? null;
     const from =
       typeof input.message.from === "string" ? input.message.from : input.message.from.email;
+    let result: { messageId?: string } | null | undefined;
+    try {
+      result = (await env.EMAIL.send(input.message)) as { messageId?: string } | null | undefined;
+    } catch (error) {
+      // The attempt itself is audit-worthy (and what e2e asserts on
+      // deployments whose email domain is not yet onboarded for sending).
+      await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+        type: EMAIL_SEND_FAILED_EVENT_TYPE,
+        idempotencyKey: `email-send-failed:${this.props.projectId}:${crypto.randomUUID()}`,
+        payload: {
+          error: error instanceof Error ? error.message : String(error),
+          from,
+          projectId: this.props.projectId,
+          subject: input.audit.subject,
+          to: input.audit.to,
+          ...(input.audit.threadId === undefined ? {} : { threadId: input.audit.threadId }),
+          ...(input.audit.inReplyTo === undefined ? {} : { inReplyTo: input.audit.inReplyTo }),
+        },
+      });
+      throw error;
+    }
+    const messageId = result?.messageId ?? null;
     // Attachment metadata only — bytes never land in the stream.
     const attachments = (input.audit.attachments ?? []).map((attachment) => ({
       filename: attachment.filename,

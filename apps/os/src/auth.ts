@@ -123,6 +123,21 @@ export function trustedInternalAuthContext(): ItxAuthContext {
   return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
 }
 
+/**
+ * A non-admin auth context for a user the platform itself just provisioned
+ * (email zero-onboarding: the sender address was verified by the ingress, and
+ * the auth worker created the user/org moments ago — no session exists yet).
+ * Same shape a signed-in session would produce, so project creation flows
+ * through the ordinary user lane (org-owned directory row, claims catch up on
+ * the user's first real sign-in).
+ */
+export function provisionedUserAuthContext(
+  config: AppConfig,
+  userPrincipal: UserPrincipal,
+): ItxAuthContext {
+  return contextFromPrincipal(config, userPrincipal);
+}
+
 export function userPrincipalOf(auth: ItxAuth): UserPrincipal | undefined {
   return auth instanceof ItxAuthContext ? auth.userPrincipal : undefined;
 }

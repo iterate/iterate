@@ -203,6 +203,7 @@ test coverage removed without replacement is
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)
+- [Email](./docs/email.md) — project inboxes + the zero-onboarding email agent (bot@ → auto-provisioned project → threaded replies)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
 - [Headless Local Debugging](./docs/headless-local-debugging.md)

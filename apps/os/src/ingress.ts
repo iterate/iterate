@@ -150,6 +150,7 @@ function isApiWorkerLanePath(pathname: string): boolean {
   ) {
     return true;
   }
+  if (pathname === "/api/integrations/email/inject") return true;
   return false;
 }
 

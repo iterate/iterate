@@ -1,5 +1,36 @@
 const RESERVED_SLUGS = ["prj", "org"];
 
+/**
+ * Slugs no organization or project may claim: they collide with well-known
+ * email local parts on the deployment's email domain (`<slug>@iterate.app`
+ * shares an address space with `bot@iterate.app`, `noreply+auth@...`, etc. —
+ * see apps/os/src/domains/email/). Auth slug resolution rejects them for
+ * project creation and routes around them for org creation; the OS email
+ * ingress checks inbound local parts against the same list.
+ */
+export const RESERVED_PLATFORM_SLUGS = [
+  "bot",
+  "admin",
+  "administrator",
+  "support",
+  "help",
+  "postmaster",
+  "abuse",
+  "security",
+  "noreply",
+  "no-reply",
+  "mailer-daemon",
+  "root",
+  "info",
+  "contact",
+  "team",
+  "hello",
+];
+
+export function isReservedPlatformSlug(slug: string): boolean {
+  return RESERVED_PLATFORM_SLUGS.includes(slug.toLowerCase());
+}
+
 export function slugify(name: string): string {
   const slug = name
     .toLowerCase()

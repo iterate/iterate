@@ -30,6 +30,7 @@ import {
 import type { ProjectWorker } from "./types.ts";
 import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
+import { handleEmailInjectApiRequest } from "./domains/email/email-inject-api.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
@@ -129,8 +130,8 @@ export default {
   // project hostname base (e.g. `*@iterate.app`) delivers here. setReject is
   // the permanent-failure channel; a thrown error is a temporary failure the
   // sending MTA retries — so infra errors deliberately propagate.
-  async email(message: ForwardableEmailMessage) {
-    await handleInboundEmail(message);
+  async email(message: ForwardableEmailMessage, _env: Env, ctx: ExecutionContext) {
+    await handleInboundEmail(message, ctx);
   },
 };
 
@@ -235,6 +236,11 @@ async function apiFetch(
   // project's stream without a capnweb round trip.
   const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
   if (slackWebhookResponse !== null) return slackWebhookResponse;
+
+  // Synthetic inbound email (admin-secret gated): the e2e/dev stand-in for
+  // the email() entrypoint above, sharing its entire pipeline.
+  const emailInjectResponse = await handleEmailInjectApiRequest({ config, ctx, request });
+  if (emailInjectResponse !== null) return emailInjectResponse;
 
   if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
   const unauthenticated = new UnauthenticatedOsRpcTarget({

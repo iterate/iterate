@@ -415,3 +415,27 @@ describe("public config helpers", () => {
     }>();
   });
 });
+
+describe("nested overrides on wrapped object fields", () => {
+  it("sees through .prefault() when validating nested env override keys", () => {
+    // Regression: unwrapConfigSchema only unwrapped ZodDefault/Optional/
+    // Nullable, so a nested override targeting a `.prefault({})` object field
+    // (e.g. APP_CONFIG_EMAIL__ZERO_ONBOARDING_ENABLED against config.email)
+    // threw "targets nested keys on a non-object config field" on every
+    // request instead of parsing.
+    const schema = BaseAppConfig.extend({
+      email: z
+        .object({
+          allowedSenders: z.array(z.string()).default([]),
+          zeroOnboardingEnabled: z.boolean().default(false),
+        })
+        .prefault({}),
+    });
+    const parsed = parseAppConfigFromEnv({
+      configSchema: schema,
+      prefix: "APP_CONFIG_",
+      env: { APP_CONFIG_EMAIL__ZERO_ONBOARDING_ENABLED: "true" },
+    });
+    expect(parsed.email).toMatchObject({ zeroOnboardingEnabled: true, allowedSenders: [] });
+  });
+});

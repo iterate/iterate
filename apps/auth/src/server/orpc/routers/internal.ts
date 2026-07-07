@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { resolveUniqueSlug } from "@iterate-com/shared/slug";
+import { isReservedPlatformSlug, resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
 import { config } from "../../env.ts";
@@ -126,7 +126,10 @@ const createForUser = os.internal.organization.createForUser
     const slug = await resolveUniqueSlug({
       name: input.name,
       slug: input.slug,
+      // Reserved platform slugs (email local parts like `bot`) count as taken
+      // so org creation routes around them with a suffix instead of failing.
       isTaken: async (candidate) =>
+        isReservedPlatformSlug(candidate) ||
         Boolean(await getOrganizationBySlug(context.db, { slug: candidate })),
     });
 

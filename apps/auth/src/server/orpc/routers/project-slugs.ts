@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { slugify } from "@iterate-com/shared/slug";
+import { isReservedPlatformSlug, slugify } from "@iterate-com/shared/slug";
 import type { Client } from "sqlfu";
 import { getProjectById, getProjectBySlug } from "../../db/queries/index.ts";
 
@@ -27,6 +27,14 @@ export async function resolveProjectCreateTarget(input: {
   slug?: string;
 }): Promise<ProjectCreateTarget> {
   const slug = slugify(input.slug ?? input.name);
+
+  // Project slugs double as email local parts (`<slug>@iterate.app`), so the
+  // platform's well-known addresses can never be shadowed by a project.
+  if (isReservedPlatformSlug(slug)) {
+    throw new ORPCError("CONFLICT", {
+      message: `Project slug ${slug} is reserved.`,
+    });
+  }
 
   const existingById = input.id ? await getProjectById(input.db, { id: input.id }) : null;
   if (existingById) {

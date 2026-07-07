@@ -73,6 +73,13 @@ export interface DeployedEnv {
    * existed).
    */
   projectHostnameBases: string[];
+  /**
+   * Whether inbound mail to `bot@<projectHostnameBases[0]>` may auto-provision
+   * a user/org/project for a brand-new verified sender (the zero-onboarding
+   * email agent — tasks/email-agent-zero-onboarding.md). On for dev/preview
+   * slots; off for prd until real inbound MX + rate limiting land.
+   */
+  emailZeroOnboardingEnabled: boolean;
   /** IDs of the Cloudflare resources this env owns (created once by ensure-resources). */
   resources: {
     /** KV: slug -> project-id cache in front of the auth project directory. */
@@ -101,6 +108,7 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     eventDocsBaseUrl: `https://events.iterate-preview-${n}.com`,
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
+    emailZeroOnboardingEnabled: true,
     resources,
   };
 }
@@ -116,6 +124,7 @@ export const envs = {
     eventDocsBaseUrl: "https://events.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
+    emailZeroOnboardingEnabled: false,
     resources: {
       projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
       workerBuildCacheKvId: "43306c224d364c7aa804c3ff762c4d08",

@@ -15,6 +15,10 @@ import {
   parseMessageIdList,
   replySubject,
   senderMatchesAllowlist,
+  domainsAlignRelaxed,
+  foldEmailSenderDirectory,
+  normalizeEmailAddress,
+  verifySenderAlignment,
   EMAIL_MAX_MESSAGE_BYTES,
   type OutboundEmailAttachment,
 } from "./utils.ts";
@@ -347,5 +351,92 @@ describe("buildProjectEmailMessage", () => {
         request: { to: "u@e.com", subject: "Hi", text: "x", replyTo: "acme+t42@evil.com" },
       }),
     ).toThrow(/replyTo/);
+  });
+});
+
+describe("normalizeEmailAddress", () => {
+  it("lowercases but preserves +tags and dots (distinct identities)", () => {
+    expect(normalizeEmailAddress(" Joe.Bloggs+Test@GMAIL.com ")).toBe("joe.bloggs+test@gmail.com");
+  });
+});
+
+describe("verifySenderAlignment", () => {
+  const gmailFrom = { fromDomain: "gmail.com" };
+
+  it("accepts dmarc=pass", () => {
+    expect(
+      verifySenderAlignment({
+        authenticationResults: ["mx.cloudflare.net; spf=fail; dmarc=pass header.from=gmail.com"],
+        ...gmailFrom,
+      }),
+    ).toEqual({ verified: true });
+  });
+
+  it("accepts aligned dkim=pass (exact and relaxed)", () => {
+    expect(
+      verifySenderAlignment({
+        authenticationResults: ["mx.cloudflare.net; dkim=pass header.d=gmail.com"],
+        ...gmailFrom,
+      }),
+    ).toEqual({ verified: true });
+    expect(
+      verifySenderAlignment({
+        authenticationResults: ["mx.cloudflare.net; dkim=pass header.i=@mail.gmail.com"],
+        ...gmailFrom,
+      }),
+    ).toEqual({ verified: true });
+  });
+
+  it("rejects unaligned dkim, spf-only, dmarc=fail, and missing headers", () => {
+    expect(
+      verifySenderAlignment({
+        authenticationResults: ["mx.cloudflare.net; dkim=pass header.d=evil.com"],
+        ...gmailFrom,
+      }),
+    ).toMatchObject({ verified: false });
+    expect(
+      verifySenderAlignment({
+        authenticationResults: ["mx.cloudflare.net; spf=pass smtp.mailfrom=gmail.com"],
+        ...gmailFrom,
+      }),
+    ).toMatchObject({ verified: false });
+    expect(
+      verifySenderAlignment({
+        authenticationResults: ["mx.cloudflare.net; dmarc=fail header.from=gmail.com"],
+        ...gmailFrom,
+      }),
+    ).toMatchObject({ verified: false });
+    expect(verifySenderAlignment({ authenticationResults: [], ...gmailFrom })).toMatchObject({
+      verified: false,
+    });
+  });
+});
+
+describe("domainsAlignRelaxed", () => {
+  it("matches equal domains and label-boundary parents", () => {
+    expect(domainsAlignRelaxed("gmail.com", "gmail.com")).toBe(true);
+    expect(domainsAlignRelaxed("mail.gmail.com", "gmail.com")).toBe(true);
+    expect(domainsAlignRelaxed("gmail.com", "mail.gmail.com")).toBe(true);
+    expect(domainsAlignRelaxed("notgmail.com", "gmail.com")).toBe(false);
+  });
+});
+
+describe("foldEmailSenderDirectory", () => {
+  it("first claim wins per address (deterministic under provisioning races)", () => {
+    const events = [
+      {
+        type: "events.iterate.com/email/sender-claimed",
+        payload: { address: "joe@gmail.com", projectId: "prj_first" },
+      },
+      {
+        type: "events.iterate.com/email/sender-claimed",
+        payload: { address: "joe@gmail.com", projectId: "prj_second" },
+      },
+      { type: "events.iterate.com/email/sender-claimed", payload: { address: "no-project-id" } },
+      { type: "events.iterate.com/something-else", payload: { address: "x", projectId: "y" } },
+    ];
+    const folded = foldEmailSenderDirectory(events);
+    expect(folded.get("joe@gmail.com")).toBe("prj_first");
+    expect(folded.size).toBe(1);
   });
 });

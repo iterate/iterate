@@ -70,7 +70,7 @@ it("treats the bare localhost project-host base as an OS app-host alias", async 
 });
 
 it("sends itx paths on the OS host to the api lane", async () => {
-  for (const path of ["/api", "/api/admin-cookie"]) {
+  for (const path of ["/api", "/api/admin-cookie", "/api/integrations/email/inject"]) {
     const route = await decideIngressRoute({
       config: DEV_CONFIG,
       method: "GET",

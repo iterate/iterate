@@ -331,3 +331,143 @@ export function buildProjectEmailMessage(input: {
     ...(attachments.length > 0 ? { attachments } : {}),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Zero-onboarding (tasks/email-agent-zero-onboarding.md): the bot@ inbox that
+// maps SENDERS to auto-provisioned projects. Pure helpers only — the
+// provisioning chain lives in zero-onboarding.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * The zero-onboarding inbox: mail to `bot@<projectHostnameBases[0]>` maps the
+ * SENDER to a project (provisioning user/org/project on first contact).
+ * Reserved as a slug platform-wide via RESERVED_PLATFORM_SLUGS, so no project
+ * can ever shadow it.
+ */
+export const ZERO_ONBOARDING_LOCAL_PART = "bot";
+
+/** Audit fact for a send whose EMAIL binding call failed (e.g. domain not yet
+ * onboarded for Email Sending) — the attempt is still observable. */
+export const EMAIL_SEND_FAILED_EVENT_TYPE = "events.iterate.com/email/send-failed";
+
+/**
+ * Deployment-wide (projectId: null) stream mapping verified sender addresses
+ * to the project provisioned for them ("Email Sender Claim" — CONTEXT.md).
+ * Mirrors the Slack team directory, except claims are appended by the email
+ * ingress itself on first zero-onboarding contact rather than by a project's
+ * connect flow.
+ */
+export const EMAIL_SENDER_DIRECTORY_STREAM_PATH = "/integrations/email-sender-directory";
+export const EMAIL_SENDER_CLAIMED_EVENT_TYPE = "events.iterate.com/email/sender-claimed";
+
+/**
+ * The sender identity primitive: lowercase only. `+tags` and dots are
+ * deliberately preserved — `joe+x@gmail.com` is a distinct identity from
+ * `joe@gmail.com` (and that is a feature for testing).
+ */
+export function normalizeEmailAddress(address: string): string {
+  return address.trim().toLowerCase();
+}
+
+/**
+ * Folds the deployment-wide email sender directory. FIRST claim wins per
+ * address: claims are append-once (idempotency-keyed on the normalized
+ * address), and a deterministic winner makes the provisioning race safe —
+ * a concurrent loser reads the directory back and adopts the winning project.
+ */
+export function foldEmailSenderDirectory(
+  events: readonly { type: string; payload?: unknown }[],
+): Map<string, string> {
+  const claims = new Map<string, string>();
+  for (const event of events) {
+    if (event.type !== EMAIL_SENDER_CLAIMED_EVENT_TYPE) continue;
+    const payload = event.payload as { address?: unknown; projectId?: unknown };
+    if (typeof payload?.address !== "string" || typeof payload?.projectId !== "string") continue;
+    if (!claims.has(payload.address)) claims.set(payload.address, payload.projectId);
+  }
+  return claims;
+}
+
+export type SenderVerification = { verified: true } | { verified: false; reason: string };
+
+/**
+ * The zero-onboarding trust gate: Cloudflare's inbound MX computes
+ * SPF/DKIM/DMARC before invoking the worker and records the verdicts in
+ * Authentication-Results headers. A sender is verified when `dmarc=pass`
+ * (alignment with the From domain is DMARC's definition), or when
+ * `dkim=pass` and the DKIM domain aligns with the From-header domain
+ * (RFC 7489 relaxed). SPF alone never suffices: forwarding breaks it, and the
+ * envelope sender it covers can differ from the From header identity keys on.
+ *
+ * Stricter than the slug-lane `dmarcPasses` (clause parsing + alignment vs a
+ * substring check) because this lane has no allowlist in front of it — but it
+ * shares the same residual weakness: without knowing whether Cloudflare
+ * strips sender-forged Authentication-Results headers (RFC 8601 §5 says it
+ * SHOULD), authserv-id pinning cannot help. The real-MX follow-up must
+ * confirm the stripping behavior before prd enablement; until then the only
+ * ingress is the admin-gated inject route.
+ */
+export function verifySenderAlignment(input: {
+  authenticationResults: string[];
+  fromDomain: string;
+}): SenderVerification {
+  if (input.authenticationResults.length === 0) {
+    return { verified: false, reason: "no authentication-results header" };
+  }
+  const fromDomain = input.fromDomain.toLowerCase();
+  const seen: string[] = [];
+  for (const header of input.authenticationResults) {
+    // `authserv-id; method=result key=value ...; method=result ...`
+    for (const clause of header.split(";").slice(1)) {
+      const parsed = parseAuthClause(clause);
+      if (!parsed) continue;
+      seen.push(`${parsed.method}=${parsed.result}`);
+      if (parsed.result !== "pass") continue;
+      if (parsed.method === "dmarc") return { verified: true };
+      if (parsed.method === "dkim") {
+        const dkimDomain = parsed.params["header.d"] || domainOfIdentity(parsed.params["header.i"]);
+        if (dkimDomain && domainsAlignRelaxed(dkimDomain, fromDomain)) {
+          return { verified: true };
+        }
+      }
+    }
+  }
+  return {
+    verified: false,
+    reason: `no aligned pass for ${fromDomain} in [${seen.join(", ")}]`,
+  };
+}
+
+function parseAuthClause(
+  clause: string,
+): { method: string; result: string; params: Record<string, string> } | null {
+  const tokens = clause.trim().split(/\s+/).filter(Boolean);
+  const head = tokens[0];
+  if (!head) return null;
+  const match = /^([a-z0-9-]+)=([a-z0-9]+)$/i.exec(head);
+  if (!match) return null;
+  const params: Record<string, string> = {};
+  for (const token of tokens.slice(1)) {
+    const eq = token.indexOf("=");
+    if (eq <= 0) continue;
+    params[token.slice(0, eq).toLowerCase()] = token.slice(eq + 1).replace(/^"|"$/g, "");
+  }
+  return { method: match[1]!.toLowerCase(), result: match[2]!.toLowerCase(), params };
+}
+
+function domainOfIdentity(identity: string | undefined): string | undefined {
+  if (!identity) return undefined;
+  const at = identity.lastIndexOf("@");
+  return at >= 0 ? identity.slice(at + 1) : identity;
+}
+
+/**
+ * RFC 7489 relaxed alignment, approximated without a public-suffix list: the
+ * domains are equal, or one is a parent of the other at a label boundary
+ * (mail.gmail.com aligns with gmail.com).
+ */
+export function domainsAlignRelaxed(a: string, b: string): boolean {
+  const left = a.toLowerCase();
+  const right = b.toLowerCase();
+  return left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`);
+}
