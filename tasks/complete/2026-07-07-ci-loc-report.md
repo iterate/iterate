@@ -1,5 +1,5 @@
 ---
-status: in-review
+status: done
 size: small
 pr: https://github.com/iterate/iterate/pull/1715
 ---
@@ -8,9 +8,10 @@ pr: https://github.com/iterate/iterate/pull/1715
 
 ## Status summary
 
-Implemented, PR open (#1715). Workflow + script + SLOC follow-up all pushed; validated locally
-against real merged-PR diffs and via `depot ci run`. Remaining: automatic `pull_request` runs
-only start once this lands on main (Depot registers triggers from the default branch).
+Done, PR open (#1715). Workflow + script + SLOC follow-up all pushed and validated end-to-end:
+the workflow ran automatically on the PR itself and posted/updated the sticky comment in place,
+so the "triggers only register from main" gotcha turned out not to apply here — the new
+workflow's `pull_request` runs started pre-merge.
 
 ## Motivation
 
@@ -56,9 +57,10 @@ lockfile churn". PRs should show a small table of net LOC change broken down by 
   String literals are tracked so `"http://..."` isn't treated as a comment; regex literals are
   not (known, acceptable limitation — "for now" per the ask). "Before" content is taken at the
   merge-base, matching the three-dot diff.
-- **Trigger gotcha**: Depot registers triggers from the default branch, so the automatic
-  `pull_request` runs only start once this lands on main. Validated pre-merge via
-  `depot ci run --workflow .depot/workflows/loc-report.yml` and by running the script locally.
+- **Trigger gotcha**: docs/depot-ci.md warns triggers register from the default branch, but
+  empirically the new workflow's `pull_request` trigger ran on this very PR pre-merge, posted
+  the comment, and updated it in place on subsequent pushes. Also validated via
+  `depot ci run --workflow .depot/workflows/loc-report.yml` and local script runs.
 
 ## Implementation log
 
