@@ -193,10 +193,9 @@ describe("custom domain provisioning", () => {
     await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toBeNull();
   });
 
-  it("allows same-project hostnames covered by an existing custom-domain route", async () => {
+  it("registers explicit subdomain custom domains over parent app routing", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
     await primeProjectHostname(directory, "garple.com", project);
-    await primeProjectHostname(directory, "counter.garple.com", project);
     const createdBodies: unknown[] = [];
     let customHostname: Record<string, unknown> | null = null;
     const provisioner = createCloudflareCustomDomainProvisioner({
@@ -238,15 +237,15 @@ describe("custom domain provisioning", () => {
               projectSlug: "garple",
               source: "iterate-os",
             },
-            hostname: "counter.garple.com",
-            id: "custom-hostname-counter",
+            hostname: "www.garple.com",
+            id: "custom-hostname-www",
             ssl: { status: "active", wildcard: true },
             status: "active",
           };
           return Response.json({ success: true, result: customHostname });
         }
 
-        if (url.pathname === "/client/v4/zones/zone-1/custom_hostnames/custom-hostname-counter") {
+        if (url.pathname === "/client/v4/zones/zone-1/custom_hostnames/custom-hostname-www") {
           return Response.json({
             success: true,
             result: customHostname,
@@ -267,21 +266,21 @@ describe("custom domain provisioning", () => {
       }) as typeof fetch,
     });
 
-    const snapshot = await provisioner.ensure({ hostname: "counter.garple.com", project });
+    const snapshot = await provisioner.ensure({ hostname: "www.garple.com", project });
 
-    expect(createdBodies).toMatchObject([{ hostname: "counter.garple.com" }]);
+    expect(createdBodies).toMatchObject([{ hostname: "www.garple.com" }]);
     expect(snapshot).toMatchObject({
-      hostname: "counter.garple.com",
+      hostname: "www.garple.com",
       status: "active",
     });
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
     );
-    await expect(
-      readProjectHostnameRegistration(directory, "counter.garple.com"),
-    ).resolves.toBeNull();
-    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual({
-      appSlug: "counter",
+    await expect(readProjectHostnameRegistration(directory, "www.garple.com")).resolves.toEqual(
+      project,
+    );
+    await expect(readProjectByHostname(directory, "www.garple.com")).resolves.toEqual({
+      appSlug: null,
       record: project,
     });
   });
@@ -437,6 +436,13 @@ describe("custom domain provisioning", () => {
     await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toEqual(
       project,
     );
+    await expect(
+      readProjectHostnameRegistration(directory, "counter.garple.com"),
+    ).resolves.toBeNull();
+    await expect(readProjectByHostname(directory, "counter.garple.com")).resolves.toEqual({
+      appSlug: "counter",
+      record: project,
+    });
   });
 
   it("removes same-project routing KV when a refreshed hostname is no longer active", async () => {

@@ -266,42 +266,7 @@ async function reconcileProjectHostnameRegistration(input: {
     hostname: input.hostname,
     projectId: input.project.id,
   });
-  // If the immediate parent already routes to this project, preserve
-  // subdomain-as-app routing instead of installing an exact homepage route.
-  if (
-    await hasSameProjectParentHostnameRegistration({
-      directory: input.directory,
-      hostname: input.hostname,
-      projectId: input.project.id,
-    })
-  ) {
-    const registeredProject = await readProjectHostnameRegistration(
-      input.directory,
-      input.hostname,
-    );
-    if (registeredProject?.id === input.project.id) {
-      await deleteProjectHostname(input.directory, input.hostname);
-    }
-    return;
-  }
   await primeProjectHostname(input.directory, input.hostname, input.project);
-}
-
-async function hasSameProjectParentHostnameRegistration(input: {
-  directory: KVNamespace;
-  hostname: string;
-  projectId: string;
-}): Promise<boolean> {
-  const parent = parentHostname(input.hostname);
-  if (!parent) return false;
-  const registeredProject = await readProjectHostnameRegistration(input.directory, parent);
-  return registeredProject?.id === input.projectId;
-}
-
-function parentHostname(hostname: string): string | null {
-  const dotIndex = hostname.indexOf(".");
-  if (dotIndex <= 0) return null;
-  return hostname.slice(dotIndex + 1);
 }
 
 function assertCloudflareHostnameBelongsToProject(
