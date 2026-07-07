@@ -198,6 +198,101 @@ describe("iterate auth login", () => {
       error: expect.any(Error),
     });
   });
+
+  it("refreshes once when cookie token verification fails", async () => {
+    const oldSigned = await signedTokenSet();
+    const currentSigned = await signedTokenSet();
+    const doRefresh = vi.fn(async () => currentSigned.tokenSet);
+    const auth = testAuthMiddleware(config, {
+      doRefresh,
+      jwks: currentSigned.jwks as never,
+    });
+    const onError = vi.fn();
+
+    const result = await auth.authenticate({
+      headers: new Headers({
+        cookie: sessionCookie(oldSigned.tokenSet),
+      }),
+      includeUserInfo: false,
+      onError,
+    });
+
+    expect(doRefresh).toHaveBeenCalledTimes(1);
+    expect(result.session?.user.id).toBe("usr_session");
+    expect(result.responseHeaders.get("set-cookie")).toContain("iterate_session=");
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("refreshes once from the session endpoint when cookie token verification fails", async () => {
+    const oldSigned = await signedTokenSet();
+    const currentSigned = await signedTokenSet();
+    const doRefresh = vi.fn(async () => currentSigned.tokenSet);
+    const handler = testAuthHandler(config, {
+      doRefresh,
+      jwks: currentSigned.jwks as never,
+    });
+
+    const response = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/session", {
+        headers: { cookie: sessionCookie(oldSigned.tokenSet) },
+      }),
+    );
+
+    expect(doRefresh).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain("iterate_session=");
+    await expect(response.json()).resolves.toMatchObject({
+      authenticated: true,
+      user: { id: "usr_session" },
+    });
+  });
+
+  it("repairs session endpoint verification after a non-fatal proactive refresh failure", async () => {
+    const oldSigned = await signedTokenSet();
+    const currentSigned = await signedTokenSet();
+    const doRefresh = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary token endpoint failure"))
+      .mockResolvedValueOnce(currentSigned.tokenSet);
+    const handler = testAuthHandler(config, {
+      doRefresh,
+      jwks: currentSigned.jwks as never,
+    });
+
+    const response = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/session?refresh=force", {
+        headers: { cookie: sessionCookie(oldSigned.tokenSet) },
+      }),
+    );
+
+    expect(doRefresh).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain("iterate_session=");
+    await expect(response.json()).resolves.toMatchObject({
+      authenticated: true,
+      user: { id: "usr_session" },
+    });
+  });
+
+  it("returns unauthenticated from the session endpoint when userinfo fails", async () => {
+    const signed = await signedTokenSet();
+    const handler = testAuthHandler(config, {
+      getUserInfo: async () => {
+        throw new Error("userinfo unavailable");
+      },
+      jwks: signed.jwks as never,
+    });
+
+    const response = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/session", {
+        headers: { cookie: sessionCookie(signed.tokenSet) },
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toContain("iterate_session=");
+    await expect(response.json()).resolves.toEqual({ authenticated: false });
+  });
 });
 
 function testAuthHandler(

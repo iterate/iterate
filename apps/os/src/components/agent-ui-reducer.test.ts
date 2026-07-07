@@ -590,6 +590,177 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  it("renders a slack user message webhook as a user bubble", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            event: {
+              type: "message",
+              channel: "C08R1SMTZGD",
+              user: "U0123ABC",
+              ts: "1783437255.864399",
+              text: "hey <@U9BOT> can you check <https://example.com/status|the status page>? a &amp; b",
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: "hey @U9BOT can you check [the status page](https://example.com/status)? a & b",
+        via: { service: "slack", sender: "U0123ABC" },
+      },
+    ]);
+  });
+
+  it("renders the bot's slack echo webhook as an assistant bubble", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            authorizations: [{ is_bot: true, bot_id: "B0BOT", user_id: "U9BOT" }],
+            event: {
+              type: "message",
+              subtype: "bot_message",
+              channel: "C08R1SMTZGD",
+              bot_id: "B0BOT",
+              bot_profile: { name: "iterate" },
+              ts: "1783437299.000100",
+              text: "All 3 checks passed.",
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "assistant",
+        text: "All 3 checks passed.",
+        via: { service: "slack", sender: "iterate" },
+      },
+    ]);
+  });
+
+  it("renders a third-party bot's slack message as a user bubble, not the assistant", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            authorizations: [{ is_bot: true, bot_id: "B0BOT", user_id: "U9BOT" }],
+            event: {
+              type: "message",
+              subtype: "bot_message",
+              channel: "C08R1SMTZGD",
+              bot_id: "B0OTHER",
+              bot_profile: { name: "github", user_id: "UGITHUB" },
+              ts: "1783437300.000100",
+              text: "Deploy finished.",
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: "Deploy finished.",
+        via: { service: "slack", sender: "github" },
+      },
+    ]);
+  });
+
+  it("ignores non-message and edit slack webhooks", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            event: { type: "reaction_added", user: "U0123ABC", reaction: "eyes" },
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            event: {
+              type: "message",
+              subtype: "message_changed",
+              channel: "C08R1SMTZGD",
+              message: { text: "edited text", user: "U0123ABC" },
+            },
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: { body: { type: "url_verification", challenge: "x" } },
+      },
+    ]);
+
+    expect(state.items).toEqual([]);
+  });
+
+  it("queues a slack user message that arrives mid-turn", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            event: { type: "message", channel: "C1", user: "U1", ts: "1.2", text: "one more" },
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.queuedUserMessages).toMatchObject([{ kind: "user", text: "one more" }]);
+  });
+
+  it("shows only the attachments from the slack-agent's yaml input event", () => {
+    // The slack message itself already rendered from the webhook event; the
+    // slack-agent processor's agent/input-added yaml dump exists for the
+    // model, not the user — but its stored file attachments are the only
+    // browser-renderable copy of shared files.
+    const file = {
+      contentType: "image/png",
+      filename: "screenshot.png",
+      path: "files/screenshot.png",
+      size: 123,
+      url: "https://files.example/screenshot.png",
+    };
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: "slack-agent:webhook-to-agent-input:41",
+        payload: { content: "```yaml\nbody: ...\n```", files: [file] },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { kind: "user", text: "", files: [file], via: { service: "slack" } },
+    ]);
+  });
+
   it("marks an LLM request cancelled when interrupted", () => {
     const state = reduceAll([
       {
