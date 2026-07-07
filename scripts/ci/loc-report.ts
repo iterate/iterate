@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { matchesGlob } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { extname, join, matchesGlob } from "node:path";
 
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
@@ -54,12 +56,126 @@ export function parseNumstat(raw: string): ChangedFile[] {
   return files;
 }
 
+const gitMaxBuffer = 64 * 1024 * 1024;
+
+/**
+ * Changed files between merge-base(base, head) and head, with added/removed
+ * counted as SLOC: blank lines never count, and for JS-ish files line and
+ * block comments are stripped first. Counts come from diffing the
+ * stripped before/after contents, so multiline comment blocks and
+ * comment-only changes fall out naturally.
+ */
 export function getChangedFiles(baseRef: string, headRef: string): ChangedFile[] {
   const raw = execFileSync("git", ["diff", "--numstat", "-z", "-M", `${baseRef}...${headRef}`], {
     encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: gitMaxBuffer,
   });
-  return parseNumstat(raw);
+  const mergeBase = execFileSync("git", ["merge-base", baseRef, headRef], {
+    encoding: "utf8",
+  }).trim();
+  return parseNumstat(raw).map((file) => {
+    if (file.binary) return file;
+    const before = significantLines(gitShow(mergeBase, file.previousPath), file.previousPath);
+    const after = significantLines(gitShow(headRef, file.path), file.path);
+    return { ...file, ...slocDiffCounts(before, after) };
+  });
+}
+
+const jsExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
+
+function significantLines(content: string, path: string) {
+  const stripped = jsExtensions.has(extname(path)) ? stripJsComments(content) : content;
+  return stripped
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .join("\n");
+}
+
+/** Contents of `path` at `ref`, or "" when it doesn't exist there (added/deleted files). */
+function gitShow(ref: string, path: string) {
+  try {
+    return execFileSync("git", ["show", `${ref}:${path}`], {
+      encoding: "utf8",
+      maxBuffer: gitMaxBuffer,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return "";
+  }
+}
+
+function slocDiffCounts(before: string, after: string) {
+  if (before === after) return { added: 0, removed: 0 };
+  const dir = mkdtempSync(join(tmpdir(), "loc-report-"));
+  try {
+    writeFileSync(join(dir, "before"), before && `${before}\n`);
+    writeFileSync(join(dir, "after"), after && `${after}\n`);
+    let out = "";
+    try {
+      out = execFileSync(
+        "git",
+        ["diff", "--no-index", "--numstat", "--", join(dir, "before"), join(dir, "after")],
+        { encoding: "utf8", maxBuffer: gitMaxBuffer },
+      );
+    } catch (error) {
+      // git diff --no-index exits 1 when the files differ; the numstat is still on stdout
+      out = (error as { stdout?: string }).stdout || "";
+    }
+    const [added, removed] = out.split("\t");
+    return { added: Number(added) || 0, removed: Number(removed) || 0 };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Removes line (`//`) and block comments, tracking string/template-literal
+ * state so things like "http://..." survive. Known limitation: regex
+ * literals aren't tracked, so a regex containing `//` or `/*` will eat the
+ * rest of its line (or until a block-comment closer) - rare enough to ignore for now.
+ * Newlines inside block comments are preserved so line structure survives.
+ */
+export function stripJsComments(source: string): string {
+  let result = "";
+  let state: "code" | "single" | "double" | "template" = "code";
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    const next = source[i + 1];
+    if (state === "code") {
+      if (char === "/" && next === "/") {
+        while (i < source.length && source[i] !== "\n") i++;
+        i--;
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        i += 2;
+        while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+          if (source[i] === "\n") result += "\n";
+          i++;
+        }
+        i++;
+        continue;
+      }
+      if (char === "'") state = "single";
+      else if (char === '"') state = "double";
+      else if (char === "`") state = "template";
+      result += char;
+      continue;
+    }
+    // inside a string/template literal
+    if (char === "\\") {
+      result += char + (next || "");
+      i++;
+      continue;
+    }
+    const closed =
+      (state === "single" && (char === "'" || char === "\n")) ||
+      (state === "double" && (char === '"' || char === "\n")) ||
+      (state === "template" && char === "`");
+    if (closed) state = "code";
+    result += char;
+  }
+  return result;
 }
 
 export type GroupRow = { name: string; files: number; added: number; removed: number };
@@ -127,7 +243,7 @@ function renderComment(report: ReturnType<typeof computeReport>, baseSha: string
     "",
     renderTable(report),
     "",
-    `<sub>Lines changed between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
+    `<sub>Source lines changed (blank lines and JS comments ignored) between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
   ].join("\n");
 }
 
