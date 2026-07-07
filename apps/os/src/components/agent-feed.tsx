@@ -785,6 +785,7 @@ function AgentLiveActivity({
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
   const working = runningSteps.length > 0;
+  const toggleLive = useCallback((id: string) => onToggle(`live:${id}`), [onToggle]);
   const showStepRail =
     doneSteps.length > 0 ||
     runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
@@ -813,14 +814,18 @@ function AgentLiveActivity({
       {showStepRail ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
           {/* Steps in the live rail default to collapsed quiet rows — the
-              streaming tail below is the focus while work is in flight. */}
+              streaming tail below is the focus while work is in flight. Toggle
+              keys are namespaced with "live:" so they don't leak into the
+              settled activity, where membership means the opposite (collapse
+              a default-expanded step); a step expanded while streaming stays
+              expanded after settling via the settled default. */}
           {doneSteps.map((step) => (
             <AgentActivityStep
               key={step.id}
               step={step}
-              expanded={toggledIds.has(step.id)}
+              expanded={toggledIds.has(`live:${step.id}`)}
               hideDuplicateResponse={false}
-              onToggle={onToggle}
+              onToggle={toggleLive}
             />
           ))}
           {runningSteps.map((step) =>
@@ -828,9 +833,9 @@ function AgentLiveActivity({
               <AgentActivityStep
                 key={step.id}
                 step={step}
-                expanded={toggledIds.has(step.id)}
+                expanded={toggledIds.has(`live:${step.id}`)}
                 hideDuplicateResponse={false}
-                onToggle={onToggle}
+                onToggle={toggleLive}
               />
             ) : step === liveStep && liveStepHasVisibleContent(step) ? (
               <LiveStepStream key={step.id} step={step} />
