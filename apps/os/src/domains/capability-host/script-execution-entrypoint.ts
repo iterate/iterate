@@ -4,11 +4,6 @@ import type { JsonValue, StatelessDynamicWorkerRef } from "../../types.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 
-type ScriptExecutionEntrypointProps = {
-  projectId: string;
-  scopePath: string;
-};
-
 /**
  * Stateless loopback executor for capability-host runScript.
  *
@@ -18,7 +13,7 @@ type ScriptExecutionEntrypointProps = {
  */
 export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
   Env,
-  ScriptExecutionEntrypointProps
+  { projectId: string; scopePath: string }
 > {
   async run(code: string): Promise<JsonValue | undefined> {
     const projectId = this.ctx.props.projectId;
