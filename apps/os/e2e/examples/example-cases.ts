@@ -84,6 +84,12 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "secret-postman-echo",
   "github-mcp-connect",
   "github-webhooks-project-worker",
+  // Built-in integration usage snippets: each needs a REAL connected
+  // GitHub/Google/Slack account, which e2e fixture projects never hold.
+  "github-list-repos",
+  "github-read-file",
+  "gmail-search-inbox",
+  "slack-post-message",
   "email-send",
 ]);
 
