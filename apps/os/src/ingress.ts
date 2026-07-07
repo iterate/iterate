@@ -10,7 +10,7 @@
  *
  *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
  *   "api"      — rpc path lanes on the OS host: /api, /api/admin-cookie, and
- *                /__itx_e2e/...
+ *                Slack webhooks
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
  *                  prj_<id>.<base>, <slug>.<base>     (URL untouched)
@@ -137,8 +137,8 @@ function projectRoute(input: {
 /**
  * Path lanes served by the api pipeline on the OS host: the capnweb rpc
  * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
- * webhook ingress lanes, and the e2e fixture lane. Deliberately
- * exact-match: other `/api/*` paths (`/api/mcp`, `/api/health`, the OAuth
+ * webhook ingress lanes. Deliberately exact-match: other `/api/*` paths
+ * (`/api/mcp`, `/api/health`, the OAuth
  * callback routes under `/api/integrations/...`) are app routes and stay on
  * the "os" lane.
  */
@@ -150,7 +150,6 @@ function isApiWorkerLanePath(pathname: string): boolean {
   ) {
     return true;
   }
-  if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
 }
 

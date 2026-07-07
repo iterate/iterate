@@ -18,7 +18,7 @@
  * exactly those keys from process.env under `doppler run -- vite dev`.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { envs, type DeployedEnv } from "../../../envs.ts";
+import { envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -53,6 +53,10 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
+  // Local dev must load the baked auth JWKS too; otherwise forge-minted
+  // browser sessions from `pnpm auth:mint --browser-url` fail with
+  // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
+  "APP_CONFIG_ITERATE_AUTH__JWKS",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
@@ -60,10 +64,10 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
   // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
-  // transfers (exact names the SDK reads). Optional: an env without them
-  // still runs sandboxes — backups fail loudly in logs and every container
-  // start falls back to a fresh repo clone. Local dev never needs them
-  // (SANDBOX_BACKUP_MODE=local streams through the local R2 binding).
+  // transfers (exact names the SDK reads). Optional: without them the
+  // sandbox DO falls back to streaming archives through the BACKUP_BUCKET
+  // binding (the SDK's localBucket mode — slower, but persistence still
+  // works; also the only mode local dev supports).
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
 ];
@@ -90,7 +94,14 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // that misses one would be silent drift. (Deliberately distinct from
 // WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
 // hashed into build keys and moves on its own schedule.)
-const COMPATIBILITY_DATE = "2026-06-17";
+//
+// Policy: stay on the LATEST — keep this at the newest date the pinned workerd
+// supports (its build date; a later date errors as "in the future" locally).
+// Bump it alongside the workerd/miniflare catalog bump in pnpm-workspace.yaml,
+// so we always run current compat behavior and never accumulate opt-in flags
+// for things that became default. Only genuinely non-default flags go in
+// compatibility_flags below.
+const COMPATIBILITY_DATE = "2026-07-01";
 
 // The os worker (reader) and the builder (writer) must name the same
 // miniflare namespace in local dev or cache reads never see builds.
@@ -100,6 +111,32 @@ const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 function builderWorkerName(osWorkerName: string) {
   return `${osWorkerName}-builder`;
 }
+
+/**
+ * SSH keys authorized to `wrangler containers ssh` into ANY sandbox instance.
+ *
+ * Cloudflare Containers SSH is account-authenticated (you need Wrangler write
+ * access to the container) AND gated on the container class carrying your
+ * public key here — so this list, applied to the one sandbox container class,
+ * makes every sandbox instance reachable at once. It opens no public port
+ * (SSH tunnels through Wrangler/the control plane). SSH keys are public and
+ * reviewed like any other code; ed25519 only (the platform rejects other
+ * types). See docs/cloudflare-sandboxes.md.
+ *
+ * Add a teammate: append `{ name, public_key }` with their ed25519 key
+ * (`gh api users/<login>/keys`, or `~/.ssh/id_ed25519.pub`).
+ */
+const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
+  {
+    name: "jonastemplestein",
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB5Jd9GS/iVC1nWpIwrM3lhecTuXhsz8NoV8QcyOIuzK",
+  },
+  {
+    name: "jonas-sandbox-debug",
+    public_key:
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP+VckcAWnI0ZbBLsxmKWJtv7lbDwPWcjN37dR/VYlLq sandbox-debug",
+  },
+];
 
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
@@ -134,6 +171,24 @@ function workerBindings(input: {
       // from Doppler (OPTIONAL_SECRETS).
       BACKUP_BUCKET_NAME: `${input.workerName}-sandboxes`,
       CLOUDFLARE_R2_ACCOUNT_ID: input.accountId,
+      // Sandbox DO↔container control-plane transport. HTTP is still the SDK
+      // default in 0.12.3 but is removed from SDK releases after 2026-07-09
+      // (tunnels/code-interpreter already require RPC); RPC is the future
+      // default, so opt in now. Independent of container egress interception.
+      // See docs/cloudflare-sandboxes.md.
+      SANDBOX_TRANSPORT: "rpc",
+      // Container startup budget must cover the IMAGE PULL on a host that
+      // hasn't cached it: the baked-monorepo image is ~3 GB and a cold-host
+      // pull measured 1.5-3.2 min. The SDK defaults (instance-get 30s, i.e.
+      // schedule+start INCLUDING the pull; port-ready 90s) both sat inside a
+      // pull, so fresh sandboxes on cold hosts died with
+      // OPERATION_INTERRUPTED / transport_disposed on utils.createSession —
+      // the dominant e2e flake after the image grew (fast ~30-60s failures =
+      // the instance-get cap; ~150s ones = the dial budget). 300s each (the
+      // SDK's validation max for instance-get) clears the worst observed
+      // pull; anything slower is a genuinely stuck container and should fail.
+      SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
+      SANDBOX_PORT_TIMEOUT_MS: "300000",
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -157,6 +212,9 @@ function workerBindings(input: {
       { binding: "BUILDER", service: builderWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
+    browser: { binding: "BROWSER" },
+    images: { binding: "IMAGES" },
+    media: { binding: "MEDIA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
     queues: {
@@ -185,8 +243,22 @@ function workerBindings(input: {
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
-        image: "./Dockerfile.sandbox",
-        instance_type: "lite",
+        image: "./sandbox/Dockerfile",
+        // The sandbox image bakes this repo into /opt/iterate/iterate, so the
+        // Docker build context must be the monorepo root, not apps/os/sandbox.
+        image_build_context: "../..",
+        // standard-1 (1/2 vCPU, 4 GiB, 8 GB disk), NOT lite: the baked-monorepo
+        // image unpacks to ~3 GB, over lite's 2 GB disk — instances then fail
+        // with ImagePullRequestedDiskSizeToSmall, the rollout wedges the app
+        // "degraded", and every sandbox op storms transport_disposed (observed
+        // live on preview-1, 2026-07-06). The push itself SUCCEEDS — the limit
+        // bites at instance provisioning, so a too-big image degrades envs
+        // instead of failing the deploy. 8 GB fits the image + /workspace +
+        // the backup staging in /var/backups; if the image grows, move up a
+        // tier. Custom types can't help (platform: ≥1 vCPU, disk ≤ 2× memory,
+        // enterprise-only). Billing is while-running only, so the
+        // idle-destroyed fleet stays cheap.
+        instance_type: "standard-1",
         // Sized for e2e churn: the preview lanes provision a fresh project
         // (and sandbox container) per test, and idle containers hold an
         // instance slot until sleepAfter (3m, see
@@ -194,6 +266,13 @@ function workerBindings(input: {
         // after ~5 back-to-back runs; lite instances bill on usage, not
         // reservation, so headroom is free.
         max_instances: input.maxContainerInstances ?? 40,
+        // Interactive shell into any running sandbox via `wrangler containers
+        // ssh <instance-id>` (find ids with `wrangler containers instances`).
+        // Account-authenticated + gated on the keys below; opens no public
+        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+        // the wrangler schema, so it is set explicitly.
+        ssh: { enabled: true },
+        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
       },
     ],
     secrets: { required: REQUIRED_SECRETS },
@@ -278,10 +357,12 @@ export const config = {
   name: "os",
   main: "./src/worker.ts",
   compatibility_date: COMPATIBILITY_DATE,
+  // Only NON-default flags belong here (we stay on the latest
+  // compatibility_date, so anything default-on at that date is redundant).
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
-  // subrequests (auth worker, worker-hosted e2e fixtures through project
-  // egress) must traverse Worker routes instead of going to origin.
+  // subrequests (auth worker and project egress) must traverse Worker routes
+  // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
@@ -293,7 +374,12 @@ export const config = {
   // image on Docker/OrbStack and pairs each container with a proxy-everything
   // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
   dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
-  ...workerBindings({ workerName: "os", accountId: "" }),
+  // The dev/preview account, NOT "": local dev's ARTIFACTS binding is a
+  // REMOTE binding (wrangler proxies it to the real service), and the repo
+  // domain builds raw git remotes as https://<account>.artifacts.cloudflare.net/…
+  // — an empty account makes every local repo seed/clone fail instantly on an
+  // invalid host, which breaks project creation and sandbox provisioning.
+  ...workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
   secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },

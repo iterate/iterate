@@ -3,13 +3,25 @@ import type { StreamEventInput } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { RepoArtifactNameCodec } from "../repos/utils.ts";
 import { workerEventsQueueName } from "../../queue-names.ts";
+import {
+  createCloudflareAccountApi,
+  desiredArtifactRepoEventSubscription,
+  ensureArtifactEventSubscription,
+  listArtifactEventSubscriptions,
+  queueIdForWorkerEventQueue,
+} from "./cloudflare-event-subscriptions.ts";
 
 export const GLOBAL_CLOUDFLARE_EVENTS_STREAM_PATH = "/cloudflare/events";
 export const CLOUDFLARE_EVENT_RECEIVED_TYPE = "events.iterate.com/cloudflare/event-received";
 export const REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE =
   "events.iterate.com/repo/cloudflare-artifact-event-received";
 
-type EventQueueEnv = Pick<Env, "ARTIFACTS_NAMESPACE" | "STREAM" | "WORKER_SELF">;
+type EventQueueEnv = Pick<
+  Env,
+  "ARTIFACTS_ACCOUNT_ID" | "ARTIFACTS_NAMESPACE" | "STREAM" | "WORKER_SELF"
+> & {
+  APP_CONFIG_CLOUDFLARE__API_TOKEN?: string;
+};
 
 export function isWorkerEventsQueue(queue: string, env: Pick<Env, "WORKER_SELF">): boolean {
   return queue === workerEventsQueueName(env.WORKER_SELF);
@@ -94,11 +106,61 @@ async function appendRepoArtifactEventIfAddressable(input: {
   const cloudflareEventType = typeof input.event.type === "string" ? input.event.type : undefined;
   if (cloudflareEventType !== undefined) payload.cloudflareEventType = cloudflareEventType;
 
+  if (cloudflareEventType !== undefined && shouldEnsureRepoEventSubscription(cloudflareEventType)) {
+    try {
+      await ensureRepoEventSubscriptionIfConfigured({
+        env: input.env,
+        repoName: artifactRepo.repoName,
+      });
+    } catch (error) {
+      console.warn("[event-queue] failed to ensure artifact repo subscription", {
+        error,
+        repoName: artifactRepo.repoName,
+      });
+    }
+  }
+
   await appendToStream(input.env, streamAddress, {
     type: REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE,
     idempotencyKey: `cf-artifact-event:${input.message.id}`,
     payload,
   });
+}
+
+function shouldEnsureRepoEventSubscription(cloudflareEventType: string): boolean {
+  return [
+    "cf.artifacts.repo.created",
+    "cf.artifacts.repo.forked",
+    "cf.artifacts.repo.imported",
+  ].includes(cloudflareEventType);
+}
+
+async function ensureRepoEventSubscriptionIfConfigured(input: {
+  env: EventQueueEnv;
+  repoName: string;
+}) {
+  const apiToken = input.env.APP_CONFIG_CLOUDFLARE__API_TOKEN?.trim();
+  if (!apiToken) {
+    console.warn("[event-queue] Cloudflare API token unavailable; cannot subscribe repo events");
+    return;
+  }
+
+  const api = createCloudflareAccountApi({
+    accountId: input.env.ARTIFACTS_ACCOUNT_ID,
+    apiToken,
+  });
+  const [queueId, existing, desired] = await Promise.all([
+    queueIdForWorkerEventQueue(api, input.env.WORKER_SELF),
+    listArtifactEventSubscriptions(api),
+    desiredArtifactRepoEventSubscription({
+      repoName: input.repoName,
+      workerName: input.env.WORKER_SELF,
+    }),
+  ]);
+  const result = await ensureArtifactEventSubscription(api, { desired, existing, queueId });
+  if (result !== "unchanged") {
+    console.log(`[event-queue] artifact repo subscription ${desired.name} ${result}`);
+  }
 }
 
 function artifactRepoReferenceFromCloudflareEvent(

@@ -181,6 +181,7 @@ export interface ProjectRpcTarget {
   __describe(): Promise<ProjectDescription>;
   ai: Ai;
   agents: AgentCollection;
+  browser: CfBrowserCapability;
   /**
    * This scope's own capability host: the durable capability table behind
    * this itx (`provideCapability`, `revokeCapability`, `runScript`,
@@ -223,10 +224,11 @@ export interface ProjectRpcTarget {
   agent?: Agent;
   chat?: AgentChat;
   /**
-   * THIS agent's own sandbox — the sandbox at the agent's own `/agents/...`
-   * path. NOT a built-in: it is a durable itx-expression capability mounted
+   * THIS agent's own sandbox — the sandbox at the agent's path under the
+   * sandbox prefix (`/agents/bla` → `/sandboxes/cloudflare/agents/bla`).
+   * NOT a built-in: it is a durable itx-expression capability mounted
    * on the agent's capability host at birth
-   * (`expression: ["sandboxes", ["get", <agent path>]]`), so every
+   * (`expression: ["sandboxes", ["get", "/sandboxes/cloudflare" + <agent path>]]`), so every
    * `itx.sandbox.exec(...)` re-resolves through `itx.sandboxes.get` at call
    * time and dispatches like any provided capability. Created with the agent;
    * the container boots on the first command and sleeps after idle. Prefer
@@ -244,6 +246,123 @@ export interface AgentChat extends Describable {
 export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
+  toMarkdown(
+    ...args: CfMarkdownConversionArgs
+  ): Promise<
+    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
+  >;
+}
+
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
+};
+
+export type CfMarkdownConversionResult = {
+  name: string;
+  format: "markdown" | "error";
+  mimeType?: string;
+  tokens?: number;
+  data?: string;
+  error?: string;
+};
+
+export type CfMarkdownSupportedFormat = {
+  extension: string;
+  mimeType: string;
+};
+
+export type CfMarkdownConversionArgs =
+  | []
+  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
+
+export type CfBrowserQuickAction =
+  | "content"
+  | "screenshot"
+  | "pdf"
+  | "markdown"
+  | "snapshot"
+  | "scrape"
+  | "json"
+  | "links"
+  | "crawl";
+
+export type CfBrowserQuickActionOptions = Record<string, unknown> &
+  ({ url: string } | { html: string });
+
+/** Cloudflare Browser Run binding exposed through ITX. */
+export interface CfBrowserCapability extends Describable {
+  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  /** Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. */
+  quickAction(
+    action: CfBrowserQuickAction,
+    options: CfBrowserQuickActionOptions,
+  ): Promise<Response>;
+}
+
+export type CfImageTransformOptions = Record<string, unknown>;
+
+export type CfImageOutputOptions = { format: string } & Record<string, unknown>;
+
+export type CfImageDrawOptions = Record<string, unknown>;
+
+export type CfImageTransformInput = {
+  image: ReadableStream<Uint8Array>;
+  transforms?: CfImageTransformOptions[];
+  draws?: Array<{
+    image: ReadableStream<Uint8Array>;
+    options?: CfImageDrawOptions;
+    transforms?: CfImageTransformOptions[];
+  }>;
+  output: CfImageOutputOptions;
+};
+
+/** Cloudflare Images binding exposed through ITX as one-call helpers. */
+export interface CfImagesCapability extends Describable {
+  info(image: ReadableStream<Uint8Array>): Promise<unknown>;
+  transform(input: CfImageTransformInput): Promise<Response>;
+}
+
+export type CfVideoTransformOptions = Record<string, unknown>;
+
+export type CfVideoOutputOptions = {
+  mode: "video" | "spritesheet" | "frame" | "audio";
+} & Record<string, unknown>;
+
+export type CfVideoTransformInput = {
+  video: ReadableStream<Uint8Array>;
+  transform?: CfVideoTransformOptions;
+  output: CfVideoOutputOptions;
+};
+
+/** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */
+export interface CfVideosCapability extends Describable {
+  transform(input: CfVideoTransformInput): Promise<Response>;
+}
+
+/** Grouped first-party Cloudflare platform bindings under integrations.cf. */
+export interface CloudflareIntegrations extends Describable {
+  ai: Ai;
+  browser: CfBrowserCapability;
+  images: CfImagesCapability;
+  videos: CfVideosCapability;
 }
 
 /**
@@ -320,6 +439,8 @@ export type CompleteConnectResult =
  * connected accounts.
  */
 export interface ProjectIntegrations extends Describable {
+  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media Transformations. */
+  cf: CloudflareIntegrations;
   /** Gmail REST proxy for the project's connected Google account. */
   gmail: GmailCapability;
   /** Slack Web API proxy for the connected workspace (`integrations.slack.chat.postMessage(...)`). */
@@ -501,12 +622,12 @@ export interface Repo extends Describable {
 /**
  * Catalog of sandboxes within one project.
  *
- * A sandbox is addressed by its FULL path, which may be ANY non-root project
- * path, arbitrarily nested. Sandboxes live in their own namespace, so a
- * sandbox path never collides with the stream or agent at the same path — it
- * names them: an agent's sandbox is the sandbox at the agent's own
- * `/agents/...` path (exposed as `itx.sandbox` in that agent's scope), and
- * standalone sandboxes conventionally live under `/sandboxes/cloudflare/...`.
+ * A sandbox is addressed by its FULL path, which always lives under
+ * `/sandboxes/` — the same domain-prefix convention as `/secrets/...` and
+ * `/repos/...`: an agent's sandbox is the agent path under the Cloudflare
+ * provider segment (`/sandboxes/cloudflare/agents/...`, exposed as
+ * `itx.sandbox` in that agent's scope), and standalone sandboxes
+ * conventionally live under `/sandboxes/cloudflare/<anything>`.
  * Getting a sandbox is cheap and does not start a container; the first
  * command does, and the sandbox sleeps again after idle.
  */

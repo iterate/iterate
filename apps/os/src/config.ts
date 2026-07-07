@@ -83,6 +83,7 @@ export const AppConfig = z.object({
     .object({
       accountId: publicValue(z.string().trim().min(1)).optional(),
       artifactsNamespace: publicValue(z.string().trim().min(1)).optional(),
+      workerName: publicValue(z.string().trim().min(1)).optional(),
       apiToken: redacted(z.string().trim().min(1)).optional(),
     })
     .default({}),
@@ -136,11 +137,24 @@ export function parseConfig(env: unknown): AppConfig {
     accountId: readStringBinding(env, "ARTIFACTS_ACCOUNT_ID"),
     namespace: readStringBinding(env, "ARTIFACTS_NAMESPACE"),
   };
+  const workerName = readStringBinding(env, "WORKER_SELF");
+  const cloudflareBindings: Partial<AppConfig["cloudflare"]> = {};
 
-  if (
-    (config.cloudflare.accountId || !artifactBindings.accountId) &&
-    (config.cloudflare.artifactsNamespace || !artifactBindings.namespace)
-  ) {
+  if (!config.cloudflare.accountId && artifactBindings.accountId) {
+    cloudflareBindings.accountId =
+      artifactBindings.accountId as AppConfig["cloudflare"]["accountId"];
+  }
+
+  if (!config.cloudflare.artifactsNamespace && artifactBindings.namespace) {
+    cloudflareBindings.artifactsNamespace =
+      artifactBindings.namespace as AppConfig["cloudflare"]["artifactsNamespace"];
+  }
+
+  if (!config.cloudflare.workerName && workerName) {
+    cloudflareBindings.workerName = workerName as AppConfig["cloudflare"]["workerName"];
+  }
+
+  if (Object.keys(cloudflareBindings).length === 0) {
     return config;
   }
 
@@ -148,15 +162,7 @@ export function parseConfig(env: unknown): AppConfig {
     ...config,
     cloudflare: {
       ...config.cloudflare,
-      ...(config.cloudflare.accountId || !artifactBindings.accountId
-        ? {}
-        : { accountId: artifactBindings.accountId as AppConfig["cloudflare"]["accountId"] }),
-      ...(config.cloudflare.artifactsNamespace || !artifactBindings.namespace
-        ? {}
-        : {
-            artifactsNamespace:
-              artifactBindings.namespace as AppConfig["cloudflare"]["artifactsNamespace"],
-          }),
+      ...cloudflareBindings,
     },
   };
 }

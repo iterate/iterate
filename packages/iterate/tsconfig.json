@@ -11,6 +11,7 @@
       "@iterate-com/ui/*": ["../ui/src/*"]
     },
     "strict": true,
+    "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,

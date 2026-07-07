@@ -1,5 +1,12 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import {
+  defaultBareInvocationToChat,
+  ensureBearerAuthHeadersForChat,
   oauthResourceForOsBaseUrl,
   refreshOAuthSession,
   resolveChatProject,
@@ -137,6 +144,148 @@ describe("verifyOsSession", () => {
     });
     expect(description.principal).toBe("user_123");
     expect(fake.disposeAuthenticated).toHaveBeenCalledOnce();
+  });
+});
+
+describe("defaultBareInvocationToChat", () => {
+  test("runs chat for a bare invocation", () => {
+    expect(defaultBareInvocationToChat([])).toEqual(["chat"]);
+  });
+
+  test("leaves explicit commands and flags untouched", () => {
+    const explicit = ["chat", "--project", "prj_123"];
+    expect(defaultBareInvocationToChat(explicit)).toBe(explicit);
+
+    const help = ["--help"];
+    expect(defaultBareInvocationToChat(help)).toBe(help);
+  });
+});
+
+describe("bin wrapper", () => {
+  test("can load repo source through Node's strip-only TypeScript loader", () => {
+    const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    const result = spawnSync(process.execPath, [binPath, "--help"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+
+    expect(result.stderr).not.toContain("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX");
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("iterate");
+  });
+
+  test("npx-style execution uses the published package instead of repo source", () => {
+    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
+    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
+    const fakeBinDir = join(fakePackageRoot, "bin");
+    const fakeDistDir = join(fakePackageRoot, "dist");
+    const fakeBinPath = join(fakeBinDir, "iterate.js");
+
+    try {
+      mkdirSync(fakeBinDir, { recursive: true });
+      mkdirSync(fakeDistDir, { recursive: true });
+      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
+      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
+      writeFileSync(
+        join(fakeDistDir, "index.mjs"),
+        "export async function runCli() { console.log('fake published dist'); }\n",
+      );
+
+      const result = spawnSync(process.execPath, [fakeBinPath], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          npm_command: "exec",
+          npm_lifecycle_event: "npx",
+        },
+      });
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout.trim()).toBe("fake published dist");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("normal installed execution still delegates to repo source", () => {
+    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
+    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
+    const fakeBinDir = join(fakePackageRoot, "bin");
+    const fakeDistDir = join(fakePackageRoot, "dist");
+    const fakeBinPath = join(fakeBinDir, "iterate.js");
+
+    try {
+      mkdirSync(fakeBinDir, { recursive: true });
+      mkdirSync(fakeDistDir, { recursive: true });
+      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
+      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
+      writeFileSync(
+        join(fakeDistDir, "index.mjs"),
+        "export async function runCli() { console.log('fake published dist'); }\n",
+      );
+
+      const result = spawnSync(process.execPath, [fakeBinPath, "--help"], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NO_COLOR: "1",
+          npm_command: "",
+          npm_lifecycle_event: "",
+        },
+      });
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout).not.toContain("fake published dist");
+      expect(`${result.stdout}\n${result.stderr}`).toContain("Iterate CLI");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("ensureBearerAuthHeadersForChat", () => {
+  test("uses an existing bearer session without logging in", async () => {
+    const login = vi.fn();
+    await expect(
+      ensureBearerAuthHeadersForChat({
+        getAuthHeaders: async () => ({ authorization: "Bearer token_123" }),
+        login,
+        osBaseUrl: "https://os.iterate.com",
+      }),
+    ).resolves.toEqual({ authorization: "Bearer token_123" });
+
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  test("logs in when the stored session is not usable as a bearer token", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const login = vi.fn();
+    const getAuthHeaders = vi
+      .fn<() => Promise<{ authorization?: string; cookie?: string }>>()
+      .mockResolvedValueOnce({ cookie: "session=old" })
+      .mockResolvedValueOnce({ authorization: "Bearer token_new" });
+
+    await expect(
+      ensureBearerAuthHeadersForChat({
+        getAuthHeaders,
+        login,
+        osBaseUrl: "https://os.iterate.com",
+      }),
+    ).resolves.toEqual({ authorization: "Bearer token_new" });
+
+    expect(login).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Stored session for https://os.iterate.com cannot be used for chat. Starting browser login...",
+    );
+    consoleError.mockRestore();
   });
 });
 

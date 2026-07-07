@@ -4,9 +4,8 @@
  * One fetch handler routes every request that lands on an OS hostname:
  *
  *   MCP hostname          → the dashboard app at `/api/mcp`
- *   itx lanes             → the api pipeline (capnweb surface, e2e fixtures,
- *                           `/prj_<id>` path lane, project platform hosts,
- *                           custom hostnames)
+ *   itx lanes             → the api pipeline (capnweb surface, `/prj_<id>`
+ *                           path lane, project platform hosts, custom hostnames)
  *   OS host               → the dashboard app (TanStack Start SSR + assets)
  *
  * All Durable Object classes live here too (same-script bindings — no
@@ -19,7 +18,6 @@ import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { trustedInternalAuthContext } from "./auth.ts";
-import { e2eFixtureResponse } from "./e2e-fixtures.ts";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "./project-directory.ts";
@@ -160,9 +158,8 @@ async function appFetch(
 
 /**
  * The api pipeline: the capnweb surface at `/api`, the
- * `/api/admin-cookie` browser auth bridge, worker-hosted e2e fixtures,
- * and project ingress — every lane `decideIngressRoute` (src/ingress.ts) can
- * resolve.
+ * `/api/admin-cookie` browser auth bridge, Slack webhooks, and project ingress
+ * — every lane `decideIngressRoute` (src/ingress.ts) can resolve.
  */
 async function apiFetch(
   request: Request,
@@ -171,9 +168,6 @@ async function apiFetch(
   route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
 ) {
   const url = new URL(request.url);
-
-  const fixtureResponse = await e2eFixtureResponse(request);
-  if (fixtureResponse !== null) return fixtureResponse;
 
   if (route.lane === "project") {
     const project = await new ProjectCollectionRpcTarget({

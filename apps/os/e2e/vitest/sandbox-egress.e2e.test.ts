@@ -24,14 +24,19 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// The deployed egress-echo fixture (served by the worker under test) is
-// reachable from inside a container over the public internet; the local-dev
-// fixture binds 127.0.0.1 on the test runner and is not. Skip local dev.
+// Deployed runs publish egress-echo through apps/tunnels, so a sandbox
+// container can reach it over the public internet. Local dev binds 127.0.0.1
+// on the test runner and is not reachable from the container. Skip local dev.
 function deployedBaseUrl(): string | null {
   const raw = process.env.APP_CONFIG_BASE_URL?.trim();
   if (!raw) return null;
   const url = new URL(raw);
-  if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return null;
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
+    url.hostname.endsWith(".localhost")
+  ) {
+    return null;
+  }
   return url.toString();
 }
 
@@ -68,10 +73,10 @@ describe("sandbox egress", () => {
         description: "secret processor to fold the material",
       });
 
-      // The sandbox lives at an agent-shaped path — the same primitive an
-      // agent's `itx.sandbox` resolves to. Getting it needs no container; the
-      // curl below boots one.
-      const sandboxPath = `/agents/egress-proof/${crypto.randomUUID()}`;
+      // The sandbox lives at an agent-sandbox-shaped path — the same
+      // primitive an agent's `itx.sandbox` resolves to (agentSandboxPath).
+      // Getting it needs no container; the curl below boots one.
+      const sandboxPath = `/sandboxes/cloudflare/agents/egress-proof/${crypto.randomUUID()}`;
       const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
       const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
       // The issuer of the cert the container is presented for the echo host:

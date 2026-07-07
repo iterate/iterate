@@ -15,6 +15,23 @@
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
 //                   material, not matrix material.
+//   cf-ai-to-markdown
+//                   depends on Cloudflare Workers AI Markdown Conversion;
+//                   interactive reading material, same rationale as ai-models.
+//   ai-generate-image
+//   ai-generate-audio
+//   ai-transcribe-audio
+//   ai-generate-video
+//                   depend on remote Workers AI/Gateway model availability,
+//                   latency, and billing; interactive reading material.
+//   cf-browser-markdown
+//                   depends on Browser Run and a public docs page; external
+//                   service, so keep it interactive.
+//   cf-images-transform
+//                   depends on the Images binding and a public image fetch;
+//                   external service, so keep it interactive.
+//   cf-videos-frame depends on the Media Transformations binding and a public
+//                   video fetch; external service, so keep it interactive.
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
@@ -53,6 +70,14 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "whoami",
   "list-projects",
   "ai-models",
+  "cf-ai-to-markdown",
+  "ai-generate-image",
+  "ai-generate-audio",
+  "ai-transcribe-audio",
+  "ai-generate-video",
+  "cf-browser-markdown",
+  "cf-images-transform",
+  "cf-videos-frame",
   "exa-web-search",
   "connect-public-mcp",
   "connect-openapi-petstore",
@@ -150,13 +175,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // the container cold boot, the rest reuse the warm container (repeat
     // ensureProjectRepo calls are idempotent). No marker on purpose.
     // The Playwright REPL spec provisions a FRESH project (fresh container)
-    // per run; cold container boot + repo clone has a long tail — observed
-    // ~132s on Depot, so 120s was slightly too tight and flaked. 180s is the
-    // fail-fast budget: it covers a genuine cold boot yet still surfaces a
-    // container stuck provisioning (a Cloudflare infra transient) in ~3 min
-    // rather than stalling for many minutes — we'd rather fail and re-run than
-    // mask it (that's why this is 180s, not the absurd 480s it briefly was).
-    completionTimeoutMs: 180_000,
+    // per run; cold container boot + repo clone has a long tail. The dominant
+    // term is the IMAGE PULL on an edge location that hasn't cached the image
+    // yet: the baked-monorepo image is ~3 GB unpacked and a first-pull-after-
+    // deploy was observed at 3.2m on Depot (the platform's own health events
+    // show 1.5-3m pulls). Warm-location boots are tens of seconds. 300s covers
+    // a genuine first pull; anything past that is a container stuck
+    // provisioning, and we'd rather fail and re-run than mask it.
+    completionTimeoutMs: 300_000,
     vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux" });

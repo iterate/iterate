@@ -10,7 +10,7 @@ the dashboard, the itx api, and every Durable Object class live in a single
 script (`src/worker.ts`), plus the builder sidecar for dynamic worker builds.
 Traffic is dispatched on hostname and path:
 
-1. Rpc lanes: `/api` (+ `/api/admin-cookie`), `/__itx_e2e/*`, `/prj_<id>/...`, and project
+1. Rpc lanes: `/api` (+ `/api/admin-cookie`), `/prj_<id>/...`, and project
    platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) take the
    api pipeline. Project-host requests route to the project's seeded worker,
    never the dashboard.

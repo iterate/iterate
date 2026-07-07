@@ -7,16 +7,16 @@ routing, and **all eight Durable Object classes** live in a single script.
 The entry is [`src/worker.ts`](../src/worker.ts). Its fetch handler makes the
 one hostname/path routing decision (shared logic in `src/ingress.ts`):
 
-| Lane            | What                                                                                           |
-| --------------- | ---------------------------------------------------------------------------------------------- |
-| MCP host        | rewritten onto the app's `/api/mcp` mount                                                      |
-| api lanes       | capnweb `/api` (+ `/api/admin-cookie`), Slack webhooks, `/__itx_e2e` fixtures, project ingress |
-| everything else | dashboard SSR + server functions; client assets served from Workers Assets                     |
+| Lane            | What                                                                       |
+| --------------- | -------------------------------------------------------------------------- |
+| MCP host        | rewritten onto the app's `/api/mcp` mount                                  |
+| api lanes       | capnweb `/api` (+ `/api/admin-cookie`), Slack webhooks, project ingress    |
+| everything else | dashboard SSR + server functions; client assets served from Workers Assets |
 
 Durable Object classes (all same-script bindings — declared by class name in
 wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
 CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
-container-backed CloudflareSandbox (Dockerfile.sandbox, built by
+container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
 `wrangler deploy`).
 
 ## The builder sidecar (the "+1")

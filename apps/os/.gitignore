@@ -1,0 +1,3 @@
+
+# Local alchemy-era dev artifacts (contain local dev secrets); never commit.
+.alchemy/

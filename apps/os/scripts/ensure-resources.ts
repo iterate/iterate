@@ -72,6 +72,27 @@ export default async function ensureResources(
     await cf(`/r2/buckets`, { method: "POST", body: JSON.stringify({ name: r2BucketName }) });
     console.log(`created R2 bucket ${r2BucketName}`);
   }
+  // The Sandbox SDK checks its backup ttl only at RESTORE time and never
+  // deletes expired objects from R2 — without a lifecycle rule the bucket
+  // grows forever under e2e churn (a fresh sandbox per test). Expire the
+  // SDK's `backups/` prefix at 90 days, matching SANDBOX_BACKUP_TTL_SECONDS
+  // in cloudflare-sandbox-durable-object.ts (keep the two aligned). PUT is
+  // idempotent; it replaces this bucket's lifecycle config wholesale, which
+  // is fine while this is the only rule we want.
+  await cf(`/r2/buckets/${r2BucketName}/lifecycle`, {
+    method: "PUT",
+    body: JSON.stringify({
+      rules: [
+        {
+          id: "expire-sandbox-workspace-backups",
+          enabled: true,
+          conditions: { prefix: "backups/" },
+          deleteObjectsTransition: { condition: { type: "Age", maxAge: 90 * 24 * 60 * 60 } },
+        },
+      ],
+    }),
+  });
+  console.log(`R2 bucket ${r2BucketName} lifecycle: backups/ expire at 90d`);
 
   // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
   // One general-purpose queue per OS worker. Artifacts event subscriptions are

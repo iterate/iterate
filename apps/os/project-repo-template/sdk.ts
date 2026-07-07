@@ -205,6 +205,8 @@ export interface ProjectRpcTarget {
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   egress: ProjectEgress;
+  /** First-party outbound email from the project's own address (`email.send({ to, subject, text })`). */
+  email: EmailCapability;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   examples: ItxExampleCatalog;
   /** Slack/Google connections + the connection-scoped API proxies (`integrations.gmail`, `integrations.slack`). */
@@ -214,7 +216,7 @@ export interface ProjectRpcTarget {
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
-  /** Path-addressed sandboxes (`itx.sandboxes.get("/sandboxes/cloudflare/whatever")`). */
+  /** Path-addressed sandboxes (`itx.sandboxes.get(path)`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   secrets: SecretCollection;
   streams: ProjectStreamCollection;
@@ -225,6 +227,18 @@ export interface ProjectRpcTarget {
   // derived from the scope path, not mounted capabilities — see rpc-targets.ts.
   agent?: Agent;
   chat?: AgentChat;
+  /**
+   * THIS agent's own sandbox — the sandbox at the agent's path under the
+   * sandbox prefix (`/agents/bla` → `/sandboxes/cloudflare/agents/bla`).
+   * NOT a built-in: it is a durable itx-expression capability mounted
+   * on the agent's capability host at birth
+   * (`expression: ["sandboxes", ["get", "/sandboxes/cloudflare" + <agent path>]]`), so every
+   * `itx.sandbox.exec(...)` re-resolves through `itx.sandboxes.get` at call
+   * time and dispatches like any provided capability. Created with the agent;
+   * the container boots on the first command and sleeps after idle. Prefer
+   * dotted calls (`await itx.sandbox.exec("...")`) over grabbing the value.
+   */
+  sandbox?: CloudflareSandbox;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
@@ -236,6 +250,25 @@ export interface AgentChat extends Describable {
 export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
+}
+
+/**
+ * First-party outbound email through Cloudflare Email Service. Mail is sent
+ * from the project's own address — `<slug>@<project hostname base>`, e.g.
+ * `acme@iterate.app` — and an explicit `from` must match it: a project can
+ * never send as another project or an arbitrary address. Requires the
+ * deployment's sender domain to be onboarded for Email Sending in Cloudflare.
+ */
+export interface EmailCapability extends Describable {
+  send(input: {
+    to: string | string[];
+    subject: string;
+    /** Plain-text body; at least one of text/html is required. */
+    text?: string;
+    html?: string;
+    /** Optional explicit sender; must equal the project's own address. */
+    from?: string;
+  }): Promise<{ from: string; messageId: string | null }>;
 }
 
 // -----------------------------------------------------------------------------
@@ -474,12 +507,14 @@ export interface Repo extends Describable {
 /**
  * Catalog of sandboxes within one project.
  *
- * A sandbox is addressed by its FULL path — a stream path like every other
- * domain object: it starts with `/sandboxes/` and may nest arbitrarily. By
- * convention everything lives under `/sandboxes/cloudflare/...` (the segment
- * is convention, not enforcement). Anyone who can see the project can
- * address any of its sandboxes. Getting a sandbox is cheap and does not
- * start a container; the first command does.
+ * A sandbox is addressed by its FULL path, which always lives under
+ * `/sandboxes/` — the same domain-prefix convention as `/secrets/...` and
+ * `/repos/...`: an agent's sandbox is the agent path under the Cloudflare
+ * provider segment (`/sandboxes/cloudflare/agents/...`, exposed as
+ * `itx.sandbox` in that agent's scope), and standalone sandboxes
+ * conventionally live under `/sandboxes/cloudflare/<anything>`.
+ * Getting a sandbox is cheap and does not start a container; the first
+ * command does, and the sandbox sleeps again after idle.
  */
 export interface SandboxCollection extends Describable {
   get(path: string): Promise<CloudflareSandbox>;

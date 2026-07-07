@@ -4,9 +4,11 @@
  *   pnpm run deploy --env preview_3
  *   pnpm run deploy --env prd
  *
- * workers.dev only — no routes, no DNS, no resources. Secrets are the
- * iterate-auth relying-party credentials plus the JWKS baked in `prepare`
- * (admin-only access on deployed envs). Runs the shared pipeline
+ * Serves on the env's custom domain (routes in the generated wrangler
+ * config; the proxied DNS record is ensured create-only in `prepare`;
+ * workers.dev is off, see envs.ts for why). Secrets are the iterate-auth
+ * relying-party credentials plus the JWKS baked in `prepare` (admin-only
+ * access on deployed envs). Runs the shared pipeline
  * (scripts/lib/deploy-app.ts):
  * `vite build` with CLOUDFLARE_ENV=<env> (vite.config.ts regenerates
  * wrangler.jsonc from envs.ts before the cloudflare plugin reads it — the
@@ -17,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { streamsExampleEnvs } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
+import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { parseConfig } from "../src/config.ts";
 import { envShapedVars, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
@@ -38,6 +41,20 @@ export default async function deploy(
     servingUrl: (env) => env.baseUrl,
     requiredSecrets: REQUIRED_SECRETS,
     prepare: async (ctx, secretValues) => {
+      // Worker routes only fire when a proxied DNS record answers the host —
+      // ensure it (create-only, idempotent) before the deploy attaches the
+      // route. Same helper and stance as apps/os's ensure-resources.
+      const host = new URL(ctx.env.baseUrl).hostname;
+      const zones = await ctx.cfV4<{ id: string; name: string }[]>(
+        `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
+      );
+      await ensureProxiedDnsRecord(
+        ctx,
+        zones,
+        host,
+        `iterate ${ctx.name} streams playground route host (deploy.ts)`,
+      );
+
       // The playground verifies iterate sessions and bearer tokens against a
       // static JWKS baked at deploy time (issuer keys + forge public key) —
       // the same relying-party model as apps/os and apps/semaphore.

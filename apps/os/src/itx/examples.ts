@@ -371,7 +371,7 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Run shell commands in a sandbox (project repo included)",
     description:
-      'A sandbox is a real Linux container addressed by path — any non-root path, nested fine. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your own agent path) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
+      'A sandbox is a real Linux container addressed by a path under /sandboxes/. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your agent path under the prefix — /sandboxes/cloudflare/agents/...) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -732,7 +732,7 @@ return {
     id: "ai-models",
     title: "Workers AI is a built-in capability",
     description:
-      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — run it interactively.",
+      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — run it interactively.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -741,6 +741,170 @@ const list = Array.isArray(models) ? models : [];
 return {
   count: list.length,
   sample: list.slice(0, 5).map((model) => model?.name ?? model),
+};
+`.trim(),
+  },
+  {
+    id: "cf-ai-to-markdown",
+    title: "Convert a document to Markdown with Workers AI",
+    description:
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const supported = await itx.ai.toMarkdown();
+const csv = new Blob(["name,value\\nalpha,1\\nbeta,2\\n"], { type: "text/csv" });
+const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
+return { supported: supported.slice(0, 10), converted };
+`.trim(),
+  },
+  {
+    id: "ai-generate-image",
+    title: "Generate an image with a Workers AI model",
+    description:
+      "Runs Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const form = new FormData();
+form.append("prompt", "A compact product photo of a brushed steel desk lamp on a white background");
+form.append("width", "512");
+form.append("height", "512");
+
+const formResponse = new Response(form);
+const response = await itx.ai.run("@cf/black-forest-labs/flux-2-klein-9b", {
+  multipart: {
+    body: formResponse.body,
+    contentType: formResponse.headers.get("content-type"),
+  },
+});
+
+return {
+  docs: "https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/",
+  imageBytesApprox: response?.image ? Math.floor((response.image.length * 3) / 4) : null,
+  response,
+};
+`.trim(),
+  },
+  {
+    id: "ai-generate-audio",
+    title: "Generate speech audio with a Workers AI model",
+    description:
+      "Runs xAI Grok TTS through itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const response = await itx.ai.run("xai/grok-tts", {
+  text: "Hello from ITX. This audio was generated with a Cloudflare Workers AI speech model.",
+  voice_id: "ara",
+  language: "en",
+  output_format: { codec: "mp3", sample_rate: 44100, bit_rate: 192000 },
+});
+
+return {
+  docs: "https://developers.cloudflare.com/ai/models/xai/grok-tts/",
+  audioUrl: response?.result?.audio,
+  response,
+};
+`.trim(),
+  },
+  {
+    id: "ai-transcribe-audio",
+    title: "Transcribe audio with a Workers AI model",
+    description:
+      "Runs xAI Grok STT through itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const response = await itx.ai.run("xai/grok-stt", {
+  url: "https://storage.googleapis.com/cloud-samples-data/speech/brooklyn_bridge.mp3",
+  language: "en",
+  format: true,
+});
+
+return {
+  docs: "https://developers.cloudflare.com/ai/models/xai/grok-stt/",
+  text: response?.result?.text,
+  language: response?.result?.language,
+  duration: response?.result?.duration,
+  wordCount: response?.result?.words?.length,
+  response,
+};
+`.trim(),
+  },
+  {
+    id: "ai-generate-video",
+    title: "Generate video with a Workers AI model",
+    description:
+      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const response = await itx.ai.run("xai/grok-imagine-video", {
+  prompt: "A slow cinematic dolly shot across a clean workspace with a glowing laptop screen",
+  aspect_ratio: "16:9",
+  duration: 5,
+  resolution: "720p",
+});
+
+return {
+  docs: "https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/",
+  videoUrl: response?.result?.video,
+  response,
+};
+`.trim(),
+  },
+  {
+    id: "cf-browser-markdown",
+    title: "Render a page to Markdown with Browser Run",
+    description:
+      "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const resp = await itx.browser.quickAction("markdown", {
+  url: "https://developers.cloudflare.com/browser-run/quick-actions/",
+});
+return await resp.json();
+`.trim(),
+  },
+  {
+    id: "cf-images-transform",
+    title: "Resize and convert an image with Cloudflare Images",
+    description:
+      "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const source = await fetch("https://developers.cloudflare.com/img/logo-cloudflare-dark.svg");
+const output = await itx.integrations.cf.images.transform({
+  image: source.body,
+  transforms: [{ width: 256 }],
+  output: { format: "image/webp", quality: 85 },
+});
+return {
+  contentType: output.headers.get("content-type"),
+  bytes: (await output.arrayBuffer()).byteLength,
+};
+`.trim(),
+  },
+  {
+    id: "cf-videos-frame",
+    title: "Extract a video frame with Media Transformations",
+    description:
+      "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const source = await fetch("https://pub-d9fcbc1abcd244c1821f38b99017347f.r2.dev/aus-mobile.mp4");
+const frame = await itx.integrations.cf.videos.transform({
+  video: source.body,
+  transform: { width: 480, fit: "scale-down" },
+  output: { mode: "frame", time: "1s", format: "jpg" },
+});
+return {
+  contentType: frame.headers.get("content-type"),
+  bytes: (await frame.arrayBuffer()).byteLength,
 };
 `.trim(),
   },

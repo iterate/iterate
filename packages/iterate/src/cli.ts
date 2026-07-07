@@ -78,6 +78,15 @@ const firstNonFlagArgument = (args: string[]): string | undefined => {
   return undefined;
 };
 
+export const defaultBareInvocationToChat = (args: string[]) =>
+  args.length === 0 ? ["chat"] : args;
+
+const applyDefaultBareInvocation = () => {
+  const args = process.argv.slice(2);
+  const nextArgs = defaultBareInvocationToChat(args);
+  if (nextArgs !== args) process.argv.splice(2, args.length, ...nextArgs);
+};
+
 const resolveStreamTuiEntrypointPath = () => {
   const moduleDir = import.meta.dirname;
   const candidates = [
@@ -204,6 +213,16 @@ function resolveConfig(
   return result;
 }
 
+class StoredOsSessionError extends Error {
+  readonly reason: "missing" | "expired";
+
+  constructor(reason: "missing" | "expired", message: string) {
+    super(message);
+    this.reason = reason;
+    this.name = "StoredOsSessionError";
+  }
+}
+
 /**
  * Get auth headers for OS API calls based on the resolved config's stored session.
  * OAuth sessions are refreshed when possible.
@@ -211,13 +230,19 @@ function resolveConfig(
 const getOsAuthHeaders = async (config: Config, configName?: string): Promise<OsAuthHeaders> => {
   let session = config.session;
   if (!session) {
-    throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
+    throw new StoredOsSessionError(
+      "missing",
+      `Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`,
+    );
   }
   if (sessionNeedsRefresh(session)) {
     if (session.refreshToken && session.clientId) {
       session = await refreshOAuthSession({ config, configName, session });
     } else {
-      throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
+      throw new StoredOsSessionError(
+        "expired",
+        `Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`,
+      );
     }
   }
   if (session.token) {
@@ -767,6 +792,49 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
   return session;
 };
 
+const loginToResolvedConfig = async (resolved: { name: string; config: Config }) => {
+  const { config } = resolved;
+
+  console.error(`Logging in to ${config.authBaseUrl}...`);
+  const oauthResult = await oauthLogin(config);
+  updateConfigSession(resolved.name, oauthResult);
+  // Update in-memory config so subsequent verification and calls see the token.
+  config.session = oauthResult;
+
+  await verifyOsSession({
+    authHeaders: await getOsAuthHeaders(config, resolved.name),
+    baseUrl: config.osBaseUrl,
+  }).catch((error: unknown) => {
+    throw new Error(`Failed to verify OS session: ${errorMessage(error)}`);
+  });
+
+  return oauthResult;
+};
+
+const shouldAutoLoginForChat = (error: unknown) =>
+  error instanceof StoredOsSessionError &&
+  (error.reason === "missing" || error.reason === "expired");
+
+export const ensureBearerAuthHeadersForChat = async (input: {
+  getAuthHeaders: () => Promise<OsAuthHeaders>;
+  login: () => Promise<void>;
+  osBaseUrl: string;
+}) => {
+  let authHeaders = await input.getAuthHeaders();
+  if (authHeaders.authorization) return authHeaders;
+
+  console.error(
+    `Stored session for ${input.osBaseUrl} cannot be used for chat. Starting browser login...`,
+  );
+  await input.login();
+  authHeaders = await input.getAuthHeaders();
+  if (authHeaders.authorization) return authHeaders;
+
+  throw new Error(
+    `Stored session for ${input.osBaseUrl} has no bearer token. Run \`iterate login\` again.`,
+  );
+};
+
 const loadRemoteProcedures = async (params: {
   baseUrl: string;
 }): Promise<{ procedures: ParsedRouter }> => {
@@ -861,20 +929,7 @@ const launcherProcedures = {
     })
     .handler(async () => {
       const resolved = resolveConfig(process.cwd(), { throw: true });
-      const { config } = resolved;
-
-      console.error(`Logging in to ${config.authBaseUrl}...`);
-      const oauthResult = await oauthLogin(config);
-      updateConfigSession(resolved.name, oauthResult);
-      // Update in-memory config so subsequent verification and calls see the token.
-      config.session = oauthResult;
-
-      await verifyOsSession({
-        authHeaders: await getOsAuthHeaders(config, resolved.name),
-        baseUrl: config.osBaseUrl,
-      }).catch((error: unknown) => {
-        throw new Error(`Failed to verify OS session: ${errorMessage(error)}`);
-      });
+      const oauthResult = await loginToResolvedConfig(resolved);
       return {
         message: "Logged in successfully",
         expiresAt: oauthResult.expiresAt,
@@ -921,12 +976,34 @@ const launcherProcedures = {
       const resolved = resolveConfig(process.cwd(), { throw: true });
       const envAuth = osAuthFromEnvironment();
       let storedAuthHeaders: OsAuthHeaders | undefined;
+      let didAutoLogin = false;
+      const loginForChat = async () => {
+        didAutoLogin = true;
+        storedAuthHeaders = undefined;
+        await loginToResolvedConfig(resolved);
+      };
       const getStoredAuthHeaders = async () => {
-        storedAuthHeaders ??= await getOsAuthHeaders(resolved.config, resolved.name);
+        if (storedAuthHeaders) return storedAuthHeaders;
+        try {
+          storedAuthHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        } catch (error) {
+          if (didAutoLogin || !shouldAutoLoginForChat(error)) throw error;
+          console.error(
+            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
+          );
+          await loginForChat();
+          storedAuthHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        }
         return storedAuthHeaders;
       };
+      const getStoredBearerAuthHeaders = () =>
+        ensureBearerAuthHeadersForChat({
+          getAuthHeaders: getStoredAuthHeaders,
+          login: loginForChat,
+          osBaseUrl: resolved.config.osBaseUrl,
+        });
       const project = await resolveChatProject({
-        auth: envAuth ?? osAuthFromHeaders(await getStoredAuthHeaders()),
+        auth: envAuth ?? osAuthFromHeaders(await getStoredBearerAuthHeaders()),
         baseUrl: resolved.config.osBaseUrl,
         configName: resolved.name,
         configPath: CONFIG_PATH,
@@ -945,7 +1022,7 @@ const launcherProcedures = {
       // bearer token; the capnweb WebSocket authenticates once at connect.
       const env: Record<string, string | undefined> = { ITERATE_CONFIG_NAME: resolved.name };
       if (!envAuth) {
-        const headers = await getStoredAuthHeaders();
+        const headers = await getStoredBearerAuthHeaders();
         const token = headers.authorization?.replace(/^Bearer /, "");
         if (!token) {
           throw new Error(
@@ -1103,6 +1180,7 @@ const launcherProcedures = {
 export const getCli = async () => {
   // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
+  applyDefaultBareInvocation();
   const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
   const shouldLoadRemoteRouters =
     !requestedRootCommand ||
