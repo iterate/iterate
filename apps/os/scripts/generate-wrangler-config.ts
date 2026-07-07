@@ -369,10 +369,12 @@ function envBlock(env: DeployedEnv) {
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
-    // against account memory quota at deploy time. The old preview cap of 500
-    // was viable for lite instances because it reserved 128000 MiB; 31
-    // standard-1 instances reserve 126976 MiB and fit that same quota.
-    maxContainerInstances: isProduction ? 50 : 31,
+    // against account memory quota at deploy time. Cap 500 blocked deploys once
+    // several preview slots existed, and cap 200 only fits while not every
+    // preview slot has an OS sandbox app. Cap 100 previously wedged sustained
+    // e2e churn at assigned == max_instances, so 150 is the fleet-wide
+    // compromise until Cloudflare changes assigned-slot accounting.
+    maxContainerInstances: isProduction ? 50 : 150,
   });
   return {
     name: env.osWorkerName,
