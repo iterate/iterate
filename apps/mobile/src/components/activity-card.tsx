@@ -36,7 +36,6 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
 
 function liveSummary(activity: AgentUiActivity): string {
   const current = activity.steps.at(-1);
-  if (activity.status === "waiting") return "waiting…";
   if (current == null) return "working…";
   if (current.kind === "code") return "running code…";
   if (current.responseText !== "") return "writing code…";

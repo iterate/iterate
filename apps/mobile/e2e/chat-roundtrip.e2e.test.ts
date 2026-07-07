@@ -28,6 +28,8 @@ import {
   newMobileAgentPath,
   reduceChatEvents,
 } from "../src/lib/chat.ts";
+import { base64ToUint8Array } from "../src/lib/encoding.ts";
+import { reduceFeed } from "../src/lib/feed.ts";
 import { dialItx } from "../src/lib/itx-core.ts";
 
 test("phone client seam: new mobile chat gets a live agent reply", async () => {
@@ -99,8 +101,44 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
     () => reduceChatEvents(pushed).messages.length >= 2,
     "live subscription to deliver both messages",
   );
+
+  // Image attachment, exactly as the phone composer sends it: one addFiles
+  // call with bytes over the same socket → one input event with a signed url.
+  const { files } = await agent.addFiles({
+    files: [{ contentType: "image/png", data: base64ToUint8Array(TINY_PNG), filename: "e2e.png" }],
+    message: "What's in this image? Reply in one short sentence, no code.",
+  });
+  expect(files).toMatchObject([
+    {
+      contentType: "image/png",
+      filename: "e2e.png",
+      url: expect.stringMatching(/^https?:\/\//),
+      size: expect.any(Number),
+    },
+  ]);
+
+  // The signed URL serves the exact bytes back without auth.
+  const served = await fetch(files[0]!.url);
+  expect(served.status).toBe(200);
+  expect(served.headers.get("content-type")).toContain("image/png");
+  expect(new Uint8Array(await served.arrayBuffer())).toEqual(base64ToUint8Array(TINY_PNG));
+
+  // The feed reduction the phone renders picks the attachment up.
+  const feed = reduceFeed(agentPath, await agent.stream.getEvents({}));
+  const withFiles = feed.items.find(
+    (item) => item.kind === "user" && (item.files?.length || 0) > 0,
+  );
+  expect(withFiles).toMatchObject({
+    kind: "user",
+    files: [{ filename: "e2e.png", contentType: "image/png" }],
+  });
+
   subscription.unsubscribe();
 });
+
+/** 1x1 transparent PNG. */
+const TINY_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 /**
  * Deployed targets set APP_CONFIG_BASE_URL in Doppler; a local dev server

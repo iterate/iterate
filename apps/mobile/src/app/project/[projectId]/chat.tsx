@@ -19,9 +19,11 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -32,8 +34,14 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
-import { reduceFeed, type AgentUiItem, type AgentUiMessageItem } from "../../../lib/feed.ts";
+import {
+  reduceFeed,
+  type AgentUiFileAttachment,
+  type AgentUiItem,
+  type AgentUiMessageItem,
+} from "../../../lib/feed.ts";
 import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -73,15 +81,36 @@ export default function ChatScreen() {
   });
 
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<PickedImage[]>([]);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
   const send = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async (input: { message: string; files: PickedImage[] }) => {
       const itx = await getItxSession(baseUrl!);
       const project = await itx.projects.get(projectId);
-      await project.agents.get(path).sendMessage(message);
+      const agent = project.agents.get(path);
+      if (input.files.length === 0) {
+        await agent.sendMessage(input.message);
+        return;
+      }
+      // Same shape as the web composer: ONE addFiles call → one input event
+      // carrying every attachment → one feed message + one agent turn.
+      await agent.addFiles({
+        files: input.files.map((file) => ({
+          contentType: file.contentType,
+          data: base64ToUint8Array(file.base64),
+          filename: file.filename,
+        })),
+        ...(input.message ? { message: input.message } : {}),
+      });
     },
-    onMutate: () => setDraft(""),
-    onError: (_error, message) => setDraft(message),
+    onMutate: () => {
+      setDraft("");
+      setAttachments([]);
+    },
+    onError: (_error, input) => {
+      setDraft(input.message);
+      setAttachments(input.files);
+    },
   });
 
   if (events.error instanceof SignInRequiredError) {
@@ -124,7 +153,29 @@ export default function ChatScreen() {
         <EventList events={events.data || []} />
       )}
 
+      {attachments.length > 0 ? (
+        <View style={styles.attachmentStrip}>
+          {attachments.map((image) => (
+            <Pressable
+              key={image.previewUri}
+              onPress={() =>
+                setAttachments(attachments.filter((a) => a.previewUri !== image.previewUri))
+              }
+            >
+              <Image source={{ uri: image.previewUri }} style={styles.attachmentThumb} />
+              <Text style={styles.attachmentRemove}>✕</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+        <Pressable
+          onPress={async () => setAttachments([...attachments, ...(await pickImages())])}
+          disabled={send.isPending}
+          style={styles.attach}
+        >
+          <Text style={styles.attachText}>+</Text>
+        </Pressable>
         <TextInput
           value={draft}
           onChangeText={setDraft}
@@ -136,10 +187,16 @@ export default function ChatScreen() {
         <Pressable
           onPress={() => {
             const message = draft.trim();
-            if (message !== "" && !send.isPending) send.mutate(message);
+            const canSend = message !== "" || attachments.length > 0;
+            if (canSend && !send.isPending) send.mutate({ message, files: attachments });
           }}
-          disabled={draft.trim() === "" || send.isPending}
-          style={[styles.send, (draft.trim() === "" || send.isPending) && { opacity: 0.4 }]}
+          disabled={(draft.trim() === "" && attachments.length === 0) || send.isPending}
+          style={[
+            styles.send,
+            ((draft.trim() === "" && attachments.length === 0) || send.isPending) && {
+              opacity: 0.4,
+            },
+          ]}
         >
           <Text style={styles.sendText}>↑</Text>
         </Pressable>
@@ -194,6 +251,9 @@ function FeedList({
 
 function FeedItem({ item }: { item: AgentUiItem }) {
   if (item.kind === "activity") return <ActivityCard activity={item} />;
+  if (item.kind === "stream-woken") {
+    return <Text style={styles.wakeMarker}>— {item.text || "stream woke"} —</Text>;
+  }
   return <MessageBubble message={item} />;
 }
 
@@ -201,11 +261,42 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const isUser = message.kind === "user";
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-      <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
-        {message.text}
-      </Text>
+      {message.text !== "" ? (
+        <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
+          {message.text}
+        </Text>
+      ) : null}
+      {message.files?.map((file) => (
+        <MessageAttachment key={file.path} file={file} />
+      ))}
     </View>
   );
+}
+
+function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+  // Signed public URL minted when the file was attached — same source the
+  // web's <img> and the LLM use.
+  const open = () => void WebBrowser.openBrowserAsync(file.url);
+  if (file.contentType.startsWith("image/")) {
+    return (
+      <Pressable onPress={open}>
+        <Image source={{ uri: file.url }} style={styles.attachmentImage} resizeMode="contain" />
+      </Pressable>
+    );
+  }
+  return (
+    <Pressable onPress={open} style={styles.fileChip}>
+      <Text style={styles.fileChipText} numberOfLines={1}>
+        📎 {file.filename} · {formatFileSize(file.size)}
+      </Text>
+    </Pressable>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** The unreduced stream, newest first — the debugging view. */
@@ -280,6 +371,61 @@ const styles = StyleSheet.create({
   workingText: { color: colors.working, fontSize: 13 },
   eventRow: { gap: 4 },
   eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
+  wakeMarker: { color: colors.textFaint, fontSize: 11, textAlign: "center" },
+  attachmentImage: {
+    width: 220,
+    height: 160,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    marginTop: 4,
+  },
+  fileChip: {
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  fileChipText: { color: colors.textMuted, fontSize: 12 },
+  attachmentStrip: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  attachmentThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  attachmentRemove: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    color: colors.text,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.full,
+    width: 18,
+    height: 18,
+    textAlign: "center",
+    fontSize: 11,
+    lineHeight: 17,
+    overflow: "hidden",
+  },
+  attach: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.full,
+    borderColor: colors.border,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  attachText: { color: colors.textMuted, fontSize: 20, lineHeight: 22 },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",

@@ -17,10 +17,12 @@ import type { StreamEvent } from "../../../os/src/types.ts";
 export type {
   AgentUiActivity,
   AgentUiCodeStep,
+  AgentUiFileAttachment,
   AgentUiItem,
   AgentUiLlmStep,
   AgentUiMessageItem,
   AgentUiStep,
+  AgentUiStreamWakeItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export type AgentFeed = {

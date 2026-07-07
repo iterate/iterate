@@ -17,7 +17,13 @@ test("a full round reduces to user → activity → assistant", () => {
       result: 1,
       durationMs: 1200,
     }),
-    event(5, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
+    // Activities settle only once every step is done — the completed event is
+    // what closes the roll-up, not the assistant message.
+    event(5, "events.iterate.com/agent/llm-request-completed", {
+      llmRequestId: 2,
+      result: { status: "success" },
+    }),
+    event(6, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
   ]);
   expect(feed.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
   expect(feed).toMatchObject({ working: false, live: null });
@@ -59,7 +65,11 @@ test("summarizes a settled activity", () => {
     event(3, "events.iterate.com/capability-host/script-execution-completed", {
       executionId: "e1",
     }),
-    event(4, "events.iterate.com/agents/web-message-sent", { message: "ok" }),
+    event(4, "events.iterate.com/agent/llm-request-completed", {
+      llmRequestId: 1,
+      result: { status: "success" },
+    }),
+    event(5, "events.iterate.com/agents/web-message-sent", { message: "ok" }),
   ]);
   const activity = feed.items[0] as AgentUiActivity;
   expect(summarizeActivity(activity)).toMatch(/^Ran code 1× · 1 request · \d+(\.\d+)?s$/);
