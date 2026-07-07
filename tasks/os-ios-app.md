@@ -7,7 +7,7 @@ size: large
 
 **Status summary (for skimmers):** spec complete (grill-you interview done, see `tasks/os-ios-app.interview.md`); implementation not started. Main pieces: new `apps/mobile` Expo app on main (chat-first), plumbing ported from the voice-ios-app branch, live vitest e2e of the chat round-trip. Missing: everything; on-device pass needs Misha's phone.
 
-An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com → log in → new chat" — cold app open to typing a new message in a couple of taps, against any deployment (prd, preview_N, local dev via captun). Foundations over screen count: this is *the* iterate mobile app; native features (voice, push, widgets) graft on later.
+An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com → log in → new chat" — cold app open to typing a new message in a couple of taps, against any deployment (prd, preview*N, local dev via captun). Foundations over screen count: this is \_the* iterate mobile app; native features (voice, push, widgets) graft on later.
 
 ## Decisions (from the grill-you interview — full trail in `tasks/os-ios-app.interview.md`)
 

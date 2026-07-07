@@ -41,7 +41,7 @@ Option 2 in v1 (the interviewer's own caveat wins): bubbles from `agents/user-me
 
 ## Q4 — phone → local dev
 
-captun (`apps/tunnels`, docs/dev-environments.md): `CAPTUN_TUNNEL_NAME=<name>` on `pnpm dev` publishes local dev at `https://<name>.tunnels.iterate.com`, forwards websockets, auto-registers the URL as an OAuth callback for personal dev_<user> configs. Recommended over LAN-IP/mDNS invention; switcher treats every environment as a plain base URL.
+captun (`apps/tunnels`, docs/dev-environments.md): `CAPTUN_TUNNEL_NAME=<name>` on `pnpm dev` publishes local dev at `https://<name>.tunnels.iterate.com`, forwards websockets, auto-registers the URL as an OAuth callback for personal dev\_<user> configs. Recommended over LAN-IP/mDNS invention; switcher treats every environment as a plain base URL.
 
 ## A4
 
