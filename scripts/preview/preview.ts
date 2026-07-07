@@ -123,8 +123,13 @@ export async function deploy(
     if (!cleanupResult.ok) {
       throw new Error("Failed to tear down previews for a draft PR.");
     }
+    // Pin the post-teardown state in this write: the GitHub read inside
+    // updatePreviewState can be stale (read-after-write lag) and would
+    // otherwise resurrect the released lease and app rows — and this run's
+    // test step would then re-acquire the slot the draft just gave up.
     const update = await updatePreviewState(context, (state) => ({
       ...state,
+      ...cleanupResult.state,
       notice: draftPreviewNotice,
     }));
     return {
