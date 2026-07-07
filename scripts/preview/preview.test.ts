@@ -88,6 +88,84 @@ describe("preview workflow scope", () => {
   });
 });
 
+describe("draft preview policy", () => {
+  const { decideDraftPreviewPolicy } = previewInternals;
+
+  it("deploys ready PRs regardless of labels or leases", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: false,
+        isDraft: false,
+        labels: [],
+      }),
+    ).toBe("deploy");
+  });
+
+  it("skips drafts that never had a slot", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: false,
+        isDraft: true,
+        labels: ["bug"],
+      }),
+    ).toBe("skip");
+  });
+
+  it("gives a draft's slot back when it holds one without asking", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: true,
+        isDraft: true,
+        labels: [],
+      }),
+    ).toBe("teardown");
+  });
+
+  it("deploys drafts wearing the preview label", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: false,
+        isDraft: true,
+        labels: ["preview"],
+      }),
+    ).toBe("deploy");
+  });
+
+  it("deploys drafts when the caller explicitly allows it", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: true,
+        hasRecordedLease: false,
+        isDraft: true,
+        labels: [],
+      }),
+    ).toBe("deploy");
+  });
+
+  it("wires the lifecycle events and the dispatch override into the workflow", () => {
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+
+    // Draft/label transitions must re-run the policy so a PR can claim a
+    // slot (ready_for_review, labeled) or give one back (converted_to_draft,
+    // unlabeled).
+    expect(workflow).toContain("- ready_for_review");
+    expect(workflow).toContain("- converted_to_draft");
+    expect(workflow).toContain("- labeled");
+    expect(workflow).toContain("- unlabeled");
+    // A manual dispatch is an explicit ask, so it bypasses the draft policy.
+    expect(workflow).toContain(
+      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}",
+    );
+  });
+});
+
 describe("auth preview root secrets", () => {
   it("seeds from auth/dev when the preview root has no value", () => {
     const reads: string[] = [];

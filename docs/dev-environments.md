@@ -309,6 +309,14 @@ invariants:
   `preview deploy` / `preview test` run renews the lease for 24h; closing the
   PR tears the apps down and releases it. Lease expiry is only the safety
   valve for abandoned PRs (no pushes for >24h).
+- **Draft PRs don't claim a slot unless they ask.** Drafts are the default
+  for agent-opened PRs, and nine slots don't survive a busy night of them. A
+  draft asks by wearing the `preview` label (durable — previews then behave
+  as for a ready PR), being marked ready for review, or a one-shot explicit
+  run (dispatching the `Cloudflare Previews` workflow, or
+  `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
+  A draft that holds a slot without asking — e.g. a ready PR converted back
+  to draft — gives it back on the next lifecycle run.
 - **Nothing steals a live lease without a human `--force`.** Before running
   tests or destroying anything, the tooling re-asserts that the PR still
   holds the slot, and refuses (with an explanation naming the current holder)
