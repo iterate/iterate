@@ -6,6 +6,7 @@ import { SandboxProcessorContract } from "../sandboxes/sandbox-processor-contrac
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
+export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
 
 /**
  * Snippet-writing guidance shared by every codemode prompt (web-chat default,
@@ -180,6 +181,8 @@ export const AgentProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
+    pendingTriggerSource: z.enum(["user", "agent-loop"]).nullable().default(null),
+    autonomousTurnCount: z.number().int().nonnegative().default(0),
     /**
      * Count of finished LLM request lifecycles (completed or cancelled).
      * llm-request-scheduled idempotency is keyed on this, so every trigger
@@ -305,6 +308,15 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
       ]),
     },
+    "events.iterate.com/agent/loop-stopped": {
+      description:
+        "The agent circuit breaker stopped an autonomous tool-result loop without pausing the stream.",
+      payloadSchema: z.object({
+        maxAutonomousTurns: z.number().int().positive(),
+        reason: z.string().trim().min(1),
+        triggerOffset: z.number().int().positive(),
+      }),
+    },
   },
   processorDeps: [CapabilityHostProcessorContract, SandboxProcessorContract],
   consumes: [
@@ -319,6 +331,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/llm-request-cancelled",
+    "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
     // The agent's own sandbox (at /sandboxes/cloudflare<agent path>) fans its lifecycle
@@ -335,6 +348,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
+    "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
   ],
 });

@@ -16,6 +16,8 @@ import {
   CodeIcon,
   GitBranchIcon,
   PaperclipIcon,
+  PauseIcon,
+  PlayIcon,
 } from "lucide-react";
 import type {
   AgentUiActivity,
@@ -263,21 +265,26 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     return <ChildStreamCreatedRow item={item} projectSlug={projectSlug} />;
   }
 
-  if (item.kind !== "activity") {
-    if (item.kind === "user") {
-      return (
-        <Message
-          from="user"
-          className="pb-2 pt-3.5"
-          data-testid="agent-feed-message"
-          data-kind="user"
-        >
-          <MessageContent className="group-[.is-user]:rounded-2xl">
-            <UserMessageBody item={item} />
-          </MessageContent>
-        </Message>
-      );
-    }
+  if (item.kind === "stream-paused" || item.kind === "stream-resumed") {
+    return <StreamPauseRow item={item} />;
+  }
+
+  if (item.kind === "user") {
+    return (
+      <Message
+        from="user"
+        className="pb-2 pt-3.5"
+        data-testid="agent-feed-message"
+        data-kind="user"
+      >
+        <MessageContent className="group-[.is-user]:rounded-2xl">
+          <UserMessageBody item={item} />
+        </MessageContent>
+      </Message>
+    );
+  }
+
+  if (item.kind === "assistant") {
     return (
       <Message
         from="assistant"
@@ -295,14 +302,18 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     );
   }
 
-  return (
-    <AgentActivityRow
-      activity={item}
-      expanded={expandedIds.has(item.id)}
-      expandedIds={expandedIds}
-      onToggle={onToggle}
-    />
-  );
+  if (item.kind === "activity") {
+    return (
+      <AgentActivityRow
+        activity={item}
+        expanded={expandedIds.has(item.id)}
+        expandedIds={expandedIds}
+        onToggle={onToggle}
+      />
+    );
+  }
+
+  return null;
 });
 
 function ChildStreamCreatedRow({
@@ -384,6 +395,37 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
         </Tooltip>
       </div>
       <div className="h-px flex-1 bg-purple-500/45" />
+    </div>
+  );
+}
+
+function StreamPauseRow({
+  item,
+}: {
+  item: Extract<AgentUiItem, { kind: "stream-paused" | "stream-resumed" }>;
+}) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+  const paused = item.kind === "stream-paused";
+  const Icon = paused ? PauseIcon : PlayIcon;
+
+  return (
+    <div
+      className="flex items-center gap-3 py-3"
+      data-testid="agent-feed-stream-pause-state"
+      data-kind={item.kind}
+    >
+      <div className="h-px flex-1 bg-border" />
+      <div className="flex min-w-0 shrink items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-muted-foreground">
+        <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+        <time
+          className="truncate text-xs font-medium"
+          dateTime={dateTime}
+          title={formatDateTime(item.timestampMs)}
+        >
+          {item.reason == null ? item.text : `${item.text}: ${item.reason}`}
+        </time>
+      </div>
+      <div className="h-px flex-1 bg-border" />
     </div>
   );
 }

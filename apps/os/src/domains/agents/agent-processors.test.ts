@@ -6,7 +6,11 @@ import {
   flattenMessageToText,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
-import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import {
   OpenAiWsProcessor,
@@ -326,6 +330,46 @@ describe("minimal web-chat agent processors", () => {
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
     ).toEqual([]);
+  });
+
+  it("stops the agent loop instead of scheduling past the autonomous turn limit", async () => {
+    const stream = new MemoryStream();
+    await stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: "existing" },
+    });
+    const state = AgentProcessorContract.stateSchema.parse({
+      autonomousTurnCount: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+      pendingTriggerOffset: 1,
+      pendingTriggerSource: "agent-loop",
+    });
+    const agent = new AgentProcessor({
+      stream,
+      readState: async () => ({ offset: 1, state }),
+    });
+
+    await stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: "next" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const stopped = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/loop-stopped",
+    );
+    expect(stopped?.payload).toMatchObject({
+      maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+      reason: expect.stringContaining(`${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS}`),
+      triggerOffset: 1,
+    });
+    expect(stream.events.some((event) => event.type === "events.iterate.com/stream/paused")).toBe(
+      false,
+    );
+    expect(
+      stream.events.some(
+        (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+      ),
+    ).toBe(false);
   });
 
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
