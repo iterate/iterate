@@ -391,10 +391,21 @@ function AgentActivityRow({
           {activity.steps.map((step, index) => {
             // Expanding the activity shows what happened directly — code and
             // results are the point of expanding, not a second disclosure.
-            // Steps whose detail would show nothing (e.g. an LLM step whose
-            // whole response is the very script the next code step renders
-            // anyway) stay collapsed behind their slim header row.
+            // The activity header already says "Ran code 1×", so a lone code
+            // step renders its detail bare instead of repeating a "Ran code"
+            // header row underneath (multiple code steps keep their headers:
+            // the start times tell the runs apart). Steps whose detail would
+            // show nothing (e.g. an LLM step whose whole response is the very
+            // script the next code step renders anyway) stay collapsed behind
+            // their slim header row.
             const hideDuplicateResponse = llmResponseDuplicatesCode(activity.steps, index);
+            if (step.kind === "code" && codeStepCount(activity) === 1) {
+              return (
+                <div key={step.id} className="flex flex-col gap-2 pb-1 pt-0.5">
+                  <CodeStepDetail step={step} />
+                </div>
+              );
+            }
             const defaultExpanded = stepDetailHasContent(step, hideDuplicateResponse);
             return (
               <AgentActivityStep
@@ -534,8 +545,12 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   );
 }
 
+function codeStepCount(activity: AgentUiActivity): number {
+  return activity.steps.filter((step) => step.kind === "code").length;
+}
+
 function activitySummary(activity: AgentUiActivity): string {
-  const codeCount = activity.steps.filter((step) => step.kind === "code").length;
+  const codeCount = codeStepCount(activity);
   const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
   const interrupted = activity.steps.some(
     (step) => step.kind === "llm" && step.outcome === "cancelled",

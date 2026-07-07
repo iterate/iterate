@@ -135,3 +135,7 @@ Looking at a slack agent chat like
   events crashes real server processors (payload schema validation) and
   wedges the stream DO — seed only genuinely-external events (webhooks) and
   let the real processor chain produce the rest.
+- Follow-up from Misha's screenshot review: a single-code-step activity still
+  showed a nested "Ran code Started …" header under the "Ran code 1×" summary.
+  Lone code steps now render their detail bare inside the expanded activity;
+  multiple code steps keep headers (start times tell runs apart).
