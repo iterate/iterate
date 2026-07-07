@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { StreamEvent } from "../../types.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import { buildAgentLlmRequestBody, reduceAgentEvents } from "./agent-processor-implementation.ts";
+import {
+  buildAgentLlmRequestBody,
+  flattenMessageToText,
+  reduceAgentEvents,
+} from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
 
 type LlmRequestRequestedEvent = Extract<
@@ -78,7 +82,13 @@ export class CloudflareAiProcessor extends StreamProcessor<
         events: await this.deps.readStreamEvents(),
         llmRequestId,
       });
-      const raw = await this.deps.ai.run(input.event.payload.model, { ...body, stream: true });
+      // Workers AI chat bodies are text-only here: file attachments flatten
+      // to hint lines telling the agent how to fetch/convert the bytes.
+      const messages = body.messages.map((message) => ({
+        role: message.role,
+        content: flattenMessageToText(message),
+      }));
+      const raw = await this.deps.ai.run(input.event.payload.model, { messages, stream: true });
       const completion =
         raw instanceof ReadableStream
           ? await this.#consumeStream({ body: raw, sourceEvent: input.event })

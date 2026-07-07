@@ -8,10 +8,11 @@ import {
   type ReactNode,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BanIcon, ChevronRightIcon, CodeIcon } from "lucide-react";
+import { BanIcon, ChevronRightIcon, CodeIcon, PaperclipIcon } from "lucide-react";
 import type {
   AgentUiActivity,
   AgentUiCodeStep,
+  AgentUiFileAttachment,
   AgentUiItem,
   AgentUiLlmStep,
   AgentUiMessageItem,
@@ -249,7 +250,7 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
           data-kind="user"
         >
           <MessageContent className="group-[.is-user]:rounded-2xl">
-            <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+            <UserMessageBody item={item} />
           </MessageContent>
         </Message>
       );
@@ -357,7 +358,7 @@ function QueuedMessagesPanel({
       {messages.map((message) => (
         <Message key={message.id} from="user" className="py-1">
           <MessageContent className="group-[.is-user]:rounded-2xl">
-            <div className="whitespace-pre-wrap leading-6">{message.text}</div>
+            <UserMessageBody item={message} />
           </MessageContent>
         </Message>
       ))}
@@ -378,6 +379,59 @@ function QueuedMessagesPanel({
         </Button>
       )}
     </div>
+  );
+}
+
+function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
+  return (
+    <>
+      {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
+      <UserMessageAttachments files={item.files} hasText={item.text !== ""} />
+    </>
+  );
+}
+
+function UserMessageAttachments({
+  files,
+  hasText,
+}: {
+  files: AgentUiMessageItem["files"];
+  hasText: boolean;
+}) {
+  if (files == null || files.length === 0) return null;
+  return (
+    <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
+      {files.map((file) => (
+        <UserMessageAttachment key={file.path} file={file} />
+      ))}
+    </div>
+  );
+}
+
+function UserMessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+  if (file.contentType.startsWith("image/")) {
+    return (
+      <a href={file.url} target="_blank" rel="noreferrer" className="block max-w-full">
+        <img
+          src={file.url}
+          alt={file.filename}
+          className="max-h-64 max-w-full rounded-lg border border-border/60 bg-background object-contain"
+        />
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={file.url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex max-w-full items-center gap-1.5 self-start rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <PaperclipIcon className="size-3 shrink-0" />
+      <span className="min-w-0 truncate text-foreground/80">{file.filename}</span>
+      <span className="shrink-0 font-mono">{formatFileSize(file.size)}</span>
+    </a>
   );
 }
 
@@ -744,6 +798,13 @@ function formatSeconds(durationMs: number): string {
   if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const kilobytes = size / 1024;
+  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
+  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
 function formatClockTime(timestampMs: number): string {

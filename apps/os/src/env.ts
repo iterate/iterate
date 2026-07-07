@@ -94,6 +94,14 @@ export interface Env {
   R2_ACCESS_KEY_ID?: string;
   /** See {@link Env.R2_ACCESS_KEY_ID}. */
   R2_SECRET_ACCESS_KEY?: string;
+  /**
+   * Project file storage backing `itx.files` and agent file attachments
+   * (domains/files/project-files.ts). Keys follow the durable-object name
+   * convention `{projectId}.iterate{path}`; bytes are served publicly through
+   * HMAC-signed URLs on the reserved `iterate-files` platform app. One bucket
+   * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
+   */
+  FILES_BUCKET: R2Bucket;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;

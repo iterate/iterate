@@ -98,6 +98,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Cloudflare platform bindings are available at `itx.integrations.cf`: `cf.ai` (Workers AI `run`, `models`, `toMarkdown`), `cf.browser` (Browser Run `quickAction`, `fetch`), `cf.images` (Images `info`, `transform`), and `cf.videos` (Media Transformations `transform`). Root shortcuts exist for common calls: `itx.ai` and `itx.browser`. Call `await itx.ai.__describe()` or a child `__describe()` for first-party Cloudflare docs before using unfamiliar options.",
   '- Document conversion: use `await itx.integrations.cf.ai.toMarkdown({ name: "report.pdf", blob })` (or `itx.ai.toMarkdown`). Call `await itx.ai.toMarkdown()` with no args to list supported formats. The `name` must include the real extension.',
   '- Workers AI media examples: `await itx.examples.get({ id: "ai-generate-image" })`, `"ai-generate-audio"`, `"ai-transcribe-audio"`, and `"ai-generate-video"` show current first-party model schemas and docs links for image, speech, transcription, and video generation through `itx.ai.run(model, input)`.',
+  '- FILES: `itx.files.get(path)` is project file storage (put/bytes/url/delete). When you GENERATE files the user should see — e.g. an image from `itx.ai.run` (image models return base64 in `response.image`) — call `await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } })`: one call stores the bytes under your agent path, attaches the files to this conversation as ONE message (images become visible to you on later turns), and returns shareable signed `url`s. Files users upload arrive the same way — as attachments on your inputs, with hint lines telling you how to read or convert non-image formats.',
   '- Browser Run quick actions: use `const resp = await itx.browser.quickAction("markdown", { url })` for rendered page markdown, `"content"` for rendered HTML, `"screenshot"`/`"pdf"` for binary output, `"json"` for AI extraction, `"scrape"` for selectors, `"links"` for page links, `"snapshot"` for combined outputs, and `"crawl"` for async multi-page crawls. Parse JSON responses with `await resp.json()`; return/store binary responses as needed.',
   '- Gmail is available as `itx.integrations.gmail` when the project has a connected Google account. Check `await itx.integrations.getConnection({ provider: "google" })`, then call Gmail REST paths through `await itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
   '- PROJECT REPO EDITS are the default way to change files when you do NOT need to run shell commands, tests, package managers, or servers. Get a repo handle with `const repo = itx.repos.get(vars.repoPath ?? "/")` (or use `itx.repo` for the project repo), inspect with `await repo.readFile({ path })`, then make targeted changes with `await repo.edit({ path, message, oldString, newString })`. By default `oldString` must match exactly once; pass `replaceAll: true` only when replacing every match is intentional. Use `repo.commitFiles({ message, changes })` for new files or batch/full-file writes. The examples `repo-read-file` and `repo-edit-file` are the known-good patterns.',
@@ -116,9 +117,25 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 export const AgentLlmProvider = z.enum(["cloudflare-ai", "openai-ws"]);
 export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
 
+/**
+ * A file reference riding on an agent input: where the bytes live in project
+ * file storage plus the signed public URL minted when it was attached. The
+ * URL is stored (not re-minted per read) so history stays deterministic;
+ * links in old conversations expire with the signature (default 7 days).
+ */
+export const AgentFileAttachment = z.object({
+  contentType: z.string(),
+  filename: z.string(),
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  url: z.string(),
+});
+export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
+
 const ChatMessage = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
+  files: z.array(AgentFileAttachment).optional(),
 });
 
 const LlmRequestPolicy = z
@@ -195,6 +212,8 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "A normalized model-visible input was added.",
       payloadSchema: z.object({
         content: z.string(),
+        /** Files attached to this input — see {@link AgentFileAttachment}. */
+        files: z.array(AgentFileAttachment).optional(),
         llmRequestPolicy: LlmRequestPolicy,
       }),
     },

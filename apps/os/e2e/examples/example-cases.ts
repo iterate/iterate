@@ -113,6 +113,24 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       );
     },
   },
+  "files-roundtrip": {
+    vars: ({ marker }) => ({ note: `files ${marker}`, path: `/repl/files-${marker}.txt` }),
+    assert: (result, { marker }, expect) => {
+      const shaped = result as {
+        servedStatus: number;
+        servedText: string;
+        size: number;
+        text: string;
+        url: string;
+      };
+      expect(shaped.text).toBe(`files ${marker}`);
+      expect(shaped.servedStatus).toBe(200);
+      expect(shaped.servedText).toBe(`files ${marker}`);
+      expect(shaped.size).toBeGreaterThan(0);
+      expect(shaped.url).toContain("iterate-files--");
+      expect(shaped.url).toContain("sig=");
+    },
+  },
   "append-and-read-stream": {
     vars: ({ marker }) => ({ note: marker, path: `/repl/demo-${marker}` }),
     assert: (result, { marker }, expect) => {

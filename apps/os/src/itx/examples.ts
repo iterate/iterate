@@ -629,6 +629,35 @@ return {
 `.trim(),
   },
   {
+    id: "files-roundtrip",
+    title: "Store, read, and share a project file",
+    description:
+      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const path = vars.path ?? "/repl/files-demo.txt";
+const file = itx.files.get(path);
+
+// Strings are decoded as base64 — exactly the shape Workers AI image models
+// return in response.image.
+const note = vars.note ?? "hello project files";
+const stored = await file.put({ contentType: "text/plain", data: btoa(note) });
+
+// Read the bytes back over itx.
+const bytes = await file.bytes();
+const text = new TextDecoder().decode(new Uint8Array(bytes));
+
+// Mint a signed public URL and fetch it like any HTTP client would — this is
+// the link you paste into chat or hand to a vision model.
+const url = await file.url();
+const served = await fetch(url);
+const servedText = await served.text();
+
+return { servedStatus: served.status, servedText, size: stored.size, text, url };
+`.trim(),
+  },
+  {
     id: "exa-web-search",
     title: "Web search through the built-in Exa MCP server",
     description:
