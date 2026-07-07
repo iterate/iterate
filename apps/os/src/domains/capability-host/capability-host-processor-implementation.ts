@@ -11,10 +11,8 @@ import type {
   JsonValue,
   ProjectRpcTarget,
   RevokeCapabilityInput,
-  StatelessDynamicWorkerRef,
   StreamEvent,
 } from "../../types.ts";
-import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
@@ -31,6 +29,11 @@ type CompletedPayload = {
   executionId: string;
   result?: JsonValue;
 };
+
+type ScriptExecutionEntrypoint = {
+  run(code: string): Promise<unknown>;
+};
+
 const INVALID_PATH_SEGMENTS = new Set([
   // Mount names only — INVOCATION paths may end in __describe (intercepted in
   // invokeCapability below); a MOUNT named __describe would be unreachable.
@@ -103,7 +106,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   readonly contract = CapabilityHostProcessorContract;
   #itx: ProjectRpcTarget;
   #path: string;
-  #dynamicWorkers: DynamicWorkerRunner;
+  #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -112,7 +115,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       itx: ProjectRpcTarget;
       path: string;
       /** Runs run-script workers in this scope. */
-      dynamicWorkers: DynamicWorkerRunner;
+      scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -122,7 +125,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
-    this.#dynamicWorkers = args.dynamicWorkers;
+    this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#parent = args.parent;
   }
 
@@ -420,47 +423,11 @@ export class CapabilityHostProcessor extends StreamProcessor<
     };
 
     try {
-      // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
-      // to the same path this processor owns, not the script ref's path.
-      const result = await this.#dynamicWorkers.invokeCapability({
-        path: ["run"],
-        ref: this.#scriptWorkerRef(input.code),
-      });
+      const result = await this.#scriptExecutionEntrypoint.run(input.code);
       await complete({ result });
     } catch (error) {
       await complete({ error: error instanceof Error ? error.message : String(error) });
     }
-  }
-
-  #scriptWorkerRef(code: string): StatelessDynamicWorkerRef {
-    const source = `
-      import { WorkerEntrypoint } from "cloudflare:workers";
-      const fn = ${code};
-      export class ScriptEntrypoint extends WorkerEntrypoint {
-        async run() {
-          const itx = await this.env.ITX.get();
-          return await fn(itx);
-        }
-      }
-    `;
-    // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
-    // keeps script execution on the same DynamicWorkerRunner dispatch path as project
-    // workers and provided stateless capabilities; ITX adds only the journal events.
-    // `bundle: false` over plain JavaScript is the loader-ready fast path in
-    // resolveWorkerSource: scripts run on every agent turn and must not pay a
-    // build round trip.
-    return {
-      path: this.#path,
-      source: {
-        files: {
-          files: { "main.js": source },
-          type: "inline",
-        },
-        options: { bundle: false, entryPoint: "main.js" },
-      },
-      entrypoint: "ScriptEntrypoint",
-      type: "stateless",
-    };
   }
 }
 
