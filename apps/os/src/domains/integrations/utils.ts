@@ -2,6 +2,8 @@
 // path helpers ARE the address model: /integrations/{slug}/{connection} and
 // its projections (thread paths, secret paths, connection-from-path).
 
+import type { BuiltinIntegrationSlug } from "../../types.ts";
+
 /**
  * Deployment-wide (projectId: null) stream mapping `(slug, externalId)` — a
  * provider-side account id like a Slack team id or a GitHub installation id —
@@ -29,6 +31,12 @@ export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set([
   "github",
 ]);
 
+/** Type-guard view of {@link BUILTIN_INTEGRATION_SLUGS}: narrows an arbitrary
+ * slug string to the BuiltinIntegrationSlug union. */
+export function isBuiltinIntegrationSlug(slug: string): slug is BuiltinIntegrationSlug {
+  return BUILTIN_INTEGRATION_SLUGS.has(slug);
+}
+
 export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
 export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
 export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webhook-received";
@@ -44,6 +52,16 @@ export function readRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** Parse a body as a JSON object; null for non-JSON or non-object bodies
+ * (arrays included) — the webhook doors ACK-and-drop those. */
+export function parseJsonRecord(body: string): Record<string, unknown> | null {
+  try {
+    return readRecord(JSON.parse(body) as unknown);
+  } catch {
+    return null;
+  }
 }
 
 export function readString(value: unknown): string | undefined {
@@ -65,8 +83,8 @@ export function sanitizeConnectionName(value: string): string {
 
 /**
  * Per-project stream for one named integration connection: connect/disconnect
- * facts, token ciphertext (google), and the webhook router's events (slack)
- * all live at `/integrations/{slug}/{connection}`.
+ * facts and the webhook router's events (slack) all live at
+ * `/integrations/{slug}/{connection}`.
  */
 export function integrationConnectionStreamPath(slug: string, connection: string): string {
   return `/integrations/${slug}/${connection}`;
@@ -80,9 +98,8 @@ export function slackBotTokenSecretPath(connection: string): string {
 /** Google's OAuth token endpoint (code exchange + refresh). */
 export const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
-/** The v6 Google connection secret: holds `{ accessToken, refreshToken }` and
- * hosts the refresh worker (google-worker.ts). Egress-pinned to the token +
- * Gmail hosts; the worker refreshes the access token on a 401. */
+/** The Google connection secret: holds `{ accessToken, refreshToken }`; the
+ * shared oauth-refresh-token strategy refreshes on 401 in the Secret DO. */
 export function googleConnectionSecretPath(connection: string): string {
   return `/secrets/integrations/google/${connection}`;
 }
@@ -105,8 +122,8 @@ export function githubConnectionSecretPath(connection: string): string {
 }
 
 /** Hosts a GitHub connection secret's egress is pinned to: the API (REST +
- * installation-token mint) and github.com/uploads/objects for git-over-https,
- * releases, and LFS. */
+ * installation-token mint), plus github.com/uploads/objects as deliberate
+ * headroom for release assets and upload/redirect hosts Octokit may follow. */
 export const GITHUB_CONNECTION_EGRESS_URLS = [
   "https://api.github.com",
   "https://github.com",
@@ -145,7 +162,7 @@ export function slackConnectionFromAgentPath(agentPath: string): string | null {
 /**
  * The `{ slug, connection }` coordinates of an integration connection stream
  * path (`/integrations/{slug}/{connection}`), or null for any other path —
- * notably the three-segment team directory stream and the project root.
+ * notably the connection directory stream and the project root.
  */
 export function integrationCoordinatesFromStreamPath(
   path: string,

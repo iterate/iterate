@@ -1,7 +1,6 @@
-// Unit tests for the secret substitution grammar and compute helpers (design
-// §2.1). Pure functions — no workerd, no DO. The chaining that stitches these
-// across several secrets lives in SecretDurableObject and is exercised by the
-// integration proofs (S5).
+// Unit tests for the secret substitution grammar and compute helpers. Pure
+// functions — no workerd, no DO. The Secret DO's fetch() drives these against
+// real state and is exercised by the integration e2e proofs.
 
 import { describe, expect, test } from "vitest";
 import {
@@ -70,9 +69,9 @@ describe("substituteSecretHeaders", () => {
   });
 
   // A WS handshake IS an HTTP request, so upgrade headers substitute the same
-  // way — this is exactly what the Secret DO's WS-jail branch relies on for the
-  // header + subprotocol credential shapes (design §9 D6). Substitution stays
-  // header-only; frames are never touched.
+  // way — the property the deferred WS-egress lane will rely on for the header
+  // + subprotocol credential shapes. Substitution stays header-only; frames
+  // are never touched.
   test("substitutes the Authorization and Sec-WebSocket-Protocol upgrade headers", () => {
     const path = "/secrets/integrations/petshop-home/jonas";
     const request = new Request("https://petshop.example/gateway-subprotocol", {
@@ -102,7 +101,6 @@ describe("compute helpers", () => {
   test("computeHmacHex matches a known GitHub-style sha256 vector", async () => {
     // echo -n "hello world" | openssl dgst -sha256 -hmac "It's a Secret to Everybody"
     const digest = await computeHmacHex({
-      algo: "sha256",
       key: "It's a Secret to Everybody",
       payload: "hello world",
     });
@@ -135,7 +133,7 @@ describe("compute helpers", () => {
     const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(b64)}\n-----END PRIVATE KEY-----`;
 
     const payload = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhcHAtaWQifQ"; // header.payload
-    const sig = await computeSignatureBase64Url({ algo: "RS256", privateKeyPem: pem, payload });
+    const sig = await computeSignatureBase64Url({ privateKeyPem: pem, payload });
 
     expect(sig).not.toContain("=");
     expect(sig).not.toMatch(/[+/]/); // base64url, not base64

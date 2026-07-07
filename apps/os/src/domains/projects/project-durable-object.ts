@@ -129,7 +129,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     try {
       secretPaths = secretReferencePathsFromHeaders(request.headers);
     } catch {
-      return secretErrorResponse("secret_reference_required", 400);
+      return secretErrorResponse("secret_reference_required");
     }
     const platformReferences = platformReferencesFromHeaders(request.headers);
 
@@ -138,18 +138,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // allowlist — no Durable Object, no synthetic secret. They do not mix
     // with project-secret references in one request.
     if (platformReferences.length > 0) {
-      if (secretPaths.length > 0) return secretErrorResponse("secret_reference_foreign", 400);
+      if (secretPaths.length > 0) return secretErrorResponse("secret_reference_foreign");
       try {
         return await fetch(
           substitutePlatformApiKeyReferences({ config: parseConfig(this.env), request }),
         );
       } catch (error) {
-        if (error instanceof SecretSubstitutionError) {
-          return secretErrorResponse(
-            error.code,
-            error.code === "secret_not_allowed_for_origin" ? 403 : 400,
-          );
-        }
+        if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
       }
     }
@@ -157,7 +152,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (secretPaths.length === 0) return fetch(request);
     // One request, one secret: the referenced Secret DO substitutes its own
     // placeholders under its own host pin (cross-secret chaining is gone).
-    if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign", 400);
+    if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
 
     return this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({

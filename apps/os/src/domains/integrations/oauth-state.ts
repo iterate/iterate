@@ -27,7 +27,8 @@ const OAuthStateData = z.object({
   userId: z.string(),
 });
 
-type OAuthStateData = z.infer<typeof OAuthStateData>;
+/** The verified contents of one signed OAuth state token. */
+export type OAuthStateData = z.infer<typeof OAuthStateData>;
 
 export async function createOAuthState(
   input: Omit<OAuthStateData, "expiresAt" | "nonce">,

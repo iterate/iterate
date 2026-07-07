@@ -125,6 +125,13 @@ export async function lookupConnectionClaim(
   return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
 }
 
+/** The outcome of routing one inbound webhook: delivered to a connection, or
+ * `ignored` because no project has claimed its external id (the caller ACKs the
+ * ignored case with a 200 — see the webhook handlers' cardinal rule). */
+type RouteIntegrationWebhookResult =
+  | { connection: string; ok: true; projectId: string }
+  | { ignored: string; ok: true };
+
 /**
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
@@ -133,13 +140,6 @@ export async function lookupConnectionClaim(
  * only the signature verify, external-id extract, and event shaping; routing is
  * one function for every integration.
  */
-/** The outcome of routing one inbound webhook: delivered to a connection, or
- * `ignored` because no project has claimed its external id (the caller ACKs the
- * ignored case with a 200 — see the webhook handlers' cardinal rule). */
-type RouteIntegrationWebhookResult =
-  | { connection: string; ok: true; projectId: string }
-  | { ignored: string; ok: true };
-
 export async function routeIntegrationWebhook(input: {
   event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
   externalId: string;

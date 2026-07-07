@@ -8,7 +8,7 @@
 
 import { computeHmacHex, timingSafeStringEqual } from "../secrets/utils.ts";
 import { routeIntegrationWebhook } from "./integration-streams.ts";
-import { GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE } from "./utils.ts";
+import { GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE, parseJsonRecord } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH = "/api/integrations/github/webhook";
@@ -33,7 +33,7 @@ export async function fetchGithubWebhook(input: {
   });
   if (!verified) return Response.json({ error: "Invalid GitHub signature." }, { status: 401 });
 
-  const payload = parseJsonObject(body);
+  const payload = parseJsonRecord(body);
   if (!payload) return Response.json({ ignored: "unparseable-payload", ok: true });
 
   const installationId = githubWebhookExternalId(payload);
@@ -70,11 +70,7 @@ async function verifyGithubWebhook(input: {
   webhookSecret: string;
 }): Promise<boolean> {
   if (!input.signature256) return false;
-  const digest = await computeHmacHex({
-    algo: "sha256",
-    key: input.webhookSecret,
-    payload: input.rawBody,
-  });
+  const digest = await computeHmacHex({ key: input.webhookSecret, payload: input.rawBody });
   return timingSafeStringEqual(`sha256=${digest}`, input.signature256);
 }
 
@@ -90,15 +86,4 @@ function githubWebhookExternalId(payload: Record<string, unknown>): string | nul
     if (typeof id === "number" || typeof id === "string") return String(id);
   }
   return null;
-}
-
-function parseJsonObject(body: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }

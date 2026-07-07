@@ -1,10 +1,6 @@
 import { type AppConfig } from "../../config.ts";
 import { type PlatformCredsRef } from "../../types.ts";
-import {
-  platformReferencesFromHeaders,
-  SecretSubstitutionError,
-  substitutePlatformHeaders,
-} from "./utils.ts";
+import { SecretSubstitutionError, substitutePlatformHeaders } from "./utils.ts";
 
 /**
  * Known platform credentials: deployment-owned secrets resolved from typed
@@ -82,35 +78,25 @@ const PLATFORM_CLIENT_CREDS: Record<
   },
 };
 
-/** Which API origins the first-party GitHub App key may sign JWTs for. A
- * bring-your-own-App connection keeps its key in material instead. */
-const GITHUB_APP_KEY_ORIGINS: readonly string[] = ["https://api.github.com"];
-
 /**
  * Substitute `getSecret({ platform: ... })` API-key references into a request.
  * Called by the project egress door for requests that reference no project
  * secret. Throws SecretSubstitutionError on unknown paths, unconfigured keys,
- * or a destination outside the credential's origin pin.
+ * or a destination outside the credential's origin pin — before the
+ * substituted Request is built, so no partial substitution escapes.
  */
 export function substitutePlatformApiKeyReferences(input: {
   config: AppConfig;
   request: Request;
 }): Request {
-  const references = platformReferencesFromHeaders(input.request.headers);
   const origin = new URL(input.request.url).origin;
-  const values = new Map<string, string>();
-  for (const reference of references) {
-    const entry = PLATFORM_API_KEYS[reference.platform];
+  return substitutePlatformHeaders(input.request, ({ platform }) => {
+    const entry = PLATFORM_API_KEYS[platform];
     if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
     if (!entry.origins.includes(origin)) {
       throw new SecretSubstitutionError("secret_not_allowed_for_origin");
     }
     const value = entry.value(input.config);
-    if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
-    values.set(reference.platform, value);
-  }
-  return substitutePlatformHeaders(input.request, (reference) => {
-    const value = values.get(reference.platform);
     if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
     return value;
   });
@@ -124,28 +110,30 @@ export function resolvePlatformClientCreds(
   tokenEndpoint: string,
 ): { clientId: string; clientSecret: string } {
   const entry = PLATFORM_CLIENT_CREDS[ref.platform];
-  const creds = entry?.creds(config);
+  if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
+  const creds = entry.creds(config);
   if (creds === undefined) throw new SecretSubstitutionError("secret_not_found");
-  if (entry!.origins && !entry!.origins.includes(new URL(tokenEndpoint).origin)) {
+  if (entry.origins && !entry.origins.includes(new URL(tokenEndpoint).origin)) {
     throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
   return creds;
 }
 
 /** Resolve the first-party GitHub App private key for an installation-token
- * mint against `apiBase`. Only the real GitHub API origin is allowed. */
+ * mint against `apiBase`. Only the real GitHub API origin is allowed; a
+ * bring-your-own-App connection keeps its key in material instead. */
 export function resolvePlatformGithubAppKey(
   config: AppConfig,
   ref: PlatformCredsRef,
   apiBase: string,
-): { privateKey: string } {
+): string {
   if (ref.platform !== "integrations.github") {
     throw new SecretSubstitutionError("secret_not_found");
   }
   const privateKey = config.integrations.github?.privateKey?.exposeSecret();
   if (privateKey === undefined) throw new SecretSubstitutionError("secret_not_found");
-  if (!GITHUB_APP_KEY_ORIGINS.includes(new URL(apiBase).origin)) {
+  if (new URL(apiBase).origin !== "https://api.github.com") {
     throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
-  return { privateKey };
+  return privateKey;
 }

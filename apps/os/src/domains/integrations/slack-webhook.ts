@@ -22,7 +22,7 @@
 
 import { routeIntegrationWebhook } from "./integration-streams.ts";
 import { verifySlackSignature } from "./slack-signature.ts";
-import { SLACK_WEBHOOK_RECEIVED_EVENT_TYPE } from "./utils.ts";
+import { parseJsonRecord, readString, SLACK_WEBHOOK_RECEIVED_EVENT_TYPE } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH = "/api/integrations/slack/webhook";
@@ -53,7 +53,7 @@ export async function fetchSlackWebhook(input: {
   if (!valid) return Response.json({ error: "Invalid Slack signature." }, { status: 401 });
 
   // Signed → every "can't use this" branch ACKs 200 and drops.
-  const payload = interactivity ? parseInteractivityPayload(body) : parseJsonObject(body);
+  const payload = interactivity ? parseInteractivityPayload(body) : parseJsonRecord(body);
   if (!payload) return Response.json({ ignored: "unparseable-payload", ok: true });
   if (payload.type === "url_verification") {
     return Response.json({ challenge: payload.challenge });
@@ -62,16 +62,9 @@ export async function fetchSlackWebhook(input: {
   const teamId = readSlackTeamId(payload);
   if (!teamId) return Response.json({ ignored: "no-team-id", ok: true });
 
-  const eventId = payload.event_id;
-  const triggerId = payload.trigger_id;
   const result = await routeIntegrationWebhook({
     event: {
-      idempotencyKey:
-        typeof eventId === "string"
-          ? `slack-webhook:${eventId}`
-          : typeof triggerId === "string"
-            ? `slack-webhook:${triggerId}`
-            : `slack-webhook:${crypto.randomUUID()}`,
+      idempotencyKey: `slack-webhook:${readString(payload.event_id) ?? readString(payload.trigger_id) ?? crypto.randomUUID()}`,
       // The exact shape the Slack agent router reads (D1 — untouched).
       payload: {
         body: payload,
@@ -90,20 +83,9 @@ export async function fetchSlackWebhook(input: {
   return Response.json({ ok: true });
 }
 
-function parseJsonObject(body: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function parseInteractivityPayload(body: string): Record<string, unknown> | null {
   const payload = new URLSearchParams(body).get("payload");
-  return payload ? parseJsonObject(payload) : null;
+  return payload ? parseJsonRecord(payload) : null;
 }
 
 function readSlackTeamId(payload: Record<string, unknown>): string | null {

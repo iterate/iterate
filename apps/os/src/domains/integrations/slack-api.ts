@@ -77,6 +77,8 @@ function slackEgressAdapter(stub: SlackEgressStub): NonNullable<WebClientOptions
 export function connectionSlackClient(input: { connection: string; projectId: string }): WebClient {
   const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
   return new WebClient(placeholder, {
+    // Dials the project egress door (not the Secret DO directly, unlike
+    // github/gmail) so project egress interceptors observe Slack calls.
     adapter: slackEgressAdapter(projectStub(itxEnv.PROJECT, input.projectId)),
     // The egress door + our own error handling own retries; the SDK's node-retry
     // timers are neither needed nor edge-friendly.

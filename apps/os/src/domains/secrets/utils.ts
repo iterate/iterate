@@ -37,9 +37,8 @@ export function normalizeSecretPath(path: string): string {
   return normalized;
 }
 
-/** Every distinct placeholder across all headers. One request may reference
- * several secrets (app-tier + connection-tier), which the Secret DO resolves by
- * chaining — see `SecretDurableObject.fetch`. */
+/** Every distinct placeholder across all headers. All must address the same
+ * secret — the Secret DO rejects foreign paths (one request, one secret). */
 export function secretReferencesFromHeaders(headers: Headers): SecretReference[] {
   const byKey = new Map<string, SecretReference>();
   headers.forEach((value) => {
@@ -116,8 +115,8 @@ export function selectSecretField(material: unknown, field?: string): string {
 /**
  * Rewrites every `getSecret(...)` placeholder in every header using `resolve`.
  * The resolver is handed the parsed reference and returns the substituted
- * string; it runs in the Secret DO (trusted platform code), never in a jail, so
- * material bytes are only ever handled here on the way out to a pinned host.
+ * string; it runs in the Secret DO (trusted platform code), so material bytes
+ * are only ever handled here on the way out to a pinned host.
  */
 export function substituteSecretHeaders(
   request: Request,
@@ -139,18 +138,17 @@ export function substituteSecretHeaders(
   return new Request(request, { headers });
 }
 
-/** Hex-encoded keyed HMAC over caller bytes. Pure (no state) so it unit-tests
- * without workerd; the Secret capability's `hmac` method is this over a
- * selected field. WebCrypto is present in every isolate, so no helper library. */
+/** Hex-encoded keyed HMAC-SHA256 over caller bytes — the webhook-signature
+ * primitive (GitHub `sha256=`, Slack `v0=`). Pure (no state) so it unit-tests
+ * without workerd; WebCrypto is present in every isolate, so no helper library. */
 export async function computeHmacHex(input: {
-  algo: "sha1" | "sha256";
   key: string;
   payload: string | Uint8Array;
 }): Promise<string> {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(input.key),
-    { hash: input.algo === "sha1" ? "SHA-1" : "SHA-256", name: "HMAC" },
+    { hash: "SHA-256", name: "HMAC" },
     false,
     ["sign"],
   );
@@ -162,14 +160,12 @@ export async function computeHmacHex(input: {
 
 /**
  * RSASSA-PKCS1-v1_5 / SHA-256 signature (RS256) over caller bytes, returned
- * base64url — the JWT-signing primitive (GitHub App JWTs, and any future
- * signing integration). Like `computeHmacHex`, it attenuates "the private key"
- * to "a signature computed under the key": the key is imported here from PKCS#8
- * PEM and never returned. Pure + WebCrypto, so no helper library and unit-
- * testable without workerd. `algo` is a param so ES256 slots in later.
+ * base64url — the JWT-signing primitive for the Secret DO's GitHub App
+ * installation-token mint. The key is imported here from PKCS#8 PEM and never
+ * returned. Pure + WebCrypto, so no helper library and unit-testable without
+ * workerd.
  */
 export async function computeSignatureBase64Url(input: {
-  algo: "RS256";
   privateKeyPem: string;
   payload: string | Uint8Array;
 }): Promise<string> {
@@ -235,6 +231,11 @@ export class SecretSubstitutionError extends Error {
   }
 }
 
-export function secretErrorResponse(code: SecretErrorCode, status: number): Response {
-  return Response.json({ error: code }, { status });
+/** The one code→status mapping: a destination outside the pin is forbidden
+ * (403); every other substitution failure is a bad request (400). */
+export function secretErrorResponse(code: SecretErrorCode): Response {
+  return Response.json(
+    { error: code },
+    { status: code === "secret_not_allowed_for_origin" ? 403 : 400 },
+  );
 }

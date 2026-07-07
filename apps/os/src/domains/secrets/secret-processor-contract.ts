@@ -25,6 +25,16 @@ const SecretRefresh = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/** The encrypted-at-rest material blob, exactly as crypto.ts produces it. */
+const EncryptedMaterial = z.strictObject({
+  algorithm: z.literal("AES-GCM-SHA256"),
+  ciphertext: z.string().trim().min(1),
+  iv: z.string().trim().min(1),
+});
+
+/** The egress allowlist: substituted requests may only target these origins. */
+const Egress = z.object({ urls: z.array(z.string()) });
+
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
   version: "0.3.0",
@@ -38,19 +48,8 @@ export const SecretProcessorContract = defineProcessorContract({
         usedCount: z.number().int().min(0).default(0),
       })
       .default({ usedCount: 0 }),
-    egress: z
-      .object({
-        urls: z.array(z.string()).default([]),
-      })
-      .default({ urls: [] }),
-    encryptedMaterial: z
-      .strictObject({
-        algorithm: z.literal("AES-GCM-SHA256"),
-        ciphertext: z.string().trim().min(1),
-        iv: z.string().trim().min(1),
-      })
-      .nullable()
-      .default(null),
+    egress: Egress.default({ urls: [] }),
+    encryptedMaterial: EncryptedMaterial.nullable().default(null),
     // The refresh strategy this secret runs on a 401 / missing field, if any.
     // Stored as one fact: configure-time declaration is the trust event.
     refresh: SecretRefresh.nullable().default(null),
@@ -59,18 +58,8 @@ export const SecretProcessorContract = defineProcessorContract({
     "events.iterate.com/secret/updated": {
       description: "Updates secret material, egress URL config, and/or the refresh strategy.",
       payloadSchema: z.object({
-        egress: z
-          .object({
-            urls: z.array(z.string()),
-          })
-          .optional(),
-        encryptedMaterial: z
-          .strictObject({
-            algorithm: z.literal("AES-GCM-SHA256"),
-            ciphertext: z.string().trim().min(1),
-            iv: z.string().trim().min(1),
-          })
-          .optional(),
+        egress: Egress.optional(),
+        encryptedMaterial: EncryptedMaterial.optional(),
         // `null` clears a configured strategy; omitted leaves it unchanged.
         refresh: SecretRefresh.nullable().optional(),
       }),

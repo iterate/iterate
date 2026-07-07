@@ -124,12 +124,12 @@ describe("resolvePlatformClientCreds", () => {
 
 describe("resolvePlatformGithubAppKey", () => {
   test("the first-party App key resolves only toward the real GitHub API", () => {
-    const resolved = resolvePlatformGithubAppKey(
+    const privateKey = resolvePlatformGithubAppKey(
       config,
       { platform: "integrations.github" },
       "https://api.github.com",
     );
-    expect(resolved.privateKey).toContain("BEGIN PRIVATE KEY");
+    expect(privateKey).toContain("BEGIN PRIVATE KEY");
 
     expect(() =>
       resolvePlatformGithubAppKey(

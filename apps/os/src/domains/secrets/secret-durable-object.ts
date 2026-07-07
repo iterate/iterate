@@ -76,13 +76,10 @@ export class SecretDurableObject extends DurableObject<Env> {
       throw new Error("secret.update requires material, egress, or refresh");
     }
 
-    const current = (await this.#secretProcessor.snapshot()).state;
-    if (
-      input.egress !== undefined &&
-      input.material === undefined &&
-      current.encryptedMaterial === null
-    ) {
-      throw new Error("secret.update with egress requires existing material");
+    if (input.egress !== undefined && input.material === undefined) {
+      if ((await this.#snapshot()).encryptedMaterial === null) {
+        throw new Error("secret.update with egress requires existing material");
+      }
     }
 
     const [event] = await this.#processorHost.stream.append({
@@ -126,12 +123,12 @@ export class SecretDurableObject extends DurableObject<Env> {
     try {
       references = secretReferencesFromHeaders(request.headers);
     } catch {
-      return secretErrorResponse("secret_reference_required", 400);
+      return secretErrorResponse("secret_reference_required");
     }
-    if (references.length === 0) return secretErrorResponse("secret_reference_required", 400);
+    if (references.length === 0) return secretErrorResponse("secret_reference_required");
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
-      return secretErrorResponse("secret_reference_foreign", 400);
+      return secretErrorResponse("secret_reference_foreign");
     }
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       // Deferred, not foreclosed: WS egress returns inside this same surface.
@@ -140,21 +137,14 @@ export class SecretDurableObject extends DurableObject<Env> {
 
     try {
       const state = await this.#snapshot();
-      const origin = new URL(request.url).origin;
-      if (!state.egress.urls.some((url) => new URL(url).origin === origin)) {
-        throw new SecretSubstitutionError("secret_not_allowed_for_origin");
-      }
+      assertOriginPinned(request.url, state);
 
       // A refresh-and-retry needs the body twice; clone while it is still
-      // undisturbed. A body that cannot clone just loses the retry.
-      let retrySource: Request | null = null;
-      if (state.refresh !== null) {
-        try {
-          retrySource = request.clone() as unknown as Request;
-        } catch {
-          retrySource = null;
-        }
-      }
+      // undisturbed. (The cast is workers-types Request<Cf> vs bare Request.)
+      let retry =
+        state.refresh === null
+          ? null
+          : { source: request.clone() as unknown as Request, strategy: state.refresh };
 
       let substituted: Request;
       try {
@@ -162,35 +152,28 @@ export class SecretDurableObject extends DurableObject<Env> {
       } catch (error) {
         // No material / missing field with a strategy configured: mint first
         // (the first-use case — e.g. a fresh GitHub installation), then retry.
-        if (state.refresh === null || retrySource === null || !isMintableMiss(error)) throw error;
-        await this.#refresh(state.refresh);
-        substituted = await this.#substitute(retrySource, await this.#snapshot());
-        retrySource = null;
+        if (retry === null || !isMintableMiss(error)) throw error;
+        await this.#refresh(retry.strategy);
+        substituted = await this.#substitute(retry.source, await this.#snapshot());
+        retry = null; // one refresh per request: a just-minted token gets no second go
       }
 
-      await this.#appendUsed(this.#name.projectId, request.url);
+      await this.#appendUsed(request.url);
       const response = await fetch(substituted);
-      if (response.status !== 401 || state.refresh === null || retrySource === null) {
-        return response;
-      }
+      if (response.status !== 401 || retry === null) return response;
 
       try {
-        await this.#refresh(state.refresh);
+        await this.#refresh(retry.strategy);
       } catch {
         // The provider (or config) refused the refresh: the original 401 is
         // the caller's answer, not an opaque exception.
         return response;
       }
-      const retried = await this.#substitute(retrySource, await this.#snapshot());
-      await this.#appendUsed(this.#name.projectId, request.url);
+      const retried = await this.#substitute(retry.source, await this.#snapshot());
+      await this.#appendUsed(request.url);
       return await fetch(retried);
     } catch (error) {
-      if (error instanceof SecretSubstitutionError) {
-        return secretErrorResponse(
-          error.code,
-          error.code === "secret_not_allowed_for_origin" ? 403 : 400,
-        );
-      }
+      if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
     }
   }
@@ -289,19 +272,14 @@ export class SecretDurableObject extends DurableObject<Env> {
     const privateKeyPem =
       refresh.privateKey === "material"
         ? readStringField(material, "privateKey")
-        : resolvePlatformGithubAppKey(parseConfig(this.env), refresh.privateKey, refresh.apiBase)
-            .privateKey;
+        : resolvePlatformGithubAppKey(parseConfig(this.env), refresh.privateKey, refresh.apiBase);
     const now = Math.floor(Date.now() / 1000);
     const signingInput = `${base64UrlOfJson({ alg: "RS256", typ: "JWT" })}.${base64UrlOfJson({
       iat: now - 60,
       exp: now + 540,
       iss: refresh.appId,
     })}`;
-    const signature = await computeSignatureBase64Url({
-      algo: "RS256",
-      payload: signingInput,
-      privateKeyPem,
-    });
+    const signature = await computeSignatureBase64Url({ payload: signingInput, privateKeyPem });
     const response = await fetch(
       `${refresh.apiBase.replace(/\/$/, "")}/app/installations/${refresh.installationId}/access_tokens`,
       {
@@ -332,10 +310,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     return JSON.parse(await decryptSecretMaterial(encrypted, this.env.SECRET_ENCRYPTION_KEY));
   }
 
-  #appendUsed(usedBy: string, url?: string): Promise<unknown> {
+  #appendUsed(url: string): Promise<unknown> {
     return this.#processorHost.stream.append({
       type: "events.iterate.com/secret/used",
-      payload: { usedAt: new Date().toISOString(), usedBy, ...(url === undefined ? {} : { url }) },
+      payload: { url, usedAt: new Date().toISOString(), usedBy: this.#name.projectId },
     });
   }
 }
@@ -365,7 +343,8 @@ function assertOriginPinned(url: string, state: SecretState): void {
 
 function asMaterialRecord(material: unknown): Record<string, unknown> {
   if (typeof material !== "object" || material === null || Array.isArray(material)) {
-    throw new SecretSubstitutionError("secret_material_not_a_string");
+    // Non-record material cannot hold the fields a refresh strategy reads.
+    throw new SecretSubstitutionError("secret_reference_field_not_found");
   }
   return material as Record<string, unknown>;
 }

@@ -47,8 +47,13 @@ import {
 import {
   BUILTIN_INTEGRATION_SLUGS,
   googleConnectionSecretPath,
+  isBuiltinIntegrationSlug,
 } from "./domains/integrations/utils.ts";
-import { connectionOctokit, normalizeGithubError } from "./domains/integrations/github-api.ts";
+import {
+  connectionOctokit,
+  GITHUB_CALL_GRAMMAR,
+  normalizeGithubError,
+} from "./domains/integrations/github-api.ts";
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import {
@@ -826,7 +831,8 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       }
       // The connection's wrapped Slack WebClient: replay the caller's dotted Web
       // API path onto it (chat.postMessage, conversations.list, …) — the real
-      // SDK, its transport riding the connection's jailed egress (slack-api.ts).
+      // SDK, its transport riding the connection secret's substituting egress
+      // (slack-api.ts).
       const slack = connectionSlackClient({ connection, projectId: this.props.projectId });
       try {
         return await replayPathCall(slack, { args, path: method });
@@ -848,9 +854,10 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
           `itx.integrations.google["${connection}"] exposes gmail.request(...); got "${method.join(".")}".`,
         );
       }
-      // v6: no in-process token fetch — send the Gmail call through the
-      // connection secret's fetch with a placeholder Authorization header; the
-      // jailed refresh worker substitutes the access token and refreshes on 401.
+      // No in-process token fetch — the Gmail call goes through the connection
+      // secret's fetch with a placeholder Authorization header; the Secret DO
+      // substitutes the access token and its oauth-refresh-token strategy
+      // refreshes on 401.
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
         authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
@@ -867,9 +874,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
 
     if (slug === "github") {
       if (!connection || method.length === 0) {
-        throw new Error(
-          'itx.integrations.github expected `<connection>.<octokit path>` (e.g. itx.integrations.github["jonas"].rest.repos.listForAuthenticatedUser() or .request("GET /user/repos")); use itx.integrations.list() to see connections.',
-        );
+        throw new Error(GITHUB_CALL_GRAMMAR);
       }
       // The connection's wrapped Octokit: replay the caller's dotted path onto
       // it (rest.*, request(...), graphql(...)) — a real Octokit whose transport
@@ -905,7 +910,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
     const entries: IntegrationConnectionListEntry[] = [
       ...journalConnections.map((entry): IntegrationConnectionListEntry => {
         const { integration } = entry;
-        return integration === "slack" || integration === "google" || integration === "github"
+        return isBuiltinIntegrationSlug(integration)
           ? { ...entry, integration, source: "builtin" }
           : { ...entry, source: "provided" };
       }),
@@ -1015,7 +1020,6 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
 
   disconnect(input: Parameters<ProjectIntegrations["disconnect"]>[0]) {
     return disconnectProvider({
-      config: parseConfig(env),
       connection: input.connection,
       projectId: this.props.projectId,
       provider: input.provider,

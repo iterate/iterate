@@ -48,11 +48,19 @@ export function connectionOctokit(input: {
   });
 }
 
+/** How to drive the GitHub built-in: a named connection, then an Octokit path
+ * replayed onto that connection's wrapped Octokit. The single source of truth,
+ * shared by the dispatch guard (rpc-targets) and the error normalizer below. */
+export const GITHUB_CALL_GRAMMAR =
+  'itx.integrations.github expected `<connection>.<octokit path>` (e.g. itx.integrations.github["jonas"].rest.repos.listForAuthenticatedUser() or .request("GET /user/repos")); use itx.integrations.list() to see connections.';
+
 /**
  * Turn an Octokit failure into a caller-facing Error whose message survives the
  * capnweb boundary (which drops `error.name`). A secret-pipeline error (the
  * connection has no usable token) is named so the caller can fix the connection;
- * anything else keeps the HTTP status and Octokit's message.
+ * a path-resolution miss means the caller drove the Octokit with a shape that
+ * is not an Octokit method — point them at the grammar; anything else keeps the
+ * HTTP status and Octokit's message.
  */
 export function normalizeGithubError(error: unknown, connection: string): Error {
   const e = error as {
@@ -65,6 +73,9 @@ export function normalizeGithubError(error: unknown, connection: string): Error 
     return new Error(
       `GitHub connection "${connection}" has no usable installation token (${pipeline}). Use itx.integrations.list() to see connections.`,
     );
+  }
+  if (typeof e.message === "string" && e.message.includes("did not resolve to a function")) {
+    return new Error(GITHUB_CALL_GRAMMAR);
   }
   return new Error(`GitHub API failed with HTTP ${e.status ?? "?"}: ${e.message ?? String(error)}`);
 }
