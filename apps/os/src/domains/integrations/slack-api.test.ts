@@ -17,7 +17,8 @@ vi.mock("../projects/egress.ts", () => ({
   }),
 }));
 
-const { connectionSlackClient } = await import("./slack-api.ts");
+const { connectionSlackClient, normalizeSlackError, SLACK_CALL_GRAMMAR } =
+  await import("./slack-api.ts");
 
 describe("connectionSlackClient", () => {
   test("a WebClient call rides project egress with a placeholder auth header", async () => {
@@ -30,5 +31,31 @@ describe("connectionSlackClient", () => {
     expect(request.headers.get("authorization")).toBe(
       'Bearer getSecret({ path: "/secrets/integrations/slack/main/bot-token" })',
     );
+  });
+});
+
+describe("normalizeSlackError", () => {
+  test("a secret-pipeline error names the connection and points at discovery", () => {
+    const err = normalizeSlackError({ data: { error: "secret_no_material" } }, "main");
+    expect(err.message).toContain('Slack connection "main"');
+    expect(err.message).toContain("itx.integrations.list()");
+  });
+
+  // The forgot-the-connection shape: `slack.chat.postMessage(...)` makes the
+  // replay treat `chat` as the connection and try `postMessage` on the
+  // WebClient, which misses. That miss must surface as the call grammar, not
+  // the raw path-proxy string.
+  test("a path-resolution miss becomes the call grammar", () => {
+    const err = normalizeSlackError(
+      new Error("Capability path postMessage did not resolve to a function."),
+      "chat",
+    );
+    expect(err.message).toBe(SLACK_CALL_GRAMMAR);
+    expect(err.message).toMatch(/use itx\.integrations\.list\(\) to see connections/);
+  });
+
+  test("an unrecognized Slack error passes through verbatim", () => {
+    const err = normalizeSlackError({ message: "channel_not_found" }, "main");
+    expect(err.message).toBe("channel_not_found");
   });
 });

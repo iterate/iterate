@@ -51,7 +51,11 @@ import {
 import { connectionOctokit, normalizeGithubError } from "./domains/integrations/github-api.ts";
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
-import { connectionSlackClient, normalizeSlackError } from "./domains/integrations/slack-api.ts";
+import {
+  connectionSlackClient,
+  normalizeSlackError,
+  SLACK_CALL_GRAMMAR,
+} from "./domains/integrations/slack-api.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
@@ -829,9 +833,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
 
     if (slug === "slack") {
       if (!connection || method.length === 0) {
-        throw new Error(
-          'itx.integrations.slack expected `<connection>.<Web API method>` (e.g. itx.integrations.slack["main-slack"].chat.postMessage({ channel, text })); use itx.integrations.list() to see connections.',
-        );
+        throw new Error(SLACK_CALL_GRAMMAR);
       }
       // The connection's wrapped Slack WebClient: replay the caller's dotted Web
       // API path onto it (chat.postMessage, conversations.list, …) — the real

@@ -84,9 +84,19 @@ export function connectionSlackClient(input: { connection: string; projectId: st
   });
 }
 
+/** How to drive the Slack built-in: a named connection, then a Web API method
+ * path replayed onto that connection's WebClient. The single source of truth,
+ * shared by the dispatch guard (rpc-targets) and the error normalizer below. */
+export const SLACK_CALL_GRAMMAR =
+  'itx.integrations.slack expected `<connection>.<Web API method>` (e.g. itx.integrations.slack["main-slack"].chat.postMessage({ channel, text })); use itx.integrations.list() to see connections.';
+
 /** Turn a WebClient failure into a caller-facing Error whose message survives
  * the capnweb boundary. A secret-pipeline error (the connection has no usable
- * bot token) is named so the caller can fix it; otherwise keep Slack's error. */
+ * bot token) is named so the caller can fix it; a path-resolution miss means
+ * the caller drove the WebClient with a shape that is not a Web API method —
+ * most often they omitted the connection, so a namespace like `chat` was
+ * consumed as the connection name — so point them at the grammar; otherwise
+ * keep Slack's error. */
 export function normalizeSlackError(error: unknown, connection: string): Error {
   const e = error as { data?: { error?: string }; message?: string };
   const slackError = e.data?.error;
@@ -94,6 +104,9 @@ export function normalizeSlackError(error: unknown, connection: string): Error {
     return new Error(
       `Slack connection "${connection}" has no usable bot token (${slackError}). Use itx.integrations.list() to see connections.`,
     );
+  }
+  if (typeof e.message === "string" && e.message.includes("did not resolve to a function")) {
+    return new Error(SLACK_CALL_GRAMMAR);
   }
   return new Error(e.message ?? String(error));
 }
