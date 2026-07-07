@@ -61,13 +61,15 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
       }
     }
 
-    // The seeded homepage is a static page linking to the apps. Apps live
-    // on their own hosts: the current host prefixed with "<app>--" (e.g.
-    // counter--<slug>.<base>), so the links derive from the request URL.
+    // The seeded homepage is a static page linking to the apps. Platform
+    // hosts use "<app>--<project>.<base>"; custom domains use
+    // "<app>.<custom-hostname>".
     const url = new URL(req.url);
+    const hostKind = req.headers.get("x-iterate-host-kind");
     const appLinks = Object.entries(APPS)
       .map(([slug, ref]) => {
-        const href = `${url.protocol}//${slug}--${url.host}/`;
+        const appHost = hostKind === "custom" ? `${slug}.${url.host}` : `${slug}--${url.host}`;
+        const href = `${url.protocol}//${appHost}/`;
         return `<li><a href="${href}">${slug}</a> (${ref.type})</li>`;
       })
       .join("\n");
