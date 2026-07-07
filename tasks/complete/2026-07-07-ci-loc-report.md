@@ -84,3 +84,18 @@ lockfile churn". PRs should show a small table of net LOC change broken down by 
   literals spanning lines, division, jsdoc, unterminated block). Worth promoting to a real test
   file if this script grows.
 - `GithubEventPayload` in `scripts/ci/github.ts` gained optional `base`/`head` sha fields.
+
+## Post-review iteration (same day)
+
+Feedback from Misha addressed in a follow-up commit:
+
+1. The ```diff code-block rendering looked bad (whole rows solid green/red). Replaced with a
+markdown table mimicking GitHub's own diffstat: `+418`/`-1` columns plus a five-square
+   🟩🟥⬜ bar per row (squares fill by the group's share of the largest group's churn, split
+   green/red by add/remove ratio).
+2. The report now lives in a managed fenced section of the **PR body** (via `markdownAnnotator`,
+   label `loc-report`) instead of a sticky comment, like the preview deployment report. The
+   legacy comment on #1715 was deleted manually.
+3. Added a `priority` prop to groups: array order stays the first-match-wins _match_ order
+   (specific globs first), `priority` is the _display_ order - Product first, then
+   UI components, Tests, CI & scripts, Config, Docs, Other, Generated last.
