@@ -388,7 +388,7 @@ export function foldEmailSenderDirectory(
   return claims;
 }
 
-export type SenderVerification = { verified: true } | { verified: false; reason: string };
+type SenderVerification = { verified: true } | { verified: false; reason: string };
 
 /**
  * The zero-onboarding trust gate: Cloudflare's inbound MX computes

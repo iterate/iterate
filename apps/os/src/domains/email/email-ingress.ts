@@ -67,7 +67,7 @@ import { resolveSenderProject } from "./zero-onboarding.ts";
  * `{envelopeFrom, envelopeTo, rawMime}`, so everything past stream draining
  * is identical (and e2e-covered) for real and synthetic deliveries.
  */
-export type InboundEmailDelivery = {
+type InboundEmailDelivery = {
   /** Envelope MAIL FROM. */
   from: string;
   /** Envelope RCPT TO. */
@@ -77,7 +77,7 @@ export type InboundEmailDelivery = {
   setReject(reason: string): void;
 };
 
-export type InboundEmailResult =
+type InboundEmailResult =
   | { outcome: "accepted"; projectId: string; provisioned: boolean }
   | { outcome: "rejected"; reason: string }
   | { outcome: "dropped"; reason: string };
