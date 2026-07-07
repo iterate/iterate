@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
-// oxlint-disable-next-line iterate/no-capnweb-http-batch -- server functions are one-shot request-scoped calls: a single pipelined batch (authenticate -> list) with no socket lifecycle to manage.
-import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
+import { itxAuthFromPrincipal } from "~/auth.ts";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
@@ -11,7 +10,8 @@ import {
   type RootProjectRedirectDecision,
 } from "~/lib/project-root-redirect.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { ProjectDeploymentStatus, UnauthenticatedOs } from "~/types.ts";
+import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
+import type { ProjectDeploymentStatus } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**
@@ -24,9 +24,13 @@ import type { RequestContext } from "~/request-context.ts";
  * server-side:
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
  * - `getRootProjectRedirectServerFn` — the root `/` redirect decision (SSR);
- *   a thin proxy over the engine's `session.projects.list()`, plus the
- *   signup handoff for the one auth-created project that still needs its OS
- *   bootstrap.
+ *   the engine's `session.projects.list()` plus the signup handoff for the
+ *   one auth-created project that still needs its OS bootstrap.
+ *
+ * Both run in the OS worker itself, so they call the itx session objects
+ * in-process (`ProjectCollectionRpcTarget` on the middleware-resolved
+ * principal) — no loopback HTTP round trip to `/api`, and no capnweb
+ * HTTP-batch one-shot limit on follow-up calls.
  *
  * Project deletion is deliberately absent rather than half-implemented:
  * the archival verb (auth-worker archive + engine teardown + UI) has not
@@ -51,9 +55,9 @@ export type Project = {
 type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 /**
- * The root `/` redirect decision. It runs during SSR (itx is client-only), so
- * it proxies the engine's `session.projects.list()` through one pipelined
- * capnweb HTTP batch that forwards the caller's cookie.
+ * The root `/` redirect decision, made entirely server-side so `/` answers
+ * with one redirect straight to the final page (onboarding agent stream,
+ * project home, or the projects list) before anything renders.
  *
  * A brand-new auth signup creates the user/org/project records in auth before
  * OS has a project stream. When that single auth-known project is still
@@ -71,16 +75,21 @@ export const getRootProjectRedirectServerFn: (input?: {
     preferredProjectSlug: input?.preferredProjectSlug ?? null,
   }))
   .handler(async ({ context, data }) => {
+    // The middleware-resolved principal, not the /api cookie door: the root
+    // redirect must follow the signed-in user's claims even when the capnweb
+    // admin cookie rides the same request.
+    const principal = context.principal;
+    if (!principal) return { kind: "projects" };
+
     try {
-      const session = engineBatchSession(context);
-      const root = session.authenticate({ type: "from-server-cookie" });
-      // Explicit "mine": the admin cookie may ride the same request, and the
-      // root redirect must follow the signed-in user's claims, never the
-      // deployment listing.
-      const projects = await root.projects.list({ scope: "mine" });
+      const projects = new ProjectCollectionRpcTarget({
+        auth: itxAuthFromPrincipal(context.config, principal),
+        config: context.config,
+        ctx: context.executionCtx,
+      });
       const decision = chooseRootProjectRedirect({
         preferredProjectSlug: data.preferredProjectSlug,
-        projects,
+        projects: await projects.list({ scope: "mine" }),
       });
 
       if (
@@ -89,7 +98,7 @@ export const getRootProjectRedirectServerFn: (input?: {
         decision.project.deploymentStatus === "ready"
       ) {
         try {
-          const project = await root.projects.get(decision.project.id);
+          const project = await projects.get(decision.project.id);
           const { state } = await project.processor.snapshot();
           // The agent stream route can render before the agent capability is
           // listed. `onboardingActive` is the phase marker; waiting for the
@@ -97,8 +106,8 @@ export const getRootProjectRedirectServerFn: (input?: {
           decision.onboarding = isOnboardingActive(state);
         } catch {
           // Do not guess "home" on a transient project snapshot failure. The
-          // /projects client path has the retrying self-heal, while direct home
-          // would strand an in-progress signup away from onboarding.
+          // /projects list still shows the project, while direct home would
+          // strand an in-progress signup away from onboarding.
           return { kind: "projects" };
         }
       }
@@ -109,7 +118,7 @@ export const getRootProjectRedirectServerFn: (input?: {
         decision.project.deploymentStatus === "missing"
       ) {
         try {
-          await root.projects.create({
+          await projects.create({
             projectId: decision.project.id,
             slug: decision.project.slug,
             waitUntilCreated: false,
@@ -198,20 +207,6 @@ function withIngressUrl(
       appBaseUrl: context.config.baseUrl,
     }) ?? `${(context.config.baseUrl ?? "").replace(/\/+$/, "")}/${project.id}`;
   return { ...project, ingressUrl };
-}
-
-function engineBatchSession(context: RequestContext) {
-  const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
-  if (!baseUrl) throw new Error("baseUrl is not configured");
-  const cookie = context.rawRequest?.headers.get("cookie");
-  if (!cookie) throw new Error("Sign in to reach the project engine.");
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per request; no socket lifecycle to manage in a server function.
-  return newHttpBatchRpcSession<UnauthenticatedOs>(
-    new Request(`${baseUrl}/api`, {
-      method: "POST",
-      headers: { cookie },
-    }),
-  );
 }
 
 function organizationSlugForProject(

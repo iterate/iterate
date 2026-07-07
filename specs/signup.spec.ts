@@ -19,13 +19,16 @@ test("can sign up with an email one-time passcode", async ({ page }) => {
   await signUpWithEmailOtp(page, { email: uniqueSignupEmail("signup"), projectSlug: slug });
 
   // Back on OS, signed in: onboarding created the first project's container
-  // on auth, and /projects auto-runs the engine set-up for it. The pending
-  // state renders its data-spinner section twice during the redirect, which
-  // trips spinner-waiter's strict-mode isVisible — sit it out. Once the
-  // bootstrap finishes, the project row's name becomes a link. The cold-slot
+  // on auth, and the root `/` starts the engine bootstrap and redirects
+  // server-side straight to the onboarding agent stream. The agent page's
+  // loading states render two spinner-matching elements at once, which trips
+  // spinner-waiter's strict-mode isVisible — sit it out. The cold-slot
   // OAuth-callback straggle traced back to zombie worker routes, which the
   // deploy now verifies + heals (tasks/os-cold-create-latency.md).
-  await spinnerWaiter.settings.run({ disabled: true }, () =>
-    page.getByRole("link", { name: slug }).waitFor({ timeout: 60_000 }),
-  );
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.waitForURL(`**/projects/${slug}/agents/streams/agents/onboarding`, {
+      timeout: 60_000,
+    });
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+  });
 });

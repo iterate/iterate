@@ -1,16 +1,11 @@
 // The /api/integrations/* HTTP surface, mounted under the Start catch-all
-// route (src/routes/api.$.ts) in the app worker.
-//
-// Resurrected from the pre-migration integration-api.ts (git history). The app
-// worker has no itx bindings, so every itx effect goes through a
-// one-shot pipelined capnweb HTTP batch against this deployment's own
-// /api surface using the admin API secret — the same request-scoped
-// pattern the inbound MCP exec_js tool uses.
-
-// oxlint-disable-next-line iterate/no-capnweb-http-batch -- integration callbacks/webhooks are one-shot request-scoped calls: a single pipelined batch (authenticate -> route/complete) with no socket lifecycle to manage.
-import { newHttpBatchRpcSession } from "capnweb";
-import type { UnauthenticatedOs } from "../../types.ts";
+// route (src/routes/api.$.ts). Everything runs in the one OS worker, so itx
+// effects call the session RpcTargets in-process (first-party authority, the
+// same lane worker.ts uses for project ingress) — no loopback HTTP round trip
+// to this deployment's own /api.
 import { parseOAuthStateUnverified } from "./oauth-state.ts";
+import { trustedInternalAuthContext } from "~/auth.ts";
+import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
 
@@ -31,22 +26,6 @@ export async function handleIntegrationApiRequest(input: {
   // worker (src/domains/integrations/slack-webhook-api.ts), which has the
   // engine bindings and routes events directly — no RPC round trip.
   return null;
-}
-
-/** One-shot pipelined capnweb batch against this deployment's own itx surface. */
-function engineBatchSession(context: RequestContext) {
-  const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
-  if (!baseUrl) throw new Error("baseUrl is not configured");
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per integration request; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedOs>(
-    new Request(`${baseUrl}/api`, { method: "POST" }),
-  );
-}
-
-function requireAdminSecret(context: RequestContext): string {
-  const secret = context.config.adminApiSecret?.exposeSecret();
-  if (!secret) throw new Error("Admin API secret is not configured.");
-  return secret;
 }
 
 async function handleOAuthCallback(input: {
@@ -75,12 +54,14 @@ async function handleOAuthCallback(input: {
   const userId = input.auth?.type === "user" ? input.auth.userId : null;
   if (userId === null) return new Response("OAuth callback user mismatch.", { status: 403 });
 
-  const session = engineBatchSession(input.context);
-  const root = session.authenticate({
-    type: "admin-secret",
-    secret: requireAdminSecret(input.context),
-  });
-  const project = root.projects.get(unverified.projectId);
+  // First-party authority: the caller's session was checked above, and the
+  // state signature is verified itx-side; completing the connect is this
+  // worker's own doing, not something the browser is authorized for.
+  const project = await new ProjectCollectionRpcTarget({
+    auth: trustedInternalAuthContext(),
+    config: input.context.config,
+    ctx: input.context.executionCtx,
+  }).get(unverified.projectId);
   const result =
     input.provider === "slack"
       ? await project.integrations.completeSlackConnect({ code, state, userId })
