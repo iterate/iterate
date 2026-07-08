@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
-import { createGit } from "@cloudflare/shell/git";
+import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
@@ -22,9 +22,13 @@ import type {
   EditRepoFileResult,
   GithubRepoLink,
   GithubSyncResult,
+  RepoCommitDetails,
   RepoFileChange,
+  RepoLogCommit,
+  RepoLogResult,
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
+import { diffFileMaps } from "./line-diff.ts";
 import { RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -144,10 +148,15 @@ export class RepoDurableObject extends DurableObject<Env> {
   /**
    * A checked-out filesystem at a branch head or pinned commit — the one
    * clone pathway every read on this object goes through (file snapshots and
-   * single-file reads alike).
+   * single-file reads alike). `fullHistory` clones without a depth limit so
+   * history reads (`log`, `commitDetails`) can see past the branch tip.
    */
-  async #checkout(input: { branch?: string; commitOid?: string } = {}): Promise<{
+  async #checkout(
+    input: { branch?: string; commitOid?: string; fullHistory?: boolean } = {},
+  ): Promise<{
+    branch: string;
     filesystem: InMemoryFs;
+    git: ReturnType<typeof createGit>;
     head: { oid: string };
   }> {
     const repo = await this.gitAccess();
@@ -165,7 +174,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       } else {
         await git.clone({
           branch,
-          depth: 1,
+          ...(input.fullHistory ? {} : { depth: 1 }),
           singleBranch: true,
           url: repo.remote,
           ...credentials,
@@ -173,10 +182,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
       const [head] = await git.log({ depth: 1 });
       if (!head) throw new Error("Repo has no commits.");
-      return { filesystem, head };
+      return { filesystem, git, head };
     };
 
-    let { filesystem, head } = await clone();
+    let { filesystem, git, head } = await clone();
     if (input.commitOid !== undefined) {
       if (head.oid !== input.commitOid) {
         throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
@@ -191,10 +200,10 @@ export class RepoDurableObject extends DurableObject<Env> {
           `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
         );
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-        ({ filesystem, head } = await clone());
+        ({ filesystem, git, head } = await clone());
       }
     }
-    return { filesystem, head };
+    return { branch, filesystem, git, head };
   }
 
   whoami(): string {
@@ -304,17 +313,20 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Committed file contents at HEAD, or null when the path does not exist.
-   * `encoding: "base64"` reads the raw bytes (images, PDFs — anything a utf8
-   * decode would corrupt) and returns them base64-encoded.
+   * Committed file contents at HEAD — or, with `commitOid`, pinned to that
+   * commit — null when the path does not exist there. `encoding: "base64"`
+   * reads the raw bytes (images, PDFs — anything a utf8 decode would corrupt)
+   * and returns them base64-encoded.
    */
   async readFile(input: {
     path: string;
     encoding?: "utf8" | "base64";
+    commitOid?: string;
   }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
+    if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
     if (input.encoding === "base64") {
-      const { filesystem, head } = await this.#checkout();
+      const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
       const absolutePath = `${REPO_DIR}/${path}`;
       if (!(await filesystem.exists(absolutePath))) return null;
       const bytes = await filesystem.readFileBytes(absolutePath);
@@ -322,7 +334,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     // Exact map lookup, deliberately not an include mask: glob metacharacters
     // in a filename must not change what this reads.
-    const { commitOid, files } = await this.getFilesSnapshot();
+    const { commitOid, files } = await this.getFilesSnapshot({ commitOid: input.commitOid });
     const content = files[path];
     return content === undefined ? null : { commitOid, content, path };
   }
@@ -331,6 +343,52 @@ export class RepoDurableObject extends DurableObject<Env> {
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
+  }
+
+  /**
+   * Commit history of a branch, newest first. One full single-branch clone +
+   * `git log` — deliberately WITHOUT per-commit file stats, which cost a
+   * checkout of every commit and its parent; `commitDetails` computes those
+   * lazily for one commit at a time (the UI's expand-a-row access pattern).
+   */
+  async log(input: { branch?: string; limit?: number } = {}): Promise<RepoLogResult> {
+    const limit = parseLogLimit(input.limit);
+    const { branch, git } = await this.#checkout({ branch: input.branch, fullHistory: true });
+    const entries = await git.log({ depth: limit });
+    return { branch, commits: entries.map(toRepoLogCommit) };
+  }
+
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (versus an empty tree for the root commit), with numstat-shaped +/- line
+   * counts. Implementation: one full clone, then checkouts of the commit and
+   * its parent in the same filesystem — local tree walks, no second fetch.
+   */
+  async commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails> {
+    assertCommitOid(input.commitOid);
+    const { branch, filesystem, git } = await this.#checkout({
+      branch: input.branch,
+      fullHistory: true,
+    });
+    // Find the commit by walking the log instead of resolving the oid as a
+    // ref: same one pathway as `log` (repos are small), and an oid that is
+    // not on this branch fails with a caller-friendly error.
+    const entries = await git.log();
+    const entry = entries.find((candidate) => candidate.oid === input.commitOid);
+    if (!entry) {
+      throw new Error(`Commit ${input.commitOid} was not found on branch "${branch}".`);
+    }
+    const parentOid = entry.parent[0] || null;
+
+    await git.checkout({ ref: entry.oid, force: true });
+    const commitFiles = await readCheckoutBytes(filesystem);
+    let parentFiles = new Map<string, Uint8Array>();
+    if (parentOid !== null) {
+      await git.checkout({ ref: parentOid, force: true });
+      parentFiles = await readCheckoutBytes(filesystem);
+    }
+
+    return { ...toRepoLogCommit(entry), files: diffFileMaps(parentFiles, commitFiles), parentOid };
   }
 
   // ===========================================================================
@@ -943,6 +1001,48 @@ async function readCheckoutFiles(filesystem: InMemoryFs): Promise<Record<string,
     files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
   }
   return files;
+}
+
+/** All committed files of a checkout as one path -> raw bytes map (skips
+ * .git) — the tree-diff input for `commitDetails`, where a utf8 decode before
+ * the binary sniff would corrupt exactly the files it needs to sniff. */
+async function readCheckoutBytes(filesystem: InMemoryFs): Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>();
+  for (const path of await walkCheckoutPaths(filesystem)) {
+    files.set(path, await filesystem.readFileBytes(`${REPO_DIR}/${path}`));
+  }
+  return files;
+}
+
+/** The public `RepoLogCommit` projection of a git log entry: epoch-ms
+ * timestamp (git speaks seconds), trailing-newline-trimmed message. */
+function toRepoLogCommit(entry: GitLogEntry): RepoLogCommit {
+  return {
+    author: { email: entry.author.email, name: entry.author.name },
+    message: entry.message.replace(/\n+$/, ""),
+    oid: entry.oid,
+    parents: entry.parent,
+    timestamp: entry.author.timestamp * 1000,
+  };
+}
+
+const REPO_LOG_DEFAULT_LIMIT = 20;
+const REPO_LOG_MAX_LIMIT = 200;
+
+function parseLogLimit(limit: number | undefined): number {
+  if (limit === undefined) return REPO_LOG_DEFAULT_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > REPO_LOG_MAX_LIMIT) {
+    throw new Error(`log limit must be an integer between 1 and ${REPO_LOG_MAX_LIMIT}.`);
+  }
+  return limit;
+}
+
+/** Commit oids are full 40-hex sha1 strings — never abbreviated refs, so a
+ * pinned read can't silently resolve a branch or tag name. */
+function assertCommitOid(commitOid: string): void {
+  if (!/^[0-9a-f]{40}$/.test(commitOid)) {
+    throw new Error(`commitOid must be a full 40-character hex sha, got "${commitOid}".`);
+  }
 }
 
 /** All committed file paths of a checkout (skips .git). */
