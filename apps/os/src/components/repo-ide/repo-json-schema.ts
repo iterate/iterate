@@ -19,7 +19,7 @@ import type { JSONSchema7 } from "json-schema";
 import type { SourceCodeBlockExtension } from "@iterate-com/ui/components/source-code-block";
 
 /** The two languages the repo IDE runs json-schema validation for. */
-export type JsonSchemaLanguage = "json" | "yaml";
+type JsonSchemaLanguage = "json" | "yaml";
 
 /**
  * Which json-schema (by URL) applies to a repo file, in priority order:
@@ -100,7 +100,7 @@ function wellKnownSchemaUrl(path: string): string | null {
  * those include the `json()`/`yaml()` language extensions which
  * SourceCodeBlock already provides.
  */
-export function jsonSchemaCodeMirrorExtensions(input: {
+function jsonSchemaCodeMirrorExtensions(input: {
   language: JsonSchemaLanguage;
   schema: JSONSchema7;
 }): SourceCodeBlockExtension {
@@ -150,7 +150,7 @@ export function parseJsonDocumentColonFixed(state: EditorState) {
   return parsed;
 }
 
-export type RepoFileJsonSchema =
+type RepoFileJsonSchema =
   | { status: "none"; extensions: SourceCodeBlockExtension }
   | { status: "loading"; url: string; extensions: SourceCodeBlockExtension }
   | { status: "unavailable"; url: string; extensions: SourceCodeBlockExtension }
