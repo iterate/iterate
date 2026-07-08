@@ -1,15 +1,16 @@
 ---
-status: in-progress
+status: complete
 size: large
 branch: repo-ide-typm
 base: repo-ide-typescript-lsp
+pr: https://github.com/iterate/iterate/pull/1781
 ---
 
 # typm — like pnpm, but just for types
 
 ## Status summary
 
-Spec committed; implementation starting. Stacked on the TypeScript language server branch (#1771), which left a deliberate seam for this work (`setFiles`/`deleteFiles` into the worker vfs).
+Done and live-verified. `packages/typm` (acquisition core + cached fetch, 17 unit tests) plus the repo IDE integration (worker `acquireTypes`, post-seed trigger, debounced package.json retrigger, acquired-types re-lint) are implemented and verified end-to-end in local dev: a repo with zod/react/@tanstack/react-query got 6 packages (392 files) acquired, real hover types, and a genuine cross-module type error squiggle. Live verification exposed one real bug — `forceLinting` alone never repainted stale diagnostics — fixed with a `linter(null, {needsRefresh})` + StateEffect pair. Remaining: nothing; follow-ups listed below were deliberately left out.
 
 ## Ask (verbatim, from Misha — spinoff 6 of the repos mini-IDE task)
 
@@ -52,12 +53,12 @@ Spec committed; implementation starting. Stacked on the TypeScript language serv
 
 ## Checklist
 
-- [ ] `packages/typm`: core `acquireTypes` module — resolve/list/prune/recurse over injected fetch, caps, cycle safety, `@types` fallback, progress + warning callbacks
-- [ ] `packages/typm`: unit tests with a controllable fake registry fetch (no network, no vi.mock) — pruning, semver-range resolution, @types fallback incl. major matching, dependency + peer recursion, first-wins dedupe, caps, malformed package.json
-- [ ] Worker: `acquireTypes` comlink method + Cache API fetch wrapper + dep-snapshot no-op + vfs writes
-- [ ] Host session: post-seed trigger, debounced package.json-change retrigger, `onTypesAcquired` → `forceLinting` plumbing
-- [ ] Live verification (acceptance bar): local dev repo with zod + react deps — real `z.` completions with docs, a zod type error squiggling, @types fallback proven via react JSX typing, and a cross-package case; screenshots in the PR
-- [ ] `pnpm typecheck && pnpm lint && pnpm format` + the new tests green; confirm `gh pr checks` shows workflows actually ran
+- [x] `packages/typm`: core `acquireTypes` module — resolve/list/prune/recurse over injected fetch, caps, cycle safety, `@types` fallback, progress + warning callbacks _`packages/typm/src/typm.ts` — jsdelivr resolve/flat/CDN with ata attribution, wave-based recursion, first-wins dedupe, byte budget_
+- [x] `packages/typm`: unit tests with a controllable fake registry fetch (no network, no vi.mock) — pruning, semver-range resolution, @types fallback incl. major matching, dependency + peer recursion, first-wins dedupe, caps, malformed package.json _`typm.test.ts` (17 tests over a fake registry) + `cached-fetch.test.ts`_
+- [x] Worker: `acquireTypes` comlink method + Cache API fetch wrapper + dep-snapshot no-op + vfs writes _`repo-typescript.worker.ts` — `acquireTypes` writes into the vfs; `createCachedFetch` persists only exact-versioned URLs; `dependencySnapshot` no-ops formatting-only package.json edits_
+- [x] Host session: post-seed trigger, debounced package.json-change retrigger, `onTypesAcquired` → `forceLinting` plumbing _`repo-typescript.ts` — immediate post-seed kick, 1s-debounced `#maybeAcquireTypes` from `#reconcile`; live verification exposed `forceLinting` alone as a no-op (only flushes PENDING queries), fixed with a `linter(null, {needsRefresh})` + `StateEffect` pair (commit 9b07b2dd6)_
+- [x] Live verification (acceptance bar): local dev repo with zod + react deps — real `z.` completions with docs, a zod type error squiggling, @types fallback proven via react JSX typing, and a cross-package case; screenshots in the PR _typm-demo repo: `[typm] acquired 6 packages (392 files, 2597 kB)` — zod\@3.25.76 hover shows real `z.ZodObject<…>`, string→number assignment squiggles TS2322, react\@^18.3.0 fell back to @types/react\@18.3.31 (major-matched, not 19), @tanstack/query-core came in transitively and react via peer recursion; app.tsx (JSX + useQuery) fully clean under strict mode_
+- [x] `pnpm typecheck && pnpm lint && pnpm format` + the new tests green; confirm `gh pr checks` shows workflows actually ran _all green locally after the base merge; named workflows confirmed running on the PR after push_
 
 ## Follow-ups deliberately left out
 
@@ -69,3 +70,6 @@ Spec committed; implementation starting. Stacked on the TypeScript language serv
 ## Implementation log
 
 - v2025 prior art located and read (`getDTS` in `apps/os/backend/trpc/routers/estate.ts` on `origin/v2025`); ata 0.9.8 source read in full (`src/index.ts`, `src/apis.ts`); base-branch seam files read (`repo-typescript.ts`, `repo-typescript.worker.ts`, the REPL worker trio).
+- Core + integration implemented in 35a049f7f (`packages/typm` + worker/session wiring).
+- Merged `origin/repo-ide-typescript-lsp` review commits (5afcf93bd): composed the typm hooks with the new `#terminated` session race guards and the subscription-after-init seed ordering; made `onTypesAcquired` a stable class-field closure so the base's extension-identity fix (EditorView survives post-commit refetches) holds with the typm plugin in the bundle.
+- Live verification (local dev, headless Chrome): found the acquired types landing in the worker but squigglies never repainting — `forceLinting` only flushes a pending lint query and an untouched buffer has none. Fixed in 9b07b2dd6 with a `typesAcquired` StateEffect + `linter(null, {needsRefresh})`; re-verified from a fresh load that the type error appears with zero keystrokes.
