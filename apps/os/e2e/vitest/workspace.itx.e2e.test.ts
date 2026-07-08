@@ -13,9 +13,14 @@ describe("itx workspaces", () => {
 
     // The workspace clones from the project repo, which seeds asynchronously
     // after project creation — wait for the seed so the clone has a source.
+    // readFile THROWS (not null) until the repo artifact exists, so swallow
+    // errors while polling; cold slots can take a while to seed.
     await waitForCondition(
-      async () => (await project.repo.readFile({ path: "package.json" })) !== null,
-      { description: "project repo to be seeded" },
+      async () => {
+        const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
+        return read !== null;
+      },
+      { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
     );
 
     const workspacePath = `/workspaces/agents/e2e-${crypto.randomUUID()}`;
