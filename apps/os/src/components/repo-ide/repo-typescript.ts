@@ -1,11 +1,18 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { Remote } from "comlink";
 import type { WorkerShape } from "@valtown/codemirror-ts/worker";
 import type { SourceCodeBlockExtension } from "@iterate-com/ui/components/source-code-block";
 import { itxReplAutocompleteWorker } from "../itx-repl-autocomplete.ts";
+import {
+  desiredRepoVfs,
+  isTypeScriptEditorPath,
+  repoSeedPaths,
+  repoVfsDiff,
+  vfsPath,
+} from "./repo-typescript-vfs.ts";
 import type { RepoTypeScriptWorkerApi } from "./repo-typescript.worker.ts";
-import { effectiveEntry, workingTreeStore } from "./staged-changes.ts";
+import { workingTreeStore } from "./staged-changes.ts";
 import { useItx, type ItxReactHandle } from "~/itx/itx-react.tsx";
 
 /**
@@ -16,44 +23,13 @@ import { useItx, type ItxReactHandle } from "~/itx/itx-react.tsx";
  * Sync is reconciliation, not event-chasing — the session subscribes to the
  * repo's working-tree store and, on every change, computes the desired vfs
  * contents (effective working/staged entry per path, else cached HEAD
- * content) and diffs against what it last pushed. Creates, edits, discards,
- * deletes, and renames all fall out of the same diff, and it doubles as the
- * per-keystroke buffer sync (the editor writes every change into the store),
- * so the stock `tsSyncWorker` extension is deliberately not used — one sync
- * path instead of two racing ones.
+ * content) and diffs against what it last pushed (the pure functions in
+ * `./repo-typescript-vfs.ts`). Creates, edits, discards, deletes, and
+ * renames all fall out of the same diff, and it doubles as the per-keystroke
+ * buffer sync (the editor writes every change into the store), so the stock
+ * `tsSyncWorker` extension is deliberately not used — one sync path instead
+ * of two racing ones.
  */
-
-const TYPESCRIPT_SEED_EXTENSIONS = new Set([
-  "cjs",
-  "cts",
-  "js",
-  "json",
-  "jsx",
-  "mjs",
-  "mts",
-  "ts",
-  "tsx",
-]);
-
-/** Files worth showing to the TypeScript program: sources it can check plus
- * `.json` for `resolveJsonModule` (which also carries tsconfig.json in). */
-function isTypeScriptSeedPath(path: string): boolean {
-  const extension = path.split(".").pop() || "";
-  return TYPESCRIPT_SEED_EXTENSIONS.has(extension.toLowerCase());
-}
-
-/** Whether the language service attaches to this open buffer at all. */
-function isTypeScriptEditorPath(path: string): boolean {
-  const extension = (path.split(".").pop() || "").toLowerCase();
-  return isTypeScriptSeedPath(path) && extension !== "json";
-}
-
-/** Repo paths are relative ("src/x.ts"); the vfs wants rooted ("/src/x.ts"). */
-function vfsPath(repoPath: string): string {
-  return `/${repoPath}`;
-}
-
-const MAX_SEED_FILES = 500;
 
 class RepoTypeScriptSession {
   #worker: Worker;
@@ -68,6 +44,7 @@ class RepoTypeScriptSession {
   #store: ReturnType<typeof workingTreeStore> | null = null;
   #unsubscribe: (() => void) | null = null;
   #initialized = false;
+  #terminated = false;
   #syncedCommitOid: string | null = null;
   /** Serializes seed/resync so a commit landing mid-seed can't interleave. */
   #chain: Promise<unknown> = Promise.resolve();
@@ -89,27 +66,27 @@ class RepoTypeScriptSession {
    * moved the oid (the worker and its warm language service survive). */
   ensureSynced(itx: ItxReactHandle, commitOid: string): Promise<void> {
     const run = this.#chain.then(async () => {
-      if (this.#syncedCommitOid === commitOid) return;
+      if (this.#terminated || this.#syncedCommitOid === commitOid) return;
       const repo = itx.repos.get(this.input.repoPath);
       const { paths } = await repo.listFiles();
-      const seedPaths = paths.filter(isTypeScriptSeedPath).sort();
-      if (seedPaths.length > MAX_SEED_FILES) {
-        console.warn(
-          `[repo-ide] TypeScript language service is only seeing the first ${MAX_SEED_FILES} of ${seedPaths.length} TypeScript-relevant files.`,
-        );
-        seedPaths.length = MAX_SEED_FILES;
-      }
+      const seedPaths = repoSeedPaths(paths);
       const reads = await Promise.all(
         seedPaths.map(async (path) => [path, (await repo.readFile({ path }))?.content] as const),
       );
+      // Terminated while awaiting the seed fan-out (the user navigated to
+      // another repo): stop before touching the store. A subscription
+      // registered now would outlive the session — and its reconcile would
+      // throw released-proxy errors inside the store's listener loop,
+      // starving every listener registered after it.
+      if (this.#terminated) return;
       this.#headContents = new Map(
         reads.flatMap(([path, content]) => (typeof content === "string" ? [[path, content]] : [])),
       );
       this.#store = workingTreeStore({ ...this.input, commitOid });
       this.#unsubscribe?.();
-      this.#unsubscribe = this.#store.subscribe(() => this.#reconcile());
+      this.#unsubscribe = null;
       if (!this.#initialized) {
-        const desired = this.#desired();
+        const desired = desiredRepoVfs(this.#headContents, this.#store.changes);
         await this.#remote.initializeRepo({
           files: Object.fromEntries(
             [...desired].map(([path, content]) => [vfsPath(path), content]),
@@ -118,45 +95,35 @@ class RepoTypeScriptSession {
         });
         this.#pushed = desired;
         this.#initialized = true;
-      } else {
-        this.#reconcile();
+        if (this.#terminated) return;
       }
+      // Subscribe only now that the environment exists, then reconcile once:
+      // edits made during the awaits above are caught by the diff here. A
+      // subscription live during the seed would have "pushed" them into a
+      // worker whose updateFile still no-ops (no env yet) while recording
+      // them as delivered — silently freezing that buffer's vfs content at
+      // its seed-time value.
+      this.#unsubscribe = this.#store.subscribe(() => this.#reconcile());
+      this.#reconcile();
       this.#syncedCommitOid = commitOid;
     });
     this.#chain = run.catch(() => {});
     return run;
   }
 
-  /** HEAD overlaid with the working tree: what the vfs SHOULD contain. */
-  #desired(): Map<string, string> {
-    const desired = new Map(this.#headContents);
-    for (const [path, change] of this.#store?.changes ?? []) {
-      if (!isTypeScriptSeedPath(path)) continue;
-      const entry = effectiveEntry(change);
-      if (entry === undefined) continue;
-      if (entry.type === "write") desired.set(path, entry.content);
-      else if (entry.type === "delete") desired.delete(path);
-      // write-base64 entries are binary uploads — nothing for the program.
-    }
-    return desired;
-  }
-
   #reconcile(): void {
-    const desired = this.#desired();
-    const updates: Record<string, string> = {};
-    for (const [path, content] of desired) {
-      if (this.#pushed.get(path) !== content) updates[vfsPath(path)] = content;
-    }
-    const removals = [...this.#pushed.keys()]
-      .filter((path) => !desired.has(path))
-      .map((path) => vfsPath(path));
+    if (this.#terminated || this.#store === null) return;
+    const desired = desiredRepoVfs(this.#headContents, this.#store.changes);
+    const { updates, removals } = repoVfsDiff(this.#pushed, desired);
     this.#pushed = desired;
     if (Object.keys(updates).length > 0) void this.#remote.setFiles(updates);
     if (removals.length > 0) void this.#remote.deleteFiles(removals);
   }
 
   terminate(): void {
+    this.#terminated = true;
     this.#unsubscribe?.();
+    this.#unsubscribe = null;
     this.#releaseRemote();
     this.#worker.terminate();
   }
@@ -177,7 +144,17 @@ function workerFacade(remote: Remote<RepoTypeScriptWorkerApi>) {
     initialize: () => remote.initialize(),
     updateFile: (input: { path: string; code: string }) => remote.updateFile(input),
     getLints: (input: { path: string; diagnosticCodesToIgnore: number[] }) =>
-      remote.getLints(input),
+      remote.getLints({
+        ...input,
+        // TS2347 ("Untyped function calls may not accept type arguments") is
+        // guaranteed noise while bare npm imports are `any` (see the worker
+        // prelude) — e.g. the template sdk's `kv.get<number>(…)`. Suppressed
+        // HERE, in the editor's lint lane only, so the language service
+        // itself stays honest for future consumers (a Problems panel should
+        // decide for itself). Real acquired types (typm) end the noise;
+        // drop this then.
+        diagnosticCodesToIgnore: [...input.diagnosticCodesToIgnore, 2347],
+      }),
     getAutocompletion: (input: Parameters<RepoTypeScriptWorkerApi["getAutocompletion"]>[0]) =>
       remote.getAutocompletion(input),
     getAutocompletionWithDocs: (
@@ -190,7 +167,10 @@ function workerFacade(remote: Remote<RepoTypeScriptWorkerApi>) {
 /**
  * At most ONE live session — acquiring a different repo's session terminates
  * the previous worker, so navigating between repos never accumulates workers.
- * (Same module-level pattern as `workingTreeStore`.)
+ * (Same module-level pattern as `workingTreeStore`.) There is deliberately
+ * no teardown on route unmount: the warm language service survives in-app
+ * navigation away and back, and this one-slot registry is what bounds the
+ * cost at a single worker.
  */
 const sessions = new Map<string, RepoTypeScriptSession>();
 
@@ -266,23 +246,37 @@ export function useRepoTypeScriptExtensions(input: {
     // the session is alive are near-free — ensureSynced short-circuits on a
     // matching commit oid before any network round trip.
     gcTime: 0,
+    // A commit flips the queryKey (new oid); keep serving the previous
+    // result while ensureSynced resyncs instead of flashing squigglies off
+    // through an `undefined` gap. Safe because the facade and module
+    // namespaces are reference-stable for the life of the session, and repo
+    // switches remount the hook (RepoIde is keyed per repo) so stale data
+    // can't bridge across workers.
+    placeholderData: keepPreviousData,
     retry: 1,
   });
 
-  const data = query.data;
+  // Memoize on the stable PARTS, not the query-data envelope: the facade and
+  // module namespaces keep their identity across refetches, so the extension
+  // array (and therefore the EditorView, which SourceCodeBlock rebuilds on
+  // extension identity change) survives the post-commit refetch untouched.
+  const worker = query.data?.worker;
+  const codemirrorTs = query.data?.codemirrorTs;
+  const autocomplete = query.data?.autocomplete;
+  const view = query.data?.view;
   const path = input.path;
   return useMemo(() => {
-    if (!data || !enabled) return [];
-    const { tsFacetWorker, tsLinterWorker, tsHoverWorker } = data.codemirrorTs;
+    if (!worker || !codemirrorTs || !autocomplete || !view || !enabled) return [];
+    const { tsFacetWorker, tsLinterWorker, tsHoverWorker } = codemirrorTs;
     return [
       // No tsSyncWorker on purpose — see the module docstring: the working
       // tree store is the single buffer-sync path into the worker.
       tsFacetWorker.of({
         path: vfsPath(path),
-        worker: data.worker as unknown as WorkerShape,
+        worker: worker as unknown as WorkerShape,
       }),
       tsLinterWorker(),
-      data.autocomplete.autocompletion({
+      autocomplete.autocompletion({
         activateOnTyping: true,
         activateOnTypingDelay: 0,
         override: [itxReplAutocompleteWorker(tsFacetWorker)],
@@ -290,7 +284,7 @@ export function useRepoTypeScriptExtensions(input: {
       tsHoverWorker(),
       // The hover tooltip escapes the editor into the file pane's stacking
       // context; keep it above the sticky header/toolbar chrome.
-      data.view.EditorView.theme({ ".cm-tooltip": { zIndex: "30" } }),
+      view.EditorView.theme({ ".cm-tooltip": { zIndex: "30" } }),
     ];
-  }, [data, enabled, path]);
+  }, [worker, codemirrorTs, autocomplete, view, enabled, path]);
 }

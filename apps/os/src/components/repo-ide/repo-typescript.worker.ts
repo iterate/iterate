@@ -102,6 +102,12 @@ const TSCONFIG_OPTION_WHITELIST = [
   "verbatimModuleSyntax",
 ] as const;
 
+/**
+ * Merge the whitelisted type-level options from the repo's tsconfig.json
+ * over the defaults. Known limitation: `extends` is not followed — only the
+ * file's own `compilerOptions` are read (chasing extends chains means
+ * resolving npm-hosted configs, which is typm territory).
+ */
 function repoCompilerOptions(tsconfigText: string | null): ts.CompilerOptions {
   if (!tsconfigText) return defaultCompilerOptions;
   const parsed = ts.parseConfigFileTextToJson("/tsconfig.json", tsconfigText);
@@ -139,18 +145,12 @@ function nonEmpty(content: string): string {
   return content === "" ? "\n" : content;
 }
 
-/**
- * TS2347 "Untyped function calls may not accept type arguments": with every
- * bare npm import typed `any` (see the prelude), type arguments on external
- * calls — `kv.get<number>(…)` against the repo sdk's runtime types — are
- * guaranteed noise, not signal. Real acquired types (typm) make the calls
- * typed and the code stops firing on its own; drop the filter then if it
- * bothers anyone.
- */
-const IGNORED_DIAGNOSTIC_CODES = new Set([2347]);
-
 let seed: { files: Record<string, string>; tsconfigText: string | null } | null = null;
 
+// Diagnostics are NOT filtered here — the language service stays honest so a
+// future whole-repo consumer (a Problems panel) sees everything. The editor's
+// lint lane suppresses the noise-until-typm codes host-side, in
+// `workerFacade.getLints` (repo-typescript.ts).
 const worker = createWorker(async () => {
   const input = seed ?? { files: {}, tsconfigText: null };
   const options = repoCompilerOptions(input.tsconfigText);
@@ -158,19 +158,12 @@ const worker = createWorker(async () => {
   fsMap.set(PRELUDE_PATH, prelude);
   for (const [path, content] of Object.entries(input.files)) fsMap.set(path, nonEmpty(content));
   const system = createSystem(fsMap);
-  const env = createVirtualTypeScriptEnvironment(
+  return createVirtualTypeScriptEnvironment(
     system,
     [PRELUDE_PATH, ...Object.keys(input.files)],
     ts,
     options,
   );
-  const languageService = env.languageService;
-  const getSemanticDiagnostics = languageService.getSemanticDiagnostics.bind(languageService);
-  languageService.getSemanticDiagnostics = (fileName) =>
-    getSemanticDiagnostics(fileName).filter(
-      (diagnostic) => !IGNORED_DIAGNOSTIC_CODES.has(diagnostic.code),
-    );
-  return env;
 });
 
 /**
