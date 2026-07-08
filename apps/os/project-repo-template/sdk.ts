@@ -263,33 +263,21 @@ export interface ProjectRpcTarget {
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat extends Describable {
   /**
-<<<<<<< HEAD
    * Say something to the user — pass the message as a plain string:
-   * `await itx.chat.sendMessage("Here you go!")`. `options.files` attaches
-   * generated files, which render inline in the chat.
+   * `await itx.chat.sendMessage("Here you go!")`.
+   *
+   * `options.files` attaches project files to the message — THE way to hand
+   * the user something you generated (e.g. an `itx.ai.run` image: base64
+   * straight into `data`, never pasted into message text). Attached images
+   * render inline in the chat and stay visible to the model on later turns.
    */
   sendMessage(message: string, options?: AgentChatSendOptions): Promise<StreamEvent>;
 }
 
 /** Optional second argument to {@link AgentChat.sendMessage}. */
 export type AgentChatSendOptions = {
-  files?: Array<{
-    contentType: string;
-    data: string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
-    filename: string;
-  }>;
-=======
-   * Say something to the user. `files` attaches project files to the message
-   * — THE way to hand the user something you generated (e.g. an `itx.ai.run`
-   * image: base64 straight into `data`, never pasted into message text).
-   * Attached images render inline in the chat and stay visible to the model
-   * on later turns.
-   */
-  sendMessage(input: {
-    message: string;
-    files?: Array<{ contentType: string; data: FileData; filename: string }>;
-  }): Promise<StreamEvent>;
-}
+  files?: Array<{ contentType: string; data: FileData; filename: string }>;
+};
 
 /**
  * Bytes accepted by file-writing APIs. Strings are ALWAYS decoded as base64
@@ -342,7 +330,6 @@ export type AgentFileAttachment = {
   path: string;
   size: number;
   url: string;
->>>>>>> 319b92d93 (The dispatch model, stated and enforced: capability tree vs fetch lane)
 };
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */

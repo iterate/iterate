@@ -107,35 +107,34 @@ request":
   close to a WebSocket reconnect loop. RPC callers of `workers.get` still
   get the named `WorkerBuildInProgressError` instead.
 
-## Live capabilities can serve WebSockets — as callback pairs, not sockets
+## Live capabilities and WebSockets: the specification, and today's boundary
 
-A live capability provided over Cap'n Web (say, a Node process holding an
-open `/api` session) can back a WebSocket app host end to end. This is proven
-by `e2e/vitest/live-capability-websocket.e2e.test.ts`: the vitest runner
-provides a plain `fetch(request)` handler that upgrades, and a browser-side
-socket connecting to `livews--<slug>.<base>` reaches it.
+The behavior we want: a live capability whose `fetch(request)` upgrades —
+provided over Cap'n Web from, say, a Node process — backs a project app host
+directly, with the app's own fetch just forwarding
+(`itx.wsbackend.fetch(req)`). That is written down as a **`test.fails`
+specification** in `e2e/vitest/live-capability-websocket.e2e.test.ts`; when
+it starts passing, the platform grew the feature and the assertion flips
+loudly.
 
-The composition rule, empirically pinned by that test:
+Today it stops one hop short, and the same file pins the boundary with a
+passing test:
 
-- **The direct form does not cross the mesh.** If the capability's fetch
-  returns a `Response` carrying the socket, the capnweb fork happily tunnels
-  it across the session (stream pair) — and then the materialized socket dies
-  at the first internal workerd RPC hop with the DataCloneError. The test
-  asserts this exact failure so the boundary is visible when it moves.
-- **Callback stubs cross everywhere.** Functions are the one value RPC chains
-  natively through every hop — capnweb session, capability-host Durable
-  Object, loopback entrypoint, loader isolate. So a socket crosses the mesh
-  as two callback pairs facing each other (`send`/`close` in each direction),
-  and each end materializes its own real socket: the app isolate mints the
-  `WebSocketPair` that completes the eyeball's upgrade (the fetch lane
-  carries it from there), and the provider side adapts the author's fetch
-  handler with an in-memory socket-pair shim. Ownership footnote: RPC params
-  are released when the call returns, so the provider must `dup()` the
-  callbacks it keeps for the socket's lifetime.
+- Non-upgrade HTTP through a live capability's fetch works — `Request` and
+  `Response` serialize over capability dispatch.
+- An upgrade response does not: the capnweb fork tunnels the socket across
+  the **session** as a stream pair (`websocket-streams.ts`), then
+  materializes a real WebSocket at the session endpoint — and the first
+  internal workerd RPC hop after that refuses it (the DataCloneError,
+  asserted verbatim).
 
-The bridge is ~60 lines of userspace on each side (see the e2e's
-`BRIDGE_APP_SOURCE` and `websocketFetchCapability`); no platform machinery is
-involved beyond what this document already describes.
+The missing piece is keeping the socket in stream-pair (or callback) form
+across internal hops and materializing only at the fetch-lane exit. Until
+then, a determined userspace can bridge a socket over capability dispatch
+today by hand — frames as paired callback stubs in each direction, since
+functions chain through every hop; mind that RPC params are released on
+return, so a provider must `dup()` callbacks it keeps — but that pattern is
+deliberately not blessed here: the specification above is the intended shape.
 
 ## Rules of thumb
 
