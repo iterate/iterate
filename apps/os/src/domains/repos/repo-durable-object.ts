@@ -148,11 +148,14 @@ export class RepoDurableObject extends DurableObject<Env> {
   /**
    * A checked-out filesystem at a branch head or pinned commit — the one
    * clone pathway every read on this object goes through (file snapshots and
-   * single-file reads alike). `fullHistory` clones without a depth limit so
-   * history reads (`log`, `commitDetails`) can see past the branch tip.
+   * single-file reads alike). `historyDepth` controls how much history the
+   * branch clone carries: the default 1 for content reads, a number for
+   * bounded history (`log` — isomorphic-git records the shallow boundary in
+   * `.git/shallow` and stops walking there), `"full"` when parents must be
+   * checkout-able (`commitDetails`).
    */
   async #checkout(
-    input: { branch?: string; commitOid?: string; fullHistory?: boolean } = {},
+    input: { branch?: string; commitOid?: string; historyDepth?: number | "full" } = {},
   ): Promise<{
     branch: string;
     filesystem: InMemoryFs;
@@ -161,47 +164,70 @@ export class RepoDurableObject extends DurableObject<Env> {
   }> {
     const repo = await this.gitAccess();
     const branch = input.branch ?? repo.defaultBranch;
+    const credentials = { password: repo.token, username: "x" };
+    // Read-your-write over the eventually consistent Artifacts remote: a
+    // clone right after a push can serve the previous HEAD (#recordPushedHead
+    // has the full story). BOTH paths retry against the recorded push — a
+    // pinned read of a just-pushed commit (the History diff pane's flow:
+    // commit → expand → click a file) fails its checkout on a stale clone for
+    // exactly the same reason a branch read serves the previous head.
+    const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+
+    if (input.commitOid !== undefined) {
+      for (let attempt = 1; ; attempt++) {
+        // Pinned commits need history: a shallow clone only contains the
+        // branch tip. Project repos are small; correctness beats depth tuning.
+        const filesystem = new InMemoryFs();
+        const git = createGit(filesystem, REPO_DIR);
+        await git.clone({ branch, url: repo.remote, ...credentials });
+        const [branchHead] = await git.log({ depth: 1 });
+        if (!branchHead) throw new Error("Repo has no commits.");
+        try {
+          await git.checkout({ ref: input.commitOid, force: true });
+        } catch (error) {
+          // A clone still BEHIND the recorded push may simply predate the
+          // pinned commit — retryable. A caught-up clone that lacks the oid
+          // means the oid genuinely is not on this branch: fail fast.
+          if (expected && branchHead.oid !== expected && attempt <= 5) {
+            console.warn(
+              `repo pinned clone is behind the last push (saw ${branchHead.oid}, pushed ${expected}); retry ${attempt} for ${input.commitOid}`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          throw error;
+        }
+        const [head] = await git.log({ depth: 1 });
+        if (!head) throw new Error("Repo has no commits.");
+        if (head.oid !== input.commitOid) {
+          throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
+        }
+        return { branch, filesystem, git, head };
+      }
+    }
 
     const clone = async () => {
       const filesystem = new InMemoryFs();
       const git = createGit(filesystem, REPO_DIR);
-      const credentials = { password: repo.token, username: "x" };
-      if (input.commitOid !== undefined) {
-        // Pinned commits need history: a shallow clone only contains the
-        // branch tip. Project repos are small; correctness beats depth tuning.
-        await git.clone({ branch, url: repo.remote, ...credentials });
-        await git.checkout({ ref: input.commitOid, force: true });
-      } else {
-        await git.clone({
-          branch,
-          ...(input.fullHistory ? {} : { depth: 1 }),
-          singleBranch: true,
-          url: repo.remote,
-          ...credentials,
-        });
-      }
+      await git.clone({
+        branch,
+        ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
+        singleBranch: true,
+        url: repo.remote,
+        ...credentials,
+      });
       const [head] = await git.log({ depth: 1 });
       if (!head) throw new Error("Repo has no commits.");
       return { filesystem, git, head };
     };
 
     let { filesystem, git, head } = await clone();
-    if (input.commitOid !== undefined) {
-      if (head.oid !== input.commitOid) {
-        throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
-      }
-    } else {
-      // Read-your-write over the eventually consistent Artifacts remote: a
-      // clone right after a push can serve the previous HEAD (#recordPushedHead
-      // has the full story). Retry until the clone reaches the recorded push.
-      const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
-      for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
-        console.warn(
-          `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-        ({ filesystem, git, head } = await clone());
-      }
+    for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
+      console.warn(
+        `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      ({ filesystem, git, head } = await clone());
     }
     return { branch, filesystem, git, head };
   }
@@ -346,14 +372,18 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Commit history of a branch, newest first. One full single-branch clone +
-   * `git log` — deliberately WITHOUT per-commit file stats, which cost a
-   * checkout of every commit and its parent; `commitDetails` computes those
-   * lazily for one commit at a time (the UI's expand-a-row access pattern).
+   * Commit history of a branch, newest first. One depth-limited single-branch
+   * clone + `git log` — deliberately WITHOUT per-commit file stats, which
+   * cost a checkout of every commit and its parent; `commitDetails` computes
+   * those lazily for one commit at a time (the UI's expand-a-row pattern).
    */
   async log(input: { branch?: string; limit?: number } = {}): Promise<RepoLogResult> {
     const limit = parseLogLimit(input.limit);
-    const { branch, git } = await this.#checkout({ branch: input.branch, fullHistory: true });
+    // A depth-limited clone: `log` never checks anything out past the tip, so
+    // the sidebar's cost stays O(limit) as history grows. isomorphic-git
+    // stops the log walk at the recorded shallow boundary, and the boundary
+    // commit's `parents` are reported as plain oid strings either way.
+    const { branch, git } = await this.#checkout({ branch: input.branch, historyDepth: limit });
     const entries = await git.log({ depth: limit });
     return { branch, commits: entries.map(toRepoLogCommit) };
   }
@@ -368,13 +398,16 @@ export class RepoDurableObject extends DurableObject<Env> {
     assertCommitOid(input.commitOid);
     const { branch, filesystem, git } = await this.#checkout({
       branch: input.branch,
-      fullHistory: true,
+      historyDepth: "full",
     });
-    // Find the commit by walking the log instead of resolving the oid as a
-    // ref: same one pathway as `log` (repos are small), and an oid that is
-    // not on this branch fails with a caller-friendly error.
-    const entries = await git.log();
-    const entry = entries.find((candidate) => candidate.oid === input.commitOid);
+    // Resolve the commit directly — the input is a validated full oid, which
+    // isomorphic-git's ref resolution accepts as-is, so this stays O(1) as
+    // history grows. The single-branch clone only carries branch-reachable
+    // objects, so a foreign oid throws NotFound here.
+    const entry = await git.log({ ref: input.commitOid, depth: 1 }).then(
+      (entries) => entries[0],
+      () => undefined,
+    );
     if (!entry) {
       throw new Error(`Commit ${input.commitOid} was not found on branch "${branch}".`);
     }

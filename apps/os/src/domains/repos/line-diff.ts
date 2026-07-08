@@ -4,6 +4,12 @@
  * git's binary sniff. A tree diff needs only the COUNTS (the readonly diff
  * view renders content client-side), so this is a Myers O(ND) edit-distance
  * pass over lines, not a full edit-script diff — no dependency needed.
+ *
+ * One DELIBERATE divergence from git: a change that only adds or removes a
+ * trailing newline counts 0/0 here, where git reports 1/1 (it treats the
+ * unterminated final line as changed). Both sides split to the same lines,
+ * and "you terminated the file" reading as a rewrite of the last line is
+ * noise for this UI's purposes.
  */
 
 import type { RepoCommitFileChange } from "./types.ts";
@@ -20,7 +26,9 @@ export function isBinaryBytes(bytes: Uint8Array): boolean {
 /**
  * `git diff --numstat`-shaped line counts between two texts: the minimal
  * number of added and removed lines (Myers edit distance over lines, with
- * common prefix/suffix trimmed first so ordinary edits stay tiny).
+ * common prefix/suffix trimmed first so ordinary edits stay tiny). Not exact
+ * numstat parity — see the module docstring for the deliberate
+ * trailing-newline divergence.
  */
 export function computeLineDiffStats(
   oldText: string,

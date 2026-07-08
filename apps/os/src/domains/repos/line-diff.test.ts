@@ -18,7 +18,11 @@ describe("computeLineDiffStats", () => {
     expect(computeLineDiffStats("", "")).toEqual({ additions: 0, deletions: 0 });
   });
 
-  test("treats a missing trailing newline like git does (same line count)", () => {
+  test("ignores trailing-newline-only changes (deliberate divergence from git)", () => {
+    // Real git reports 1/1 for "a\nb" → "a\nb\n" (the unterminated final line
+    // counts as changed); we deliberately count 0/0 — both sides split to the
+    // same lines, and newline termination alone is noise for the history UI.
+    // See the module docstring in line-diff.ts.
     expect(computeLineDiffStats("a\nb", "a\nb\n")).toEqual({ additions: 0, deletions: 0 });
     expect(computeLineDiffStats("a\nb", "a\nc")).toEqual({ additions: 1, deletions: 1 });
   });

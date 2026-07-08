@@ -185,6 +185,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       await queryClient.invalidateQueries({
         queryKey: ["itx", "repo-files", projectId, repoPath],
       });
+      // The commit list changed too (this commit is now its head). Per-commit
+      // detail/content queries stay — they key by oid and are immutable.
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-log", projectId, repoPath],
+      });
       store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
       toast.success(
         result.noChanges
