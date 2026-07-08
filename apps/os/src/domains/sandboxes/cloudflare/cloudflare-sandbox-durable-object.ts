@@ -460,11 +460,17 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       type: "events.iterate.com/sandbox/destroy-requested",
       payload: {},
     });
+    // Teardown BEFORE the tombstone: if the container teardown throws, the
+    // record stays live and a retry runs the whole destroy again — tombstoning
+    // first would make the retry hit the idempotent early-return above and
+    // leave a running container behind a dead pet. A command sneaking in
+    // between teardown and tombstone at worst boots a container that the next
+    // idle expiry reclaims.
+    await super.destroy();
     this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, {
       ...record,
       destroyedAt: new Date().toISOString(),
     });
-    await super.destroy();
     this.#emitLifecycleEvent({
       type: "events.iterate.com/sandbox/destroyed",
       payload: {},
