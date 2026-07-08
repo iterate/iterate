@@ -4,7 +4,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import type { StreamEvent, StreamListItem } from "../streams/schemas.ts";
+import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -166,20 +166,12 @@ export class ProjectProcessor extends StreamProcessor<
   protected override processEvent({
     blockProcessorWhile,
     event,
-    previousState,
-    runInBackground,
     state,
     append,
   }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
-    if (previousState.created) {
-      runInBackground(async () => {
-        try {
-          await this.deps.itx.worker.processEvent({ event: event as StreamEvent });
-        } catch (error) {
-          console.log("project worker processEvent failed", error);
-        }
-      });
-    }
+    // Project worker delivery is NOT here: every project stream (this one
+    // included) pumps its own events into the worker's `processEventBatch`
+    // with a durable checkpoint (see streams/project-worker-delivery.ts).
 
     switch (event.type) {
       case "events.iterate.com/project/create-requested": {

@@ -796,7 +796,16 @@ export interface WorkspaceCollection {
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  processEvent(input: { event: StreamEvent }): Promise<void>;
+  /**
+   * Checkpointed event delivery: every project-scoped stream pumps its
+   * committed events here (see ProjectWorkerDelivery). Batches arrive in
+   * per-stream order, at-least-once — each event carries the \`path\` of the
+   * stream it lives on, so \`\${event.path}@\${event.offset}\` identifies a
+   * delivery globally and is the idempotency-key idiom for reactions. The
+   * stream only advances its checkpoint when this resolves; throwing means
+   * the whole batch is redelivered later.
+   */
+  processEventBatch(batch: StreamEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
@@ -839,11 +848,16 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
+      workerDelivery: {
+        checkpoint: number;
+        consecutiveFailures: number;
+        retryScheduled: boolean;
+      } | null;
     };
   }>;
   /**
@@ -1659,6 +1673,20 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
+/**
+ * Batch delivered to stream processors and live subscribers.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
+};
+
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1925,20 +1953,6 @@ export type WorkspaceFileInfo = {
   target?: string;
   type: "directory" | "file" | "symlink";
   updatedAt: number;
-};
-
-/**
- * Batch delivered to stream processors and live subscribers.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
- */
-export type StreamEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  state: unknown;
 };
 
 /** Stable identity for one stream subscription connection. */

@@ -59,11 +59,7 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import {
-  PROJECT_REPO_PATH,
-  PROJECT_WORKER_ENTRY_POINT,
-  PROJECT_WORKER_SOURCE_EXCLUDE,
-} from "./domains/repos/utils.ts";
+import { defaultProjectWorkerRef, PROJECT_REPO_PATH } from "./domains/repos/utils.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -122,7 +118,6 @@ import type {
   DynamicWorkerDispatchOptions,
   DynamicWorkerRef,
   ProjectWorker,
-  StatelessDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import {
@@ -401,11 +396,16 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
+      workerDelivery: {
+        checkpoint: number;
+        consecutiveFailures: number;
+        retryScheduled: boolean;
+      } | null;
     };
   }> {
     return this.durableObjectStub.runtimeState();
@@ -3697,21 +3697,6 @@ export function itxForScope(props: {
     ctx: props.ctx,
     projectId: props.projectId,
   });
-}
-
-export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
-  return {
-    path: "/",
-    source: {
-      files: {
-        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
-        repoPath: PROJECT_REPO_PATH,
-        type: "repo",
-      },
-      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
-    },
-    type: "stateless",
-  };
 }
 
 async function projectProcessorState(projectId: string) {

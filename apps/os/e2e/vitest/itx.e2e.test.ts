@@ -25,7 +25,8 @@ const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   slug: "minimal-itx-v4.project-worker-forwarding-probe",
   version: "0.1.0",
-  description: "Records project worker processEvent deliveries observed through an ITX stream.",
+  description:
+    "Records project worker processEventBatch deliveries observed through an ITX stream.",
   stateSchema: z.object({
     childPaths: z.array(z.string()).default([]),
     markers: z.array(z.string()).default([]),
@@ -1171,8 +1172,8 @@ describe("itx", () => {
                 };
               }
 
-              processEvent(input) {
-                console.log("updated project worker processed", input.event.type);
+              processEventBatch(batch) {
+                console.log("updated project worker processed", batch.events.length, "events");
               }
             }
 
@@ -1647,8 +1648,8 @@ describe("itx", () => {
                 return new Response(\`matrix project worker \${new URL(req.url).pathname}\`);
               }
 
-              processEvent(input) {
-                console.log("matrix project worker processed", input.event.type);
+              processEventBatch(batch) {
+                console.log("matrix project worker processed", batch.events.length, "events");
               }
             }
 
@@ -2198,7 +2199,7 @@ describe("itx", () => {
     });
   });
 
-  test("Dynamic project worker processEvent can cross-post project events", async () => {
+  test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -2207,6 +2208,9 @@ describe("itx", () => {
 
     using project = itx.projects.create({ slug: "project-worker-process-event" });
     const marker = `cross-post-${crypto.randomUUID()}`;
+    // NOT the root stream: delivery is derived on every project stream, so a
+    // freshly minted child stream must reach the worker with no wiring at all.
+    const sourcePath = `/sources/ping-${crypto.randomUUID()}`;
 
     await project.repo.commitFiles({
       changes: [
@@ -2220,17 +2224,22 @@ describe("itx", () => {
                 return new Response("ok");
               }
 
-              async processEvent({ event }) {
+              async processEventBatch(batch) {
+                for (const event of batch.events) await this.processEvent(event);
+              }
+
+              async processEvent(event) {
                 if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
 
                 const project = await this.env.ITX.get();
                 await project.streams.get("/cross-posted").append({
                   type: "events.iterate.com/test/cross-posted",
-                  idempotencyKey: \`project-worker-cross-post:\${event.offset}\`,
+                  idempotencyKey: \`project-worker-cross-post:\${event.path}@\${event.offset}\`,
                   metadata: {
                     crossPostedBy: "project-worker",
                     marker: event.metadata.crossPostMarker,
                     sourceOffset: event.offset,
+                    sourcePath: event.path,
                   },
                   payload: {
                     originalPayload: event.payload ?? null,
@@ -2242,7 +2251,7 @@ describe("itx", () => {
           `,
         },
       ],
-      message: "Cross-post selected project events from processEvent",
+      message: "Cross-post selected project events from processEventBatch",
     });
 
     const crossPosted = project.streams.get("/cross-posted");
@@ -2251,10 +2260,10 @@ describe("itx", () => {
       timeoutMs: 30_000,
     });
 
-    const [sourceEvent] = await project.streams.get("/").append({
+    const [sourceEvent] = await project.streams.get(sourcePath).append({
       type: "events.iterate.com/test/source",
       metadata: { crossPostMarker: marker },
-      payload: { text: "hello from root" },
+      payload: { text: "hello from a child stream" },
     });
 
     const copiedEvent = await copied;
@@ -2262,14 +2271,21 @@ describe("itx", () => {
       crossPostedBy: "project-worker",
       marker,
       sourceOffset: sourceEvent.offset,
+      sourcePath,
     });
     expect(copiedEvent.payload).toEqual({
-      originalPayload: { text: "hello from root" },
+      originalPayload: { text: "hello from a child stream" },
       originalType: "events.iterate.com/test/source",
     });
+
+    // The source stream's durable checkpoint reflects the delivery.
+    const runtimeState = await project.streams.get(sourcePath).runtimeState();
+    expect(runtimeState.runtime.workerDelivery?.checkpoint).toBeGreaterThanOrEqual(
+      sourceEvent.offset,
+    );
   });
 
-  test("Project stream subscribe can observe project worker processEvent forwarding", async () => {
+  test("Project stream subscribe can observe project worker processEventBatch forwarding", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -2299,8 +2315,12 @@ describe("itx", () => {
                 return new Response(\`forwarding test worker fetched \${new URL(req.url).pathname}\`);
               }
 
-              async processEvent(input) {
-                const event = input.event;
+              async processEventBatch(batch) {
+                for (const event of batch.events) await this.processEvent(event);
+              }
+
+              async processEvent(event) {
+                if (event.path !== "/") return;
                 if (event.type !== "events.iterate.com/stream/child-stream-created") return;
                 if (event.payload.childPath !== TRIGGER_PATH) return;
 
