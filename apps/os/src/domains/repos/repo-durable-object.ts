@@ -399,12 +399,16 @@ export class RepoDurableObject extends DurableObject<Env> {
       const token = await this.#mintGithubToken(link);
 
       // Full single-branch clone: a mirror push must be able to send every
-      // commit GitHub is missing, not just the tip.
+      // commit GitHub is missing, not just the tip. `noCheckout` because a
+      // push only moves objects — materializing the working tree in the
+      // in-memory fs roughly doubles peak memory for zero benefit, and the
+      // 128MB isolate limit is the real bound on how big a repo can mirror.
       const clone = async () => {
         const filesystem = new InMemoryFs();
         const git = createGit(filesystem, REPO_DIR);
         await git.clone({
           branch,
+          noCheckout: true,
           singleBranch: true,
           url: repo.remote,
           username: "x",
@@ -488,11 +492,16 @@ export class RepoDurableObject extends DurableObject<Env> {
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
 
+    // `noCheckout`: the sync only moves OBJECTS from GitHub to Artifacts; the
+    // working tree would double peak memory (and the content hash that used
+    // to need it is repaired lazily below). This is what lets a monorepo-
+    // sized history fit the 128MB isolate.
     const filesystem = new InMemoryFs();
     const git = createGit(filesystem, REPO_DIR);
     try {
       await git.clone({
         branch,
+        noCheckout: true,
         singleBranch: true,
         url: githubRemoteUrl(link),
         username: "x-access-token",
@@ -524,11 +533,14 @@ export class RepoDurableObject extends DurableObject<Env> {
       );
     }
 
+    // The adopted head is recorded for read-your-write, but the head CACHE is
+    // invalidated instead of recomputed: computing the contentHash here would
+    // need a full checkout (the memory hog this sync deliberately avoids).
+    // The next getHead() cold-misses and repairs the cache from a shallow
+    // depth-1 clone — the same lazy path a brand-new incarnation uses — so
+    // the synced head is still immediately live for worker builds.
     this.#recordPushedHead({ branch, commitOid: head.oid });
-    this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
-      commitOid: head.oid,
-      contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
-    });
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
 
     await this.#host.stream.append({
       type: "events.iterate.com/repo/github-synced",
