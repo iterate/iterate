@@ -412,6 +412,9 @@ describe("cloudflare preview state helpers", () => {
       testDurationMs: 678,
       status: "deployed",
       updatedAt: "2026-04-02T10:00:00.000Z",
+      workerSizeKib: 91_000.5,
+      workerGzipKib: 3_500,
+      mainWorkerGzipKib: 3_450,
     });
 
     const state = {
@@ -430,16 +433,16 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("## Summary");
     expect(body).toContain("## Environment Config Lease");
     expect(body).toContain(
-      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
+      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain(
-      "| app | status | commit | preview | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
+      "| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain(
-      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 12.3s | 678ms |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
+      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 3.42 MiB (+50.0 KiB vs main) | 12.3s | 678ms |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
     );
   });
 
@@ -476,7 +479,7 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("Footer");
     expect(body).toContain("<summary>No active environment config lease.</summary>");
     expect(body).toContain(
-      "| OS | tests failed | `1234567` |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
+      "| OS | tests failed | `1234567` |  |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
     );
     expect(body).toContain("<details>");
     expect(body).toContain("<summary>OS failure details</summary>");
