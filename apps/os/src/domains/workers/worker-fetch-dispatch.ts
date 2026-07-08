@@ -3,17 +3,29 @@ import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
 
 /**
- * The internal header carrying a {@link WorkerFetchDispatch} through the
- * fetch-native dynamic worker lane.
+ * The fetch lane: how HTTP (and only HTTP) reaches dynamic workers.
  *
- * A WebSocket upgrade response (101 + `webSocket`) cannot cross an RPC
- * method-call boundary — workerd fails with `DataCloneError: Could not
- * serialize object of type "WebSocket"` — so upgrade requests must travel the
- * whole chain over real `fetch()` calls (loopback entrypoint → Durable Object
- * stub → facet stub). Those hops have no argument channel besides the request
- * itself, so the target ref rides in this header. It is internal: OS ingress
- * strips it at the trust boundary (`stripInternalHeaders`), and each receiver
- * removes it before the request reaches dynamic worker code.
+ * workerd grants protocol semantics — WebSocket upgrades, streaming — to
+ * exactly one place: the distinguished `fetch` handler on its two real object
+ * kinds, WorkerEntrypoint and DurableObject classes (facets are DO-hosted),
+ * reached through real stubs (service bindings, `ctx.exports` loopback
+ * entrypoints, Worker Loader entrypoint stubs, DO stubs, facet stubs). Those
+ * objects are always top-of-stack, so the platform can terminate an upgrade
+ * there. Everything else — the itx capability tree, dotted paths, flattened
+ * `invokeCapability` dispatch — is an RPC overlay whose arguments and results
+ * are SERIALIZED, and a socket is the one thing serialization cannot carry
+ * (workerd: `DataCloneError: Could not serialize object of type
+ * "WebSocket"`). A capability method named `fetch` is just a method.
+ *
+ * So HTTP into a dynamic worker rides this lane: a chain of real stub
+ * fetches from ingress into the app. Real fetch has no argument channel
+ * besides the request itself, so the target ref rides in this header (the
+ * role `invokeCapability`'s `ref` argument plays on the RPC side). It is
+ * internal: OS ingress strips it at the trust boundary
+ * (`stripInternalHeaders`), and each receiver removes it before the request
+ * reaches dynamic worker code.
+ *
+ * The full model, hop by hop: docs/dynamic-worker-dispatch.md.
  */
 export const WORKER_FETCH_DISPATCH_HEADER = "x-iterate-worker-dispatch";
 

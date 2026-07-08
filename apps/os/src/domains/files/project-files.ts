@@ -140,7 +140,7 @@ export async function mintProjectFileUrl(input: {
  * Stores files under an agent's own path and returns the attachment records
  * (path + signed url + wire facts) that ride on agent stream events. The one
  * storage recipe behind every attachment surface — `agent.addFiles` (inputs)
- * and `chat.sendMessage({ files })` (agent replies). A short random prefix
+ * and `chat.sendMessage(message, { files })` (agent replies). A short random prefix
  * keeps two same-named uploads in one conversation from overwriting each
  * other under last-write-wins paths.
  */

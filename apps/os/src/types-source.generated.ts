@@ -73,147 +73,6 @@ export interface Session {
   projects: ProjectCollection;
 }
 
-/** Stream catalog for either a project or the deployment-wide global scope. */
-export interface StreamCollection {
-  __describe(): Promise<Description>;
-  /** The durable event stream at a path. */
-  get(path: string): Stream;
-}
-
-/** Repo catalog for either a project or the deployment-wide global scope. */
-export interface RepoCollection {
-  __describe(): Promise<Description>;
-  /** Create the repo at a path; resolves once \`repo/created\` lands. */
-  create(input: { path: string }): Promise<Repo>;
-  /** The repo at a path. */
-  get(path: string): Repo;
-}
-
-/** Catalog of projects reachable from a {@link Session}. */
-export interface ProjectCollection {
-  __describe(): Promise<Description>;
-  /** The itx at the project root for a \`prj_…\` id. */
-  get(projectId: string): Promise<Project>;
-  /**
-   * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed \`project/created\` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * \`waitUntilCreated: false\` to resolve as soon as the project EXISTS
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live processor state (\`itx.processor.onStateChange\` — \`state.created\`
-   * flips when bootstrap lands). The dashboard uses the fast path to redirect
-   * into the project instantly and play creation progress from pushes.
-   */
-  create(args: {
-    organizationSlug?: string;
-    projectId?: string;
-    slug: string;
-    waitUntilCreated?: boolean;
-  }): Promise<Project>;
-  /**
-   * The session's projects, enriched: identity (id/slug/org) from the auth
-   * claims or the project directory, deployment status from a concurrent
-   * engine probe (\`state.created\` on each project's processor snapshot). A
-   * probe failure degrades THAT entry to "unknown" — the list always renders.
-   * Scope is explicit: "mine" (default for user principals) is the caller's
-   * own claims even when admin credentials ride the same socket;
-   * "deployment" (every directory-known project) requires an admin principal
-   * and is the default for non-user admin principals, which have no claims.
-   */
-  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
-}
-
-/**
- * Durable event stream capability.
- *
- * Streams are the public coordination primitive, not an internal queue hidden
- * behind domain methods. Domain helpers can construct common event shapes, but
- * callers and processors still work with explicit events.
- */
-export interface Stream {
-  __describe(): Promise<Description>;
-  /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** The stream at a sub-path, resolved relative to this stream's path. */
-  at(path: string): Stream;
-  /** One event by offset or idempotencyKey; undefined when it does not exist. */
-  getEvent(
-    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
-  ): Promise<StreamEvent | undefined>;
-  /** Read one bounded page of committed events (optionally filtered by type). */
-  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
-  /**
-   * A stateful pager over a read window: repeated \`next()\` calls walk forward
-   * through pages, \`[]\` means "caught up for now". Dispose it when finished
-   * (\`using pager = stream.readEvents(...)\`).
-   */
-  readEvents(args?: StreamEventReadInput): StreamEventPager;
-  /**
-   * Block until an event lands that is after \`afterOffset\`, matches
-   * \`eventTypes\`, and passes \`predicate\`; rejects after \`timeoutMs\`.
-   */
-  waitForEvent(args: {
-    afterOffset?: number;
-    eventTypes?: readonly string[];
-    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
-    timeoutMs: number;
-  }): Promise<StreamEvent>;
-  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
-  getProcessorRuntimeState(args: {
-    subscriptionKey: string;
-  }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
-  runtimeState(): Promise<{
-    coreProcessorState: unknown;
-    runtime: {
-      connections: Record<string, unknown>;
-    };
-  }>;
-  /**
-   * Live event delivery: \`processEventBatch\` is called for every committed
-   * batch (optionally replayed from \`replayAfterOffset\`); returns an
-   * unsubscribe handle. Set \`configured: true\` only from trusted-internal
-   * auth — it opens the durable configured subscription registered under
-   * \`subscriptionKey\` (the wake-handshake response) instead of an ephemeral one.
-   */
-  subscribe(args: {
-    subscriptionKey?: string;
-    configured?: boolean;
-    processEventBatch: ProcessEventBatch;
-    replayAfterOffset?: number;
-    eventTypes?: readonly string[];
-    events?: boolean;
-    subscriber?: unknown;
-  }): Promise<StreamSubscriptionHandle>;
-}
-
-/** Git-backed repo capability used by project workers and dynamic worker refs. */
-export interface Repo {
-  __describe(): Promise<Description>;
-  /** Create the repo if it does not exist yet; resolves once \`repo/created\` lands. */
-  create(): Promise<Repo>;
-  /** Repo identity string (debug). */
-  whoami(): Promise<string>;
-  /** Commit a batch of file changes; use \`edit\` for a targeted single-string replacement. */
-  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
-  /**
-   * Safely replace text in one committed file and commit the result. The
-   * \`oldString\` must match exactly once unless \`replaceAll\` is true.
-   */
-  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
-  /** All committed file paths at HEAD. */
-  listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-  /** Committed file contents at HEAD; null when the path does not exist. */
-  readFile(input: { path: string }): Promise<{
-    commitOid: string;
-    content: string;
-    path: string;
-  } | null>;
-  /** The repo stream processor (snapshot/state). */
-  processor: StreamProcessorRpc<RepoProcessorState>;
-}
-
 /**
  * The server-side **itx** — the object an \`async (itx) => { … }\` script holds and
  * what \`env.ITX.get()\` returns. One class serves the project root and every nested
@@ -314,19 +173,55 @@ export interface Project {
   worker: DynamicWorkerCapability<ProjectWorker>;
 }
 
-/**
- * Stateful page reader for one stream read window.
- *
- * A tiny object-capability cursor: it holds only the caller's read window and
- * the last offset it returned, so there is no server-side snapshot or lease to
- * maintain (events still come from the Stream DO on every page). This is not a
- * live subscription; \`[]\` means "caught up for now". Dispose it when finished
- * (\`using pager = stream.readEvents(...)\`).
- */
-export interface StreamEventPager {
-  /** Returns [] when no newer matching page is currently available. */
-  next(): Promise<StreamEvent[]>;
-  [Symbol.dispose](): void;
+/** Stream catalog for either a project or the deployment-wide global scope. */
+export interface StreamCollection {
+  __describe(): Promise<Description>;
+  /** The durable event stream at a path. */
+  get(path: string): Stream;
+}
+
+/** Repo catalog for either a project or the deployment-wide global scope. */
+export interface RepoCollection {
+  __describe(): Promise<Description>;
+  /** Create the repo at a path; resolves once \`repo/created\` lands. */
+  create(input: { path: string }): Promise<Repo>;
+  /** The repo at a path. */
+  get(path: string): Repo;
+}
+
+/** Catalog of projects reachable from a {@link Session}. */
+export interface ProjectCollection {
+  __describe(): Promise<Description>;
+  /** The itx at the project root for a \`prj_…\` id. */
+  get(projectId: string): Promise<Project>;
+  /**
+   * Register and bootstrap a project. By default this resolves once the
+   * bootstrap saga has committed \`project/created\` — convenient for scripts
+   * and tests that use the project immediately. Pass
+   * \`waitUntilCreated: false\` to resolve as soon as the project EXISTS
+   * (identity registered, directory primed, bootstrap events appended): the
+   * saga then runs behind the returned handle, and its progress is ordinary
+   * live processor state (\`itx.processor.onStateChange\` — \`state.created\`
+   * flips when bootstrap lands). The dashboard uses the fast path to redirect
+   * into the project instantly and play creation progress from pushes.
+   */
+  create(args: {
+    organizationSlug?: string;
+    projectId?: string;
+    slug: string;
+    waitUntilCreated?: boolean;
+  }): Promise<Project>;
+  /**
+   * The session's projects, enriched: identity (id/slug/org) from the auth
+   * claims or the project directory, deployment status from a concurrent
+   * engine probe (\`state.created\` on each project's processor snapshot). A
+   * probe failure degrades THAT entry to "unknown" — the list always renders.
+   * Scope is explicit: "mine" (default for user principals) is the caller's
+   * own claims even when admin credentials ride the same socket;
+   * "deployment" (every directory-known project) requires an admin principal
+   * and is the default for non-user admin principals, which have no claims.
+   */
+  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
 export interface StreamProcessorRpc<State = unknown> {
@@ -430,16 +325,18 @@ export interface AgentChat {
   /** The agent's own event stream (the chat rides on it). */
   stream: Stream;
   /**
-   * Say something to the user. \`files\` attaches project files to the message
-   * — THE way to hand the user something you generated (e.g. an \`itx.ai.run\`
-   * image: base64 straight into \`data\`, never pasted into message text).
-   * Attached images render inline in the chat and stay visible to the model
-   * on later turns.
+   * Say something to the user — pass the message as a plain string:
+   * \`await itx.chat.sendMessage("Here you go!")\`.
+   *
+   * \`options.files\` attaches project files to the message — THE way to hand
+   * the user something you generated (e.g. an \`itx.ai.run\` image: base64
+   * straight into \`data\`, never pasted into message text). Attached images
+   * render inline in the chat and stay visible to the model on later turns.
    */
-  sendMessage(input: {
-    message: string;
-    files?: Array<{ contentType: string; data: FileData; filename: string }>;
-  }): Promise<StreamEvent>;
+  sendMessage(
+    message: string,
+    options?: { files?: Array<{ contentType: string; data: FileData; filename: string }> },
+  ): Promise<StreamEvent>;
 }
 
 /**
@@ -776,6 +673,32 @@ export interface SecretCollection {
   list(): Promise<StreamListItem[]>;
 }
 
+/** Git-backed repo capability used by project workers and dynamic worker refs. */
+export interface Repo {
+  __describe(): Promise<Description>;
+  /** Create the repo if it does not exist yet; resolves once \`repo/created\` lands. */
+  create(): Promise<Repo>;
+  /** Repo identity string (debug). */
+  whoami(): Promise<string>;
+  /** Commit a batch of file changes; use \`edit\` for a targeted single-string replacement. */
+  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
+  /**
+   * Safely replace text in one committed file and commit the result. The
+   * \`oldString\` must match exactly once unless \`replaceAll\` is true.
+   */
+  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
+  /** All committed file paths at HEAD. */
+  listFiles(): Promise<{ commitOid: string; paths: string[] }>;
+  /** Committed file contents at HEAD; null when the path does not exist. */
+  readFile(input: { path: string }): Promise<{
+    commitOid: string;
+    content: string;
+    path: string;
+  } | null>;
+  /** The repo stream processor (snapshot/state). */
+  processor: StreamProcessorRpc<RepoProcessorState>;
+}
+
 /**
  * Public project-facing worker collection.
  *
@@ -805,6 +728,70 @@ export interface ProjectWorker {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   processEvent(input: { event: StreamEvent }): Promise<void>;
   slack: ProjectWorkerSlack;
+}
+
+/**
+ * Durable event stream capability.
+ *
+ * Streams are the public coordination primitive, not an internal queue hidden
+ * behind domain methods. Domain helpers can construct common event shapes, but
+ * callers and processors still work with explicit events.
+ */
+export interface Stream {
+  __describe(): Promise<Description>;
+  /** Commit events; resolves with the same events carrying offsets and timestamps. */
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** The stream at a sub-path, resolved relative to this stream's path. */
+  at(path: string): Stream;
+  /** One event by offset or idempotencyKey; undefined when it does not exist. */
+  getEvent(
+    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
+  ): Promise<StreamEvent | undefined>;
+  /** Read one bounded page of committed events (optionally filtered by type). */
+  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
+  /**
+   * A stateful pager over a read window: repeated \`next()\` calls walk forward
+   * through pages, \`[]\` means "caught up for now". Dispose it when finished
+   * (\`using pager = stream.readEvents(...)\`).
+   */
+  readEvents(args?: StreamEventReadInput): StreamEventPager;
+  /**
+   * Block until an event lands that is after \`afterOffset\`, matches
+   * \`eventTypes\`, and passes \`predicate\`; rejects after \`timeoutMs\`.
+   */
+  waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes?: readonly string[];
+    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
+    timeoutMs: number;
+  }): Promise<StreamEvent>;
+  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
+  getProcessorRuntimeState(args: {
+    subscriptionKey: string;
+  }): Promise<ProcessorRuntimeState | null>;
+  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  runtimeState(): Promise<{
+    coreProcessorState: unknown;
+    runtime: {
+      connections: Record<string, unknown>;
+    };
+  }>;
+  /**
+   * Live event delivery: \`processEventBatch\` is called for every committed
+   * batch (optionally replayed from \`replayAfterOffset\`); returns an
+   * unsubscribe handle. Set \`configured: true\` only from trusted-internal
+   * auth — it opens the durable configured subscription registered under
+   * \`subscriptionKey\` (the wake-handshake response) instead of an ephemeral one.
+   */
+  subscribe(args: {
+    subscriptionKey?: string;
+    configured?: boolean;
+    processEventBatch: ProcessEventBatch;
+    replayAfterOffset?: number;
+    eventTypes?: readonly string[];
+    events?: boolean;
+    subscriber?: unknown;
+  }): Promise<StreamSubscriptionHandle>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -870,6 +857,21 @@ export interface ProjectWorkerSlack {
   [family: string]: unknown;
 }
 
+/**
+ * Stateful page reader for one stream read window.
+ *
+ * A tiny object-capability cursor: it holds only the caller's read window and
+ * the last offset it returned, so there is no server-side snapshot or lease to
+ * maintain (events still come from the Stream DO on every page). This is not a
+ * live subscription; \`[]\` means "caught up for now". Dispose it when finished
+ * (\`using pager = stream.readEvents(...)\`).
+ */
+export interface StreamEventPager {
+  /** Returns [] when no newer matching page is currently available. */
+  next(): Promise<StreamEvent[]>;
+  [Symbol.dispose](): void;
+}
+
 /** Cloudflare Images binding exposed through ITX as one-call helpers. */
 export interface CfImagesCapability {
   __describe(): Promise<Description>;
@@ -887,6 +889,32 @@ export interface CfVideosCapability {
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
+
+/**
+ * The \`env.ITX\` binding every dynamic worker receives — one object, two
+ * channels, split by what the wire can carry:
+ *
+ * - \`get()\` — the capability tree. An itx scoped to the worker's path;
+ *   everything on it is Workers RPC method calls whose arguments and results
+ *   are serialized data or live stubs. No name on this tree is
+ *   protocol-special (\`fetch\` included).
+ * - \`fetch(request)\` — the fetch lane. Real HTTP into a sibling dynamic
+ *   worker, selected by the \`x-iterate-worker-dispatch\` header (JSON
+ *   \`{ ref, buildBudgetMs? }\`, the same ref shape \`workers.get\` takes). This
+ *   is a chain of real workerd fetch hops end to end, so it is the ONLY
+ *   channel that can carry protocol semantics — WebSocket upgrades reach the
+ *   target class's own \`fetch\` handler and the 101's socket tunnels back.
+ *   A cold build answers a 503 building page marked
+ *   \`x-iterate-worker-building\` (auto-refreshing for browsers, retryable for
+ *   WebSocket reconnect loops).
+ *
+ * Authority is identical on both channels: the binding's own scope, minted by
+ * the host — worker code never picks its own project.
+ */
+export type ItxBinding = {
+  fetch(request: Request): Promise<Response>;
+  get(): Promise<Project>;
+};
 
 /**
  * Self-description of one node in the capability tree — what \`__describe()\`
@@ -936,156 +964,6 @@ export type ItxAuthCredentials =
 export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
-
-/** One entry of a session's project catalog (\`session.projects.list()\`). */
-export type ProjectListEntry = {
-  id: string;
-  slug: string;
-  organizationId: string | null;
-  organizationName: string | null;
-  organizationSlug: string | null;
-  deploymentStatus: ProjectDeploymentStatus;
-};
-
-export type StreamEventInput = {
-  type: string;
-  payload?: Record<string, unknown> | undefined;
-  metadata?: Record<string, unknown> | undefined;
-  source?:
-    | {
-        processor?: { slug: string; version: string } | undefined;
-        crossPost?:
-          | {
-              ruleId: string;
-              from: {
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              };
-            }
-          | undefined;
-      }
-    | undefined;
-  idempotencyKey?: string | undefined;
-};
-
-export type StreamEvent = {
-  type: string;
-  payload?: Record<string, unknown> | undefined;
-  metadata?: Record<string, unknown> | undefined;
-  source?:
-    | {
-        processor?: { slug: string; version: string } | undefined;
-        crossPost?:
-          | {
-              ruleId: string;
-              from: {
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              };
-            }
-          | undefined;
-      }
-    | undefined;
-  idempotencyKey?: string | undefined;
-  offset: number;
-  createdAt: string;
-};
-
-/** The read window accepted by \`Stream.getEvents\` / \`Stream.readEvents\`. */
-export type StreamEventReadInput = {
-  /** Exclusive lower bound. Defaults to 0. */
-  afterOffset?: number;
-  /** Exclusive upper bound. Omit/null to read through the current tail. */
-  beforeOffset?: number | null;
-  /** Event types to include. Omit or include "*" for all; [] matches none. */
-  eventTypes?: readonly string[];
-  /** Page size, 1-500. Defaults to 500. */
-  limit?: number;
-};
-
-/** Serializable snapshot plus optional live runtime debug state for a processor. */
-export type ProcessorRuntimeState<State = unknown> = {
-  snapshot: { offset: number; state: State };
-  runtime?: Record<string, unknown>;
-};
-
-/**
- * Callback invoked by the stream pump for each delivered batch.
- *
- * It stays as a named type because Workers RPC callback lifecycle helpers need
- * to duplicate, retain, and dispose exactly this callback shape.
- */
-export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
-
-/**
- * Live subscription handle returned by \`Stream.subscribe\`.
- *
- * \`ping()\` mirrors {@link ProcessorStateSubscriptionHandle.ping}: \`true\` while
- * the connection is still open on the live stream, \`false\` after it closed
- * (replaced, delivery failure, unsubscribe); it rejects when the stream's
- * Durable Object incarnation is gone. Either non-\`true\` outcome means the
- * subscriber should re-subscribe.
- */
-export type StreamSubscriptionHandle = Disposable & {
-  /** Stable identity of this subscription connection. */
-  subscriptionKey: SubscriptionKey;
-  /** The stream's max offset at subscribe time (replay starts behind it). */
-  streamMaxOffset: number;
-  ping(): boolean | Promise<boolean>;
-  /** Close this connection; safe to call more than once. */
-  unsubscribe(): void;
-};
-
-/** Command object for committing a batch of repo file mutations. */
-export type CommitRepoFilesInput = {
-  author?: { email: string; name: string };
-  branch?: string;
-  changes: RepoFileChange[];
-  message: string;
-};
-
-/** Result returned after a repo commit attempt, including no-op commits. */
-export type CommitRepoFilesResult = {
-  branch: string;
-  changedPaths: string[];
-  commitOid: string;
-  noChanges: boolean;
-};
-
-/** Command object for a coding-agent-style exact string edit. */
-export type EditRepoFileInput = {
-  author?: { email: string; name: string };
-  branch?: string;
-  message: string;
-  newString: string;
-  oldString: string;
-  path: string;
-  replaceAll?: boolean;
-};
-
-/** Result returned after an exact string edit commit attempt. */
-export type EditRepoFileResult = CommitRepoFilesResult & {
-  occurrenceCount: number;
-  path: string;
-};
-
-/**
- * The repo processor's reduced state, inferred from the contract's
- * \`stateSchema\` — the one definition of the shape.
- */
-export type RepoProcessorState = {
-  artifactName: string | null;
-  created: boolean;
-  defaultBranch: string | null;
-  initialized: boolean;
-  remote: string | null;
-};
 
 /** What a project itx's \`__describe()\` returns: the Description convention plus identity and the capability inventory. */
 export type ProjectDescription = Description & {
@@ -1167,48 +1045,36 @@ export type OpenApiRpc = object;
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
 
-/**
- * Whether a project the directory knows about actually exists in THIS
- * deployment's engine:
- * - \`ready\` — the project stream's bootstrap saga ran (\`state.created\`).
- * - \`missing\` — the engine has no state for it (e.g. the deployment was reset
- *   while the auth worker kept its rows); it can be set up again.
- * - \`unknown\` — the probe failed (engine hiccup); don't block the list on it.
- */
-export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
-
-/**
- * Batch delivered to stream processors and live subscribers.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
- */
-export type StreamEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  state: unknown;
+/** One entry of a session's project catalog (\`session.projects.list()\`). */
+export type ProjectListEntry = {
+  id: string;
+  slug: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  organizationSlug: string | null;
+  deploymentStatus: ProjectDeploymentStatus;
 };
 
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
+export type CapabilityDescription = {
+  instructions?: string;
+  path: string[];
+  providedAtOffset?: number;
+  /**
+   * The itx scope path this capability is declared at (\`"/"\`, \`"/agents/bla"\`, …).
+   * Set when a scope reports capabilities it inherited from an enclosing scope,
+   * so the reader can tell a local mount from an inherited one. Absent on
+   * built-ins (they exist at every scope).
+   */
+  scope?: string;
+  type: "builtin" | "live" | "itx-expression";
+  types?: string;
+};
 
-/**
- * One repo file mutation.
- *
- * Kept named because public \`Repo.commitFiles\`, input parsing, and artifact
- * commit implementation all validate the same command shape.
- */
-export type RepoFileChange =
-  | {
-      path: string;
-      content: string;
-    }
-  | {
-      path: string;
-      delete: true;
-    };
+/** Serializable snapshot plus optional live runtime debug state for a processor. */
+export type ProcessorRuntimeState<State = unknown> = {
+  snapshot: { offset: number; state: State };
+  runtime?: Record<string, unknown>;
+};
 
 export type ProcessorSnapshot<State> = {
   offset: number;
@@ -1229,21 +1095,6 @@ export type ProcessorSnapshot<State> = {
 export type ProcessorStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
-};
-
-export type CapabilityDescription = {
-  instructions?: string;
-  path: string[];
-  providedAtOffset?: number;
-  /**
-   * The itx scope path this capability is declared at (\`"/"\`, \`"/agents/bla"\`, …).
-   * Set when a scope reports capabilities it inherited from an enclosing scope,
-   * so the reader can tell a local mount from an inherited one. Absent on
-   * built-ins (they exist at every scope).
-   */
-  scope?: string;
-  type: "builtin" | "live" | "itx-expression";
-  types?: string;
 };
 
 export type CfMarkdownConversionArgs =
@@ -1311,6 +1162,32 @@ export type AgentProcessorState = {
     startedAt: string;
   }[];
   scriptExecutionsCompleted: string[];
+};
+
+export type StreamEvent = {
+  type: string;
+  payload?: Record<string, unknown> | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  source?:
+    | {
+        processor?: { slug: string; version: string } | undefined;
+        crossPost?:
+          | {
+              ruleId: string;
+              from: {
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              };
+            }
+          | undefined;
+      }
+    | undefined;
+  idempotencyKey?: string | undefined;
+  offset: number;
+  createdAt: string;
 };
 
 /**
@@ -1482,6 +1359,51 @@ export type ScheduleView = {
   setAt: string;
 };
 
+/** Command object for committing a batch of repo file mutations. */
+export type CommitRepoFilesInput = {
+  author?: { email: string; name: string };
+  branch?: string;
+  changes: RepoFileChange[];
+  message: string;
+};
+
+/** Result returned after a repo commit attempt, including no-op commits. */
+export type CommitRepoFilesResult = {
+  branch: string;
+  changedPaths: string[];
+  commitOid: string;
+  noChanges: boolean;
+};
+
+/** Command object for a coding-agent-style exact string edit. */
+export type EditRepoFileInput = {
+  author?: { email: string; name: string };
+  branch?: string;
+  message: string;
+  newString: string;
+  oldString: string;
+  path: string;
+  replaceAll?: boolean;
+};
+
+/** Result returned after an exact string edit commit attempt. */
+export type EditRepoFileResult = CommitRepoFilesResult & {
+  occurrenceCount: number;
+  path: string;
+};
+
+/**
+ * The repo processor's reduced state, inferred from the contract's
+ * \`stateSchema\` — the one definition of the shape.
+ */
+export type RepoProcessorState = {
+  artifactName: string | null;
+  created: boolean;
+  defaultBranch: string | null;
+  initialized: boolean;
+  remote: string | null;
+};
+
 /** Worker recipe accepted by \`workers.get\` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
@@ -1503,6 +1425,79 @@ export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
 };
+
+export type StreamEventInput = {
+  type: string;
+  payload?: Record<string, unknown> | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  source?:
+    | {
+        processor?: { slug: string; version: string } | undefined;
+        crossPost?:
+          | {
+              ruleId: string;
+              from: {
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              };
+            }
+          | undefined;
+      }
+    | undefined;
+  idempotencyKey?: string | undefined;
+};
+
+/** The read window accepted by \`Stream.getEvents\` / \`Stream.readEvents\`. */
+export type StreamEventReadInput = {
+  /** Exclusive lower bound. Defaults to 0. */
+  afterOffset?: number;
+  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  beforeOffset?: number | null;
+  /** Event types to include. Omit or include "*" for all; [] matches none. */
+  eventTypes?: readonly string[];
+  /** Page size, 1-500. Defaults to 500. */
+  limit?: number;
+};
+
+/**
+ * Callback invoked by the stream pump for each delivered batch.
+ *
+ * It stays as a named type because Workers RPC callback lifecycle helpers need
+ * to duplicate, retain, and dispose exactly this callback shape.
+ */
+export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/**
+ * Live subscription handle returned by \`Stream.subscribe\`.
+ *
+ * \`ping()\` mirrors {@link ProcessorStateSubscriptionHandle.ping}: \`true\` while
+ * the connection is still open on the live stream, \`false\` after it closed
+ * (replaced, delivery failure, unsubscribe); it rejects when the stream's
+ * Durable Object incarnation is gone. Either non-\`true\` outcome means the
+ * subscriber should re-subscribe.
+ */
+export type StreamSubscriptionHandle = Disposable & {
+  /** Stable identity of this subscription connection. */
+  subscriptionKey: SubscriptionKey;
+  /** The stream's max offset at subscribe time (replay starts behind it). */
+  streamMaxOffset: number;
+  ping(): boolean | Promise<boolean>;
+  /** Close this connection; safe to call more than once. */
+  unsubscribe(): void;
+};
+
+/**
+ * Whether a project the directory knows about actually exists in THIS
+ * deployment's engine:
+ * - \`ready\` — the project stream's bootstrap saga ran (\`state.created\`).
+ * - \`missing\` — the engine has no state for it (e.g. the deployment was reset
+ *   while the auth worker kept its rows); it can be set up again.
+ * - \`unknown\` — the probe failed (engine hiccup); don't block the list on it.
+ */
+export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
@@ -1598,6 +1593,22 @@ export type SecretUpdateInput = {
 };
 
 /**
+ * One repo file mutation.
+ *
+ * Kept named because public \`Repo.commitFiles\`, input parsing, and artifact
+ * commit implementation all validate the same command shape.
+ */
+export type RepoFileChange =
+  | {
+      path: string;
+      content: string;
+    }
+  | {
+      path: string;
+      delete: true;
+    };
+
+/**
  * Stateless workers are WorkerEntrypoint exports loaded directly from source.
  *
  * \`props\` are passed to \`worker.getEntrypoint(name, { props })\` and appear as
@@ -1636,6 +1647,23 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
    */
   updatePolicy?: "block" | "stale-while-rebuild";
 };
+
+/**
+ * Batch delivered to stream processors and live subscribers.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
+};
+
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
 
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;

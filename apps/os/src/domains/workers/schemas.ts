@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
+import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 
@@ -313,3 +314,29 @@ export const DynamicWorkerRef = z.discriminatedUnion("type", [
   StatelessDynamicWorkerRef,
   StatefulDynamicWorkerRef,
 ]) satisfies z.ZodType<DynamicWorkerRef, unknown>;
+
+/**
+ * The `env.ITX` binding every dynamic worker receives — one object, two
+ * channels, split by what the wire can carry:
+ *
+ * - `get()` — the capability tree. An itx scoped to the worker's path;
+ *   everything on it is Workers RPC method calls whose arguments and results
+ *   are serialized data or live stubs. No name on this tree is
+ *   protocol-special (`fetch` included).
+ * - `fetch(request)` — the fetch lane. Real HTTP into a sibling dynamic
+ *   worker, selected by the `x-iterate-worker-dispatch` header (JSON
+ *   `{ ref, buildBudgetMs? }`, the same ref shape `workers.get` takes). This
+ *   is a chain of real workerd fetch hops end to end, so it is the ONLY
+ *   channel that can carry protocol semantics — WebSocket upgrades reach the
+ *   target class's own `fetch` handler and the 101's socket tunnels back.
+ *   A cold build answers a 503 building page marked
+ *   `x-iterate-worker-building` (auto-refreshing for browsers, retryable for
+ *   WebSocket reconnect loops).
+ *
+ * Authority is identical on both channels: the binding's own scope, minted by
+ * the host — worker code never picks its own project.
+ */
+export type ItxBinding = {
+  fetch(request: Request): Promise<Response>;
+  get(): Promise<ProjectRpcTarget>;
+};

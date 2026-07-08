@@ -62,7 +62,7 @@ describe("minimal web-chat agent processors", () => {
       "The block must contain a single async arrow function",
     );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage({ message })");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(message)");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
     // The verbatim type surface rides along so the agent knows what it holds.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Project>");
@@ -239,7 +239,7 @@ describe("minimal web-chat agent processors", () => {
             response: [
               "```js",
               "async (itx) => {",
-              "  await itx.chat.sendMessage({ message: 'hello from ai' });",
+              "  await itx.chat.sendMessage('hello from ai');",
               "}",
               "```",
             ].join("\n"),
@@ -525,7 +525,7 @@ describe("minimal web-chat agent processors", () => {
                 {
                   delta: {
                     content:
-                      "async (itx) => {\n  await itx.chat.sendMessage({ message: 'real-ai-agent-ok' });\n}\n```",
+                      "async (itx) => {\n  await itx.chat.sendMessage('real-ai-agent-ok');\n}\n```",
                   },
                 },
               ],

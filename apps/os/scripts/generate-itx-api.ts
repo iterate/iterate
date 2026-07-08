@@ -459,6 +459,10 @@ export function generateItxApi(): string {
   };
 
   enqueue("UnauthenticatedOs");
+  // The worker-side contract: `env.ITX` on dynamic workers. Not reachable from
+  // the /api walk (nothing on the capability tree mentions it), but worker code
+  // imports it from the sdk.ts copy of this file, so it is a second seed.
+  enqueue("ItxBinding");
   while (queue.length > 0) {
     const name = queue.shift()!;
     if (emitted.has(name)) continue;

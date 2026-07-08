@@ -306,7 +306,7 @@ reducing committed history up to that offset, executes the call, and appends
 started/chunk/output/completed events. The agent contract: respond with
 exactly one fenced JavaScript block containing a single
 `async (itx) => { … }`, which the ITX processor executes; replies reach the
-user via `itx.chat.sendMessage({ message })`
+user via `itx.chat.sendMessage(message)`
 (`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
 calls: a returned value (or thrown error) renders back into history as the
 next input and triggers another turn, while a script that returns `undefined`

@@ -98,7 +98,7 @@ const MCP_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
-  "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage({ message }). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
+  "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage(message). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
 
 /**
@@ -533,6 +533,11 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {
+      // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
+      // method call whose Response comes back as a serialized copy — exactly
+      // enough for "the worker built, loaded, and answered". Protocol traffic
+      // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
+      // protocol needs (docs/dynamic-worker-dispatch.md).
       const response = await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
       // This probe only cares that the project worker accepted the request. The
       // returned Response can be a Cap'n Web RPC stub, and keeping that stub

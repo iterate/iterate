@@ -24,6 +24,19 @@ test("template @slack/web-api range matches the apps/os dependency", () => {
   expect(templatePackageJson.dependencies["@slack/web-api"]).toBe(hostRange);
 });
 
+test("template sdk.ts carries the current platform itx contract verbatim", () => {
+  // sdk.ts declares a `codegen: copy` marker over ../src/itx-api.generated.ts,
+  // but that preset has silently not fired under the oxlint js-plugin bridge —
+  // the snapshot drifted for weeks without a lint error. This test is the
+  // deterministic guard: seeded projects must get the types the platform
+  // actually speaks (ItxBinding, worker refs, …). On failure, run
+  // `pnpm lint --fix` to re-copy the generated contract between sdk.ts's
+  // codegen markers.
+  const sdk = templateFile("sdk.ts");
+  const types = readFileSync(new URL("../../../src/itx-api.generated.ts", import.meta.url), "utf8");
+  expect(sdk).toContain(types.trimEnd());
+});
+
 test("template app links use custom-domain subdomains only for custom host routes", () => {
   const worker = templateFile("worker.ts");
 

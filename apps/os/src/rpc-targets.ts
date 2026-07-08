@@ -1929,10 +1929,11 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "An agent's web-chat door: sendMessage({ message, files? }) appends the agent's reply " +
-        "to its stream (what the user sees). `files` attaches generated files — base64 " +
-        "strings (itx.ai.run image output), Uint8Array, Blob, or a stream — which render " +
-        "inline in the chat and stay model-visible on later turns.",
+        "An agent's web-chat door: sendMessage(message, { files? }) appends the agent's reply " +
+        "to its stream (what the user sees). The message is a plain string; the optional " +
+        "second argument's `files` attaches generated files — base64 strings (itx.ai.run " +
+        "image output), Uint8Array, Blob, or a stream — which render inline in the chat " +
+        "and stay model-visible on later turns.",
       children: { sendMessage: "Say something to the user (optionally with file attachments)." },
       parent: "agent.chat / itx.chat (agent scopes only)",
     });
@@ -1953,30 +1954,32 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
   }
 
   /**
-   * Say something to the user. `files` attaches project files to the message
-   * — THE way to hand the user something you generated (e.g. an `itx.ai.run`
-   * image: base64 straight into `data`, never pasted into message text).
-   * Attached images render inline in the chat and stay visible to the model
-   * on later turns.
+   * Say something to the user — pass the message as a plain string:
+   * `await itx.chat.sendMessage("Here you go!")`.
+   *
+   * `options.files` attaches project files to the message — THE way to hand
+   * the user something you generated (e.g. an `itx.ai.run` image: base64
+   * straight into `data`, never pasted into message text). Attached images
+   * render inline in the chat and stay visible to the model on later turns.
    */
-  async sendMessage(input: {
-    message: string;
-    files?: Array<{ contentType: string; data: FileData; filename: string }>;
-  }): Promise<StreamEvent> {
-    const message = input.message.trim();
-    if (message === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
+  async sendMessage(
+    message: string,
+    options?: { files?: Array<{ contentType: string; data: FileData; filename: string }> },
+  ): Promise<StreamEvent> {
+    const trimmed = message.trim();
+    if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
-      input.files === undefined || input.files.length === 0
+      options?.files === undefined || options.files.length === 0
         ? undefined
         : await storeAgentFileAttachments({
             agentPath: this.props.path,
             config: parseConfig(env),
-            files: input.files,
+            files: options.files,
             projectId: this.props.projectId,
           });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: { message, ...(files === undefined ? {} : { files }) },
+      payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
     });
     return event;
   }

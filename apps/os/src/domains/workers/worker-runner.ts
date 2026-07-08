@@ -166,22 +166,21 @@ export class DynamicWorkerRunner {
     path: string[];
     ref: DynamicWorkerRef;
   }): Promise<unknown> {
-    // Safety net: a dotted `worker.fetch(request)` carrying a WebSocket
-    // upgrade must not go through method replay — its 101 response cannot
-    // serialize across the RPC hops replay uses. HTTP dispatch is explicit
-    // everywhere it matters (ingress and userspace routers call the fetch
-    // lane directly); this catches in-process stragglers like
-    // `itx.worker.fetch(upgradeRequest)` from platform code. Only works for
-    // callers in-process with this runner — on the far side of an RPC
-    // boundary the response is already doomed before it gets here.
+    // Capability dispatch is method calls; no name is protocol-special here,
+    // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
+    // upgrade needs the REAL fetch handler on a real workerd object reached
+    // over fetch hops — its 101 response cannot serialize across the RPC hops
+    // replay uses, and silently rerouting on the name `fetch` would make it
+    // magic in the capability tree when the model is precisely that it is
+    // not. Refuse loudly, with directions.
     const [firstArg] = args;
-    if (
-      path.length === 1 &&
-      path[0] === "fetch" &&
-      firstArg instanceof Request &&
-      isWebSocketUpgradeRequest(firstArg)
-    ) {
-      return await this.fetch({ buildBudgetMs, ref, request: firstArg });
+    if (firstArg instanceof Request && isWebSocketUpgradeRequest(firstArg)) {
+      throw new Error(
+        "WebSocket upgrades cannot ride capability dispatch: a 101 response's socket does not " +
+          "serialize across RPC method calls. Use the fetch lane instead — project ingress " +
+          "dispatches app hosts over it automatically, and worker code calls env.ITX.fetch " +
+          "with the target ref in the x-iterate-worker-dispatch header.",
+      );
     }
 
     if (ref.type === "stateful") {

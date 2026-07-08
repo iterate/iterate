@@ -1834,7 +1834,7 @@ describe("itx", () => {
     });
   });
 
-  test("Agent scripts can send web-chat messages and call project tools", async () => {
+  test("Agent scripts can send web-chat messages (with file attachments) and call project tools", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -1860,6 +1860,11 @@ describe("itx", () => {
       predicate: (event) => event.payload?.message === "project tool saw project-capability",
       timeoutMs: 30_000,
     });
+    const filesOptionReply = agent.stream.waitForEvent({
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) => event.payload?.message === "string form with files",
+      timeoutMs: 30_000,
+    });
 
     await agent.stream.append({
       type: AGENT_OUTPUT_ADDED_TYPE,
@@ -1867,7 +1872,11 @@ describe("itx", () => {
         content: fencedAgentScript(`
           async (itx) => {
             const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.chat.sendMessage({ message });
+            await itx.chat.sendMessage(message);
+            // The way to attach files: the options second argument.
+            await itx.chat.sendMessage("string form with files", {
+              files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
+            });
           }
         `),
       },
@@ -1876,6 +1885,13 @@ describe("itx", () => {
     expect(await projectToolReply).toMatchObject({
       type: AGENT_WEB_MESSAGE_SENT_TYPE,
       payload: { message: "project tool saw project-capability" },
+    });
+    expect(await filesOptionReply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: {
+        message: "string form with files",
+        files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
+      },
     });
 
     const events = await agent.stream.getEvents();
@@ -1904,7 +1920,7 @@ describe("itx", () => {
 
     const content = fencedAgentScript(`
       async (itx) => {
-        await itx.chat.sendMessage({ message: ${JSON.stringify(marker)} });
+        await itx.chat.sendMessage(${JSON.stringify(marker)});
       }
     `);
     const [historicalOutput] = await agent.stream.append({
@@ -2053,14 +2069,12 @@ describe("itx", () => {
             const probe = await itx.agent.agentProbe.inspect("agent-only");
             const first = await itx.agent.agentCounter.increment();
             const current = await itx.agent.agentCounter.current();
-            await itx.chat.sendMessage({
-              message: JSON.stringify({
-                durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
-                current,
-                first,
-                probe,
-              }),
-            });
+            await itx.chat.sendMessage(JSON.stringify({
+              durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
+              current,
+              first,
+              probe,
+            }));
           }
         `),
       },

@@ -24,6 +24,14 @@ in the root `worker.ts`. The router dispatches every app request through
 `x-iterate-worker-dispatch` header — the platform's fetch-native worker lane.
 Keep that shape: it is what lets WebSocket upgrades and streaming responses
 tunnel through (an `app.fetch(req)` RPC method call cannot carry a socket).
+
+An app's HTTP handler MUST literally be a method named `fetch` on the
+exported class (a stateless `WorkerEntrypoint` or a stateful `DurableObject`)
+— that is Cloudflare's rule, not the platform's: workerd only performs
+protocol work, WebSocket upgrades included, through that distinguished
+handler on a real worker object. A method named anything else — or a `fetch`
+reached as a capability method call — is ordinary RPC: its arguments and
+results are serialized copies, so it can serve data but never a socket.
 `apps/websocket/` is the seeded WebSocket proof-of-concept: a stateful
 Durable Object app serving live sockets at `/ws`; copy its shape for anything
 real-time. Method calls on apps (`project.workers.get(ref).someMethod()`)
