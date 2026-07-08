@@ -472,7 +472,10 @@ function agentInputTriggerSource(
   event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/input-added" }>,
 ): "user" | "agent-loop" | null {
   if (event.payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
-  return event.idempotencyKey?.startsWith("agent/render-script-result@") === true
+  // Inputs the loop generates for itself — script results, LLM-failure
+  // retries — must count against the autonomous turn limit, not reset it.
+  const agentLoopKeyPrefixes = ["agent/render-script-result@", "agent/render-llm-failure@"];
+  return agentLoopKeyPrefixes.some((prefix) => event.idempotencyKey?.startsWith(prefix))
     ? "agent-loop"
     : "user";
 }

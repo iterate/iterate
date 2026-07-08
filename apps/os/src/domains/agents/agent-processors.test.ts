@@ -810,6 +810,9 @@ describe("minimal web-chat agent processors", () => {
     );
     expect(scheduled).toHaveLength(2);
     expect(scheduled[1]!.payload).toMatchObject({ requestId: "llm-request:gen-1" });
+    // The retry is the loop talking to itself: it counts as an autonomous turn
+    // instead of resetting the circuit breaker the way a real user message does.
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ autonomousTurnCount: 1 });
   });
 
   it("stops auto-retrying after three consecutive failures", async () => {
