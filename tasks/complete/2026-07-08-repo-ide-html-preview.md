@@ -1,18 +1,19 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: repo-ide-html-preview
+pr: https://github.com/iterate/iterate/pull/1767
 ---
 
 # Repo IDE: HTML preview
 
 ## Status summary
 
-Implemented and verified live; awaiting review on PR #1767. Code/Preview
-toggle on `.html`/`.htm` files renders the current buffer in a sandboxed
-iframe (`allow-scripts` only, opaque origin — verified in-frame:
-`origin: null`, `document.cookie` throws SecurityError). No known missing
-pieces; follow-up ideas listed at the bottom.
+Done. PR #1767 (CI green, review feedback addressed). Code/Preview toggle on
+`.html`/`.htm` files renders the current buffer in a sandboxed iframe
+(`allow-scripts` only, opaque origin — verified in-frame: `origin: null`,
+`document.cookie` throws SecurityError). Follow-up ideas listed at the
+bottom.
 
 ## Ask (verbatim, spinoff #2 from the repos mini-IDE task)
 
@@ -35,13 +36,17 @@ pieces; follow-up ideas listed at the bottom.
   `allow-same-origin`, so the document runs in an opaque origin: no cookies,
   no localStorage, no same-origin reads against the OS app. Style isolation is
   free (nothing leaks in or out).
-  - ⚠️ Stance on `allow-scripts`: allowed. Repo HTML is user-supplied but the
-    viewer is the same user who can already run this file anywhere; an opaque
-    origin means a script can't touch the app's session, DOM, or storage.
-    Interactive previews (a canvas demo, a little form playground) are half
-    the point of an HTML renderer. NOT allowed: `allow-same-origin`,
-    `allow-top-navigation`, `allow-popups`, `allow-forms`, `allow-modals` —
-    default-deny everything else.
+  - ⚠️ Stance on `allow-scripts`: allowed. Interactive previews (a canvas
+    demo, a little form playground) are half the point of an HTML renderer.
+    Repos are project-scoped, so the author isn't necessarily the viewer — a
+    collaborator's (or agent's) committed HTML runs in the viewer's browser
+    on Preview. The opaque origin contains that (no session, DOM, or storage
+    access); the accepted residual risk, shared by every script-enabled HTML
+    preview (VS Code live preview, htmlpreview.github.io), is a convincing
+    fake UI that `fetch()`es out whatever the viewer types into the frame.
+    NOT allowed: `allow-same-origin`, `allow-top-navigation`,
+    `allow-popups`, `allow-forms`, `allow-modals` — default-deny everything
+    else.
   - `referrerPolicy="no-referrer"` so subresource requests don't leak the
     dashboard URL.
   - srcdoc (not a blob URL): the Chrome data:-URL restriction that forced the
