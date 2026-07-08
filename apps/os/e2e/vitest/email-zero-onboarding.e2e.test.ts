@@ -16,7 +16,7 @@
 // create-test-project.ts's documented no-op convention.
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../src/types.ts";
+import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
