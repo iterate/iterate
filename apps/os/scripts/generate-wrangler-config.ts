@@ -153,6 +153,7 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  WORKSPACE: "WorkspaceDurableObject",
 } as const;
 
 // Durable Object migration history. Deployed workers only apply tags NEWER
@@ -175,6 +176,7 @@ const DO_MIGRATIONS = [
     ],
   },
   { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
+  { tag: "v3", new_sqlite_classes: ["WorkspaceDurableObject"] },
 ];
 
 // Every bound class needs a migration entry (and nothing else does).
