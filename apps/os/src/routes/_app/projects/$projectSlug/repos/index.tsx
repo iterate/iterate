@@ -30,7 +30,6 @@ import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { repoPathToSplat } from "~/lib/repo-splat.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
@@ -354,4 +353,13 @@ function compareRepoRows(
 ) {
   if (key === "path") return left.path.localeCompare(right.path);
   return new Date(left[key]).getTime() - new Date(right[key]).getTime();
+}
+
+function repoPathToSplat(path: string) {
+  // TEMPORARY HACK: the legacy project repo lives at path "/", whose splat
+  // would be empty — its URL ".../repos//" normalizes to the repos index,
+  // making it unviewable. "ROOT" stands in for it until it becomes
+  // /repos/config. Must mirror repoPathFromSplat in ./$.tsx.
+  if (path === "/") return "ROOT";
+  return path.startsWith("/repos/") ? path.slice("/repos/".length) : path;
 }
