@@ -196,8 +196,29 @@ function collectClasses(rpcTargetsFile: { statements: Iterable<Node> }): ClassRe
     const publicName = publishedNameOf(decl);
     renameMap.set(className, publicName);
     if (root === RELAY_ROOT) {
+      // Several relays may front the SAME contract (ProcessorRelayRpcTarget and
+      // StreamProcessorRpcTarget both publish StreamProcessorRpc) — but a relay
+      // sharing a name with a class-defined interface would be two different
+      // shapes under one published name.
+      if (classByPublicName.has(publicName)) {
+        throw new Error(
+          `published name "${publicName}" is claimed by both ` +
+            `${classByPublicName.get(publicName)?.name?.text} (interface) and ${className} (relay)`,
+        );
+      }
       relayContracts.add(publicName);
     } else {
+      // Two classes publishing one interface name would silently overwrite each
+      // other here — generation and the implements check would only ever see
+      // the last one, letting the first drift undetected.
+      const existing = classByPublicName.get(publicName);
+      if (existing || relayContracts.has(publicName)) {
+        throw new Error(
+          `published name "${publicName}" is claimed by both ` +
+            `${existing?.name?.text ?? "a relay"} and ${className} — every ` +
+            `${ITERATE_ROOT}<"Name"> literal must be unique to its surface`,
+        );
+      }
       classByPublicName.set(publicName, decl);
     }
   }
