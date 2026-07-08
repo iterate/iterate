@@ -159,6 +159,8 @@ export interface Project {
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
+  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
+  workspaces: WorkspaceCollection;
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
@@ -710,6 +712,22 @@ export interface DynamicWorkerCollection {
 }
 
 /**
+ * Catalog of durable workspaces within one project.
+ *
+ * A workspace is addressed by its FULL path, which always lives under
+ * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
+ * `/repos/...`: an agent's workspace is the agent path under the prefix
+ * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
+ * scope), and standalone workspaces live under `/workspaces/<anything>`.
+ * Getting a workspace is cheap; the first call on it clones the project repo.
+ */
+export interface WorkspaceCollection {
+  __describe(): Promise<Description>;
+  /** The workspace at a path (clones the project repo on first use). */
+  get(path: string): Workspace;
+}
+
+/**
  * Default seeded project worker contract.
  *
  * This documents the reference repo's `worker.ts` only. Arbitrary dynamic
@@ -837,6 +855,57 @@ export interface Secret {
 }
 
 /**
+ * One durable workspace: a private virtual filesystem living in a Durable
+ * Object (no container, always warm), seeded on first use with a checkout of
+ * the project repo at `/` — every call waits for that clone, so a read that
+ * returns proves the checkout exists. Read, write, and edit files freely;
+ * nothing is shared until pushed. `git` publishes commits to the workspace's
+ * own branch in the project repo (`workspaces/<path>`), never to main.
+ *
+ * Constraints: individual files are capped at ~1.5MB (store large blobs with
+ * `itx.files`), and the `.git` directory is platform-managed — read it if you
+ * like, but writes there are rejected (use the `git` methods). Workspace
+ * branches are for durability and handoff, not worker builds: point worker
+ * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
+ */
+export interface Workspace {
+  __describe(): Promise<Description>;
+  /** Workspace identity string (debug). */
+  whoami(): Promise<string>;
+  /** File contents, or null when the path does not exist. */
+  readFile(path: string): Promise<string | null>;
+  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
+  readFileBytes(path: string): Promise<Uint8Array | null>;
+  /**
+   * Wipe the checkout and re-clone the project repo on the next call — the
+   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
+   * commits survive on the workspace branch).
+   */
+  reset(): Promise<void>;
+  writeFile(path: string, content: string): Promise<void>;
+  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
+  appendFile(path: string, content: string): Promise<void>;
+  /** Delete one file. Returns false when the path did not exist. */
+  deleteFile(path: string): Promise<boolean>;
+  /**
+   * Safely replace text in one file (uncommitted — use `git` to publish).
+   * The `oldString` must match exactly once unless `replaceAll` is true.
+   */
+  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;
+  glob(pattern: string): Promise<WorkspaceFileInfo[]>;
+  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;
+  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
+  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
+  /** File metadata, or null when the path does not exist. */
+  stat(path: string): Promise<WorkspaceFileInfo | null>;
+  exists(path: string): Promise<boolean>;
+  /** Git over this workspace's checkout. */
+  git: WorkspaceGit;
+}
+
+/**
  * Slack Web API surface exposed by the seeded project worker
  * (`itx.worker.slack.chat.postMessage({...})`).
  *
@@ -881,6 +950,33 @@ export interface CfVideosCapability {
   __describe(): Promise<Description>;
   /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */
   transform(input: CfVideoTransformInput): Promise<Response>;
+}
+
+/**
+ * Git operations over a workspace's checkout, mirroring `@cloudflare/shell`'s
+ * git command names so upstream docs apply. The workflow is ordinary git:
+ * `add({ filepath: "." })` stages everything, `commit({ message })` commits,
+ * `push()` publishes to the workspace's own branch in the project repo.
+ * Push credentials are injected inside the workspace Durable Object (from the
+ * project repo's `gitAccess()`), so no token ever rides this surface.
+ */
+export interface WorkspaceGit {
+  __describe(): Promise<Description>;
+  /** Staging state of every changed file. */
+  status(): Promise<WorkspaceGitStatusEntry[]>;
+  /** Stage a file (`filepath: "."` stages everything). */
+  add(input: { filepath: string }): Promise<{ added: string }>;
+  /** Stage a file deletion. */
+  rm(input: { filepath: string }): Promise<{ removed: string }>;
+  commit(input: {
+    author?: { email: string; name: string };
+    message: string;
+  }): Promise<{ message: string; oid: string }>;
+  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]>;
+  /** Changed files in the working tree relative to HEAD. */
+  diff(): Promise<{ filepath: string; status: string }[]>;
+  /** Push the workspace branch to the project repo. */
+  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }>;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -1643,6 +1739,36 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   updatePolicy?: "block" | "stale-while-rebuild";
 };
 
+/** Input to `Workspace.edit` — a safe single-occurrence string replacement. */
+export type EditWorkspaceFileInput = {
+  newString: string;
+  oldString: string;
+  path: string;
+  replaceAll?: boolean;
+};
+
+/** Result of `Workspace.edit`. The change is in the working tree only — not committed. */
+export type EditWorkspaceFileResult = {
+  occurrenceCount: number;
+  path: string;
+};
+
+/**
+ * Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`'s
+ * `FileInfo`, the shape `readDir`/`glob`/`stat` return.
+ */
+export type WorkspaceFileInfo = {
+  createdAt: number;
+  mimeType: string;
+  name: string;
+  path: string;
+  size: number;
+  /** Symlink target, present only on symlinks. */
+  target?: string;
+  type: "directory" | "file" | "symlink";
+  updatedAt: number;
+};
+
 /**
  * Batch delivered to stream processors and live subscribers.
  *
@@ -1740,6 +1866,27 @@ export type JsonValue =
   | null
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+/** One file's staging state returned by `WorkspaceGit.status`. */
+export type WorkspaceGitStatusEntry = {
+  filepath: string;
+  /** HEAD status: 0=absent, 1=present. */
+  head: number;
+  /** Stage status: 0=absent, 1=identical, 2=modified, 3=added. */
+  stage: number;
+  /** Human-readable status (e.g. "modified", "added"). */
+  status: string;
+  /** Workdir status: 0=absent, 1=identical, 2=modified. */
+  workdir: number;
+};
+
+/** One commit returned by `WorkspaceGit.log`. */
+export type WorkspaceGitLogEntry = {
+  author: { email: string; name: string; timestamp: number };
+  message: string;
+  oid: string;
+  parent: string[];
+};
 
 export type CfImageTransformOptions = { [x: string]: unknown };
 
