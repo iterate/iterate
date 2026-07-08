@@ -71,6 +71,10 @@ class RepoTypeScriptSession {
   #syncedCommitOid: string | null = null;
   /** Serializes seed/resync so a commit landing mid-seed can't interleave. */
   #chain: Promise<unknown> = Promise.resolve();
+  /** typm (type acquisition) plumbing — see #maybeAcquireTypes. */
+  #typesAcquiredListeners = new Set<() => void>();
+  #acquireTimer: ReturnType<typeof setTimeout> | null = null;
+  #lastRequestedPackageJson: string | null = null;
 
   constructor(
     private input: { projectId: string; repoPath: string },
@@ -118,6 +122,7 @@ class RepoTypeScriptSession {
         });
         this.#pushed = desired;
         this.#initialized = true;
+        this.#maybeAcquireTypes(desired, 0);
       } else {
         this.#reconcile();
       }
@@ -153,9 +158,43 @@ class RepoTypeScriptSession {
     this.#pushed = desired;
     if (Object.keys(updates).length > 0) void this.#remote.setFiles(updates);
     if (removals.length > 0) void this.#remote.deleteFiles(removals);
+    this.#maybeAcquireTypes(desired, 1000);
+  }
+
+  /** Fires when a typm run landed new `.d.ts` files in the worker (the
+   * editor's lints are push-cached, so listeners force a re-lint). Returns an
+   * unsubscribe. Plain closures only — see {@link workerFacade}. */
+  onTypesAcquired(listener: () => void): () => void {
+    this.#typesAcquiredListeners.add(listener);
+    return () => this.#typesAcquiredListeners.delete(listener);
+  }
+
+  /**
+   * Kick typm (npm type acquisition) in the worker whenever the effective
+   * package.json content changes. Debounced — package.json edits arrive per
+   * keystroke — and cheap to over-call: the worker no-ops unless the parsed
+   * dependency maps actually changed. Failures degrade to the prelude's
+   * `declare module "*"` wildcard (bare imports stay `any`), never the editor.
+   */
+  #maybeAcquireTypes(desired: Map<string, string>, delayMs: number): void {
+    const packageJsonText = desired.get("package.json");
+    if (packageJsonText === undefined) return;
+    if (packageJsonText === this.#lastRequestedPackageJson) return;
+    this.#lastRequestedPackageJson = packageJsonText;
+    if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
+    this.#acquireTimer = setTimeout(() => {
+      void this.#remote
+        .acquireTypes({ packageJsonText })
+        .then((result) => {
+          if (!result.acquired) return;
+          for (const listener of this.#typesAcquiredListeners) listener();
+        })
+        .catch((error) => console.error("[repo-ide] typm type acquisition failed", error));
+    }, delayMs);
   }
 
   terminate(): void {
+    if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
     this.#unsubscribe?.();
     this.#releaseRemote();
     this.#worker.terminate();
@@ -218,6 +257,7 @@ const loadExtensionModules = import.meta.env.SSR
         import("@valtown/codemirror-ts"),
         import("@codemirror/autocomplete"),
         import("@codemirror/view"),
+        import("@codemirror/lint"),
       ]);
 
 /**
@@ -242,15 +282,23 @@ export function useRepoTypeScriptExtensions(input: {
     queryKey: ["repo-typescript", input.projectId, input.repoPath, input.commitOid],
     queryFn: async () => {
       try {
-        const [comlink, codemirrorTs, autocomplete, view] = await loadExtensionModules!();
+        const [comlink, codemirrorTs, autocomplete, view, lint] = await loadExtensionModules!();
         const session = repoTypeScriptSession(
           { projectId: input.projectId, repoPath: input.repoPath },
           comlink,
         );
         await session.ensureSynced(itx, input.commitOid);
         // Only the plain facade goes into query data (which React sees) —
-        // never the session/remote; see workerFacade.
-        return { worker: session.worker, codemirrorTs, autocomplete, view };
+        // never the session/remote; see workerFacade. onTypesAcquired is a
+        // delegating closure for the same reason.
+        return {
+          worker: session.worker,
+          onTypesAcquired: (listener: () => void) => session.onTypesAcquired(listener),
+          codemirrorTs,
+          autocomplete,
+          view,
+          lint,
+        };
       } catch (error) {
         // The editor works fine without the language service, so failures
         // here are invisible by design — except in the console.
@@ -288,6 +336,12 @@ export function useRepoTypeScriptExtensions(input: {
         override: [itxReplAutocompleteWorker(tsFacetWorker)],
       }),
       tsHoverWorker(),
+      // Lints are push-cached per buffer: when a typm run lands new types in
+      // the worker (imports going any → real), repaint the squigglies.
+      data.view.ViewPlugin.define((editorView) => {
+        const unsubscribe = data.onTypesAcquired(() => data.lint.forceLinting(editorView));
+        return { destroy: unsubscribe };
+      }),
       // The hover tooltip escapes the editor into the file pane's stacking
       // context; keep it above the sticky header/toolbar chrome.
       data.view.EditorView.theme({ ".cm-tooltip": { zIndex: "30" } }),

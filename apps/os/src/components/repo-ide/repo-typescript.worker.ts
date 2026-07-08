@@ -1,3 +1,5 @@
+import { acquireTypes as typmAcquireTypes } from "@iterate-com/typm";
+import { createCachedFetch } from "@iterate-com/typm/cached-fetch";
 import {
   createDefaultMapFromCDN,
   createSystem,
@@ -184,6 +186,45 @@ function ensurePathExists(path: string) {
   if (env && !env.getSourceFile(path)) env.createFile(path, "\n");
 }
 
+/**
+ * typm: type acquisition for the repo's package.json dependencies — the
+ * follow-up the seam comment above was written for. Acquired `.d.ts` trees
+ * land under `/node_modules/...` in this vfs, where Bundler-mode resolution
+ * finds them and the `declare module "*"` wildcard stops matching. Failures
+ * degrade to exactly the wildcard-`any` behavior; nothing here can break the
+ * editor.
+ */
+const TYPM_LIMITS = { maxPackages: 120, maxTotalBytes: 25 * 1024 * 1024 };
+
+const typmFetch = createCachedFetch({
+  fetch: (url) => fetch(url),
+  cacheName: "typm-v1",
+  // Flat listings and file contents are exact-versioned (immutable) URLs;
+  // range-resolution answers change as packages publish, so never persist those.
+  shouldCache: (url) => !url.includes("/package/resolve/"),
+});
+
+/** Dep maps of the last acquisition — package.json edits that don't change
+ * dependencies (scripts, formatting) must not trigger anything. */
+let lastAcquiredDependencies: string | null = null;
+
+function dependencySnapshot(packageJsonText: string): string | null {
+  try {
+    const parsed = JSON.parse(packageJsonText) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    return JSON.stringify({
+      dependencies: parsed.dependencies || {},
+      devDependencies: parsed.devDependencies || {},
+    });
+  } catch {
+    // A mid-edit package.json is unparseable more often than not; keep the
+    // last acquired types until the JSON is whole again.
+    return null;
+  }
+}
+
 const api = {
   ...worker,
   /** Provide the seed BEFORE `initialize()` builds the environment (the
@@ -204,6 +245,36 @@ const api = {
     const env = worker.getEnv();
     if (!env) return;
     for (const path of paths) env.deleteFile(path);
+  },
+  /**
+   * Run typm over the repo's package.json and write the acquired `.d.ts`
+   * trees into the vfs. Returns whether anything new landed (the host
+   * force-relints open buffers when it did). No-ops when the dependency maps
+   * are unchanged or the JSON doesn't parse (mid-edit).
+   */
+  async acquireTypes(input: { packageJsonText: string }): Promise<{ acquired: boolean }> {
+    const snapshot = dependencySnapshot(input.packageJsonText);
+    if (!snapshot || snapshot === lastAcquiredDependencies || !worker.getEnv()) {
+      return { acquired: false };
+    }
+    lastAcquiredDependencies = snapshot;
+    try {
+      const result = await typmAcquireTypes({
+        packageJson: input.packageJsonText,
+        fetch: typmFetch,
+        log: (message) => console.info(`[typm] ${message}`),
+        limits: TYPM_LIMITS,
+      });
+      for (const [path, content] of Object.entries(result.files)) {
+        worker.updateFile({ path, code: nonEmpty(content) });
+      }
+      return { acquired: Object.keys(result.files).length > 0 };
+    } catch (error) {
+      // Transient failure (offline, CDN hiccup): allow a later retrigger.
+      lastAcquiredDependencies = null;
+      console.error("[typm] type acquisition failed", error);
+      return { acquired: false };
+    }
   },
   getLints(input: { path: string; diagnosticCodesToIgnore: number[] }) {
     ensurePathExists(input.path);

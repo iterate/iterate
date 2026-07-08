@@ -44,6 +44,7 @@
     "@iterate-com/auth": "workspace:*",
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
+    "@iterate-com/typm": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@mmkal/jsonata": "^2.2.1",

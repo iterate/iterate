@@ -48,6 +48,7 @@ export default defineConfig({
     // from a foreign-instance facet).
     include: [
       "@codemirror/autocomplete",
+      "@codemirror/lint",
       "@codemirror/view",
       "@typescript/vfs",
       "@valtown/codemirror-ts",
