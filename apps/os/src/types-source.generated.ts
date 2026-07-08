@@ -973,8 +973,6 @@ export type StreamEventInput = {
 
 export type StreamEvent = {
   type: string;
-  offset: number;
-  createdAt: string;
   payload?: Record<string, unknown> | undefined;
   metadata?: Record<string, unknown> | undefined;
   source?:
@@ -995,6 +993,8 @@ export type StreamEvent = {
       }
     | undefined;
   idempotencyKey?: string | undefined;
+  offset: number;
+  createdAt: string;
 };
 
 /** The read window accepted by \`Stream.getEvents\` / \`Stream.readEvents\`. */
@@ -1116,7 +1116,7 @@ export type ProjectProcessorState = {
     hostnameStatus: string | null;
     ownershipVerification: { name: string; value: string } | null;
     sslStatus: string | null;
-    status: "requested" | "provisioning" | "pending_validation" | "active" | "failed" | "removing";
+    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";
     validationRecords: { name: string; status: string | null; value: string }[];
     wildcard: boolean;
     createdAt: string;
@@ -1287,7 +1287,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 export type AgentProcessorState = {
   systemPrompt: string;
   history: {
-    role: "user" | "assistant";
+    role: "assistant" | "user";
     content: string;
     files?:
       | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -1301,7 +1301,7 @@ export type AgentProcessorState = {
     | { phase: "requested"; llmRequestId: number }
     | null;
   pendingTriggerOffset: number | null;
-  pendingTriggerSource: "user" | "agent-loop" | null;
+  pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;
   requestGeneration: number;
   inProgressScriptExecutions: {

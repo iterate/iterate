@@ -101,10 +101,20 @@ practical (a temp-dir + `getSemanticDiagnostics` pass is acceptable there).
       `Name` type argument; delete `RELAY_CONTRACTS` and the suffix regex —
       _regenerated output is byte-identical to the suffix-convention output,
       confirming the refactor preserves the published contract exactly_
-- [ ] Port the generator to `@typescript/native-preview/unstable/sync`
-- [ ] Add the `implements`-injection type test (deterministic `.replace`, then
-      typecheck) alongside the freshness + standalone tests
-- [ ] Regenerate `itx-api.generated.ts`, `types-source.generated.ts`, and the
+- [x] Port the generator to `@typescript/native-preview/unstable/sync` —
+      _snapshot in ~210ms vs ~3s for the strada program; output identical
+      except deterministic printer ordering in checker-expanded unions; the
+      standalone guard test also runs on the native compiler now (temp dir +
+      real project instead of an in-memory host)_
+- [x] Add the `implements`-injection type test (deterministic `.replace`, then
+      typecheck) alongside the freshness + standalone tests —
+      _`verifyRpcTargetsSatisfyContract` in the generator script: injects
+      `implements __itxApi.<Name>` into every contract-defining class via AST
+      positions + an fs overlay (nothing written to disk), typechecks the
+      modified rpc-targets.ts in the real project; runs after every generate
+      and as the third guard test; negative-tested (a sabotaged contract
+      produces 18 diagnostics)_
+- [x] Regenerate `itx-api.generated.ts`, `types-source.generated.ts`, and the
       project-repo-template `sdk.ts` copy
 - [ ] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green; PR open
       as draft with monitors running
