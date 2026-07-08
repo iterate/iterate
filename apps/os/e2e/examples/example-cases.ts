@@ -237,24 +237,55 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "sandbox-exec": {
-    // One shared sandbox path for the whole matrix: the first runtime pays
-    // the container cold boot, the rest reuse the warm container (repeat
-    // ensureProjectRepo calls are idempotent). No marker on purpose.
-    // The Playwright REPL spec provisions a FRESH project (fresh container)
-    // per run; cold container boot + repo clone has a long tail. The dominant
-    // term is the IMAGE PULL on an edge location that hasn't cached the image
-    // yet: the baked-monorepo image is ~3 GB unpacked and a first-pull-after-
-    // deploy was observed at 3.2m on Depot (the platform's own health events
-    // show 1.5-3m pulls). Warm-location boots are tens of seconds. 300s covers
-    // a genuine first pull; anything past that is a container stuck
-    // provisioning, and we'd rather fail and re-run than mask it.
+    // One shared sandbox name for the whole matrix: the first runtime pays
+    // the create + container cold boot, the rest reuse the warm container
+    // (the example's get-or-create makes reuse natural). No marker on
+    // purpose. 300s: a cold-host image pull + boot has a long tail even on
+    // the stock image; anything past that is a container stuck provisioning,
+    // and we'd rather fail and re-run than mask it.
     completionTimeoutMs: 300_000,
-    vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
+    vars: () => ({ sandboxName: "example-matrix" }),
     assert: (result, _ctx, expect) => {
-      expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
-      expect((result as { repoFiles: string[] }).repoFiles).toEqual(
-        expect.arrayContaining(["README.md", "worker.ts"]),
-      );
+      expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
+    },
+  },
+  "workspace-edit-and-push": {
+    // Unique workspace per example × runtime: the path is durable identity
+    // (one Durable Object, one branch), so sharing one across the matrix
+    // would make the second runtime's edit() fail (oldString already
+    // replaced) and pushes race. Each run pays its own clone — seconds, not
+    // the sandbox's container boot — but the budget still covers a cold
+    // Artifacts clone with the 503-retry tail.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
+    assert: (result, ctx, expect) => {
+      expect(result).toMatchObject({
+        readmePresent: true,
+        edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
+        pushedBranch: `workspaces/examples/edit-${ctx.marker}`,
+      });
+      expect((result as { commitOid: string }).commitOid).toMatch(/^[0-9a-f]{40}$/);
+    },
+  },
+  "workspace-files-transfer": {
+    // Fresh workspace per run (same identity reasoning as above); the files
+    // paths are shared but every put() overwrites, and `note` makes each
+    // run's transferred content self-identifying.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({
+      note: `transfer-${marker}`,
+      workspacePath: `/workspaces/examples/transfer-${marker}`,
+    }),
+    assert: (result, ctx, expect) => {
+      expect(result).toMatchObject({
+        inWorkspace: `transfer-${ctx.marker}`,
+        published: {
+          contentType: "application/json",
+          path: "/examples/package-from-workspace.json",
+        },
+      });
+      expect((result as { published: { size: number } }).published.size).toBeGreaterThan(0);
+      expect((result as { urlHost: string }).urlHost).toContain("iterate-files--");
     },
   },
   "repo-commit-files": {

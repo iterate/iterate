@@ -131,12 +131,14 @@ describe("worker builds", () => {
               path: "worker.ts",
               content: [
                 `// build salt ${crypto.randomUUID()}`,
-                'import { WorkerEntrypoint } from "cloudflare:workers";',
+                // The seeded sdk.ts survives this commit (only package.json
+                // and worker.ts change), so the replacement worker keeps the
+                // IterateProjectWorker base class — processEventBatch stays
+                // implemented and stream deliveries keep checkpointing.
+                'import { IterateProjectWorker } from "./sdk.ts";',
                 'import { WebClient } from "@slack/web-api";',
                 "",
-                "export default class ProjectWorker extends WorkerEntrypoint {",
-                "  processEvent(): void {}",
-                "",
+                "export default class ProjectWorker extends IterateProjectWorker {",
                 "  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {",
                 "    let receiver: unknown = this;",
                 "    for (const segment of path.slice(0, -1)) {",

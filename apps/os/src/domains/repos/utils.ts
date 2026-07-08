@@ -1,3 +1,5 @@
+import type { StatelessDynamicWorkerRef } from "../workers/schemas.ts";
+
 type RepoArtifactNameParts = {
   projectId: string | null;
   path: string;
@@ -18,7 +20,7 @@ export const PROJECT_REPO_PATH = "/";
  * the public `project.worker` alias and the seeded repo template pointed at
  * the same module.
  */
-export const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
+const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
 
 /**
  * Default masks for the default project worker's repo file source: build from
@@ -26,7 +28,29 @@ export const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
  * bundler only pulls modules reachable from the entry point, so a broad
  * include keeps user-added helper files importable without ref changes.
  */
-export const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
+const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
+
+/**
+ * THE canonical ref for a project's default worker: the seeded repo at the
+ * project root, built from `worker.ts`. Everything that dispatches into "the
+ * project worker" — the `project.worker` itx alias, project ingress, and the
+ * per-stream event delivery pump — shares this one recipe so they can never
+ * point at different workers.
+ */
+export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
+  return {
+    path: "/",
+    source: {
+      files: {
+        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
+        repoPath: PROJECT_REPO_PATH,
+        type: "repo",
+      },
+      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
+    },
+    type: "stateless",
+  };
+}
 
 function normalizeRepoPath(path: string): string {
   if (path === "") return "/";
@@ -60,6 +84,26 @@ function base64UrlDecode(value: string): string {
   const binary = atob(padded);
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Standard base64 of raw bytes — the binary lane of `readFile` /
+ * `commitFiles`. Not url-safe on purpose: these values travel inside JSON
+ * bodies and data: URLs, matching the `files.put` string convention.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** Inverse of {@link bytesToBase64}; throws a caller-friendly error on junk. */
+export function base64ToBytes(base64: string): Uint8Array {
+  try {
+    return Uint8Array.from(atob(base64.trim()), (char) => char.charCodeAt(0));
+  } catch {
+    throw new Error("contentBase64 must be valid base64.");
+  }
 }
 
 /**

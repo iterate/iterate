@@ -18,7 +18,10 @@ const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
 
 export class StreamEventLog {
-  constructor(readonly sql: SqlStorage) {
+  constructor(
+    readonly sql: SqlStorage,
+    readonly path: string,
+  ) {
     this.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
@@ -132,9 +135,7 @@ export class StreamEventLog {
         eventChunks.push(chunk.chunkBytes);
       }
     }
-    return [...chunksByOffset.values()].map((eventChunks) =>
-      StreamEventSchema.parse(JSON.parse(decodeChunks(eventChunks))),
-    );
+    return [...chunksByOffset.values()].map((eventChunks) => this.#parseEvent(eventChunks));
   }
 
   #readEventFromChunks(offset: number): StreamEvent {
@@ -147,8 +148,20 @@ export class StreamEventLog {
       )
       .toArray()
       .map((row) => row.chunkBytes);
-    return StreamEventSchema.parse(JSON.parse(decodeChunks(chunks)));
+    return this.#parseEvent(chunks);
   }
+
+  #parseEvent(chunks: ArrayBuffer[]): StreamEvent {
+    const parsed = JSON.parse(decodeChunks(chunks)) as unknown;
+    return StreamEventSchema.parse(addLegacyEventPath(parsed, this.path));
+  }
+}
+
+function addLegacyEventPath(value: unknown, path: string): unknown {
+  if (value !== null && typeof value === "object" && !("path" in value)) {
+    return { ...value, path };
+  }
+  return value;
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

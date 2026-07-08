@@ -1,0 +1,275 @@
+// The platform's default agent POLICY, as data: which system prompt, model,
+// provider, capability mounts, and boot context a new agent gets, decided by
+// its path. This module is the single source both consumers share:
+//
+//   - `itx.agents.defaults.forPath(path)` (rpc-targets.ts) hands the policy to
+//     the project worker, which owns appending it — the seeded template reacts
+//     to `stream/child-stream-created` for `/agents/**` and appends
+//     `defaults.events` (see project-repo-template/worker.ts). Projects bend
+//     policy by editing that reaction, not by forking the platform.
+//   - The project processor appends only MECHANICS (processor subscriptions);
+//     it no longer touches policy.
+//
+// Every event carries an idempotency key derived from (projectId, agentPath),
+// so at-least-once delivery to the worker and retried creates all collapse
+// into one durable birth certificate.
+
+import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
+import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
+import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
+import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { isEmailAgentPath } from "../email/utils.ts";
+import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
+import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
+import {
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  type AgentLlmProvider,
+} from "./agent-processor-contract.ts";
+import { DEFAULT_OPENAI_WS_MODEL } from "./openai-ws-processor-contract.ts";
+import { readOpenAiApiKeyFromAppConfig } from "./utils.ts";
+
+/** New agents default to openai-ws when the deployment has an OpenAI key
+ * configured; otherwise they fall back to Workers AI. */
+export function deploymentDefaultLlmProvider(env: unknown): AgentLlmProvider {
+  return readOpenAiApiKeyFromAppConfig(env) === null ? "cloudflare-ai" : "openai-ws";
+}
+
+// The onboarding script ships INSIDE the seeded repo (the agent can read the
+// same file the prompt embeds); the prompt below needs its text at build time.
+const PROJECT_REPO_ONBOARDING_MD = PROJECT_REPO_INITIAL_FILES.find(
+  (file) => file.path === "ONBOARDING.md",
+)!.content;
+
+/**
+ * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
+ * router forwards raw thread webhooks to their stream, the `slack-agent`
+ * processor transcribes them, and replies go out through the named Slack
+ * connection's itx.integrations.slack[connection] Web API capability instead
+ * of web chat. The connection comes from the agent's path
+ * (`/agents/slack/{connection}/...`).
+ */
+export function slackAgentSystemPrompt(connection: string): string {
+  const postMessage = `itx.integrations.slack[${JSON.stringify(connection)}].chat.postMessage`;
+  return [
+    "You are an iterate AI agent running inside a Slack thread.",
+    "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+    "The code block must contain a single async arrow function: async (itx) => { ... }.",
+    "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
+    `To reply in the thread, use await ${postMessage}({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.`,
+    "FILES people share in the thread are downloaded into project file storage and attached to your inputs automatically: images are directly visible to you; other formats carry a hint line telling you how to read them: fetch bytes via itx.files.get(path).bytes(), then convert documents to markdown with const [converted] = await itx.ai.toMarkdown([{ name, blob: new Blob([bytes]) }]) — supports PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, and XML.",
+    `To SEND a file or image to the thread — including ones you generate with itx.ai.run (image models return base64 in response.image) — store it and post its signed url; Slack unfurls image urls into inline previews. NEVER paste base64 into message text: const stored = await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); await ${postMessage}({ channel, thread_ts, text: "Here you go! " + stored.files[0].url }); Stored images also stay visible to you on later turns, so you can iterate on what you made.`,
+    'If someone posts a URL to an image you need to look at, download it and attach it to your conversation so you can actually see it: const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); then return a short confirmation — the image is visible to you from your next turn.',
+    'If asked about email, Gmail, or an inbox: await itx.integrations.list() shows the project\'s connections; a connected Google connection gives Gmail access via await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Do not claim you lack inbox access before checking.',
+    'If asked about GitHub: itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION — enumerate repos with await itx.integrations.github["<conn>"].rest.apps.listReposAccessibleToInstallation({ per_page: 5 }) (repos are in data.repositories; user-scoped ...ForAuthenticatedUser endpoints answer 403), .rest.issues.create({ owner, repo, title }), the escape hatch .request("GET /repos/{owner}/{repo}/readme", { owner, repo, headers: { accept: "application/vnd.github.raw+json" } }), or .graphql(query, variables). There is NO generic .api.request({ method, path }) shape. Known-good snippets: itx.examples.get({ id: "github-list-repos" }) and "github-read-file".',
+    "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
+    `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.google["<connection>"].gmail.request(...)]) — so the thread is never silent while you fetch.`,
+    "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+    `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call ${postMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
+    "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  ].join("\n");
+}
+
+/**
+ * Agents under `/agents/email/**` are email-thread agents: the email router
+ * forwards inbound mail to their stream, the `email-agent` processor
+ * transcribes it, and replies go out through itx.email.reply — which derives
+ * the counterpart, subject, and threading headers from the thread stream.
+ */
+export const EMAIL_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent handling one email conversation.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "Inbound emails on this thread arrive as your inputs (from, subject, body, attachments).",
+  "To answer, use await itx.email.reply({ text }) (or { html }). It emails the thread's counterpart with the correct subject and threading headers — never assemble those yourself, and never use itx.chat.sendMessage or itx.email.send to answer this thread.",
+  "ATTACHMENTS people email you are stored in project file storage and attached to your inputs automatically: images (png/jpeg/webp/svg) are directly visible to you — just look at them. Documents are NOT directly readable; convert them to markdown first with Cloudflare's converter: const bytes = await itx.files.get(path).bytes(); const [converted] = await itx.ai.toMarkdown([{ name: filename, blob: new Blob([bytes]) }]); converted.data is the markdown. Supported formats: PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, XML, and images. The stored `path` for each attachment is in your input's file list.",
+  'To attach files when replying (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
+  "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
+  "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
+
+/**
+ * Agents under `/agents/repos/<slug>/pull-requests/<n>` are pull-request
+ * agents: the repo processor forwards that PR's GitHub webhooks to their
+ * stream, the `github-pr-agent` processor transcribes them (mention-gated —
+ * only human comments naming the agent trigger a turn), and replies go out
+ * through the linked connection's itx.integrations.github[connection] Octokit
+ * as PR comments. The exact coordinates arrive as a route-context input from
+ * the `github-pr/route-configured` fact on the stream.
+ */
+const PR_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent attached to one GitHub pull request.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "This pull request's GitHub webhooks (opens, pushes, reviews, comments) arrive as your inputs. You are woken when a human comment mentions you; treat the rest as context.",
+  'To reply, post a PR comment through the connection named in your route-context input: await itx.integrations.github["<connection>"].rest.issues.createComment({ owner, repo, issue_number, body }). Never use itx.chat.sendMessage to answer the PR.',
+  'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION: rest.pulls.get / rest.pulls.listFiles read the PR and its diff, the escape hatch .request("GET /repos/{owner}/{repo}/...", { ... }) covers everything else (user-scoped ...ForAuthenticatedUser endpoints answer 403).',
+  "The linked project repo is readable via itx.repos.get(<repoPath from your route-context input>).readFile({ path }) / .listFiles() when you need file contents beyond the diff.",
+  "GitHub is not chat: one complete, well-written comment per request. Do the work first (read the diff, fetch files, run scripts across turns), then comment once with the full answer. Write in GitHub-flavored markdown.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
+
+/**
+ * Agents under `/agents/mcp/**` are inbound MCP session agents: one stream per
+ * inbound MCP session. The ask_assistant MCP tool appends the caller's message
+ * to the session stream and blocks until the agent's next chat reply, so the
+ * reply door is the same itx.chat.sendMessage as web chat.
+ */
+const MCP_AGENT_SYSTEM_PROMPT = [
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  "",
+  "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
+  "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage(message). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
+].join("\n");
+
+/**
+ * The onboarding agent is a normal web-chat agent whose system prompt embeds
+ * the seeded ONBOARDING.md script. Same codemode contract as every agent.
+ */
+const ONBOARDING_AGENT_SYSTEM_PROMPT = [
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  "",
+  "You are this project's onboarding agent. Follow the onboarding script below.",
+  "On a brand-new project, the project repo and worker may still be seeding during your first turn. If a repo or worker capability reports that it is missing or not ready, keep onboarding conversational and retry shortly instead of treating that as a fatal setup failure.",
+  "",
+  PROJECT_REPO_ONBOARDING_MD,
+].join("\n");
+
+/** THE place the "agent path decides the reply door" rule lives: Slack thread
+ * agents reply via their connection's Slack Web API, inbound MCP session agents via their blocked
+ * ask_assistant call, everything else via web chat. */
+function agentSystemPromptForPath(agentPath: string): string {
+  if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
+  const slackConnection = slackConnectionFromAgentPath(agentPath);
+  if (slackConnection !== null) {
+    return slackAgentSystemPrompt(slackConnection);
+  }
+  if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
+  if (isPrAgentPath(agentPath)) return PR_AGENT_SYSTEM_PROMPT;
+  if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
+  return DEFAULT_AGENT_SYSTEM_PROMPT;
+}
+
+const DEFAULT_MODEL_BY_LLM_PROVIDER = {
+  "cloudflare-ai": DEFAULT_AGENT_MODEL,
+  "openai-ws": DEFAULT_OPENAI_WS_MODEL,
+} satisfies Record<AgentLlmProvider, string>;
+
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  provider?: AgentLlmProvider;
+  model?: string;
+};
+
+/** The default policy for one agent path: the named pieces plus the exact
+ * event batch that applies them (idempotency-keyed, safe to re-append). */
+export type AgentDefaultPolicy = {
+  systemPrompt: string;
+  provider: AgentLlmProvider;
+  model: string;
+  events: AgentPolicyEventInput[];
+};
+
+/** The policy events an agent is born with, as append inputs. Typed
+ * structurally (not against the full event catalog) so the SDK projection
+ * stays self-contained. */
+export type AgentPolicyEventInput = {
+  type: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+};
+
+/**
+ * The default agent policy for a path. `deploymentLlmProvider` is the
+ * deployment-wide provider choice (openai-ws when the deployment has an
+ * OpenAI key); `overrides` bake caller customization into the returned
+ * events so the common case stays one append.
+ */
+export function agentDefaultsForPath(input: {
+  agentPath: string;
+  deploymentLlmProvider: AgentLlmProvider;
+  projectId: string;
+  overrides?: AgentDefaultsOverrides;
+}): AgentDefaultPolicy {
+  const { agentPath, projectId } = input;
+  const provider = input.overrides?.provider ?? input.deploymentLlmProvider;
+  const model = input.overrides?.model ?? DEFAULT_MODEL_BY_LLM_PROVIDER[provider];
+  const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
+
+  const events: AgentPolicyEventInput[] = [
+    {
+      type: "events.iterate.com/agent/config-updated",
+      idempotencyKey: `agent/config-updated:${projectId}:${agentPath}`,
+      payload: { systemPrompt },
+    },
+    {
+      type: "events.iterate.com/agent/llm-provider-selected",
+      idempotencyKey: `agent/llm-provider-selected:${projectId}:${agentPath}`,
+      payload: { ifUnset: true, model, provider },
+    },
+    // The agent's own workspace, a durable itx-expression re-evaluated per
+    // call, so agent birth never touches the workspace Durable Object — the
+    // project-repo clone happens lazily on the first workspace call. (No
+    // sandbox mount: sandboxes are pets, created explicitly via
+    // itx.sandboxes.create.)
+    {
+      type: "events.iterate.com/capability-host/capability-provided",
+      idempotencyKey: `capability-host/workspace-provided:${projectId}:${agentPath}`,
+      payload: {
+        path: ["workspace"],
+        type: "itx-expression",
+        expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
+        instructions:
+          `THIS agent's own workspace: a private checkout of the project repo at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces), living in a Durable Object filesystem — no container, always warm. ` +
+          'The first call clones the project repo and every call waits for that clone. Read/write/edit freely (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root); nothing is shared until pushed. ' +
+          `workspace.git (add/commit/push) publishes to the project repo branch "${workspaceBranchName(agentWorkspacePath(agentPath))}", never to main.`,
+      },
+    },
+    // Per-agent boot context as a model-visible input (the system prompt is
+    // static; ids and paths are not). dont-trigger-request: this must never
+    // wake the LLM by itself.
+    {
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: `agent/boot-context:${projectId}:${agentPath}`,
+      payload: {
+        content: [
+          "Platform context for this agent:",
+          `- Project id: ${projectId}`,
+          `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
+          '- The project repo is at repo path "/" — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus userland capability getters like itx.worker.waitrose.*), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time; platform capability types come from its `iterate` devDependency — import type { ... } from "iterate/sdk"), sdk.ts (the seeded IterateProjectWorker base class, re-exporting those types), AGENTS.md, and ONBOARDING.md.',
+          "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
+          "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
+          '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
+          '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',
+          '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
+          "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
+          '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
+        ].join("\n"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    },
+    // The onboarding agent starts the conversation itself; every other agent
+    // waits for its first input (a web message, Slack webhook, email, ...).
+    ...(agentPath === ONBOARDING_AGENT_PATH
+      ? [
+          {
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `project-onboarding-start:${projectId}`,
+            payload: {
+              content:
+                "Start onboarding now. The project owner just created this project and is looking at the chat.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          },
+        ]
+      : []),
+  ];
+
+  return { systemPrompt, provider, model, events };
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
@@ -26,6 +26,7 @@ class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(offset).toISOString(),
         offset,
+        path: this.path,
       };
       this.events.push(event);
       return event;
@@ -92,7 +93,7 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
+    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
   }
 
   async subscribe(): Promise<never> {
@@ -123,28 +124,26 @@ function event(type: string, payload: Record<string, unknown>, offset = 1): Stre
     payload,
     createdAt: new Date(offset).toISOString(),
     offset,
+    path: "/projects/test",
   };
 }
 
 function makeHarness() {
   const network = new MemoryStreamNetwork();
-  const getSandbox = vi.fn(async () => ({}));
   const itx = {
     projectId: "prj_test",
-    sandboxes: { get: getSandbox },
     streams: { get: (path: string) => network.get(path) },
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
     stream: network.get("/"),
-    defaultLlmProvider: "openai-ws",
     itx,
   });
-  return { getSandbox, network, processor };
+  return { network, processor };
 }
 
 describe("ProjectProcessor agent birth", () => {
-  it("mounts itx.sandbox without minting the sandbox Durable Object identity", async () => {
-    const { getSandbox, network, processor } = makeHarness();
+  it("appends only processor subscriptions at birth — policy comes from the project worker", async () => {
+    const { network, processor } = makeHarness();
 
     await processor.ingest({
       events: [
@@ -155,18 +154,15 @@ describe("ProjectProcessor agent birth", () => {
       streamMaxOffset: 1,
     });
 
-    expect(getSandbox).not.toHaveBeenCalled();
-
-    const sandboxMount = network
-      .eventsAt("/agents/demo")
-      .find(
-        (streamEvent) =>
-          streamEvent.type === "events.iterate.com/capability-host/capability-provided",
-      );
-    expect(sandboxMount?.payload).toMatchObject({
-      expression: ["sandboxes", ["get", "/sandboxes/cloudflare/agents/demo"]],
-      path: ["sandbox"],
-      type: "itx-expression",
-    });
+    // Mechanics only. System prompt, provider selection, capability mounts,
+    // and boot context are appended by the project worker via
+    // itx.agents.defaults (see agents/agent-defaults.test.ts).
+    const born = network.eventsAt("/agents/demo").map((streamEvent) => streamEvent.type);
+    expect(born).toEqual([
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
   });
 });

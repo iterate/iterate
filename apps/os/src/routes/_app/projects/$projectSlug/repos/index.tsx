@@ -134,178 +134,181 @@ function ProjectReposIndexContent() {
   }, [filter, repos, sort]);
 
   const panel = (
-    <>
-      <div className="space-y-3 rounded-lg border bg-card p-4">
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void form.handleSubmit();
-          }}
-        >
-          <FieldGroup>
-            <form.Field name="path">
-              {(field) => {
-                const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
-
-                return (
-                  <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Path</FieldLabel>
-                    <Input
-                      id={field.name}
-                      name={field.name}
-                      placeholder="/repos/project"
-                      value={field.state.value}
-                      onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.value)}
-                      aria-invalid={isInvalid}
-                    />
-                    <FieldDescription>Project-local repo path.</FieldDescription>
-                    {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
-                  </Field>
-                );
-              }}
-            </form.Field>
-          </FieldGroup>
-
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-            {([canSubmit, isSubmitting]) => (
-              <Button
-                className="self-start"
-                type="submit"
-                size="sm"
-                disabled={!canSubmit || isSubmitting || createRepo.isPending}
-              >
-                {isSubmitting || createRepo.isPending ? "Creating..." : "Create Repo"}
-              </Button>
-            )}
-          </form.Subscribe>
-        </form>
-      </div>
-
-      <div className="flex w-full flex-col gap-2 md:flex-row">
-        <Input
-          className="h-9 flex-1"
-          placeholder="Filter repos..."
-          value={filter}
-          onChange={(event) => setFilter(event.currentTarget.value)}
-        />
-        <Button
-          type="button"
-          variant="outline"
-          className="md:shrink-0"
-          onClick={() => setFilter("")}
-        >
-          Reset
-        </Button>
-      </div>
-
-      {repos === undefined ? (
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
-          Loading repos…
-        </div>
-      ) : repos.length === 0 ? (
-        <Empty className="rounded-lg border">
-          <EmptyHeader>
-            <EmptyTitle>No Repos</EmptyTitle>
-            <EmptyDescription>
-              Project Repos will appear here after they are created.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <div className="rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <SortableHead
-                  active={sort.key === "path"}
-                  direction={sort.direction}
-                  label="Repo"
-                  onClick={() => setSort(nextSort(sort, "path"))}
-                />
-                <SortableHead
-                  active={sort.key === "createdAt"}
-                  direction={sort.direction}
-                  label="Created"
-                  onClick={() => setSort(nextSort(sort, "createdAt"))}
-                />
-                <TableHead>Artifact</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visibleRepos.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
-                    No Repos match.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                visibleRepos.map((repo) => {
-                  const artifactName = RepoArtifactNameCodec.stringify({
-                    projectId: project.id,
-                    path: repo.path,
-                  });
-                  const artifactDashboardUrl = buildCloudflareArtifactDashboardUrl({
-                    accountId: routeConfig.cloudflareAccountId,
-                    artifactName,
-                    namespace: routeConfig.cloudflareArtifactsNamespace,
-                  });
-                  const repoSplat = repoPathToSplat(repo.path);
+    <div className="flex-1 overflow-y-auto p-4">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+        <div className="space-y-3 rounded-lg border bg-card p-4">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void form.handleSubmit();
+            }}
+          >
+            <FieldGroup>
+              <form.Field name="path">
+                {(field) => {
+                  const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
 
                   return (
-                    <TableRow key={repo.path}>
-                      <TableCell className="min-w-[18rem] py-3">
-                        <Link
-                          className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
-                          to="/projects/$projectSlug/repos/$"
-                          params={{
-                            projectSlug: params.projectSlug,
-                            _splat: repoSplat,
-                          }}
-                          search={{}}
-                        >
-                          {repo.path}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="w-40 text-muted-foreground">
-                        {formatRelativeTime(repo.createdAt)}
-                      </TableCell>
-                      <TableCell className="w-32">
-                        {artifactDashboardUrl ? (
-                          <a
-                            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                            href={artifactDashboardUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <ExternalLink className="size-4" />
-                            Artifact
-                          </a>
-                        ) : (
-                          <span
-                            className="inline-flex items-center gap-1 text-sm text-muted-foreground"
-                            title="Cloudflare account ID is not configured."
-                          >
-                            <ExternalLink className="size-4" />
-                            Artifact
-                          </span>
-                        )}
-                      </TableCell>
-                    </TableRow>
+                    <Field data-invalid={isInvalid}>
+                      <FieldLabel htmlFor={field.name}>Path</FieldLabel>
+                      <Input
+                        id={field.name}
+                        name={field.name}
+                        placeholder="/repos/project"
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(event) => field.handleChange(event.target.value)}
+                        aria-invalid={isInvalid}
+                      />
+                      <FieldDescription>Project-local repo path.</FieldDescription>
+                      {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
+                    </Field>
                   );
-                })
+                }}
+              </form.Field>
+            </FieldGroup>
+
+            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+              {([canSubmit, isSubmitting]) => (
+                <Button
+                  className="self-start"
+                  type="submit"
+                  size="sm"
+                  disabled={!canSubmit || isSubmitting || createRepo.isPending}
+                >
+                  {isSubmitting || createRepo.isPending ? "Creating..." : "Create Repo"}
+                </Button>
               )}
-            </TableBody>
-          </Table>
+            </form.Subscribe>
+          </form>
         </div>
-      )}
-    </>
+
+        <div className="flex w-full flex-col gap-2 md:flex-row">
+          <Input
+            className="h-9 flex-1"
+            placeholder="Filter repos..."
+            value={filter}
+            onChange={(event) => setFilter(event.currentTarget.value)}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            className="md:shrink-0"
+            onClick={() => setFilter("")}
+          >
+            Reset
+          </Button>
+        </div>
+
+        {repos === undefined ? (
+          <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+            Loading repos…
+          </div>
+        ) : repos.length === 0 ? (
+          <Empty className="rounded-lg border">
+            <EmptyHeader>
+              <EmptyTitle>No Repos</EmptyTitle>
+              <EmptyDescription>
+                Project Repos will appear here after they are created.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <SortableHead
+                    active={sort.key === "path"}
+                    direction={sort.direction}
+                    label="Repo"
+                    onClick={() => setSort(nextSort(sort, "path"))}
+                  />
+                  <SortableHead
+                    active={sort.key === "createdAt"}
+                    direction={sort.direction}
+                    label="Created"
+                    onClick={() => setSort(nextSort(sort, "createdAt"))}
+                  />
+                  <TableHead>Artifact</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleRepos.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                      No Repos match.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  visibleRepos.map((repo) => {
+                    const artifactName = RepoArtifactNameCodec.stringify({
+                      projectId: project.id,
+                      path: repo.path,
+                    });
+                    const artifactDashboardUrl = buildCloudflareArtifactDashboardUrl({
+                      accountId: routeConfig.cloudflareAccountId,
+                      artifactName,
+                      namespace: routeConfig.cloudflareArtifactsNamespace,
+                    });
+                    const repoSplat = repoPathToSplat(repo.path);
+
+                    return (
+                      <TableRow key={repo.path}>
+                        <TableCell className="min-w-[18rem] py-3">
+                          <Link
+                            className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
+                            to="/projects/$projectSlug/repos/$"
+                            params={{
+                              projectSlug: params.projectSlug,
+                              _splat: repoSplat,
+                            }}
+                            search={{}}
+                          >
+                            {repo.path}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="w-40 text-muted-foreground">
+                          {formatRelativeTime(repo.createdAt)}
+                        </TableCell>
+                        <TableCell className="w-32">
+                          {artifactDashboardUrl ? (
+                            <a
+                              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                              href={artifactDashboardUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <ExternalLink className="size-4" />
+                              Artifact
+                            </a>
+                          ) : (
+                            <span
+                              className="inline-flex items-center gap-1 text-sm text-muted-foreground"
+                              title="Cloudflare account ID is not configured."
+                            >
+                              <ExternalLink className="size-4" />
+                              Artifact
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 
   return (
     <ProjectStreamView
+      layout="fullPanel"
       panel={panel}
       projectId={project.id}
       streamPath="/repos"
@@ -353,5 +356,10 @@ function compareRepoRows(
 }
 
 function repoPathToSplat(path: string) {
+  // TEMPORARY HACK: the legacy project repo lives at path "/", whose splat
+  // would be empty — its URL ".../repos//" normalizes to the repos index,
+  // making it unviewable. "ROOT" stands in for it until it becomes
+  // /repos/config. Must mirror repoPathFromSplat in ./$.tsx.
+  if (path === "/") return "ROOT";
   return path.startsWith("/repos/") ? path.slice("/repos/".length) : path;
 }

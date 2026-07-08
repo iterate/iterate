@@ -141,17 +141,17 @@ function projectRoute(input: {
 
 /**
  * Path lanes served by the api pipeline on the OS host: the capnweb rpc
- * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
- * webhook ingress lanes. Deliberately exact-match: other `/api/*` paths
- * (`/api/mcp`, `/api/health`, the OAuth
- * callback routes under `/api/integrations/...`) are app routes and stay on
- * the "os" lane.
+ * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack and
+ * GitHub webhook ingress lanes. Deliberately exact-match: other `/api/*`
+ * paths (`/api/mcp`, `/api/health`, the OAuth callback routes under
+ * `/api/integrations/...`) are app routes and stay on the "os" lane.
  */
 function isApiWorkerLanePath(pathname: string): boolean {
   if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
   if (
     pathname === "/api/integrations/slack/webhook" ||
-    pathname === "/api/integrations/slack/interactivity-webhook"
+    pathname === "/api/integrations/slack/interactivity-webhook" ||
+    pathname === "/api/integrations/github/webhook"
   ) {
     return true;
   }

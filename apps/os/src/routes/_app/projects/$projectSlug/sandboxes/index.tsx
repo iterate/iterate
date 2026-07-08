@@ -19,9 +19,9 @@ import { useItx } from "~/itx/itx-react.tsx";
 const SANDBOXES_ROOT = "/sandboxes";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
-  // Sandboxes ARE streams (a Cloudflare sandbox lives at
-  // /sandboxes/cloudflare/<name>): this page is the /sandboxes catalogue
-  // stream's view, with the live sandbox tree in the side panel.
+  // Sandboxes ARE streams (a sandbox lives at /sandboxes/<name>):
+  // this page is the /sandboxes catalogue stream's view, with the live
+  // sandbox tree in the side panel.
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: async ({ context }) =>
@@ -58,8 +58,8 @@ function ProjectSandboxesIndexContent() {
             <div className="space-y-1">
               <h2 className="text-sm font-semibold">Sandbox streams</h2>
               <p className="text-xs text-muted-foreground">
-                Cloudflare sandboxes are addressed under{" "}
-                <code className="font-mono">/sandboxes/cloudflare</code>.
+                Sandboxes are created explicitly and addressed as{" "}
+                <code className="font-mono">/sandboxes/&lt;name&gt;</code>.
               </p>
             </div>
             <StreamTree
@@ -146,7 +146,10 @@ function SandboxOperationsPanel({ routeConfig }: { routeConfig: PublicRouteConfi
 
       <dl className="grid gap-2 text-xs">
         <MetadataLine label="Worker" value={workerName} />
-        <MetadataLine label="Container class" value="CloudflareSandboxDurableObject" />
+        <MetadataLine
+          label="Container classes"
+          value="Sandbox<Type>DurableObject (one per instance type)"
+        />
         <MetadataLine label="Doppler config" value={dopplerConfig} />
       </dl>
 

@@ -6,6 +6,9 @@ import { basicSetup, EditorView } from "codemirror";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { yaml } from "@codemirror/lang-yaml";
+import { markdown } from "@codemirror/lang-markdown";
+import { html } from "@codemirror/lang-html";
+import { sql } from "@codemirror/lang-sql";
 import { foldService } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
@@ -177,10 +180,44 @@ function selectAll(view: EditorView) {
   });
 }
 
+export type SourceCodeLanguage =
+  | "typescript"
+  | "javascript"
+  | "json"
+  | "yaml"
+  | "markdown"
+  | "html"
+  | "sql"
+  | "text";
+
+/** The CodeMirror language extension for a {@link SourceCodeLanguage}. */
+export function sourceCodeLanguageExtension(
+  language: SourceCodeLanguage,
+): SourceCodeBlockExtension {
+  switch (language) {
+    case "typescript":
+      return javascript({ jsx: true, typescript: true });
+    case "javascript":
+      return javascript({ jsx: true });
+    case "json":
+      return json();
+    case "yaml":
+      return yaml();
+    case "markdown":
+      return markdown();
+    case "html":
+      return html();
+    case "sql":
+      return sql();
+    case "text":
+      return [];
+  }
+}
+
 export interface SourceCodeBlockProps {
   code: string;
   className?: string;
-  language?: "typescript" | "json" | "yaml" | "text";
+  language?: SourceCodeLanguage;
   showCopyButton?: boolean;
   showLineNumbers?: boolean;
   plainChrome?: boolean;
@@ -209,14 +246,7 @@ export function SourceCodeBlock({
   const [copied, setCopied] = useState(false);
 
   const extensions = useMemo<CodeMirrorProps["extensions"]>(() => {
-    const languageExtension =
-      language === "json"
-        ? json()
-        : language === "yaml"
-          ? yaml()
-          : language === "typescript"
-            ? javascript({ typescript: true })
-            : [];
+    const languageExtension = sourceCodeLanguageExtension(language);
 
     return [
       basicSetup,
@@ -227,7 +257,9 @@ export function SourceCodeBlock({
       keymap.of(searchKeymap),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
-      !showLineNumbers || plainChrome
+      // Orthogonal on purpose: plainChrome strips the visual chrome (border,
+      // highlights), showLineNumbers alone decides the gutter.
+      !showLineNumbers
         ? EditorView.theme({
             ".cm-gutters": {
               display: "none",

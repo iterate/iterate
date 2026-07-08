@@ -9,15 +9,20 @@ markdown files that are easy to scan and update. Commit changes with
 `itx.repo.commitFiles({ message, changes: [{ path, content }] })`.
 
 The project worker entrypoint is `worker.ts` (TypeScript). Its default export
-handles HTTP for the project's hosts, receives every committed project event
-through `processEvent({ event })`, and reaches the project's capabilities
-through `await this.env.ITX.get()`. The worker is built by the platform's
+handles HTTP for the project's hosts, receives every committed event on every
+stream in the project through `processEvent(event)` (checkpointed,
+at-least-once, per-stream order — `event.path` says which stream; see the
+`IterateProjectWorker` base class exported by `sdk.ts`), and reaches the
+project's capabilities through `await this.env.ITX.get()`. The worker is built
+by the platform's
 worker build pipeline: multi-file TypeScript works, and npm dependencies
 declared in `package.json` are installed at build time. The platform's
 capability types come from the `iterate` package — `import type { Project,
 StreamEvent } from "iterate/sdk"`. It's a devDependency here (worker code only
 imports types from it); run `npm install` to get typechecking and editor
-support.
+support. `sdk.ts` is the small seeded runtime companion — the
+`IterateProjectWorker` base class, plus a re-export of the package's types so
+worker code has one import surface. Treat it as read-only.
 
 Apps live under `apps/` as their own dynamic workers, routed by the APPS map
 in the root `worker.ts`. The router dispatches every app request through

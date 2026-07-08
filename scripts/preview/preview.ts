@@ -14,6 +14,13 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import {
+  parseWorkerSizeFromDeployOutput,
+  parseWorkerSizeStatusDescription,
+  renderWorkerSizeCell,
+  workerSizeStatusContext,
+  type WorkerSizeInfo,
+} from "./worker-size.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -230,6 +237,15 @@ export async function deploy(
     notice: claimNotice,
   }));
 
+  // Best-effort: a missing or unreadable baseline only costs the "vs main"
+  // delta in the size column, never the deploy.
+  const workerSizeBaselines = await fetchMainWorkerSizeBaselines(context).catch(
+    (error): Record<string, WorkerSizeInfo> => {
+      logPreview(`worker-size baselines unavailable: ${formatPreviewErrorMessage(error)}`);
+      return {};
+    },
+  );
+
   let ok = true;
   let latestState = leaseUpdate.state;
   // Pin the lease, notice, and every batch's entries in each write: the
@@ -254,6 +270,7 @@ export async function deploy(
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
+          mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
           pullRequestHeadSha: context.pullRequestHeadSha,
           repositoryRoot: runtime.repositoryRoot,
           runUrl: context.workflowRunUrl,
@@ -1402,6 +1419,17 @@ export const CloudflarePreviewAppEntry = z.object({
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
   /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
   testRetries: z.string().trim().min(1).nullable().optional(),
+  /** Wrangler-reported "Total Upload" of the deployed worker, in KiB. */
+  workerSizeKib: z.number().nonnegative().finite().nullable().optional(),
+  /** Wrangler-reported gzip size of the deployed worker, in KiB. */
+  workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
+  /**
+   * Main's deployed gzip size in KiB at deploy time, read from the
+   * `worker-size/<app>` commit status main deploys publish — the baseline for
+   * the table's "vs main" delta. Absent until the first post-merge main
+   * deploy publishes one.
+   */
+  mainWorkerGzipKib: z.number().nonnegative().finite().nullable().optional(),
 });
 export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 
@@ -1782,6 +1810,7 @@ function renderPreviewAppTable(entries: z.infer<typeof CloudflarePreviewAppEntry
     "status",
     "commit",
     "preview",
+    "size (gzip)",
     "deploy duration",
     "test duration",
     "retries",
@@ -1805,6 +1834,7 @@ function renderPreviewAppTableRow(entry: z.infer<typeof CloudflarePreviewAppEntr
     renderStatusLabel(entry.status),
     entry.shortSha ? `\`${entry.shortSha}\`` : "",
     entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
+    renderWorkerSizeCell(entry.workerGzipKib, entry.mainWorkerGzipKib),
     entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
     entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
     entry.testRetries ?? "",
@@ -1971,6 +2001,60 @@ async function writePullRequestBody(params: {
       pull_number: params.pullRequestNumber,
     }),
   );
+}
+
+/**
+ * Newest `worker-size/<app>` commit status per preview app on main — the
+ * baseline for the PR table's "vs main" size delta, published by the main
+ * deploy workflows (scripts/ci/report-worker-size.ts). Apps deploy
+ * independently (path-filtered workflows), so no single main commit carries a
+ * status for every app: walk recent main commits and take each app's newest.
+ */
+async function fetchMainWorkerSizeBaselines(params: {
+  githubToken: string;
+  repositoryFullName: string;
+}): Promise<Record<string, WorkerSizeInfo>> {
+  const octokit = new Octokit({ auth: params.githubToken });
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const commits = await withGithubRetry("repos.listCommits (main)", () =>
+    octokit.rest.repos.listCommits({ owner, repo, sha: "main", per_page: 30 }),
+  );
+  // All-or-nothing: swallowing one commit's failed status read could
+  // silently promote an OLDER commit's baseline and render a misleading
+  // "vs main" delta — a blank delta beats a wrong one. Any rejection here
+  // propagates to the caller's catch, which drops deltas for this run.
+  const combinedStatuses = await Promise.all(
+    commits.data.map((commit) =>
+      octokit.rest.repos
+        .getCombinedStatusForRef({ owner, repo, ref: commit.sha })
+        .then((response) => ({ sha: commit.sha, statuses: response.data.statuses })),
+    ),
+  );
+
+  const baselines: Record<string, WorkerSizeInfo> = {};
+  // Newest commit first, first hit per app wins.
+  for (const { sha, statuses } of combinedStatuses) {
+    for (const slug of Object.keys(cloudflarePreviewApps)) {
+      if (baselines[slug]) {
+        continue;
+      }
+      const status = statuses.find((entry) => entry.context === workerSizeStatusContext(slug));
+      const parsed = parseWorkerSizeStatusDescription(status?.description);
+      if (parsed) {
+        baselines[slug] = parsed;
+        logPreview(
+          `worker-size baseline for ${slug}: gzip ${parsed.gzipKib} KiB (main@${sha.slice(0, 7)})`,
+        );
+      }
+    }
+  }
+  if (Object.keys(baselines).length === 0) {
+    logPreview(
+      "no worker-size baselines found on recent main commits — size deltas will be blank until a main deploy publishes one",
+    );
+  }
+
+  return baselines;
 }
 
 type EnvironmentConfigLeaseReconcileResult = {
@@ -2735,6 +2819,8 @@ async function deployPreviewAppWithStatus(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  /** Main's published size baseline for this app, when one exists. */
+  mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
   runUrl: string | null;
@@ -2780,6 +2866,7 @@ async function deployPreviewApp(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
   runUrl: string | null;
@@ -2810,9 +2897,20 @@ async function deployPreviewApp(input: {
     repositoryRoot: input.repositoryRoot,
     signal: input.signal,
   });
+  // Wrangler prints "Total Upload: … KiB / gzip: … KiB" on every upload —
+  // lift it out of the captured deploy output for the PR table's size column.
+  const workerSize = parseWorkerSizeFromDeployOutput(
+    `${deployResult.stdout}\n${deployResult.stderr}`,
+  );
+  const sizeFields = {
+    workerSizeKib: workerSize?.totalKib ?? null,
+    workerGzipKib: workerSize?.gzipKib ?? null,
+    mainWorkerGzipKib: workerSize ? (input.mainWorkerSize?.gzipKib ?? null) : null,
+  };
   if (deployResult.exitCode !== 0) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
+      ...sizeFields,
       message: commandFailureMessage(deployResult, "Preview deployment failed."),
       status: "deploy-failed",
     });
@@ -2827,6 +2925,7 @@ async function deployPreviewApp(input: {
   if (!readiness.ok) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
+      ...sizeFields,
       message: readiness.message,
       status: "deploy-failed",
     });
@@ -2834,6 +2933,7 @@ async function deployPreviewApp(input: {
 
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
+    ...sizeFields,
     status: "awaiting-tests",
   });
 }
