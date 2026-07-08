@@ -248,12 +248,7 @@ export interface AgentChat extends Describable {
    * `await itx.chat.sendMessage("Here you go!")`. `options.files` attaches
    * generated files, which render inline in the chat.
    */
-  sendMessage(
-    // The `{ message }` object form is legacy and kept for back-compat only —
-    // new code always passes a plain string (+ options).
-    message: string | { message: string; files?: AgentChatSendOptions["files"] },
-    options?: AgentChatSendOptions,
-  ): Promise<StreamEvent>;
+  sendMessage(message: string, options?: AgentChatSendOptions): Promise<StreamEvent>;
 }
 
 /** Optional second argument to {@link AgentChat.sendMessage}. */

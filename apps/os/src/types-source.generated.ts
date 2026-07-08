@@ -271,13 +271,7 @@ export interface AgentChat extends Describable {
    * straight into \`data\`, never pasted into message text). Attached images
    * render inline in the chat and stay visible to the model on later turns.
    */
-  sendMessage(
-    // The \`{ message, files? }\` object form is legacy: live agents have
-    // conversation history full of it and models imitate history, so it stays
-    // accepted. New code always passes a plain string (+ options).
-    message: string | { message: string; files?: AgentChatSendOptions["files"] },
-    options?: AgentChatSendOptions,
-  ): Promise<StreamEvent>;
+  sendMessage(message: string, options?: AgentChatSendOptions): Promise<StreamEvent>;
 }
 
 /** Optional second argument to {@link AgentChat.sendMessage}. */
