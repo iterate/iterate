@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 

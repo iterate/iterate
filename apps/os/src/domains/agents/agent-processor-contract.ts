@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
@@ -84,7 +84,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "A response with no code block does nothing and ends your turn (the user never sees your raw text — only what you sendMessage).",
   "",
-  "The `itx` argument is an RpcStub<ProjectRpcTarget> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
+  "The `itx` argument is an RpcStub<Project> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
   "",
   "To say anything to the user, call `await itx.chat.sendMessage(message)` with a plain string. If no script sends a message, the user sees nothing.",
   "",
@@ -115,7 +115,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).sendMessage("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
-  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold a `ProjectRpcTarget`, agent-scoped):",
+  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (itx-api.generated.ts — generated from the live RPC surface; you hold a `Project`, agent-scoped):",
   "",
   "```ts",
   ITX_TYPES_SOURCE,
@@ -193,6 +193,13 @@ export const AgentProcessorContract = defineProcessorContract({
      * collapses into one scheduled event at the stream's append dedup layer.
      */
     requestGeneration: z.number().int().nonnegative().default(0),
+    /**
+     * Failed llm-request-completed events since the last success. Governs
+     * whether a failure's error input auto-retries (below the cap) or sits in
+     * context untriggered (at the cap) — a persistent provider failure must
+     * not retry-loop forever.
+     */
+    consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     inProgressScriptExecutions: z
       .array(
         z.object({
@@ -348,3 +355,18 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<AgentProcessorContract>`,
+ * `ConsumedEvent<AgentProcessorContract>`, `ProcessorEvent<AgentProcessorContract, T>`.
+ */
+export type AgentProcessorContract = typeof AgentProcessorContract;
+
+/**
+ * The agent processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape (the old hand-written copy
+ * in the former types.ts silently omitted `llmProviderConfigured` and
+ * `requestGeneration`).
+ */
+export type AgentProcessorState = ProcessorState<AgentProcessorContract>;

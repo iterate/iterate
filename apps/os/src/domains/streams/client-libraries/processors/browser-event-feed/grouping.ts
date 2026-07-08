@@ -10,7 +10,7 @@
 // advance state, and processEventBatch re-folds it over the same batch to derive the
 // exact SQLite ops. Same input => same ops => idempotent replay.
 
-import type { StreamEvent } from "../../../../../types.ts";
+import type { StreamEvent } from "../../../schemas.ts";
 
 /** Maps an event type to its specific renderer component, or null to fall into the group. */
 function componentForEventType(type: string): string | null {

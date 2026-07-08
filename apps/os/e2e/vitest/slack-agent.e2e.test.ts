@@ -11,7 +11,7 @@
 // message (see incident_agent_anchor_skips_first_input).
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../src/types.ts";
+import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,

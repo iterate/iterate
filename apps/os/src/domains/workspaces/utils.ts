@@ -23,7 +23,7 @@ export function agentWorkspacePath(agentPath: string): string {
 /**
  * The workspace path is durable identity (it becomes the Durable Object name),
  * so this guard sits at the edge where callers choose a path — same role as
- * `normalizeSandboxPath` / `normalizeAgentPath`. Beyond the prefix, the only
+ * `assertSandboxPath` / `normalizeAgentPath`. Beyond the prefix, the only
  * real constraint is codec safety: the path must survive the
  * `{projectId}.iterate{path}` name round trip unchanged, so two spellings can
  * never mint two Durable Objects that parse back to one canonical path.

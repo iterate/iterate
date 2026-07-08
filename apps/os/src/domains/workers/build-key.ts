@@ -1,4 +1,4 @@
-import type { WorkerBuildOptions } from "../../types.ts";
+import type { WorkerBuildOptions } from "./schemas.ts";
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
 

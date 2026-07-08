@@ -10,7 +10,8 @@ import {
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
-import type { DynamicWorkerRef, UnauthenticatedOs } from "../../src/types.ts";
+import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
+import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";

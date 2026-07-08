@@ -1,6 +1,6 @@
 import { CheckIcon, LoaderCircleIcon } from "lucide-react";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { ProjectProcessorState } from "~/types.ts";
+import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
 
 /**
  * One bootstrap milestone, derived purely from the project processor's reduced

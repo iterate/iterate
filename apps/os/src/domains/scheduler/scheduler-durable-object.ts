@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { ScheduleView } from "../../types.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import {
   createStreamProcessorHost,
@@ -8,6 +7,7 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import type { ScheduleView } from "./types.ts";
 import { SchedulerProcessor } from "./scheduler-processor-implementation.ts";
 import {
   SchedulerProcessorContract,

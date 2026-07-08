@@ -8,7 +8,7 @@ import {
   type BrowserStreamClient,
   type BrowserStreamClientFactory,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import type { Stream } from "~/types.ts";
+import type { Stream } from "~/itx-api.generated.ts";
 
 export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
   args,

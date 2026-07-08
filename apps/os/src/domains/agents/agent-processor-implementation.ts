@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   AgentProcessorContract,
@@ -11,14 +11,14 @@ import {
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
-export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
+export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof AgentProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<AgentProcessorContract>["reduce"]>[0]) {
     return reduceAgentEvent({ event, state });
   }
 
@@ -28,7 +28,8 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     event,
     previousState,
     runInBackground,
-  }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
+    state,
+  }: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
         if (event.payload.systemPrompt === undefined) return;
@@ -129,13 +130,49 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         );
         return;
       }
+      // A failed request must never brick the stream: the error becomes a
+      // model-visible input, exactly like a thrown script. Below the
+      // consecutive-failure cap the input triggers a retry so the model can
+      // react (fix its request, tell the user what happened); at the cap it
+      // sits in context untriggered so a persistent provider failure (bad key,
+      // outage) cannot retry-loop — the next user message resumes normally.
+      case "events.iterate.com/agent/llm-request-completed": {
+        const result = event.payload.result;
+        if (result.status !== "failure") return;
+        if (
+          previousState.currentRequest?.phase !== "requested" ||
+          previousState.currentRequest.llmRequestId !== event.payload.llmRequestId
+        ) {
+          // Stale completion (e.g. the request was already cancelled) — the
+          // reducer ignored it, so don't render an error input for it either.
+          return;
+        }
+        const retry = state.consecutiveLlmFailures < MAX_CONSECUTIVE_LLM_FAILURES;
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/render-llm-failure@${event.offset}`,
+            payload: {
+              content:
+                `Your LLM request failed (${event.payload.provider}):\n\`\`\`\n${result.error.message}\n\`\`\`` +
+                (retry
+                  ? ""
+                  : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
+              llmRequestPolicy: {
+                behaviour: retry ? "after-current-request" : "dont-trigger-request",
+              },
+            },
+          }),
+        );
+        return;
+      }
       default:
         return;
     }
   }
 
   protected override async processEventBatch(
-    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
     await this.#settleLlmRequestScheduling(args);
@@ -151,7 +188,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
    * the same stream event.
    */
   async #settleLlmRequestScheduling(
-    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {
@@ -331,7 +368,13 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return state;
       }
-      return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
+      return {
+        ...state,
+        consecutiveLlmFailures:
+          event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        currentRequest: null,
+        requestGeneration: state.requestGeneration + 1,
+      };
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
@@ -386,7 +429,10 @@ function agentInputTriggerSource(
   event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/input-added" }>,
 ): "user" | "agent-loop" | null {
   if (event.payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
-  return event.idempotencyKey?.startsWith("agent/render-script-result@") === true
+  // Inputs the loop generates for itself — script results, LLM-failure
+  // retries — must count against the autonomous turn limit, not reset it.
+  const agentLoopKeyPrefixes = ["agent/render-script-result@", "agent/render-llm-failure@"];
+  return agentLoopKeyPrefixes.some((prefix) => event.idempotencyKey?.startsWith(prefix))
     ? "agent-loop"
     : "user";
 }
@@ -416,6 +462,13 @@ function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRe
 }
 
 const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
+
+/**
+ * Failed-request error inputs stop auto-retrying once this many failures land
+ * in a row (counter resets on any success). Two automatic retries, then wait
+ * for the user.
+ */
+const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 
 // The "tool result" half of the codemode loop: a finished script execution
 // renders back into model-visible history so the next turn can look at the

@@ -2,17 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import jsonata from "@mmkal/jsonata/sync";
 import { z } from "zod";
 import type { Env } from "../../env.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import type {
-  ProcessorRuntimeState,
-  Stream,
-  StreamEvent,
-  StreamEventInput,
-  StreamSubscriptionHandle,
-  DynamicWorkerRef,
-} from "../../types.ts";
+import type { DynamicWorkerRef } from "../workers/schemas.ts";
+import type { ProcessorRuntimeState, StreamSubscriptionHandle } from "./rpc-types.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest } from "./stream-processor-host.ts";
 import { StreamEventLog } from "./stream-storage.ts";

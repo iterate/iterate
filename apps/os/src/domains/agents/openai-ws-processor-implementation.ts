@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 import type { ResponseInput, ResponsesClientEvent } from "openai/resources/responses/responses";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   buildAgentLlmRequestBody,
@@ -62,7 +62,7 @@ const OpenAiWebSocketReadyState = {
 const OPENAI_WS_REQUEST_DEADLINE_MS = 10 * 60_000;
 
 export class OpenAiWsProcessor extends StreamProcessor<
-  typeof OpenAiWsProcessorContract,
+  OpenAiWsProcessorContract,
   {
     /** Null when the deployment has no OpenAI key; requests then fail politely. */
     apiKey: string | null;
@@ -100,7 +100,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<OpenAiWsProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/agent/llm-request-requested": {
         if (event.payload.provider !== OpenAiWsProcessorContract.slug) return state;
@@ -136,7 +136,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<OpenAiWsProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/agent/llm-request-requested") return;
     if (event.payload.provider !== OpenAiWsProcessorContract.slug) return;
     const llmRequestId = event.offset;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEventInput } from "../../types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   AgentProcessor,
   buildAgentLlmRequestBody,
@@ -65,8 +65,8 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(message)");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
     // The verbatim type surface rides along so the agent knows what it holds.
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<ProjectRpcTarget>");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface ProjectRpcTarget {");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Project>");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Project {");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface CapabilityHost {");
     // Tool-call stance: small data-first snippets, parallel fan-out, explicit
     // loop-ending rule, and the built-in discovery surfaces.
@@ -767,6 +767,153 @@ describe("minimal web-chat agent processors", () => {
     expect(stream.events.map((event) => event.type)).not.toEqual(
       expect.arrayContaining(["events.iterate.com/agent/output-added"]),
     );
+  });
+
+  it("turns a failed LLM request into an error input and schedules a retry", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-provider-selected",
+        payload: { ifUnset: true, model: "gpt-5.5", provider: "openai-ws" },
+      },
+      ...openAiWsRequestEvents("hello"),
+    );
+    const requested = stream.events.at(-1)!;
+    await deliver();
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      payload: {
+        durationMs: 10,
+        llmRequestId: requested.offset,
+        provider: "openai-ws",
+        result: { status: "failure", error: { message: "provider exploded" } },
+      },
+    });
+    await deliver();
+    await deliver();
+
+    const errorInput = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        String(event.payload?.content).includes("Your LLM request failed"),
+    );
+    expect(errorInput?.payload).toMatchObject({
+      content: expect.stringContaining("provider exploded"),
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[1]!.payload).toMatchObject({ requestId: "llm-request:gen-1" });
+    // The retry is the loop talking to itself: it counts as an autonomous turn
+    // instead of resetting the circuit breaker the way a real user message does.
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ autonomousTurnCount: 1 });
+  });
+
+  it("stops auto-retrying after three consecutive failures", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-provider-selected",
+        payload: { ifUnset: true, model: "gpt-5.5", provider: "openai-ws" },
+      },
+      ...openAiWsRequestEvents("hello"),
+    );
+    let requestedOffset = stream.events.at(-1)!.offset;
+    await deliver();
+
+    for (let failure = 1; failure <= 3; failure++) {
+      await stream.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 10,
+          llmRequestId: requestedOffset,
+          provider: "openai-ws",
+          result: { status: "failure", error: { message: `boom ${failure}` } },
+        },
+      });
+      const completedOffset = stream.events.at(-1)!.offset;
+      await deliver(); // completion -> error input appended
+      await deliver(); // error input -> retry scheduled (failures 1-2 only)
+      if (failure < 3) {
+        await deliver(); // scheduled -> agent starts its debounce timer
+        // The retry's debounce timer fires llm-request-requested for the new
+        // generation. (The seeded request's own timer also fires a duplicate
+        // requested event for "llm-request:1" — reduce ignores it, and so
+        // must this wait.)
+        const requested = await stream.waitForEvent({
+          afterOffset: completedOffset,
+          predicate: (event) =>
+            event.type === "events.iterate.com/agent/llm-request-requested" &&
+            (event.payload as any)?.requestId === `llm-request:gen-${failure}`,
+          timeoutMs: 2_000,
+        });
+        requestedOffset = requested.offset;
+        await deliver();
+      }
+    }
+
+    const errorInputs = stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        String(event.payload?.content).includes("Your LLM request failed"),
+    );
+    expect(errorInputs.map((event) => event.payload?.llmRequestPolicy)).toEqual([
+      { behaviour: "after-current-request" },
+      { behaviour: "after-current-request" },
+      { behaviour: "dont-trigger-request" },
+    ]);
+    expect(errorInputs[2]!.payload).toMatchObject({
+      content: expect.stringContaining("automatic retries stopped"),
+    });
+
+    // Give a would-be fourth request time to (wrongly) schedule.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await deliver();
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    expect(scheduled).toHaveLength(3); // seed + two auto-retries, nothing after the cap
+  });
+
+  it("resets the consecutive failure counter after a successful request", async () => {
+    const failureTurn = (base: number, result: unknown): StreamEventInput[] => [
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: {
+          debounceMs: 0,
+          model: "gpt-5.5",
+          provider: "openai-ws",
+          requestId: `llm-request:${base}`,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-5.5", provider: "openai-ws", requestId: `llm-request:${base}` },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: { durationMs: 1, llmRequestId: base + 1, provider: "openai-ws", result },
+      },
+    ];
+    const stream = new MemoryStream();
+    await stream.append(
+      ...failureTurn(1, { status: "failure", error: { message: "boom" } }),
+      ...failureTurn(4, { status: "failure", error: { message: "boom again" } }),
+    );
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 2 });
+
+    await stream.append(...failureTurn(7, { status: "success" }));
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
   });
 
   it("fails orphaned requests a dead incarnation left behind (recovery sweep)", async () => {

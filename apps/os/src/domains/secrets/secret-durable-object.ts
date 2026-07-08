@@ -2,7 +2,6 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -11,6 +10,7 @@ import {
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
