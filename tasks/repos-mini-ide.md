@@ -63,6 +63,8 @@ Change the `/repos` view on the OS dashboard to a mini IDE:
 - [x] Feedback: working tree persists to localStorage — _keyed by repo + HEAD oid so a moved HEAD orphans stale state (swept on load) instead of producing weird diffs; quota errors degrade to memory-only_
 - [x] Feedback: staging area — _working + staged slots per path (`staged-changes.ts`); `+`/`−` on SCM rows/headers/editor; file in both sections after post-stage edits; Commit = staged-only when anything is staged; post-commit migration of surviving working edits to the new oid's store (verified across reload)_
 - [x] Feedback: block-level staging — _inline diff baselines on the staged snapshot; its `+` chunk control IS accept-chunk, whose updated original doc writes back as the staged snapshot; `⨯` discards the block_
+- [x] Feedback: SCM row hover no longer changes row height — _action buttons reserve space (invisible→visible) and fit the row (size-5)_
+- [x] Feedback: staged rows open a readonly HEAD↔staged diff — _`staged=true` URL param; no chunk controls, editor rejects input, Diff button disabled (no non-diff version exists), Unstage returns to the editable view_
 
 ## Spinoffs (from Misha, more or less verbatim — each is its own future task)
 
