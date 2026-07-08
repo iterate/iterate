@@ -4,6 +4,7 @@ import type { SourceCodeBlockProps } from "./source-code-block.client.tsx";
 export type {
   SourceCodeBlockExtension,
   SourceCodeBlockProps,
+  SourceCodeLanguage,
 } from "./source-code-block.client.tsx";
 
 // Keep CodeMirror (languages, theme, search) out of the server bundle: the

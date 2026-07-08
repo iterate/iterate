@@ -34,6 +34,8 @@ export const StreamViewSearch = z.object({
   filter: z.boolean().optional().catch(undefined),
   /** Whether the processors sidebar is open. */
   panel: z.boolean().optional().catch(undefined),
+  /** Whether the events sheet is open (full-panel layouts only). */
+  events: z.boolean().optional().catch(undefined),
   /** Subscription key of the processor focused in the sidebar. */
   processor: z.string().optional().catch(undefined),
 });

@@ -379,28 +379,108 @@ return { current: await counter.current() }; // 2, and it persists under the key
   },
   {
     id: "sandbox-exec",
-    title: "Run shell commands in a sandbox (project repo included)",
+    title: "Create a sandbox and run shell commands in it",
     description:
-      'A sandbox is a real Linux container addressed by a path under /sandboxes/. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your agent path under the prefix — /sandboxes/cloudflare/agents/...) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
+      "A sandbox is a real Linux container, kept like a project pet: it exists only after itx.sandboxes.create({ name, instanceType? }) (names are one path segment — the path is /sandboxes/<name>; instance types are Cloudflare's — lite, basic (default), standard-1..4 — fixed for life), and itx.sandboxes.get(path) then returns the bare Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, … — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). The first command boots the container (can take a minute cold); after idle it is snapshotted and shut down — files under /workspace come back on the next start, everything else resets. The image is the stock Cloudflare one (Ubuntu, Node, Bun, git): install what you need, and clone repos with gitCheckout (GH_TOKEN is planted automatically when the project has a GitHub connection). Prefer reusing an existing sandbox (itx.sandboxes.list()) over creating more.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// The path IS the identity: same path, same sandbox (and its filesystem)
-// until you destroy() it. Different paths are different containers.
-const sandbox = await itx.sandboxes.get(vars.sandboxPath ?? "/sandboxes/cloudflare/example");
+// Reuse the sandbox if it exists, create it otherwise. The name IS the
+// identity, verbatim — no normalization anywhere: same name, same sandbox
+// (and its /workspace) until destroy(). create is strict, so a concurrent
+// creator can win the race — swallow the create error and let the second
+// get() be the arbiter.
+const name = vars.sandboxName ?? "example";
+const path = "/sandboxes/" + name;
+const sandbox = await itx.sandboxes.get(path).catch(async () => {
+  await itx.sandboxes.create({ name, instanceType: vars.instanceType }).catch(() => {});
+  return itx.sandboxes.get(path);
+});
 
 // exec runs a shell command; the first one boots the container.
 const uname = await sandbox.exec("uname -s");
 
-// The project repo is ALWAYS checked out at /workspace/repos/project, which is
-// also the default working directory — so a bare "ls" lists the project. Every
-// command awaits provisioning internally; no ensureProjectRepo() call needed.
-const repo = await sandbox.exec("ls");
+// Only /workspace survives stop/idle (snapshot-restored) — keep durable
+// work there.
+const marker = await sandbox.exec("echo hello > /workspace/marker && cat /workspace/marker");
 
 return {
   os: uname.stdout.trim(), // "Linux"
-  repoFiles: repo.stdout.trim().split("\\n"),
-  exitCode: repo.exitCode,
+  marker: marker.stdout.trim(), // "hello"
+  exitCode: marker.exitCode,
+};
+`.trim(),
+  },
+  {
+    id: "workspace-edit-and-push",
+    title: "Edit files in a workspace, then push its branch",
+    description:
+      'A workspace is a private checkout of the project repo in a durable virtual filesystem (no container, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other. The first call clones the project repo and every call waits for that clone. Changes stay private until pushed: git.push() publishes to the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// The path IS the identity: same path, same filesystem. An agent's own
+// workspace is itx.workspace — for the example we address one by path.
+const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+
+// Reads wait for the clone, so a successful read proves the checkout exists.
+// Paths are absolute; "/" is the repo root.
+const readme = await workspace.readFile("/README.md");
+
+// Write and edit freely — this is a working tree, not a commit-per-change.
+await workspace.writeFile("/notes/workspace-example.md", "status: draft\\n");
+const edited = await workspace.edit({
+  path: "/notes/workspace-example.md",
+  oldString: "status: draft",
+  newString: "status: reviewed",
+});
+
+// Ordinary git publishes to the workspace's own branch (never main).
+await workspace.git.add({ filepath: "." });
+const commit = await workspace.git.commit({ message: "Workspace example note" });
+const pushed = await workspace.git.push();
+
+return {
+  readmePresent: readme !== null,
+  edited,
+  commitOid: commit.oid,
+  pushedBranch: pushed.branch,
+};
+`.trim(),
+  },
+  {
+    id: "workspace-files-transfer",
+    title: "Move bytes between itx.files and a workspace",
+    description:
+      "itx.files (R2-backed project file storage: uploads, attachments, signed URLs) and workspaces (repo checkouts) compose through bytes: files.get(path).bytes() → workspace.writeFileBytes pulls a stored file into the checkout; workspace.readFileBytes → files.get(path).put({ data, contentType }) publishes a checkout file to storage (e.g. to mint a signed URL). Gotcha: files.put string data must be base64 — encode plain text with new TextEncoder().encode(text).",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+
+// files -> workspace: pull a stored file into the checkout. put() string data
+// must be base64, so encode plain text as bytes instead.
+await itx.files.get("/examples/transfer.txt").put({
+  data: new TextEncoder().encode(vars.note ?? "born in itx.files"),
+  contentType: "text/plain",
+});
+const stored = await itx.files.get("/examples/transfer.txt").bytes();
+await workspace.writeFileBytes("/imported/transfer.txt", stored);
+const inWorkspace = await workspace.readFile("/imported/transfer.txt");
+
+// workspace -> files: publish a checkout file (here the seeded package.json)
+// to project file storage and mint a shareable signed URL.
+const packageJsonBytes = await workspace.readFileBytes("/package.json");
+const published = await itx.files.get("/examples/package-from-workspace.json").put({
+  data: packageJsonBytes,
+  contentType: "application/json",
+});
+const url = await itx.files.get("/examples/package-from-workspace.json").url();
+
+return {
+  inWorkspace,
+  published,
+  urlHost: new URL(url).host,
 };
 `.trim(),
   },

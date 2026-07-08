@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
@@ -26,6 +26,7 @@ class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(offset).toISOString(),
         offset,
+        path: this.path,
       };
       this.events.push(event);
       return event;
@@ -123,15 +124,14 @@ function event(type: string, payload: Record<string, unknown>, offset = 1): Stre
     payload,
     createdAt: new Date(offset).toISOString(),
     offset,
+    path: "/projects/test",
   };
 }
 
 function makeHarness() {
   const network = new MemoryStreamNetwork();
-  const getSandbox = vi.fn(async () => ({}));
   const itx = {
     projectId: "prj_test",
-    sandboxes: { get: getSandbox },
     streams: { get: (path: string) => network.get(path) },
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
@@ -139,12 +139,12 @@ function makeHarness() {
     defaultLlmProvider: "openai-ws",
     itx,
   });
-  return { getSandbox, network, processor };
+  return { network, processor };
 }
 
 describe("ProjectProcessor agent birth", () => {
-  it("mounts itx.sandbox without minting the sandbox Durable Object identity", async () => {
-    const { getSandbox, network, processor } = makeHarness();
+  it("mounts only the workspace at birth — sandboxes are created explicitly, never granted", async () => {
+    const { network, processor } = makeHarness();
 
     await processor.ingest({
       events: [
@@ -155,18 +155,13 @@ describe("ProjectProcessor agent birth", () => {
       streamMaxOffset: 1,
     });
 
-    expect(getSandbox).not.toHaveBeenCalled();
-
-    const sandboxMount = network
+    const capabilityMounts = network
       .eventsAt("/agents/demo")
-      .find(
+      .filter(
         (streamEvent) =>
           streamEvent.type === "events.iterate.com/capability-host/capability-provided",
-      );
-    expect(sandboxMount?.payload).toMatchObject({
-      expression: ["sandboxes", ["get", "/sandboxes/cloudflare/agents/demo"]],
-      path: ["sandbox"],
-      type: "itx-expression",
-    });
+      )
+      .map((streamEvent) => (streamEvent.payload as { path: string[] }).path);
+    expect(capabilityMounts).toEqual([["workspace"]]);
   });
 });

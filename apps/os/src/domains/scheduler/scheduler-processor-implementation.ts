@@ -33,8 +33,6 @@ export type SchedulerProcessorDeps = {
   repointAlarm: (atMs: number | null) => void | Promise<void>;
   /** Next armed alarm time, for runtime-state inspection only. */
   readAlarm: () => Promise<number | null>;
-  /** This Scheduler's stream path — handed to scripts as `schedule.path`. */
-  streamPath: string;
 };
 
 /**
@@ -91,6 +89,7 @@ export class SchedulerProcessor extends StreamProcessor<
               action: payload.action,
               definedAtOffset: event.offset,
               ...(payload.metadata === undefined ? {} : { metadata: payload.metadata }),
+              path: event.path,
               nextTriggerAt: initialTriggerAtMs(payload.recurrence, Date.parse(event.createdAt)),
               recurrence: payload.recurrence,
               runCount: 0,
@@ -335,12 +334,19 @@ export class SchedulerProcessor extends StreamProcessor<
       outcome = { outcome: "skipped" };
     } else {
       try {
+        const schedulePath =
+          entry.path ?? (await this.stream.getEvent({ offset: entry.definedAtOffset }))?.path;
+        if (schedulePath === undefined) {
+          throw new Error(
+            `cannot resolve stream path for schedule "${pending.key}" defined at offset ${entry.definedAtOffset}`,
+          );
+        }
         const result = await this.deps.dynamicWorkers.invokeCapability({
           args: [
             {
               key: pending.key,
               ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-              path: this.deps.streamPath,
+              path: schedulePath,
               recurrence: entry.recurrence,
               setAt: entry.setAt,
             },

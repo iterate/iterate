@@ -64,8 +64,19 @@ import {
   PROJECT_WORKER_ENTRY_POINT,
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
+import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
+import {
+  DEFAULT_SANDBOX_INSTANCE_TYPE,
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SandboxInstanceType,
+} from "./domains/sandboxes/instance-types.ts";
+import {
+  assertSandboxPath,
+  assertValidSleepAfter,
+  sandboxPathFor,
+} from "./domains/sandboxes/utils.ts";
+import { SandboxProcessorContract } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
 import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
@@ -134,7 +145,7 @@ import type {
   ProjectDescription,
 } from "./domains/itx/describe.ts";
 import type { CfExecutionContext } from "./domains/itx/utils.ts";
-import type { CloudflareSandbox } from "./domains/sandboxes/utils.ts";
+import type { CloudflareSandbox, SandboxCreateInput } from "./domains/sandboxes/utils.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -621,7 +632,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return describeNode({
       instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
-        commitFiles: "Commit a batch of file changes ({ message, changes }).",
+        commitFiles:
+          "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         linkGithub:
@@ -629,7 +641,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         listFiles: "List file paths.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
-        readFile: "Read one file ({ path }).",
+        readFile:
+          'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
@@ -692,8 +705,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return this.#durableObjectStub.listFiles();
   }
 
-  /** Committed file contents at HEAD; null when the path does not exist. */
-  readFile(input: { path: string }): Promise<{
+  /**
+   * Committed file contents at HEAD; null when the path does not exist.
+   * `encoding: "base64"` reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -851,23 +867,42 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
 }
 
 /**
- * The `itx.sandboxes` built-in. `get(path)` returns the sandbox Durable
- * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
- * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
- * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated path, after the same
- * project-access assert every collection performs. Every sandbox lives under
- * `/sandboxes/` (the same domain-prefix convention as `/secrets/...` and
- * `/repos/...`): an agent's sandbox is its agent path under the prefix
- * (`itx.sandbox` on `/agents/bla` is `sandboxes.get("/sandboxes/cloudflare/agents/bla")`);
- * standalone sandboxes conventionally live under `/sandboxes/cloudflare/...`.
+ * The `itx.sandboxes` built-in. Sandboxes are PETS:
+ * `create({ name, instanceType })` is the only way one comes to exist
+ * (nothing mints a sandbox implicitly — `get` refuses paths that were never
+ * created), names are one path segment (`/sandboxes/<name>` — no intermediate
+ * folders in the stream tree), and the sandbox itself carries the imperative
+ * lifecycle (`start`/`sleep`/`destroy`).
+ *
+ * `get(path)` returns the sandbox Durable Object's own RPC stub —
+ * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
+ * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding
+ * code here. Confinement is by name: the stub is minted from this project's
+ * id plus the validated path, after the same project-access assert every
+ * collection performs.
+ *
+ * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
+ * instance type per container class (instance-types.ts), so each type is its
+ * own Durable Object namespace and routing needs the type. The `/sandboxes`
+ * catalogue stream is the directory: `create` journals `create-requested`
+ * there (idempotency-keyed by path, so the stream's native dedup makes the
+ * FIRST claim on a name authoritative — races settle atomically in one
+ * append) BEFORE touching any container namespace, and `get` routes by the
+ * claim's instance type. The catalogue and not the sandbox's own stream
+ * because reads materialize streams (any wake appends `created`/`woken`):
+ * routing a `get` through the sandbox's own stream would mint a junk stream
+ * for every typo'd path, and addressing must never create.
  */
 class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Paths live under /sandboxes/ — an agent's sandbox is its agent path under the prefix (/sandboxes/cloudflare/agents/..., what itx.sandbox resolves to); pick /sandboxes/cloudflare/<name> for standalone ones.",
-      children: { get: "The sandbox at a path (boots the container on first use)." },
+        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
+      children: {
+        create: "Create a sandbox (strict: existing/destroyed names are errors). Returns { path }.",
+        get: "The sandbox at a created path (boots the container on first use).",
+        list: "Every sandbox stream path in the project (including destroyed sandboxes' streams — the stream is the history).",
+      },
       parent: "a project itx (itx.sandboxes)",
     });
   }
@@ -877,20 +912,126 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The sandbox at a path. Cheap — the container boots on the first command, not here. */
-  async get(path: string): Promise<CloudflareSandbox> {
-    const normalized = normalizeSandboxPath(path);
-    const stub = env.SANDBOX.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: normalized,
+  /** The instance type's own container namespace — see instance-types.ts for
+   * why instance types are separate Durable Object classes. */
+  #namespace(instanceType: SandboxInstanceType) {
+    const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof typeof env;
+    return env[binding] as DurableObjectNamespace<SandboxDurableObject>;
+  }
+
+  #stub(path: string, instanceType: SandboxInstanceType) {
+    return this.#namespace(instanceType).getByName(
+      DurableObjectNameCodec.stringify({ projectId: this.props.projectId, path }),
+    );
+  }
+
+  /** The `/sandboxes` catalogue stream — the directory of every sandbox ever
+   * requested in the project (one `create-requested` per name, idempotency-
+   * keyed by path). One stream for the whole domain, so looking a name up
+   * never materializes anything but the catalogue itself. */
+  get #catalogue() {
+    return env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({ projectId: this.props.projectId, path: "/sandboxes" }),
+    );
+  }
+
+  static #claimKey(path: string) {
+    return `sandbox-create-requested:${path}`;
+  }
+
+  /** The name claim journaled for a path (the catalogue's `create-requested`
+   * event), or undefined if no create was ever requested there. Its instance
+   * type is what routes the path to the right container namespace. */
+  async #claim(path: string): Promise<{ instanceType: SandboxInstanceType } | undefined> {
+    const event = await this.#catalogue.getEvent({
+      idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+    });
+    if (event === undefined) return undefined;
+    return {
+      instanceType: SandboxInstanceType.parse(
+        (event.payload as { instanceType: string }).instanceType,
+      ),
+    };
+  }
+
+  /** Create a sandbox. Strict: an existing or destroyed path is an error.
+   * Returns the path to `get`. */
+  async create(
+    input: SandboxCreateInput,
+  ): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }> {
+    const instanceType = SandboxInstanceType.parse(
+      input.instanceType ?? DEFAULT_SANDBOX_INSTANCE_TYPE,
+    );
+    const path = sandboxPathFor(input.name);
+    // Validate everything the journal records BEFORE journaling it — a
+    // rejected create must leave no trace.
+    if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
+    // Claim the name first: append the create-requested to the catalogue,
+    // idempotency-keyed by path. The stream dedups by key atomically, so the
+    // event that comes back IS the authoritative claim — ours if the name was
+    // free, the original if it was ever claimed before (including by a racing
+    // creator). Only a matching instance type may proceed to the container
+    // namespace: the Durable Object there is the strict authority on whether
+    // the sandbox is live, destroyed, or (after a create that died between
+    // this append and its call) still to be born — the retry heals it.
+    const [claim] = await this.#catalogue.append(
+      SandboxProcessorContract.buildEvent({
+        type: "events.iterate.com/sandbox/create-requested",
+        idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+        payload: {
+          path,
+          instanceType,
+          sleepAfter: input.sleepAfter,
+          keepAlive: input.keepAlive,
+          env: input.env,
+        },
       }),
     );
-    // Container runtimes do not reliably surface `ctx.id.name`, so the
-    // sandbox learns who it is here, before the stub reaches the caller —
-    // see CloudflareSandboxDurableObject.ensureIdentity.
-    await stub.ensureIdentity({ path: normalized, projectId: this.props.projectId });
+    if (claim === undefined) {
+      throw new Error(`sandbox "${path}": the catalogue append returned no event`);
+    }
+    const claimedType = SandboxInstanceType.parse(
+      (claim.payload as { instanceType: string }).instanceType,
+    );
+    if (claimedType !== instanceType) {
+      throw new Error(
+        `sandbox "${path}" was already requested as instance type "${claimedType}" — names are unique per project; pick a new name`,
+      );
+    }
+    return await this.#stub(path, instanceType).create({
+      env: input.env,
+      instanceType,
+      keepAlive: input.keepAlive,
+      path,
+      projectId: this.props.projectId,
+      sleepAfter: input.sleepAfter,
+    });
+  }
+
+  /** The sandbox at a path. Throws unless the path was created (and not destroyed). */
+  async get(path: string): Promise<CloudflareSandbox> {
+    const asserted = assertSandboxPath(path);
+    const claim = await this.#claim(asserted);
+    if (claim === undefined) {
+      throw new Error(
+        `sandbox "${asserted}" does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, instanceType })`,
+      );
+    }
+    const stub = this.#stub(asserted, claim.instanceType);
+    // Getting never creates: the sandbox proves it was created (and not
+    // destroyed) before the stub reaches the caller. Container runtimes do
+    // not reliably surface `ctx.id.name`, so this call also re-asserts the
+    // identity create() recorded — see SandboxDurableObject.assertCreated.
+    await stub.assertCreated({ path: asserted, projectId: this.props.projectId });
     return stub;
+  }
+
+  /** Every sandbox stream path in the project (`/sandboxes/...`), including
+   * destroyed sandboxes' streams — the stream is the history. */
+  list(): Promise<StreamListItem[]> {
+    return projectProcessorState(this.props.projectId).then((state) =>
+      state.streams.filter((stream) => stream.path.startsWith("/sandboxes/")),
+    );
   }
 }
 
@@ -3162,7 +3303,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   repo: "The project repo at /repos/project.",
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
-  sandboxes: "Path-addressed Cloudflare sandboxes.",
+  sandboxes:
+    "The project's sandboxes (pets): create({ name, instanceType }), get(path), list(); start/sleep/destroy live on the sandbox.",
   scheduler:
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
@@ -3454,7 +3596,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Path-addressed sandboxes (`itx.sandboxes.get("/sandboxes/cloudflare/whatever")`). */
+  /** The project's sandboxes — explicitly created, sized Linux containers
+   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   get sandboxes(): SandboxCollectionRpcTarget {
     return new SandboxCollectionRpcTarget({
       auth: this.#props.auth,
