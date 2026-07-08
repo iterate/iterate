@@ -191,6 +191,14 @@ export class StreamSubscribers {
   // resets these and the durable rows + folded config re-derive every decision
   // (at-least-once absorbs the repeats).
   readonly #pokesInFlight = new Set<string>();
+  /**
+   * True while runIdleTeardownNow severs connections. The disconnect facts it
+   * appends bump maxOffset, and append's post-commit wake() would otherwise
+   * see the new lag and re-poke — defeating the teardown (thermo review r1,
+   * blocker 1, with an empirical repro). Reconcile is suppressed for the
+   * teardown turn; the final watermark ack below covers the facts.
+   */
+  #tearingDown = false;
   readonly #pushDrains = new Set<string>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
@@ -213,6 +221,7 @@ export class StreamSubscribers {
    */
   wake(): void {
     for (const connection of this.#connections.values()) connection.wake();
+    if (this.#tearingDown) return;
     try {
       this.#reconcileDurable();
     } catch (error) {
@@ -292,7 +301,7 @@ export class StreamSubscribers {
         if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
           continue;
         }
-        this.#poke(subscriptionKey, config.delivery.target);
+        this.#poke(subscriptionKey, config.delivery.target, configOffset);
         continue;
       }
 
@@ -305,9 +314,12 @@ export class StreamSubscribers {
    * One poke: ask the wake target to hand back its checkpoint and a live sink,
    * then open the delivery connection from that checkpoint. The entire
    * handshake is this single call — the stream initiated it and owns the
-   * returned sink, so there is no subscribe-back race and nothing to fence.
+   * returned sink, so there is no subscribe-back race. The ONE fence left is
+   * against config replacement: a poke that resolves after its subscription
+   * was replaced (or switched to push mode) must drop its sink rather than
+   * open a zombie connection or ack a now-authoritative push cursor.
    */
-  #poke(subscriptionKey: string, target: WakeDeliveryTarget): void {
+  #poke(subscriptionKey: string, target: WakeDeliveryTarget, configOffset: number): void {
     const state = this.#hooks.coreState();
     if (state.projectId === undefined || state.path === undefined) return;
     const request: StreamSubscriberWakeRequest = {
@@ -319,7 +331,19 @@ export class StreamSubscribers {
     this.#pokesInFlight.add(subscriptionKey);
     const work = (async () => {
       try {
-        const response = await this.#hooks.dial.poke(target, request);
+        const response = await withDeliveryTimeout(
+          this.#hooks.dial.poke(target, request),
+          `poke ${subscriptionKey}`,
+        );
+        const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+        if (
+          current === undefined ||
+          current.latestConfiguredEvent.offset !== configOffset ||
+          current.latestConfiguredEvent.payload.delivery.mode !== "wake"
+        ) {
+          response.sink[Symbol.dispose]();
+          return;
+        }
         const presence =
           response.subscriber === undefined
             ? undefined
@@ -407,13 +431,19 @@ export class StreamSubscribers {
             deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
             attempt: row.attempt + 1,
             configuredEvent: {
-              ...entry.latestConfiguredEvent,
+              type: entry.latestConfiguredEvent.type,
+              offset: entry.latestConfiguredEvent.offset,
+              createdAt: entry.latestConfiguredEvent.createdAt,
               path: state.path,
-            } as StreamEvent,
+              payload: entry.latestConfiguredEvent.payload,
+            },
           };
 
           try {
-            await this.#hooks.dial.push(config.delivery.expression, batch);
+            await withDeliveryTimeout(
+              this.#hooks.dial.push(config.delivery.expression, batch),
+              `push ${subscriptionKey}`,
+            );
           } catch (error) {
             // "continue" = the failure handler already moved the goalposts
             // (halved the bisect window or stepped over confirmed poison) and
@@ -567,10 +597,20 @@ export class StreamSubscribers {
    * `subscription-configured`) is the way back.
    */
   #park(subscriptionKey: string, attempts: number, error: unknown): void {
+    // State-guarded, not idempotency-keyed: a park after resume at an unmoved
+    // cursor is a NEW transition and must land as a new fact (an idempotency
+    // key derived from the cursor would swallow it and the subscription would
+    // retry forever without ever turning red again). Duplicate suppression
+    // comes from the fold: while parked, the pump never runs this path.
+    if (
+      this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey]?.parkedAtOffset !==
+      undefined
+    ) {
+      return;
+    }
     const row = this.#hooks.store.get(subscriptionKey);
     this.#hooks.appendFact({
       type: "events.iterate.com/stream/subscription-parked",
-      idempotencyKey: `subscription-parked:${subscriptionKey}:${row?.ackedOffset ?? 0}`,
       payload: {
         subscriptionKey,
         atOffset: row?.ackedOffset ?? 0,
@@ -852,24 +892,57 @@ export class StreamSubscribers {
    */
   runIdleTeardownNow(): void {
     this.#idleTimer = undefined;
-    // Snapshot first: close() mutates the connection table.
-    for (const subscriptionKey of this.#configuredConnectionKeys()) {
-      const connection = this.#connections.get(subscriptionKey);
-      if (connection !== undefined) {
-        // The sink received everything through the connection cursor, so the
-        // watermark may honestly advance to it — which is what keeps the
-        // post-teardown reconcile a no-op instead of an immediate re-poke
-        // that would defeat the teardown.
-        this.#hooks.store.ack(subscriptionKey, connection.cursor);
-      }
-      this.close(subscriptionKey, "idle");
+    // Snapshot first: close() mutates the connection table. The whole loop is
+    // one synchronous DO turn, so nothing foreign can interleave — the only
+    // events appended during it are our own subscriber-disconnected facts.
+    const keys = this.#configuredConnectionKeys();
+    this.#tearingDown = true;
+    try {
+      for (const subscriptionKey of keys) this.close(subscriptionKey, "idle");
+    } finally {
+      this.#tearingDown = false;
     }
+    // Advance every torn-down watermark past the disconnect facts this loop
+    // just appended, so the next reconcile is a no-op instead of an immediate
+    // re-poke. Safe: the watermark is observational (the subscriber's own
+    // checkpoint is the truth), and after >= idleTeardownMs of append silence
+    // the pumps were long since drained, so maxOffset holds nothing the sink
+    // has not already seen except our own facts.
+    const maxOffset = this.#hooks.coreState().maxOffset;
+    for (const subscriptionKey of keys) this.#hooks.store.ack(subscriptionKey, maxOffset);
   }
 
   #configuredConnectionKeys(): string[] {
     return [...this.#connections]
       .filter(([, connection]) => connection.subscriptionType === "configured")
       .map(([subscriptionKey]) => subscriptionKey);
+  }
+}
+
+/**
+ * Bounds one delivery/poke attempt. Without it a wedged receiver (the worst
+ * real case: a cold worker build that never completes) holds the drain slot
+ * and pins the DO unboundedly, with no nack, no backoff, and no park. On
+ * timeout the attempt counts as a failure — the spine backs off and retries;
+ * a build that was merely slow continues server-side via waitUntil, so the
+ * retry hits the warm cache (the same shape #1761's build budget had).
+ */
+const DELIVERY_TIMEOUT_MS = 60_000;
+
+async function withDeliveryTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${DELIVERY_TIMEOUT_MS}ms`)),
+          DELIVERY_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

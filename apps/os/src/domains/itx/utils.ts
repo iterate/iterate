@@ -118,6 +118,20 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
 }
 
 /**
+ * The loopback ItxEntrypoint stub viewed by callers that use its RPC `get()`
+ * (the scoped itx root) rather than binding it as a dynamic worker's env
+ * fetcher. Same stub, honest type: `Fetcher` is what worker bindings need,
+ * `get()` is what in-process callers (the stream delivery dial, scheduler
+ * scripts) actually call. Both the stub and the root it returns are
+ * per-acquisition and must be disposed by the caller.
+ */
+export type ItxLoopbackStub = { get(): Promise<unknown> } & Partial<Disposable>;
+
+export function itxLoopbackStub(exports: unknown, props: ItxEntrypointProps): ItxLoopbackStub {
+  return itxEntrypointBinding(exports, itxEntrypointProps(props)) as unknown as ItxLoopbackStub;
+}
+
+/**
  * Shape helper for the `__describe()` convention (see `Description` in
  * ./describe.ts): fills the always-present fields so every node returns
  * `{ instructions, types, children, ... }` even before it has real content.

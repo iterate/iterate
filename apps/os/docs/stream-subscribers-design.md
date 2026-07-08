@@ -1,10 +1,10 @@
 # Stream subscribers: the unified design
 
 Status: **decided** (design review + grilling with Jonas, 2026-07-08). Ships as **ONE PR**.
-History: [`outbound-subscribers-review-a.md`](outbound-subscribers-review-a.md) (external prior
-art), [`outbound-subscribers-review-b.md`](outbound-subscribers-review-b.md) (codebase archaeology),
-[`outbound-subscribers-proposals.md`](outbound-subscribers-proposals.md) (the three-way shootout
-this design descends from). Line refs are against `spiritual-hoof` @ bc2b2e5e7 unless marked
+History: the exploration record (two independent deep reviews — external prior art and codebase
+archaeology — plus the three-way proposal shootout this design descends from) lived at the repo
+root during development and was dropped before merge; see PR #1784's early commits
+(`outbound-subscribers-review-a/b.md`, `outbound-subscribers-proposals.md`) if you want it. Line refs are against `spiritual-hoof` @ bc2b2e5e7 unless marked
 `[main]`.
 
 ## Thesis

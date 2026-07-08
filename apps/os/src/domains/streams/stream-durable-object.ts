@@ -3,27 +3,23 @@ import { z } from "zod";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
-import { evaluateItxExpression } from "../../itx/expression.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
-import { buildCrossPostAppendInput, type CrossPostProvenanceChain } from "./cross-post.ts";
+import { buildIngestAppendInputs } from "./cross-post.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
-import { compileEventSelector, compileJsonataExpression } from "./event-selector.ts";
+import { compileEventSelector } from "./event-selector.ts";
 import { SqliteSubscriptionCursorStore, StreamEventLog } from "./stream-storage.ts";
 import {
   StreamSubscribers,
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
-import { retainProcessEventBatch } from "./subscriber-sinks.ts";
+import { createSubscriberDial, type WakeTargetStub } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -37,14 +33,6 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
-
-/**
- * Backstop cap on a cross-post provenance chain. The structural cycle guard
- * (`ingest` never appends an event whose chain already contains this stream)
- * is the real protection; the cap only bounds acyclic relay graphs nobody
- * should build (a 5-hop relay is a design smell, not a use case).
- */
-const MAX_CROSS_POST_HOPS = 5;
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -69,9 +57,10 @@ export const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *    before it becomes a durable fact.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
  *    (`stream-storage.ts`) when missing or version-skewed.
- * 4. Subscriptions — live delivery connections managed by
- *    `stream-connections.ts`; this class only decides policy (who may
- *    subscribe, which configured subscribers to wake, what facts to append).
+ * 4. Delivery — every lane (ephemeral connections, wake pokes, push drains)
+ *    lives in `stream-subscribers.ts`, dialing transports through
+ *    `subscriber-sinks.ts`; this class only decides policy (who may
+ *    subscribe, what a config event means, which facts to append).
  *
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`. This class is deliberately NOT
@@ -95,10 +84,22 @@ export class StreamDurableObject extends DurableObject<Env> {
       readEvents: (args) => this.getEvents(args),
       coreState: () => this.#coreProcessorState,
       store: new SqliteSubscriptionCursorStore(this.ctx.storage.sql),
-      dial: {
-        poke: (target, request) => this.#poke(target, request),
-        push: (expression, batch) => this.#push(expression, batch),
-      },
+      dial: createSubscriberDial({
+        projectId: this.name.projectId,
+        exports: this.ctx.exports,
+        wakeTargetStub: (target) => {
+          // Belt-and-braces: config was validated in #validateAppend before it
+          // became durable state; re-checking on the dial path protects older
+          // or hand-edited persisted state. Policy stays here — the dial only
+          // knows transports.
+          this.#validateWakeDeliveryTarget(target);
+          return this.#wakeTargetNamespace(target.type).getByName(
+            DurableObjectNameCodec.stringify(target.address, { allowNullProjectId: true }),
+          );
+        },
+        onDurableDeliveryError: (subscriptionKey, error) =>
+          this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
+      }),
       appendFact: (event) => {
         // Facts the delivery machinery produces (presence, parked, poison
         // records) are observations; appending one must never mask the
@@ -404,6 +405,32 @@ export class StreamDurableObject extends DurableObject<Env> {
   // both parse). Re-validating the growing record fields on every append was
   // quadratic work for no added safety.
   #reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
+    // Replay resilience (the #1714 parse-poison posture): a core event that no
+    // longer parses — a pre-v10 config shape replayed during a state rebuild,
+    // or a hand-corrupted row — folds as INERT (counters + breaker only)
+    // instead of throwing, which would brick the stream's constructor forever.
+    // New appends never take this path: #validateAppend strict-parses config
+    // events BEFORE they commit.
+    try {
+      return this.#reduceCore(args);
+    } catch (error) {
+      console.error("stream core reduce skipped unparseable event", {
+        offset: args.event.offset,
+        type: args.event.type,
+        error,
+      });
+      return this.#reduceCircuitBreaker({
+        event: args.event,
+        state: {
+          ...args.state,
+          eventCount: args.state.eventCount + 1,
+          maxOffset: args.event.offset,
+        },
+      });
+    }
+  }
+
+  #reduceCore(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
     const parse = CoreProcessorContract.parseEvent;
     let next: CoreProcessorState = {
       ...args.state,
@@ -758,39 +785,20 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  // ===========================================================================
-  // The dial: how the spine reaches subscribers. Wake pokes go straight to the
-  // target Durable Object binding; push deliveries evaluate the persisted itx
-  // expression against the same project-scoped `env.ITX` root every dynamic
-  // worker gets — one authority recipe, no special lane for the stream.
-  // ===========================================================================
-
   /**
-   * One poke: `wakeStreamSubscriber` on the target Durable Object. The
-   * response IS the whole handshake — checkpoint plus a live sink whose
-   * ownership transfers to this stream (returned-stub semantics), so there is
-   * no subscribe-back call and no handshake race. The sink is retained here,
-   * with the durable lane's result-pulling liveness policy attached.
+   * Cross-post receiving end — an ordinary push SINK on the target stream
+   * (`(batch) => void`, the same shape every subscriber provides), reached by
+   * a source stream's push subscription (sugar: `crossPostTo`). All
+   * cross-post semantics — provenance, loop protection, idempotency keys, the
+   * optional JSONata transform — live in `cross-post.ts`; this method only
+   * appends the built inputs in its own synchronous turn.
    */
-  async #poke(target: WakeDeliveryTarget, request: StreamSubscriberWakeRequest) {
-    // Belt-and-braces: config was validated in #validateAppend before it
-    // became durable state; re-checking on the dial path protects older or
-    // hand-edited persisted state.
-    this.#validateWakeDeliveryTarget(target);
-    const durableObjectName = DurableObjectNameCodec.stringify(target.address, {
-      allowNullProjectId: true,
+  ingest(batch: StreamPushEventBatch): void {
+    const inputs = buildIngestAppendInputs(batch, {
+      projectId: this.name.projectId,
+      path: this.name.path,
     });
-    const stub = this.#wakeTargetNamespace(target.type).getByName(durableObjectName);
-    const response = (await stub.wakeStreamSubscriber(request)) as StreamSubscriberWakeResponse;
-    return {
-      checkpointOffset: response.checkpointOffset,
-      sink: retainProcessEventBatch(response.sink, {
-        onDeliveryError: (error) =>
-          this.#subscribers.onDurableDeliveryError(request.subscriptionKey, error),
-      }),
-      subscriber: response.subscriber,
-      getRuntimeState: response.getRuntimeState,
-    };
+    if (inputs.length > 0) this.append(...inputs);
   }
 
   #wakeTargetNamespace(type: ConfiguredSubscriberDurableObjectType): WakeTargetNamespace {
@@ -803,139 +811,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       secret: this.env.SECRET,
     }[type];
     return namespace as unknown as WakeTargetNamespace;
-  }
-
-  /**
-   * One push delivery: evaluate the expression to a sink and invoke it with
-   * the batch. The root is the project-scoped itx every dynamic worker sees as
-   * `env.ITX` (the scheduler's script lane uses the identical recipe), so
-   * `["worker", "processEventBatch"]` reaches the project worker and
-   * `["streams", ["get", path], "ingest"]` reaches a sibling stream through
-   * exactly the calls ordinary user code would make. The awaited resolve is
-   * the ack; a reject propagates to the spine's retry/park machine.
-   */
-  async #push(
-    expression: Parameters<typeof evaluateItxExpression>[1],
-    batch: StreamPushEventBatch,
-  ) {
-    const projectId = this.name.projectId;
-    if (projectId === null) {
-      throw new Error("push subscriptions require a project-scoped stream");
-    }
-    const binding = itxEntrypointBinding(
-      this.ctx.exports,
-      itxEntrypointProps({ projectId, path: "/" }),
-    ) as unknown as { get(): Promise<unknown> } & Partial<Disposable>;
-    try {
-      const itx = await binding.get();
-      try {
-        const { receiver, value } = await evaluateItxExpression(itx, expression);
-        if (typeof value !== "function") {
-          throw new Error("push subscription expression did not resolve to a callable sink");
-        }
-        await Reflect.apply(value, receiver, [batch]);
-      } finally {
-        // Both stubs are per-delivery: the itx root and the loopback binding
-        // that minted it. Dropping either without disposal leaks the remote
-        // reference for the isolate's lifetime.
-        (itx as Partial<Disposable>)?.[Symbol.dispose]?.();
-      }
-    } finally {
-      binding[Symbol.dispose]?.();
-    }
-  }
-
-  /**
-   * Cross-post receiving end — an ordinary push SINK on the target stream
-   * (`(batch) => void`, the same shape every subscriber provides), reached by
-   * a source stream's subscription `{ delivery: { mode: "push", expression:
-   * ["streams", ["get", targetPath], "ingest"] } }` (sugar:
-   * `stream.crossPostTo(...)`). The generic spine knows nothing about
-   * cross-posting; everything cross-post-specific — provenance stamping, the
-   * structural cycle guard, idempotency keys, the optional TRANSFORM — lives
-   * here, in named receiver code (selectors filter; receivers transform).
-   *
-   * Transform: the subscription's receiver params may carry
-   * `params: { transform: "<JSONata>" }` — a JSONata expression evaluated
-   * against each source event that CONSTRUCTS the event body to append,
-   * e.g. `{ "type": "myapp/pr-opened", "payload": { "repo":
-   * payload.body.repository.full_name } }`. Omitted fields default to the
-   * source event's (`type` especially). Provenance and idempotency keys are
-   * stamped by this method AFTER the transform — a transform can reshape the
-   * body but can never forge or drop the chain. A transform that throws or
-   * returns a non-object skips that event and records an idempotent error
-   * fact; it never wedges the subscription.
-   */
-  ingest(batch: StreamPushEventBatch): void {
-    const params = IngestParams.parse(batch.configuredEvent.payload?.params ?? {});
-    const transform =
-      params.transform === undefined ? undefined : compileJsonataExpression(params.transform);
-
-    const inputs: StreamEventInput[] = [];
-    for (const event of batch.events) {
-      const chain = event.source?.crossPostedFrom ?? [];
-      if (chain.length >= MAX_CROSS_POST_HOPS) continue;
-      const hop = {
-        subscriptionKey: batch.subscriptionKey,
-        createdAt: event.createdAt,
-        offset: event.offset,
-        path: event.path,
-        projectId: batch.projectId,
-        type: event.type,
-      };
-      const crossPostedFrom: CrossPostProvenanceChain = [...chain, hop];
-      // Structural loop protection: never ingest an event whose provenance
-      // chain already contains this stream (including the source hop itself
-      // when someone wires a stream to ingest into itself).
-      const selfOnChain = crossPostedFrom.some(
-        (entry) => entry.projectId === this.name.projectId && entry.path === this.name.path,
-      );
-      if (selfOnChain) continue;
-
-      let body: Pick<StreamEvent, "type" | "payload" | "metadata"> = event;
-      if (transform !== undefined) {
-        try {
-          const produced = IngestTransformResult.parse(transform.evaluate(event));
-          body = {
-            type: produced.type ?? event.type,
-            ...(produced.payload === undefined
-              ? event.payload === undefined
-                ? {}
-                : { payload: event.payload }
-              : { payload: produced.payload }),
-            ...(produced.metadata === undefined
-              ? event.metadata === undefined
-                ? {}
-                : { metadata: event.metadata }
-              : { metadata: produced.metadata }),
-          };
-        } catch (error) {
-          // Deterministic per-event failure: skipping with a durable record is
-          // the only non-wedging option (throwing would park the SOURCE
-          // subscription on an event that will never transform differently).
-          inputs.push({
-            type: "events.iterate.com/stream/error-occurred",
-            idempotencyKey: `ingest-transform-failed:${batch.subscriptionKey}:${event.path}@${event.offset}`,
-            payload: {
-              message: `ingest transform for subscription "${batch.subscriptionKey}" failed on ${event.path}@${event.offset}: ${String(error)}`,
-            },
-          });
-          continue;
-        }
-      }
-
-      inputs.push(
-        buildCrossPostAppendInput({
-          event: { ...event, ...body },
-          crossPostedFrom,
-          // At-least-once delivery collapses to exactly-once appends: the key
-          // is derived from the SOURCE coordinate, so a redelivered batch
-          // re-appends nothing.
-          idempotencyKey: `xpost:${batch.subscriptionKey}:${batch.projectId ?? "global"}:${event.path}:${event.offset}`,
-        }),
-      );
-    }
-    if (inputs.length > 0) this.append(...inputs);
   }
 
   #validateWakeDeliveryTarget(target: WakeDeliveryTarget): void {
@@ -1240,22 +1115,6 @@ const StreamAppendInput = StreamEventInputSchema.extend({
   offset: z.number().int().nonnegative().optional(),
 });
 
-/** The receiver params `Stream.ingest` understands (see the `params` bag on
- * `subscription-configured`). Loose: unknown keys are someone else's params. */
-const IngestParams = z.looseObject({
-  transform: z.string().trim().min(1).optional(),
-});
-
-/**
- * What an ingest transform may construct. Strict, so a typo'd key fails as a
- * recorded per-event error instead of silently vanishing from the copy.
- */
-const IngestTransformResult = z.strictObject({
-  type: z.string().trim().min(1).optional(),
-  payload: z.record(z.string(), z.unknown()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-
 /**
  * One committed event with the core state before and after reducing it — what
  * the append loop hands to `#processEvent` after the commit (the same shape
@@ -1302,16 +1161,13 @@ function resetCircuitBreaker(
 }
 
 /**
- * The one method a wake-target Durable Object must expose. Namespace stubs are
- * cast to this shape because the generated DurableObjectStub types would
- * otherwise chase each target class's full internal surface.
+ * A wake-target Durable Object namespace. Stubs are cast to this shape because
+ * the generated DurableObjectStub types would otherwise chase each target
+ * class's full internal surface; `WakeTargetStub` (subscriber-sinks.ts) is the
+ * one method the dial actually calls.
  */
 type WakeTargetNamespace = {
-  getByName(name: string): {
-    wakeStreamSubscriber(
-      request: StreamSubscriberWakeRequest,
-    ): Promise<StreamSubscriberWakeResponse>;
-  };
+  getByName(name: string): WakeTargetStub;
 };
 
 function parseStreamDurableObjectName(name: string | undefined) {

@@ -244,18 +244,18 @@ function makeHarness() {
   };
 }
 
-/** wake(), then fire the alarm whenever a retry is pending, until the subscription parks. */
-async function driveUntilParked(h: ReturnType<typeof makeHarness>): Promise<void> {
+/** wake(), then fire the alarm whenever a retry is pending, until `parks` park facts exist. */
+async function driveUntilParked(h: ReturnType<typeof makeHarness>, parks = 1): Promise<void> {
   h.subscribers.wake();
   await h.settle();
-  for (let round = 0; round < 200 && h.factsOfType(PARKED).length === 0; round += 1) {
+  for (let round = 0; round < 400 && h.factsOfType(PARKED).length < parks; round += 1) {
     const next = h.store.minNextAttemptAt();
     if (next === null) throw new Error("no pending retry while driving toward park");
     h.advanceTo(Math.max(h.now(), next) + 1);
     h.subscribers.onAlarm();
     await h.settle();
   }
-  if (h.factsOfType(PARKED).length === 0) throw new Error("subscription never parked");
+  if (h.factsOfType(PARKED).length < parks) throw new Error("subscription never parked");
 }
 
 function pushPayload(
@@ -407,7 +407,7 @@ describe("StreamSubscribers", () => {
     });
   });
 
-  it("d. parks at MAX_DELIVERY_ATTEMPTS with one idempotent parked fact, then goes silent", async () => {
+  it("d. parks at MAX_DELIVERY_ATTEMPTS with one state-guarded parked fact, then goes silent", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"));
@@ -419,8 +419,11 @@ describe("StreamSubscribers", () => {
 
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
     const parkedFacts = h.factsOfType(PARKED);
+    // State-guarded, not idempotency-keyed: the fold's parkedAtOffset is what
+    // suppresses duplicates, so a park after a resume at an unmoved cursor
+    // still lands as a NEW fact (the park-resume-park regression below).
     expect(parkedFacts).toHaveLength(1);
-    expect(parkedFacts[0].idempotencyKey).toBe("subscription-parked:k:0");
+    expect(parkedFacts[0].idempotencyKey).toBeUndefined();
     expect(parkedFacts[0].payload).toMatchObject({
       subscriptionKey: "k",
       atOffset: 0,
@@ -434,6 +437,14 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
     expect(h.factsOfType(PARKED)).toHaveLength(1);
+
+    // Park-resume-park at the SAME cursor: the second park must land as a new
+    // fact — the subscription turns red again instead of retrying forever.
+    delete h.configured["k"].parkedAtOffset;
+    h.subscribers.onResumed("k");
+    await driveUntilParked(h, 2);
+    expect(h.factsOfType(PARKED)).toHaveLength(2);
+    expect(h.configured["k"].parkedAtOffset).toBe(0);
   });
 
   it("e. resume: onResumed retries immediately; onResumed with afterOffset seeks the cursor", async () => {
@@ -558,7 +569,7 @@ describe("StreamSubscribers", () => {
     ]);
     const parkedFacts = h.factsOfType(PARKED);
     expect(parkedFacts).toHaveLength(1);
-    expect(parkedFacts[0].idempotencyKey).toBe("subscription-parked:k:2");
+    expect(parkedFacts[0].idempotencyKey).toBeUndefined();
     expect(parkedFacts[0].payload).toMatchObject({ subscriptionKey: "k", atOffset: 2 });
     // NOT all events were skipped: offsets 3 and 4 are still owed delivery.
     expect(h.row("k")?.ackedOffset).toBe(2);

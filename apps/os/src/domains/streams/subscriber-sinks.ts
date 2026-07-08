@@ -27,7 +27,17 @@
 // `retainProcessEventBatch` below and the wire tests in
 // stream-wire.e2e.test.ts.
 
-import type { GetProcessorRuntimeState, ProcessEventBatch } from "./rpc-types.ts";
+import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
+import { itxLoopbackStub } from "../itx/utils.ts";
+import type {
+  GetProcessorRuntimeState,
+  ProcessEventBatch,
+  StreamPushEventBatch,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "./rpc-types.ts";
+import type { WakeDeliveryTarget } from "./core-processor-contract.ts";
+import type { SubscriberDial } from "./stream-subscribers.ts";
 import { disposeIgnoredRpcResult, isThenable } from "./stream-processor.ts";
 
 /** An RPC callback after retention: callable, disposable, with optional broken-transport signal. */
@@ -147,4 +157,89 @@ export function retainGetProcessorRuntimeState(
       },
     },
   );
+}
+
+// =============================================================================
+// The dial: how the spine reaches subscribers over real transports.
+// =============================================================================
+
+/** The one RPC method a wake-target Durable Object stub must expose. */
+export type WakeTargetStub = {
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+};
+
+/**
+ * Builds the spine's {@link SubscriberDial} from the Stream Durable Object's
+ * authority: a namespace resolver for wake pokes (policy — which namespaces
+ * exist, target validation — stays with the DO) and the project-scoped itx
+ * loopback for push expressions. Everything transport-shaped — retention of
+ * returned sinks, per-delivery stub lifecycles, expression walking over RPC —
+ * lives here, keeping this file the ONLY streams module that knows transports
+ * exist.
+ */
+export function createSubscriberDial(deps: {
+  /** The stream's projectId; push requires a project scope. */
+  projectId: string | null;
+  /** The Durable Object's `ctx.exports` (the in-worker loopback registry). */
+  exports: unknown;
+  /** Validate + resolve a wake target to its Durable Object stub (DO policy). */
+  wakeTargetStub(target: WakeDeliveryTarget): WakeTargetStub;
+  /** Where durable-sink delivery rejections land (spine: close → re-poke). */
+  onDurableDeliveryError(subscriptionKey: string, error: unknown): void;
+}): SubscriberDial {
+  return {
+    /**
+     * One poke: `wakeStreamSubscriber` on the target Durable Object. The
+     * response IS the whole handshake — checkpoint plus a live sink whose
+     * ownership transfers to this stream (returned-stub semantics:
+     * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/).
+     * The sink is retained here with the durable lane's result-pulling
+     * liveness policy attached.
+     */
+    async poke(target, request) {
+      const response = await deps.wakeTargetStub(target).wakeStreamSubscriber(request);
+      return {
+        checkpointOffset: response.checkpointOffset,
+        sink: retainProcessEventBatch(response.sink, {
+          onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
+        }),
+        subscriber: response.subscriber,
+        getRuntimeState: response.getRuntimeState,
+      };
+    },
+
+    /**
+     * One push delivery: evaluate the expression to a sink and invoke it with
+     * the batch. The root is the project-scoped itx every dynamic worker sees
+     * as `env.ITX` (the scheduler's script lane uses the identical recipe), so
+     * `["worker", "processEventBatch"]` reaches the project worker and
+     * `["streams", ["get", path], "ingest"]` reaches a sibling stream through
+     * exactly the calls ordinary user code would make. The awaited resolve is
+     * the ack; a reject propagates to the spine's retry/park machine. Both
+     * per-delivery stubs (the loopback binding and the itx root it minted) are
+     * disposed — dropping either unpulled leaks the remote reference for the
+     * isolate's lifetime.
+     */
+    async push(expression: ItxExpression, batch: StreamPushEventBatch) {
+      const projectId = deps.projectId;
+      if (projectId === null) {
+        throw new Error("push subscriptions require a project-scoped stream");
+      }
+      const binding = itxLoopbackStub(deps.exports, { projectId, path: "/" });
+      try {
+        const itx = await binding.get();
+        try {
+          const { receiver, value } = await evaluateItxExpression(itx, expression);
+          if (typeof value !== "function") {
+            throw new Error("push subscription expression did not resolve to a callable sink");
+          }
+          await Reflect.apply(value, receiver, [batch]);
+        } finally {
+          (itx as Partial<Disposable>)?.[Symbol.dispose]?.();
+        }
+      } finally {
+        binding[Symbol.dispose]?.();
+      }
+    },
+  };
 }

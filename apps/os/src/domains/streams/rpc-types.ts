@@ -97,11 +97,13 @@ export type StreamPushEventBatch = StreamEventBatch & {
   /** 1-based consecutive attempt count for this batch. */
   attempt: number;
   /**
-   * The exact committed `subscription-configured` event this delivery serves —
-   * so a receiver can configure itself from committed stream state without a
+   * The committed `subscription-configured` event this delivery serves — so a
+   * receiver can configure itself from committed stream state without a
    * side-channel registry (which stream, which selector, whose params).
+   * Narrowed to the fields the fold stores; an honest shape instead of a
+   * `StreamEvent` cast that pretends metadata/source survived.
    */
-  configuredEvent: StreamEvent;
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
 /**
