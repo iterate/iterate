@@ -6,7 +6,10 @@ import { cn } from "@iterate-com/ui/lib/utils";
  *
  * Uses CSS text-overflow so the full path is shown whenever it fits,
  * and only truncated (with ellipsis at the end) when space is tight.
- * The full path is always available on hover via tooltip.
+ * The tooltip reveals the full path, and only opens when it adds
+ * information: when the label is abbreviated (`label` differs from
+ * `path`) or when the displayed text is actually truncated. A label
+ * that already shows the full path in full gets no tooltip.
  */
 export function EventsStreamPathLabel({
   path,
@@ -18,18 +21,27 @@ export function EventsStreamPathLabel({
   className?: string;
 }) {
   const displayValue = label ?? path;
-  const textNode = (
-    <span className={cn("block min-w-0 truncate whitespace-nowrap font-mono", className)}>
-      {displayValue}
-    </span>
-  );
 
   return (
-    <Tooltip>
+    <Tooltip
+      onOpenChange={(open, eventDetails) => {
+        if (!open || displayValue !== path) return;
+        const text = eventDetails.trigger?.querySelector("[data-slot=stream-path-label-text]");
+        const truncated = text != null && text.scrollWidth > text.clientWidth;
+        if (!truncated) eventDetails.cancel();
+      }}
+    >
       <TooltipTrigger render={<span className="inline-flex min-w-0 max-w-full" />}>
-        {textNode}
+        <span
+          data-slot="stream-path-label-text"
+          className={cn("block min-w-0 truncate whitespace-nowrap font-mono", className)}
+        >
+          {displayValue}
+        </span>
       </TooltipTrigger>
-      <TooltipContent>
+      {/* side="right" so an open tooltip never covers the list item above; the
+          extra offset keeps the arrow from sitting on top of the label */}
+      <TooltipContent side="right" sideOffset={10}>
         <p className="font-mono text-xs">{path}</p>
       </TooltipContent>
     </Tooltip>
