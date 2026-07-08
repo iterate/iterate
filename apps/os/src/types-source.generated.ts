@@ -691,8 +691,11 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-  /** Committed file contents at HEAD; null when the path does not exist. */
-  readFile(input: { path: string }): Promise<{
+  /**
+   * Committed file contents at HEAD; null when the path does not exist.
+   * \`encoding: "base64"\` reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -1755,6 +1758,12 @@ export type RepoFileChange =
   | {
       path: string;
       content: string;
+    }
+  | {
+      path: string;
+      /** Standard base64 of the file's raw bytes — the binary write lane
+       * (images, PDFs, …), matching the \`files.put\` string convention. */
+      contentBase64: string;
     }
   | {
       path: string;

@@ -18,6 +18,12 @@ export type RepoFileChange =
     }
   | {
       path: string;
+      /** Standard base64 of the file's raw bytes — the binary write lane
+       * (images, PDFs, …), matching the `files.put` string convention. */
+      contentBase64: string;
+    }
+  | {
+      path: string;
       delete: true;
     };
 

@@ -25,7 +25,7 @@ import type {
   RepoFileChange,
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
-import { RepoArtifactNameCodec } from "./utils.ts";
+import { RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -125,6 +125,31 @@ export class RepoDurableObject extends DurableObject<Env> {
       include?: string[];
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
+    const { filesystem, head } = await this.#checkout(input);
+
+    // Mask paths BEFORE reading contents: an excluded tree (a committed
+    // node_modules/, build output) should cost a directory walk, not reads.
+    const paths = await walkCheckoutPaths(filesystem);
+    const selected = filterWorkerSnapshotPaths(paths.sort(), {
+      exclude: input.exclude,
+      include: input.include,
+    });
+    const files: Record<string, string> = {};
+    for (const path of selected) {
+      files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
+    }
+    return { commitOid: head.oid, files };
+  }
+
+  /**
+   * A checked-out filesystem at a branch head or pinned commit — the one
+   * clone pathway every read on this object goes through (file snapshots and
+   * single-file reads alike).
+   */
+  async #checkout(input: { branch?: string; commitOid?: string } = {}): Promise<{
+    filesystem: InMemoryFs;
+    head: { oid: string };
+  }> {
     const repo = await this.gitAccess();
     const branch = input.branch ?? repo.defaultBranch;
 
@@ -169,19 +194,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         ({ filesystem, head } = await clone());
       }
     }
-
-    // Mask paths BEFORE reading contents: an excluded tree (a committed
-    // node_modules/, build output) should cost a directory walk, not reads.
-    const paths = await walkCheckoutPaths(filesystem);
-    const selected = filterWorkerSnapshotPaths(paths.sort(), {
-      exclude: input.exclude,
-      include: input.include,
-    });
-    const files: Record<string, string> = {};
-    for (const path of selected) {
-      files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
-    }
-    return { commitOid: head.oid, files };
+    return { filesystem, head };
   }
 
   whoami(): string {
@@ -290,9 +303,23 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.put(`repo-pushed-head:${result.branch}`, result.commitOid);
   }
 
-  /** Committed file contents at HEAD, or null when the path does not exist. */
-  async readFile(input: { path: string }): Promise<RepoFileRead | null> {
+  /**
+   * Committed file contents at HEAD, or null when the path does not exist.
+   * `encoding: "base64"` reads the raw bytes (images, PDFs — anything a utf8
+   * decode would corrupt) and returns them base64-encoded.
+   */
+  async readFile(input: {
+    path: string;
+    encoding?: "utf8" | "base64";
+  }): Promise<RepoFileRead | null> {
     const path = normalizeRepoFilePath(input.path);
+    if (input.encoding === "base64") {
+      const { filesystem, head } = await this.#checkout();
+      const absolutePath = `${REPO_DIR}/${path}`;
+      if (!(await filesystem.exists(absolutePath))) return null;
+      const bytes = await filesystem.readFileBytes(absolutePath);
+      return { commitOid: head.oid, content: bytesToBase64(bytes), path };
+    }
     // Exact map lookup, deliberately not an include mask: glob metacharacters
     // in a filename must not change what this reads.
     const { commitOid, files } = await this.getFilesSnapshot();
@@ -752,7 +779,11 @@ async function commitFilesToArtifactRepo(input: {
         if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
           await filesystem.mkdir(dir, { recursive: true });
         }
-        await filesystem.writeFile(absolutePath, change.content);
+        if ("contentBase64" in change) {
+          await filesystem.writeFileBytes(absolutePath, base64ToBytes(change.contentBase64));
+        } else {
+          await filesystem.writeFile(absolutePath, change.content);
+        }
         await git.add({ filepath: path });
       }
       return {};
@@ -973,6 +1004,12 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
     changes: input.changes.map((change) => {
       const path = normalizeRepoFilePath(change.path);
       if ("delete" in change) return { delete: true, path };
+      if ("contentBase64" in change) {
+        if (typeof change.contentBase64 !== "string") {
+          throw new Error(`commitFiles change "${path}" contentBase64 must be a string.`);
+        }
+        return { contentBase64: change.contentBase64, path };
+      }
       if (typeof change.content !== "string") {
         throw new Error(`commitFiles change "${path}" content must be a string.`);
       }
