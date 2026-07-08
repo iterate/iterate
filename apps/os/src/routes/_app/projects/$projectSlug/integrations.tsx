@@ -268,13 +268,15 @@ function ProjectIntegrationsContent() {
   }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
   const resetFeedViewSearch = () => {
-    void navigate({
+    return navigate({
       search: (previous) => ({ ...previous, ...STREAM_VIEW_SEARCH_RESET }),
       replace: true,
     });
   };
-  const openFeed = (panel: FeedPanel) => {
-    resetFeedViewSearch();
+  const openFeed = async (panel: FeedPanel) => {
+    if (feedPanel != null && feedPanel.streamPath !== panel.streamPath) {
+      await resetFeedViewSearch();
+    }
     setFeedPanel(panel);
   };
   const openProjectFeed = () =>
@@ -401,7 +403,7 @@ function ProjectIntegrationsContent() {
         feedPanel={feedPanel}
         onOpenChange={(open) => {
           if (!open) {
-            resetFeedViewSearch();
+            void resetFeedViewSearch();
             setFeedPanel(null);
           }
         }}
