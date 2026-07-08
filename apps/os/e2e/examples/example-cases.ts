@@ -239,6 +239,45 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       );
     },
   },
+  "workspace-edit-and-push": {
+    // Unique workspace per example × runtime: the path is durable identity
+    // (one Durable Object, one branch), so sharing one across the matrix
+    // would make the second runtime's edit() fail (oldString already
+    // replaced) and pushes race. Each run pays its own clone — seconds, not
+    // the sandbox's container boot — but the budget still covers a cold
+    // Artifacts clone with the 503-retry tail.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
+    assert: (result, ctx, expect) => {
+      expect(result).toMatchObject({
+        readmePresent: true,
+        edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
+        pushedBranch: `workspaces/examples/edit-${ctx.marker}`,
+      });
+      expect((result as { commitOid: string }).commitOid).toMatch(/^[0-9a-f]{40}$/);
+    },
+  },
+  "workspace-files-transfer": {
+    // Fresh workspace per run (same identity reasoning as above); the files
+    // paths are shared but every put() overwrites, and `note` makes each
+    // run's transferred content self-identifying.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({
+      note: `transfer-${marker}`,
+      workspacePath: `/workspaces/examples/transfer-${marker}`,
+    }),
+    assert: (result, ctx, expect) => {
+      expect(result).toMatchObject({
+        inWorkspace: `transfer-${ctx.marker}`,
+        published: {
+          contentType: "application/json",
+          path: "/examples/package-from-workspace.json",
+        },
+      });
+      expect((result as { published: { size: number } }).published.size).toBeGreaterThan(0);
+      expect((result as { urlHost: string }).urlHost).toContain("iterate-files--");
+    },
+  },
   "repo-commit-files": {
     // Unique content per run so the commit is never a no-op on the shared
     // matrix project.
