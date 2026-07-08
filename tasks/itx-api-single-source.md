@@ -89,11 +89,18 @@ practical (a temp-dir + `getSemanticDiagnostics` pass is acceptable there).
       commit on this branch; see the implementation log for the merge-policy
       details (main's post-#1655 features restyled into the branch's
       docstrings-on-classes convention)_
-- [ ] Introduce `IterateRpcTarget<Name extends string>` in `rpc-targets.ts`;
+- [x] Introduce `IterateRpcTarget<Name extends string>` in `rpc-targets.ts`;
       migrate every RpcTarget class to it (including relay classes, whose
-      `Name` is the contract they front)
-- [ ] Rewrite `scripts/generate-itx-api.ts` discovery: heritage-chain check +
-      `Name` type argument; delete `RELAY_CONTRACTS` and the suffix regex
+      `Name` is the contract they front) — _all 44 classes migrated; relays use
+      an explicit `IterateRpcRelay<Name>` marker subclass rather than
+      "Name resolves to an exported type ⇒ relay", which would have misfired on
+      name collisions (an unrelated `Project` type exists in
+      project-server-fns.ts); class hierarchies pass the name through the
+      parent's generic (`StreamCollectionRpcTarget<Name = "StreamCollection">`)_
+- [x] Rewrite `scripts/generate-itx-api.ts` discovery: heritage-chain check +
+      `Name` type argument; delete `RELAY_CONTRACTS` and the suffix regex —
+      _regenerated output is byte-identical to the suffix-convention output,
+      confirming the refactor preserves the published contract exactly_
 - [ ] Port the generator to `@typescript/native-preview/unstable/sync`
 - [ ] Add the `implements`-injection type test (deterministic `.replace`, then
       typecheck) alongside the freshness + standalone tests

@@ -9,13 +9,16 @@
 //
 // How it works: build a TS program over rpc-targets.ts, start at
 // UnauthenticatedOsRpcTarget, and walk every type reachable from its public
-// members. RpcTarget classes become interfaces (class name minus "RpcTarget",
-// plus a few naming overrides); named type aliases and interfaces referenced in
-// signatures are discovered wherever they live (their domain modules) and
-// emitted once — checker-expanded when the alias is a bare type-reference
-// (`z.infer<…>`, `ProcessorState<…>`, i.e. a derived type that would not be
-// import-free copied literally), and copied verbatim otherwise (hand-authored
-// literal shapes, which keeps their docstrings and generics intact).
+// members. Classes extending IterateRpcTarget<"Name"> become `interface Name`
+// (the string-literal type argument IS the published name — no naming
+// convention, no override table); classes extending IterateRpcRelay<"Name">
+// instead publish the existing hand-authored contract of that name. Named type
+// aliases and interfaces referenced in signatures are discovered wherever they
+// live (their domain modules) and emitted once — checker-expanded when the
+// alias is a bare type-reference (`z.infer<…>`, `ProcessorState<…>`, i.e. a
+// derived type that would not be import-free copied literally), and copied
+// verbatim otherwise (hand-authored literal shapes, which keeps their
+// docstrings and generics intact).
 //
 // Regenerate: pnpm generate:itx-api
 // Freshness is enforced by src/itx-api.generated.test.ts.
@@ -29,29 +32,9 @@ const projectDir = fileURLToPath(new URL("..", import.meta.url));
 const rpcTargetsPath = path.join(projectDir, "src/rpc-targets.ts");
 const outPath = path.join(projectDir, "src/itx-api.generated.ts");
 
-/**
- * Relay classes: thin passthroughs that don't define a surface of their own but
- * forward to an existing hand-authored contract (a subscription handle, a
- * processor RPC facade, a dynamic proxy). Instead of emitting an interface from
- * the class's members, the generator renames mentions of the class to the named
- * contract and emits THAT (from the discovered named-type registry). The class
- * stays honest either by `implements <contract>` or by the `return new …()`
- * call site in rpc-targets.ts being typed as the contract.
- *
- * This is the ONLY class-name mapping. Every other class publishes under its
- * name minus the `RpcTarget` suffix, so a capability that wants a different
- * public name is named to match (e.g. `SlackCapabilityRpcTarget` → `SlackCapability`).
- */
-const RELAY_CONTRACTS: Record<string, string> = {
-  ProcessorRelayRpcTarget: "StreamProcessorRpc",
-  StreamProcessorRpcTarget: "StreamProcessorRpc",
-  McpClientRpcTarget: "McpClientRpc",
-  OpenApiRpcTarget: "OpenApiRpc",
-  DynamicWorkerRpcTarget: "DynamicWorkerCapability",
-  StreamSubscriptionRpcTarget: "StreamSubscriptionHandle",
-  ProcessorStateSubscriptionRpcTarget: "ProcessorStateSubscriptionHandle",
-  ProjectEgressInterceptRpcTarget: "ProjectEgressIntercept",
-};
+/** The opt-in roots in rpc-targets.ts (see their docstrings there). */
+const ITERATE_ROOT = "IterateRpcTarget";
+const RELAY_ROOT = "IterateRpcRelay";
 
 /**
  * Public members that are host-side plumbing, never part of the RPC contract.
@@ -101,27 +84,77 @@ export function generateItxApi(): string {
 
   // ── Registries ─────────────────────────────────────────────────────────────
 
-  /** Every RpcTarget class in rpc-targets.ts, by class name. */
-  const classesByName = new Map<string, ts.ClassDeclaration>();
+  /** Every class declared in rpc-targets.ts, by class name. */
+  const allClasses = new Map<string, ts.ClassDeclaration>();
   for (const statement of rpcTargetsFile.statements) {
-    if (ts.isClassDeclaration(statement) && statement.name?.text.endsWith("RpcTarget")) {
-      classesByName.set(statement.name.text, statement);
+    if (ts.isClassDeclaration(statement) && statement.name) {
+      allClasses.set(statement.name.text, statement);
     }
   }
 
-  /** class name -> emitted interface name (or relay contract name). */
-  const renameMap = new Map<string, string>();
-  /** emitted interface name -> class, for classes that DO define a surface. */
-  const classByPublicName = new Map<string, ts.ClassDeclaration>();
-  for (const [className, decl] of classesByName) {
-    const relayContract = RELAY_CONTRACTS[className];
-    if (relayContract) {
-      renameMap.set(className, relayContract);
-      continue;
+  const extendsClauseOf = (decl: ts.ClassDeclaration): ts.ExpressionWithTypeArguments | undefined =>
+    decl.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
+
+  /**
+   * Walk the extends chain to the opt-in root. Returns which root terminates
+   * the chain (relay classes go through IterateRpcRelay, which itself extends
+   * IterateRpcTarget), or undefined for a class that never opted in.
+   */
+  const rootOf = (
+    decl: ts.ClassDeclaration,
+  ): typeof ITERATE_ROOT | typeof RELAY_ROOT | undefined => {
+    const base = extendsClauseOf(decl)?.expression.getText();
+    if (base === RELAY_ROOT) return RELAY_ROOT;
+    if (base === ITERATE_ROOT) return ITERATE_ROOT;
+    const parent = base ? allClasses.get(base) : undefined;
+    return parent ? rootOf(parent) : undefined;
+  };
+
+  /**
+   * The published name: the string-literal type argument in the class's own
+   * extends clause (`extends IterateRpcTarget<"Stream">`, or
+   * `extends ParentClass<"ProjectStreamCollection">` for a subclass). A class
+   * hierarchy's PARENT names itself in its own type-parameter default
+   * (`class X<Name extends string = "StreamCollection"> extends IterateRpcTarget<Name>`),
+   * so every published name is spelled exactly once, at the class that defines it.
+   */
+  const publishedNameOf = (decl: ts.ClassDeclaration): string => {
+    const clause = extendsClauseOf(decl);
+    const arg = clause?.typeArguments?.[0];
+    if (arg && ts.isLiteralTypeNode(arg) && ts.isStringLiteral(arg.literal)) {
+      return arg.literal.text;
     }
-    const publicName = className.replace(/RpcTarget$/, "");
+    if (arg && ts.isTypeReferenceNode(arg)) {
+      const param = decl.typeParameters?.find((tp) => tp.name.text === arg.typeName.getText());
+      const fallback = param?.default;
+      if (fallback && ts.isLiteralTypeNode(fallback) && ts.isStringLiteral(fallback.literal)) {
+        return fallback.literal.text;
+      }
+    }
+    throw new Error(
+      `class ${decl.name?.text} opted into the itx contract (extends ${ITERATE_ROOT}) but does ` +
+        `not spell its published name as a string literal — write ` +
+        `\`extends ${ITERATE_ROOT}<"Name">\` (or pass/default the literal through the parent's generic).`,
+    );
+  };
+
+  /** class name -> published name (its emitted interface, or its relay contract). */
+  const renameMap = new Map<string, string>();
+  /** published interface name -> class, for classes that DO define a surface. */
+  const classByPublicName = new Map<string, ts.ClassDeclaration>();
+  /** published relay contract names (must resolve to hand-authored named types). */
+  const relayContracts = new Set<string>();
+  for (const [className, decl] of allClasses) {
+    if (className === ITERATE_ROOT || className === RELAY_ROOT) continue;
+    const root = rootOf(decl);
+    if (!root) continue;
+    const publicName = publishedNameOf(decl);
     renameMap.set(className, publicName);
-    classByPublicName.set(publicName, decl);
+    if (root === RELAY_ROOT) {
+      relayContracts.add(publicName);
+    } else {
+      classByPublicName.set(publicName, decl);
+    }
   }
 
   /**
@@ -151,10 +184,12 @@ export function generateItxApi(): string {
   }
 
   // Every relay must forward to a contract that actually exists as a hand-authored
-  // named type — otherwise a typo'd or missing entry would emit a dangling name.
-  for (const contract of Object.values(RELAY_CONTRACTS)) {
+  // named type — otherwise a typo'd or renamed contract would emit a dangling name.
+  for (const contract of relayContracts) {
     if (!namedDecls.has(contract)) {
-      throw new Error(`RELAY_CONTRACTS points at "${contract}", which no module exports as a type`);
+      throw new Error(
+        `a class extends ${RELAY_ROOT}<"${contract}">, but no module exports a type of that name`,
+      );
     }
   }
 
@@ -257,13 +292,11 @@ export function generateItxApi(): string {
     const lines: string[] = [];
     const classDoc = jsDocOf(cls);
     if (classDoc) lines.push(classDoc);
-    // A class extending another RpcTarget is an interface extension: emit only
-    // the subclass's own members and inherit the rest.
-    const baseClassName = cls.heritageClauses
-      ?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)
-      ?.types[0]?.expression.getText();
-    const basePublicName =
-      baseClassName && baseClassName !== "RpcTarget" ? renameMap.get(baseClassName) : undefined;
+    // A class extending another published class is an interface extension:
+    // emit only the subclass's own members and inherit the rest. (The opt-in
+    // roots themselves are not in renameMap, so a direct extends is no clause.)
+    const baseClassName = extendsClauseOf(cls)?.expression.getText();
+    const basePublicName = baseClassName ? renameMap.get(baseClassName) : undefined;
     lines.push(
       `export interface ${publicName}${basePublicName ? ` extends ${basePublicName}` : ""} {`,
     );

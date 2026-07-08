@@ -207,6 +207,44 @@ import {
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 
+/**
+ * The root of every itx-facing RpcTarget. Extending it (directly, or through
+ * another IterateRpcTarget subclass) is the opt-in signal for the generated
+ * public contract (scripts/generate-itx-api.ts), and `Name` is the published
+ * interface name — spelled exactly once, as a string literal, in the class
+ * declaration that defines the surface:
+ *
+ *     class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> { … }
+ *
+ * emits `export interface ProjectEgress { … }` from the class's public
+ * members (their docstrings and explicit signatures ARE the contract text).
+ * A class hierarchy passes the name through its parent's generic — the parent
+ * names itself in the parameter default, the subclass in the argument:
+ *
+ *     class StreamCollectionRpcTarget<Name extends string = "StreamCollection">
+ *       extends IterateRpcTarget<Name> { … }
+ *     class ProjectStreamCollectionRpcTarget
+ *       extends StreamCollectionRpcTarget<"ProjectStreamCollection"> { … }
+ *
+ * For a class that fronts an existing hand-authored contract instead of
+ * defining its own interface, see {@link IterateRpcRelay}.
+ */
+export class IterateRpcTarget<Name extends string> extends RpcTarget {
+  /** Phantom carrier for the published name; never assigned, invisible at runtime. */
+  declare protected readonly __itxPublicName?: Name;
+}
+
+/**
+ * A relay: an RpcTarget that forwards to an existing hand-authored contract
+ * named `Name` (a subscription handle, a processor RPC facade, a dynamic
+ * proxy) rather than defining a surface of its own. The generator renames
+ * mentions of the class to `Name` and publishes THAT type — which must be an
+ * exported type alias or interface somewhere in the app. The class stays
+ * honest either by `implements <contract>` or by its construction sites being
+ * typed as the contract.
+ */
+export class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
+
 type FetchOnly = Pick<Fetcher, "fetch">;
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
@@ -246,7 +284,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
  * behind domain methods. Domain helpers can construct common event shapes, but
  * callers and processors still work with explicit events.
  */
-export class StreamRpcTarget extends RpcTarget {
+export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
@@ -378,7 +416,9 @@ export class StreamRpcTarget extends RpcTarget {
 }
 
 /** Stream catalog for either a project or the deployment-wide global scope. */
-class StreamCollectionRpcTarget extends RpcTarget {
+class StreamCollectionRpcTarget<
+  Name extends string = "StreamCollection",
+> extends IterateRpcTarget<Name> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: "Stream catalog: get(path) returns the durable event stream at that path.",
@@ -402,7 +442,7 @@ class StreamCollectionRpcTarget extends RpcTarget {
 }
 
 /** Project-scoped stream catalog with reduced-state listing. */
-class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget {
+class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"ProjectStreamCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
     super(projectProps);
   }
@@ -425,7 +465,7 @@ class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget {
  * the DO so every write returns read-your-writes visible and alarm-armed;
  * this target only normalizes input sugar before dialing.
  */
-class SchedulerRpcTarget extends RpcTarget {
+class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -485,7 +525,7 @@ class SchedulerRpcTarget extends RpcTarget {
 }
 
 /** Path-addressed Scheduler catalog; `itx.scheduler` is `get("/scheduler/primary")`. */
-class SchedulerCollectionRpcTarget extends RpcTarget {
+class SchedulerCollectionRpcTarget extends IterateRpcTarget<"SchedulerCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -565,7 +605,7 @@ async function requestRepoCreate(input: {
 }
 
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
-class RepoRpcTarget extends RpcTarget {
+class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes.`,
@@ -650,7 +690,9 @@ class RepoRpcTarget extends RpcTarget {
 }
 
 /** Repo catalog for either a project or the deployment-wide global scope. */
-class RepoCollectionRpcTarget extends RpcTarget {
+class RepoCollectionRpcTarget<
+  Name extends string = "RepoCollection",
+> extends IterateRpcTarget<Name> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: "Repo catalog: get(path) / create({ path }).",
@@ -683,7 +725,7 @@ class RepoCollectionRpcTarget extends RpcTarget {
 }
 
 /** Project-scoped repo catalog with reduced-state listing. */
-class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget {
+class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRepoCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
     super(projectProps);
   }
@@ -695,7 +737,7 @@ class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget {
 }
 
 /** Agent catalog within one project. */
-class AgentCollectionRpcTarget extends RpcTarget {
+class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -743,7 +785,7 @@ class AgentCollectionRpcTarget extends RpcTarget {
  * (`itx.sandbox` on `/agents/bla` is `sandboxes.get("/sandboxes/cloudflare/agents/bla")`);
  * standalone sandboxes conventionally live under `/sandboxes/cloudflare/...`.
  */
-class SandboxCollectionRpcTarget extends RpcTarget {
+class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -776,7 +818,7 @@ class SandboxCollectionRpcTarget extends RpcTarget {
 }
 
 /** Secret catalog within one project. */
-class SecretCollectionRpcTarget extends RpcTarget {
+class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -807,7 +849,7 @@ class SecretCollectionRpcTarget extends RpcTarget {
 }
 
 /** Path-addressed secret capability. Secret material has no public read API. */
-class SecretRpcTarget extends RpcTarget {
+class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `The secret at "${this.props.path}": describe() for metadata, update() to set, fetch() to use it in an egress request via placeholder substitution. The raw value is never returned.`,
@@ -859,7 +901,7 @@ class SecretRpcTarget extends RpcTarget {
 type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
 
 /** One project file, addressed by path. */
-class FileHandleRpcTarget extends RpcTarget {
+class FileHandleRpcTarget extends IterateRpcTarget<"FileHandle"> {
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -917,7 +959,7 @@ class FileHandleRpcTarget extends RpcTarget {
  * agent's own path. Bytes are served to any HTTP client via signed URLs
  * (`FileHandle.url()`).
  */
-class FilesRpcTarget extends RpcTarget {
+class FilesRpcTarget extends IterateRpcTarget<"Files"> {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -946,7 +988,7 @@ class FilesRpcTarget extends RpcTarget {
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
-class AiRpcTarget extends RpcTarget {
+class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -994,7 +1036,7 @@ class AiRpcTarget extends RpcTarget {
 }
 
 /** Cloudflare Browser Run binding exposed through ITX. */
-class CfBrowserCapabilityRpcTarget extends RpcTarget {
+class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -1027,7 +1069,7 @@ class CfBrowserCapabilityRpcTarget extends RpcTarget {
 }
 
 /** Cloudflare Images binding exposed through ITX as one-call helpers. */
-class CfImagesCapabilityRpcTarget extends RpcTarget {
+class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -1064,7 +1106,7 @@ class CfImagesCapabilityRpcTarget extends RpcTarget {
 }
 
 /** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */
-class CfVideosCapabilityRpcTarget extends RpcTarget {
+class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -1091,7 +1133,7 @@ class CfVideosCapabilityRpcTarget extends RpcTarget {
 }
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
-class CloudflareIntegrationsRpcTarget extends RpcTarget {
+class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -1177,7 +1219,7 @@ function describeConnectionSdk(input: {
  * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
  * verified itx-side.
  */
-class ProjectIntegrationsRpcTarget extends RpcTarget {
+class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations"> {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -1496,7 +1538,7 @@ class ProjectIntegrationsRpcTarget extends RpcTarget {
  * Inside an email thread agent scope (`/agents/email/t<id>`), `reply` derives
  * the counterpart, subject, and threading headers from the thread stream.
  */
-class EmailCapabilityRpcTarget extends RpcTarget {
+class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -1883,7 +1925,7 @@ class EmailCapabilityRpcTarget extends RpcTarget {
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
-class AgentChatRpcTarget extends RpcTarget {
+class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -1951,7 +1993,7 @@ type AgentRpcTargetProps = {
 };
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
-class AgentRpcTarget extends RpcTarget {
+class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: AgentRpcTargetProps;
@@ -2122,7 +2164,7 @@ class AgentRpcTarget extends RpcTarget {
  * `get(ref)` mirrors the desired capability-tree shape:
  * `itx.projects.get("prj").workers.get(ref).someRpcMethod()`.
  */
-class DynamicWorkerCollectionRpcTarget extends RpcTarget {
+class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -2167,7 +2209,7 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget {
  * method surface, so this wrapper deliberately exposes no method names beyond
  * the flattened capability dispatcher.
  */
-class DynamicWorkerRpcTarget extends RpcTarget {
+class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
   readonly #flattenNestedPaths: boolean;
   readonly #props: { ctx: CfExecutionContext; projectId: string };
@@ -2275,7 +2317,7 @@ class DynamicWorkerRpcTarget extends RpcTarget {
 type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
 
 /** Catalog of projects reachable from a {@link Session}. */
-export class ProjectCollectionRpcTarget extends RpcTarget {
+export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -2631,7 +2673,7 @@ type CapabilityHostRpcTargetProps = {
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
-class CapabilityHostRpcTarget extends RpcTarget {
+class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   // Private on purpose: on the capability surfaces, every PUBLIC member name is
   // claimed capability namespace (the fallback proxy checks `key in target`,
   // and ITX_SURFACE_MEMBER_NAMES bans mounts from shadowing members). A public
@@ -2720,7 +2762,7 @@ class CapabilityHostRpcTarget extends RpcTarget {
 }
 
 /** Catalog of capability scopes within one project (`itx.capabilityHosts`). */
-class CapabilityHostCollectionRpcTarget extends RpcTarget {
+class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHostCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -2825,7 +2867,7 @@ type ProjectRpcTargetProps = {
  * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
  * round trip; today we don't.
  */
-export class ProjectRpcTarget extends RpcTarget {
+export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: ProjectRpcTargetProps;
@@ -3191,7 +3233,7 @@ async function projectProcessorState(projectId: string) {
  * deployment-wide surfaces backed by `projectId: null`, so only admin/internal
  * auth can reach them.
  */
-class SessionRpcTarget extends RpcTarget {
+class SessionRpcTarget extends IterateRpcTarget<"Session"> {
   constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
   }
@@ -3245,7 +3287,7 @@ class SessionRpcTarget extends RpcTarget {
  * canonical Cap'n Web pattern: authority cannot be forged, only handed back by a
  * method that already checked you.
  */
-export class UnauthenticatedOsRpcTarget extends RpcTarget {
+export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"UnauthenticatedOs"> {
   constructor(
     readonly props: {
       config: AppConfig;
@@ -3296,7 +3338,7 @@ type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
  * live subscription; `[]` means "caught up for now". Dispose it when finished
  * (`using pager = stream.readEvents(...)`).
  */
-class StreamEventPagerRpcTarget extends RpcTarget {
+class StreamEventPagerRpcTarget extends IterateRpcTarget<"StreamEventPager"> {
   readonly #input: Omit<StreamEventReadInput, "afterOffset">;
   readonly #readPage: (input?: StreamEventReadInput) => Promise<StreamEvent[]>;
   #afterOffset: number;
@@ -3345,7 +3387,7 @@ class StreamEventPagerRpcTarget extends RpcTarget {
  * by the stream offset that mounted the capability, so disposing an older
  * provision after a replacement cannot revoke the newer mount at the same path.
  */
-class CapabilityProvisionRpcTarget extends RpcTarget {
+class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `The ownership handle for the mount at "${this.path.join(".")}" (providedAtOffset ${this.providedAtOffset}): revoke() removes exactly this mount; disposal (\`using\`) revokes too.`,
@@ -3424,7 +3466,7 @@ class CapabilityProvisionRpcTarget extends RpcTarget {
  * the close function matters: a later subscription can reuse the same key, and
  * an old handle must not look up by key and close the replacement.
  */
-export class StreamSubscriptionRpcTarget extends RpcTarget {
+export class StreamSubscriptionRpcTarget extends IterateRpcRelay<"StreamSubscriptionHandle"> {
   readonly #close: () => void;
   readonly #isLive: () => boolean;
   readonly #streamMaxOffset: number;
@@ -3487,7 +3529,7 @@ export class StreamSubscriptionRpcTarget extends RpcTarget {
  * live runtime interceptor slot and, when there is no interceptor, performs the
  * terminal secret-substitution fetch path.
  */
-class ProjectEgressRpcTarget extends RpcTarget {
+class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -3521,7 +3563,7 @@ class ProjectEgressRpcTarget extends RpcTarget {
  * The Project Durable Object owns the retained live callback. This handle only
  * releases that exact retained callback if it is still the current interceptor.
  */
-export class ProjectEgressInterceptRpcTarget extends RpcTarget {
+export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgressIntercept"> {
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #release: () => void | Promise<void>;
   #releasePromise: Promise<void> | undefined;
@@ -3569,7 +3611,7 @@ export class StreamProcessorRpcTarget<
   Contract extends StreamProcessorContract,
   PublicState = ProcessorState<Contract>,
 >
-  extends RpcTarget
+  extends IterateRpcRelay<"StreamProcessorRpc">
   implements StreamProcessorRpc<PublicState>
 {
   readonly #processor: StreamProcessor<Contract, object>;
@@ -3651,7 +3693,7 @@ export class StreamProcessorRpcTarget<
 // (what authenticate() returns), which an itx holder does not have.
 const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
 
-class ItxExampleCatalogRpcTarget extends RpcTarget {
+class ItxExampleCatalogRpcTarget extends IterateRpcTarget<"ItxExampleCatalog"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -3699,7 +3741,10 @@ function exampleSummary(example: ItxExample): ItxExampleSummary {
  * each method awaits the resolved processor stub, then makes a plain method
  * call on it.
  */
-class ProcessorRelayRpcTarget<State> extends RpcTarget implements StreamProcessorRpc<State> {
+class ProcessorRelayRpcTarget<State>
+  extends IterateRpcRelay<"StreamProcessorRpc">
+  implements StreamProcessorRpc<State>
+{
   readonly #resolveProcessor: () => PromiseLike<unknown>;
 
   constructor(resolveProcessor: () => PromiseLike<unknown>) {
@@ -3773,7 +3818,7 @@ function projectStateChangeCallback<InternalState, PublicState>(
  * (a dead Durable Object incarnation makes the call itself reject — both
  * signals tell the client to re-subscribe).
  */
-class ProcessorStateSubscriptionRpcTarget extends RpcTarget {
+class ProcessorStateSubscriptionRpcTarget extends IterateRpcRelay<"ProcessorStateSubscriptionHandle"> {
   readonly #handle: StreamProcessorStateSubscriptionHandle;
 
   constructor(handle: StreamProcessorStateSubscriptionHandle) {
@@ -3807,7 +3852,7 @@ type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 // it gives every project web search with zero setup.
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 
-class McpClientCollectionRpcTarget extends RpcTarget {
+class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -3850,7 +3895,7 @@ class McpClientCollectionRpcTarget extends RpcTarget {
   }
 }
 
-class McpClientRpcTarget extends RpcTarget {
+class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
   static createLazyClient(input: McpClientConnectInput, deps: McpClientDeps) {
     return new McpClientRpcTarget({ config: input, ...deps });
   }
@@ -3915,7 +3960,7 @@ type OpenApiReadyState = {
   spec: Record<string, unknown>;
 };
 
-class OpenApiCollectionRpcTarget extends RpcTarget {
+class OpenApiCollectionRpcTarget extends IterateRpcTarget<"OpenApiCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -3935,7 +3980,7 @@ class OpenApiCollectionRpcTarget extends RpcTarget {
   }
 }
 
-class OpenApiRpcTarget extends RpcTarget {
+class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   readonly #ready: () => Promise<OpenApiReadyState>;
 
   static createLazyClient(input: OpenApiConnectInput, deps: OpenApiDeps) {
