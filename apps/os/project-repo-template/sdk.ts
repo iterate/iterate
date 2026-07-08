@@ -543,7 +543,10 @@ export interface SecretCollection extends Describable {
 
 /** Path-addressed secret capability. Secret material has no public read API. */
 export interface Secret extends Describable {
-  describe(): Promise<SecretDescription>;
+  /** The secret's self-report: the discovery {@link Description} merged with
+   * its public {@link SecretDescription} (audit, egress, hasMaterial, refresh).
+   * The raw value is never part of it. */
+  __describe(): Promise<Description & SecretDescription>;
   fetch(req: Request): Promise<Response>;
   processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
