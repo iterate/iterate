@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 branch: chat-snippet-stream-preview
 base: itx-chat-send-message-string
@@ -9,7 +9,7 @@ base: itx-chat-send-message-string
 
 ## Status summary
 
-Mostly done. The pure parser (`extractStreamingSendMessagePreview`) is
+Done. The pure parser (`extractStreamingSendMessagePreview`) is
 implemented with 15 hard unit tests (token-by-token prefix simulation), and
 wired into `LiveStepStream` in `agent-feed.tsx` — the preview renders as an
 in-flight assistant message bubble above the streaming code block. A demo
