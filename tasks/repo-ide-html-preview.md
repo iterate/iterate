@@ -8,15 +8,18 @@ branch: repo-ide-html-preview
 
 ## Status summary
 
-Spec committed; implementation not started yet. Planned: a Code/Preview toggle
-in the editor-pane file header for `.html`/`.htm` files, rendering the current
-working-tree buffer in a sandboxed iframe.
+Implemented and verified live; awaiting review on PR #1767. Code/Preview
+toggle on `.html`/`.htm` files renders the current buffer in a sandboxed
+iframe (`allow-scripts` only, opaque origin — verified in-frame:
+`origin: null`, `document.cookie` throws SecurityError). No known missing
+pieces; follow-up ideas listed at the bottom.
 
 ## Ask (verbatim, spinoff #2 from the repos mini-IDE task)
 
 > **HTML renderer.** Similar [to the markdown previewer — a toggle like
+>
 > > vscode's "Preview | Markdown" buttons in the top left]. Initially just
-> renders html and assumes inline styling.
+> > renders html and assumes inline styling.
 
 ## Design decisions (assumptions marked ⚠️)
 
@@ -55,10 +58,37 @@ working-tree buffer in a sandboxed iframe.
 
 ## Checklist
 
-- [ ] `preview` search param on the repo detail route + `useRepoIdeSearch`
-- [ ] `HtmlPreview` sandboxed-iframe component + html-path predicate
-- [ ] Code/Preview toggle in the file header for html files
-- [ ] Preview renders the live working buffer (unsaved edits included)
-- [ ] Verify live in local dev: create an html file with inline styles and a
-      script tag, toggle preview, confirm sandboxing stance, screenshot
-- [ ] typecheck / lint / format / scoped tests
+- [x] `preview` search param on the repo detail route + `useRepoIdeSearch` —
+      _`RepoDetailSearch` in the `$` route + `useRepoIdeSearch`/`patchSearch`
+      in `repo-ide.tsx`; diff and preview clear each other, file selection
+      clears both_
+- [x] `HtmlPreview` sandboxed-iframe component + html-path predicate —
+      _`html-preview.tsx` (component + sandbox rationale);
+      `isHtmlPreviewPath` lives in `repo-file-kinds.ts` beside the other
+      path→kind logic (also keeps the component file fast-refresh-clean)_
+- [x] Code/Preview toggle in the file header for html files —
+      _`CodePreviewToggle` in `repo-editor-pane.tsx`, rendered through a new
+      `leading` slot on `FileChrome`; header shows a "(Preview)" suffix like
+      "(Index)"/"(Working Tree)"_
+- [x] Preview renders the live working buffer (unsaved edits included) —
+      _preview shows the same `value` the editor edits (working → staged →
+      HEAD precedence)_
+- [x] Verify live in local dev: create an html file with inline styles and a
+      script tag, toggle preview, confirm sandboxing stance, screenshot —
+      _seeded `/repos/demo` with `hello.html` via the itx CLI; headless
+      Chrome walkthrough: toggle, live unsaved edit re-render, in-frame
+      script printed `origin: null` + cookie SecurityError, Diff↔Preview
+      exclusion; screenshots in the PR body_
+- [x] typecheck / lint / format / scoped tests — _all green; lint forced the
+      predicate move noted above_
+
+## Implementation log
+
+- View state follows the existing URL-param pattern (`diff`/`scm`/`staged`);
+  no new state store, no useState.
+- The toggle renders only for `.html`/`.htm`; a stale `preview=true` param on
+  a non-html file is simply ignored by the pane.
+- Follow-up ideas (out of scope): markdown preview lands the same toggle
+  shape (parallel task); a preview for the readonly Index/staged view;
+  auto-refresh preview while typing is moot today because preview replaces
+  the editor — a side-by-side split would change that.

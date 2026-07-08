@@ -28,9 +28,3 @@ export function HtmlPreview({ html }: { html: string }) {
     />
   );
 }
-
-/** Only real html documents get the Code/Preview toggle — .svg also opens as
- * html-highlighted text but is an image format, not a page. */
-export function isHtmlPreviewPath(path: string): boolean {
-  return /\.html?$/i.test(path);
-}
