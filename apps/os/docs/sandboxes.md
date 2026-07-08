@@ -21,7 +21,7 @@ const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic
 
 // … then address it by path, forever. get() returns the BARE
 // @cloudflare/sandbox stub — the SDK's whole surface, nothing wrapped on top.
-const sandbox = await itx.sandboxes.get(path); // "/sandboxes/basic/main"
+const sandbox = await itx.sandboxes.get(path); // "/sandboxes/main"
 await sandbox.exec("echo hi"); // first command boots the container
 await sandbox.gitCheckout("https://github.com/acme/repo", { targetDir: "/workspace/repo" });
 await sandbox.startProcess("bun server.js");
@@ -38,11 +38,22 @@ Sizes are Cloudflare's container **instance types, verbatim** — `lite`,
 ([limits](https://developers.cloudflare.com/containers/platform-details/limits/)).
 Cloudflare fixes the instance type per container class, so each instance type is its
 own Durable Object class + namespace (`src/domains/sandboxes/instance-types.ts` is the
-canonical table) and the instance type is a path segment —
-**`/sandboxes/<instanceType>/<name>`** — which makes the path alone route to the right
-namespace and is honest about the one thing a sandbox can never change.
+canonical table). The type is **configuration, not identity**: it never
+appears in the path. `create` claims the name by appending
+`create-requested` to the **`/sandboxes` catalogue stream** (idempotency-keyed
+by path, so the stream's native dedup settles racing creates atomically), and
+`get` routes to the right namespace by that claim's instance type. The
+catalogue and not the sandbox's own stream because ANY read materializes a
+stream — routing lookups through per-sandbox streams would mint a junk stream
+for every typo'd `get`. Honest about the one thing a sandbox can never change,
+without a type segment in every address.
 
-The path scheme follows the domain-prefix convention (`/secrets/...`,
+Paths are flat — **`/sandboxes/<name>`**, names are one path segment. The
+streams system materializes every path prefix as a stream (a new stream
+announces itself to all ancestors), so a nested path like
+`/sandboxes/lite/main` would mint a meaningless intermediate "folder" stream
+(`/sandboxes/lite`) that shows up in listings but is not a sandbox. The path
+scheme otherwise follows the domain-prefix convention (`/secrets/...`,
 `/repos/...`, `/agents/...`): a project path names exactly one kind of
 object, and every sandbox is discoverable as a stream under `/sandboxes/`.
 
@@ -61,17 +72,19 @@ Every lifecycle verb appears on the sandbox's own stream as a
 `<verb>-requested` / past-tense pair (the command, then the reality — see
 `sandbox-processor-contract.ts`):
 
-| Command                                                                        | What happens                                                                                                                                                  | Events                                                             |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `itx.sandboxes.create({ name, instanceType?, sleepAfter?, keepAlive?, env? })` | Durable record written; no container boots. Strict — destroyed names are retired, not recycled.                                                               | `create-requested` → `created` (+ `configured` when `env` given)   |
-| `start()`                                                                      | Boot the container now, restore `/workspace`, apply env vars. Also happens implicitly when a command reaches a stopped sandbox.                               | `start-requested` → `started` (implicit wakes emit `started` only) |
-| `sleep()`                                                                      | Snapshot `/workspace` to R2, then tear the container down. The sandbox stays created. The idle timer (`sleepAfter`, default 10m) does the same automatically. | `sleep-requested` → `backup-created` → `stopped`                   |
-| `destroy()`                                                                    | Permanent: container torn down, record tombstoned, `get()` refuses the path forever.                                                                          | `destroy-requested` → `stopped` → `destroyed`                      |
+| Command                                                                        | What happens                                                                                                                                                  | Events                                                                                           |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `itx.sandboxes.create({ name, instanceType?, sleepAfter?, keepAlive?, env? })` | Durable record written; no container boots. Strict — destroyed names are retired, not recycled.                                                               | `create-requested` (on the `/sandboxes` catalogue) → `created` (+ `configured` when `env` given) |
+| `start()`                                                                      | Boot the container now, restore `/workspace`, apply env vars. Also happens implicitly when a command reaches a stopped sandbox.                               | `start-requested` → `started` (implicit wakes emit `started` only)                               |
+| `sleep()`                                                                      | Snapshot `/workspace` to R2, then tear the container down. The sandbox stays created. The idle timer (`sleepAfter`, default 10m) does the same automatically. | `sleep-requested` → `backup-created` → `stopped`                                                 |
+| `destroy()`                                                                    | Permanent: container torn down, record tombstoned, `get()` refuses the path forever.                                                                          | `destroy-requested` → `stopped` → `destroyed`                                                    |
 
 `started`/`stopped` are the authoritative signal (they also fire for implicit
 wakes and idle sleeps); the `-requested` events are the record of who asked.
-Appends are best-effort by design: lifecycle telemetry never blocks or fails
-a container start/stop. `SandboxProcessor` folds the events into a small
+`create-requested` is the one durable-by-contract append — it IS the name
+claim and the routing record, so `create` awaits it. Everything else is
+best-effort by design: lifecycle telemetry never blocks or fails a container
+start/stop. `SandboxProcessor` folds the events into a small
 status projection (`status`, `instanceType`, `lastBackupId`, `env`) — it takes no
 actions and is not yet wired to a processor host.
 
