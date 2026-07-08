@@ -10,7 +10,7 @@ import {
   type SandboxLifecycleEventInput,
 } from "../sandbox-processor-contract.ts";
 import { SANDBOX_INSTANCE_TYPE_BINDINGS, type SandboxInstanceType } from "../instance-types.ts";
-import { githubTokenEnvForConnections, normalizeSandboxPath } from "../utils.ts";
+import { githubTokenEnvForConnections, assertSandboxPath } from "../utils.ts";
 
 /**
  * The workspace root inside every sandbox container: what the backup/restore
@@ -576,7 +576,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * whenever the runtime provides it).
    */
   #ensureIdentity(identity: SandboxIdentity): void {
-    const path = normalizeSandboxPath(identity.path);
+    const path = assertSandboxPath(identity.path);
     const expectedName = DurableObjectNameCodec.stringify({
       projectId: identity.projectId,
       path,
@@ -602,7 +602,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const name = this.ctx.id.name;
     if (name !== undefined) {
       const parsed = DurableObjectNameCodec.parse(name);
-      return { path: normalizeSandboxPath(parsed.path), projectId: parsed.projectId };
+      return { path: assertSandboxPath(parsed.path), projectId: parsed.projectId };
     }
     const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
     if (!stored) {

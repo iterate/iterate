@@ -376,11 +376,12 @@ return { current: await counter.current() }; // 2, and it persists under the key
     runtimes: ALL_RUNTIMES,
     code: `
 // Reuse the sandbox if it exists, create it otherwise. The path IS the
-// identity: same path, same sandbox (and its /workspace) until destroy() —
-// and it carries the instance type as its second segment, so derive both
-// create inputs from it. create is strict, so a concurrent creator can win
-// the race — swallow the create error and let the second get() be the arbiter.
-const path = (vars.sandboxPath ?? "/sandboxes/basic/example").replace(/^/*/, "/");
+// identity, verbatim — no normalization anywhere: same path, same sandbox
+// (and its /workspace) until destroy(). It carries the instance type as its
+// second segment, so derive both create inputs from it. create is strict, so
+// a concurrent creator can win the race — swallow the create error and let
+// the second get() be the arbiter.
+const path = vars.sandboxPath ?? "/sandboxes/basic/example";
 const [, , instanceType, ...nameSegments] = path.split("/");
 const sandbox = await itx.sandboxes.get(path).catch(async () => {
   await itx.sandboxes.create({ name: nameSegments.join("/"), instanceType }).catch(() => {});

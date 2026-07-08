@@ -42,7 +42,7 @@ import {
   SandboxInstanceType,
 } from "./domains/sandboxes/instance-types.ts";
 import {
-  normalizeSandboxPath,
+  assertSandboxPath,
   sandboxPathFor,
   sandboxInstanceTypeForPath,
 } from "./domains/sandboxes/utils.ts";
@@ -691,13 +691,13 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
   }
 
   async get(path: string) {
-    const normalized = normalizeSandboxPath(path);
-    const stub = this.#stub(normalized);
+    const asserted = assertSandboxPath(path);
+    const stub = this.#stub(asserted);
     // Getting never creates: the sandbox proves it was created (and not
     // destroyed) before the stub reaches the caller. Container runtimes do
     // not reliably surface `ctx.id.name`, so this call also re-asserts the
     // identity create() recorded — see SandboxDurableObject.assertCreated.
-    await stub.assertCreated({ path: normalized, projectId: this.props.projectId });
+    await stub.assertCreated({ path: asserted, projectId: this.props.projectId });
     return stub;
   }
 

@@ -1,4 +1,4 @@
-import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
 import { SANDBOX_INSTANCE_TYPES, type SandboxInstanceType } from "./instance-types.ts";
 
@@ -17,55 +17,54 @@ const SANDBOX_PATH_PREFIX = "/sandboxes";
  * type is part of identity because a Durable Object can never change
  * container class (= instance type). */
 export function sandboxPathFor(instanceType: SandboxInstanceType, name: string): string {
-  return normalizeSandboxPath(`${SANDBOX_PATH_PREFIX}/${instanceType}${normalizePath(name)}`);
+  return assertSandboxPath(`${SANDBOX_PATH_PREFIX}/${instanceType}/${name}`);
 }
 
 /** The instance-type segment of a sandbox path — which container namespace
  * the sandbox lives in. Throws on paths that don't carry a known instance
  * type (which includes every pre-pet `/sandboxes/cloudflare/...` path). */
 export function sandboxInstanceTypeForPath(path: string): SandboxInstanceType {
-  const normalized = normalizeSandboxPath(path);
-  const segment = normalized.split("/")[2];
+  const asserted = assertSandboxPath(path);
+  const segment = asserted.split("/")[2];
   const instanceType = SANDBOX_INSTANCE_TYPES.find((candidate) => candidate === segment);
   if (instanceType === undefined) {
     throw new Error(
       `sandbox paths carry their instance type as the segment after /sandboxes/ ` +
-        `(one of ${SANDBOX_INSTANCE_TYPES.join(", ")}), got "${normalized}"`,
+        `(one of ${SANDBOX_INSTANCE_TYPES.join(", ")}), got "${asserted}"`,
     );
   }
   return instanceType;
 }
 
 /**
- * The sandbox path is durable identity (it becomes the Durable Object name),
- * so this guard sits at the edge where callers choose a path — same role as
- * `normalizeAgentPath` / `normalizeSecretPath`.
+ * The sandbox path is durable identity (it becomes the Durable Object name).
+ * This VALIDATES and never rewrites: the path a caller uses is exactly the
+ * path `create` returned, or an error — no added slashes, no canonicalizing.
  *
- * Beyond the prefix, the only real constraint is codec safety. The Durable
+ * Beyond the prefix, the one real constraint is codec safety. The Durable
  * Object NAME is `{projectId}.iterate{path}`, and recovering identity from a
  * name parses it through `new URL(...)`, which rewrites some paths (a space
- * becomes `%20`, `/x/../y` collapses to `/y`). A path that does not survive
- * that round trip would let two spellings mint two Durable Objects that parse
- * back to one canonical path — so reject exactly those, and nothing more.
+ * becomes `%20`, `/x/../y` collapses to `/y`). A path the codec would rewrite
+ * would let two spellings mint two Durable Objects for one identity — so
+ * reject exactly those, and nothing more.
  */
-export function normalizeSandboxPath(path: string): string {
-  const normalized = normalizePath(path);
-  if (normalized === SANDBOX_PATH_PREFIX || !normalized.startsWith(`${SANDBOX_PATH_PREFIX}/`)) {
+export function assertSandboxPath(path: string): string {
+  if (!path.startsWith(`${SANDBOX_PATH_PREFIX}/`)) {
     throw new Error(
-      `sandbox paths live under ${SANDBOX_PATH_PREFIX}/<instanceType>/ ` +
-        `(create one with itx.sandboxes.create), got "${normalized}"`,
+      `sandbox paths start with ${SANDBOX_PATH_PREFIX}/<instanceType>/ ` +
+        `(use the exact path itx.sandboxes.create returned), got "${path}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(
-    DurableObjectNameCodec.stringify({ path: normalized, projectId: ROUND_TRIP_PROJECT_ID }),
+    DurableObjectNameCodec.stringify({ path, projectId: ROUND_TRIP_PROJECT_ID }),
   ).path;
-  if (roundTripped !== normalized) {
+  if (roundTripped !== path) {
     throw new Error(
-      `sandbox path must be a stable Durable Object path (it round-trips unchanged ` +
-        `through the name codec), got "${normalized}" which normalizes to "${roundTripped}"`,
+      `sandbox path must be a stable Durable Object path (the name codec would ` +
+        `rewrite "${path}" to "${roundTripped}") — avoid spaces, "..", and "//"`,
     );
   }
-  return normalized;
+  return path;
 }
 
 /**

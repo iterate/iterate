@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  assertSandboxPath,
   githubTokenEnvForConnections,
-  normalizeSandboxPath,
   sandboxInstanceTypeForPath,
   sandboxPathFor,
 } from "./utils.ts";
@@ -25,38 +25,32 @@ describe("sandboxPathFor / sandboxInstanceTypeForPath", () => {
   });
 });
 
-describe("normalizeSandboxPath", () => {
-  test("accepts /sandboxes/ paths, arbitrarily nested", () => {
-    expect(normalizeSandboxPath("/sandboxes/basic/whatever")).toBe("/sandboxes/basic/whatever");
-    expect(normalizeSandboxPath("/sandboxes/lite/bla/bla")).toBe("/sandboxes/lite/bla/bla");
+describe("assertSandboxPath", () => {
+  test("accepts /sandboxes/ paths verbatim, arbitrarily nested", () => {
+    expect(assertSandboxPath("/sandboxes/basic/whatever")).toBe("/sandboxes/basic/whatever");
+    expect(assertSandboxPath("/sandboxes/lite/bla/bla")).toBe("/sandboxes/lite/bla/bla");
+  });
+
+  test("validates, never rewrites — paths are exact strings", () => {
+    // No normalization: a missing leading slash is an error, not a repair.
+    expect(() => assertSandboxPath("sandboxes/basic/deeply/nested")).toThrow(
+      /start with \/sandboxes/,
+    );
   });
 
   test("rejects paths outside /sandboxes/", () => {
     // The domain prefix is the identity convention (like /secrets, /repos).
-    expect(() => normalizeSandboxPath("/agents/demo")).toThrow(/live under \/sandboxes/);
-    expect(() => normalizeSandboxPath("/sandboxes")).toThrow(/live under \/sandboxes/);
+    expect(() => assertSandboxPath("/agents/demo")).toThrow(/start with \/sandboxes/);
+    expect(() => assertSandboxPath("/sandboxes")).toThrow(/start with \/sandboxes/);
+    expect(() => assertSandboxPath("/")).toThrow(/start with \/sandboxes/);
+    expect(() => assertSandboxPath("")).toThrow(/start with \/sandboxes/);
   });
 
-  test("adds the leading slash", () => {
-    expect(normalizeSandboxPath("sandboxes/basic/deeply/nested/path")).toBe(
-      "/sandboxes/basic/deeply/nested/path",
-    );
-  });
-
-  test("rejects the root path", () => {
-    expect(() => normalizeSandboxPath("/")).toThrow(/live under \/sandboxes/);
-    expect(() => normalizeSandboxPath("")).toThrow(/live under \/sandboxes/);
-  });
-
-  test("rejects paths that do not round-trip through the name codec", () => {
+  test("rejects paths the name codec would rewrite", () => {
     // A space becomes %20 and `/x/../y` collapses to `/y`: two spellings would
-    // otherwise mint two Durable Objects for one canonical identity.
-    expect(() => normalizeSandboxPath("/sandboxes/foo/../bar")).toThrow(
-      /round-trip|stable Durable Object|live under/,
-    );
-    expect(() => normalizeSandboxPath("/sandboxes/foo bar")).toThrow(
-      /round-trip|stable Durable Object/,
-    );
+    // otherwise mint two Durable Objects for one identity.
+    expect(() => assertSandboxPath("/sandboxes/foo/../bar")).toThrow(/rewrite/);
+    expect(() => assertSandboxPath("/sandboxes/foo bar")).toThrow(/rewrite/);
   });
 });
 
