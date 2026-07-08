@@ -29,6 +29,7 @@ describe("ensureMcpSessionAgentReady", () => {
                   ...event,
                   createdAt: new Date(index + 1).toISOString(),
                   offset: index + 1,
+                  path,
                 }));
               },
               async waitForEvent(args) {
@@ -71,6 +72,7 @@ describe("ensureMcpSessionAgentReady", () => {
       payload: { systemPrompt: "ready" },
       createdAt: new Date().toISOString(),
       offset: 2,
+      path: "/agents/mcp/session-test",
     });
     await ready;
 
