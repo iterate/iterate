@@ -8,7 +8,7 @@
 import { readNumber, readRecord } from "../integrations/utils.ts";
 
 /** Namespace prefix all PR agent streams live under. */
-export const PR_AGENT_PATH_PREFIX = "/agents/repos/";
+const PR_AGENT_PATH_PREFIX = "/agents/repos/";
 
 /** Path segment separating the repo slug from the PR number. */
 const PULL_REQUESTS_SEGMENT = "/pull-requests/";
