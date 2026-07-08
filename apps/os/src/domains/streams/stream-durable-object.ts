@@ -7,6 +7,7 @@ import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { DynamicWorkerRef } from "../workers/schemas.ts";
+import { buildCrossPostAppendInput, type CrossPostProvenanceChain } from "./cross-post.ts";
 import type { ProcessorRuntimeState, StreamSubscriptionHandle } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
@@ -81,7 +82,7 @@ function compileCrossPostCondition(condition: string): jsonata.Expression {
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
-  readonly #log = new StreamEventLog(this.ctx.storage.sql);
+  readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   readonly #connections = new StreamConnections({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -196,6 +197,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ...body,
         offset: workingState.maxOffset + 1,
         createdAt: new Date().toISOString(),
+        path: this.name.path,
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
         throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
@@ -680,7 +682,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const sourceProjectId = args.state.projectId ?? this.name.projectId;
     const sourcePath = args.state.path ?? this.name.path;
-    const { createdAt, offset, ...copy } = args.event;
+    const { createdAt, offset } = args.event;
 
     this.#runInBackground(async () => {
       await Promise.all(
@@ -697,7 +699,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             projectId: sourceProjectId,
             type: args.event.type,
           };
-          const crossPostedFrom = [...chain, hop];
+          const crossPostedFrom: CrossPostProvenanceChain = [...chain, hop];
           const targetOnChain = crossPostedFrom.some(
             (entry) => entry.projectId === target.projectId && entry.path === target.path,
           );
@@ -723,11 +725,14 @@ export class StreamDurableObject extends DurableObject<Env> {
             if (matched !== true) return;
           }
 
-          await this.#appendToStreamCoordinate(target, {
-            ...copy,
-            source: { ...copy.source, crossPostedFrom },
-            idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
-          });
+          await this.#appendToStreamCoordinate(
+            target,
+            buildCrossPostAppendInput({
+              event: args.event,
+              crossPostedFrom,
+              idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
+            }),
+          );
         }),
       );
     });

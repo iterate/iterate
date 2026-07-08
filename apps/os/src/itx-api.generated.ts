@@ -1352,6 +1352,7 @@ export type StreamEvent = {
   idempotencyKey?: string | undefined;
   offset: number;
   createdAt: string;
+  path: string;
 };
 
 /**
