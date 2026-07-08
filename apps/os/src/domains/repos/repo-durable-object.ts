@@ -706,22 +706,30 @@ export class RepoDurableObject extends DurableObject<Env> {
    * itx.search corpus after a write lands. Same never-fail-the-write posture
    * as the GitHub mirror push; a failure just leaves the index one commit
    * stale until the next write (or an explicit `itx.search.indexRepo`).
+   *
+   * Chained onto `#serializeWrite` (like `#scheduleGithubMirrorPush`) so
+   * snapshots run in commit order: each reads HEAD and runs a stale-key sweep,
+   * and two overlapping snapshots finishing out of order would let an older
+   * sweep delete objects a newer snapshot wrote (or resurrect deleted files),
+   * leaving repo search results wrong until the next index. Serializing makes
+   * the last-committed snapshot the last to run, so the corpus converges on
+   * current HEAD.
    */
   #scheduleSearchIndex(branch: string): void {
     const projectId = this.#name.projectId;
     if (branch !== REPO_DEFAULT_BRANCH || projectId === null) return;
+    const indexed = this.#serializeWrite(async () => {
+      const snapshot = await this.getFilesSnapshot({ branch });
+      await indexRepoSnapshotToSearchIndex({
+        files: snapshot.files,
+        projectId,
+        repoPath: this.#name.path,
+      });
+    });
     this.ctx.waitUntil(
-      this.getFilesSnapshot()
-        .then((snapshot) =>
-          indexRepoSnapshotToSearchIndex({
-            files: snapshot.files,
-            projectId,
-            repoPath: this.#name.path,
-          }),
-        )
-        .catch((error: unknown) => {
-          console.warn("search index repo snapshot failed", error);
-        }),
+      indexed.catch((error: unknown) => {
+        console.warn("search index repo snapshot failed", error);
+      }),
     );
   }
 

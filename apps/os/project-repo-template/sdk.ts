@@ -711,9 +711,10 @@ export interface Search {
   /**
    * Re-mirror every existing itx.files object into the search corpus — the
    * backfill verb for files that predate search indexing (puts mirror
-   * incrementally from here on).
+   * incrementally from here on). Counts reflect the actual mirror outcome:
+   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
    */
-  backfillFiles(): Promise<{ mirrored: number; skipped: number }>;
+  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;
 }
 
 /**

@@ -163,7 +163,6 @@ import {
   indexRepoSnapshotToSearchIndex,
   mirrorFileToSearchIndex,
   projectSearchFilter,
-  SEARCH_MAX_DOCUMENT_BYTES,
   searchInstanceName,
 } from "./domains/search/search-index.ts";
 import type {
@@ -1685,12 +1684,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   /**
    * Re-mirror every existing itx.files object into the search corpus — the
    * backfill verb for files that predate search indexing (puts mirror
-   * incrementally from here on).
+   * incrementally from here on). Counts reflect the actual mirror outcome:
+   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
    */
-  async backfillFiles(): Promise<{ mirrored: number; skipped: number }> {
+  async backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }> {
     const prefix = `${this.props.projectId}.iterate/`;
-    let mirrored = 0;
-    let skipped = 0;
+    const counts = { mirrored: 0, skipped: 0, failed: 0 };
     let cursor: string | undefined;
     do {
       const page = await env.FILES_BUCKET.list({ cursor, limit: 500, prefix });
@@ -1698,22 +1697,17 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         const object = await env.FILES_BUCKET.get(entry.key);
         if (object === null) continue;
         const { path } = DurableObjectNameCodec.parse(entry.key);
-        const bytes = new Uint8Array(await object.arrayBuffer());
-        if (bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) {
-          skipped += 1;
-          continue;
-        }
-        await mirrorFileToSearchIndex({
-          bytes,
+        const outcome = await mirrorFileToSearchIndex({
+          bytes: new Uint8Array(await object.arrayBuffer()),
           contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
           path,
           projectId: this.props.projectId,
         });
-        mirrored += 1;
+        counts[outcome] += 1;
       }
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor !== undefined);
-    return { mirrored, skipped };
+    return counts;
   }
 }
 

@@ -35,7 +35,7 @@ import type { StreamEventBatch } from "../streams/rpc-types.ts";
 export const SEARCH_SEGMENT_SIZE = 100;
 
 /** AI Search skips files over 4 MB; don't bother writing them. */
-export const SEARCH_MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
+const SEARCH_MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
 
 // Keep single events from bloating a segment document past the 4 MB indexing
 // cap: payloads are for retrieval context, not archival (the stream is the
@@ -201,27 +201,34 @@ export async function indexStreamEventBatch(input: {
   }
 }
 
+/** Outcome of one file mirror, so backfill callers can report honest counts. */
+type MirrorFileOutcome = "mirrored" | "skipped" | "failed";
+
 /**
  * Mirror one itx.files write into the search index. Raw bytes with the
  * original content type — AI Search converts rich formats (pdf, images,
  * docx, …) to markdown itself. Oversized files are skipped (AI Search would
- * skip them anyway). Best-effort: never throws.
+ * skip them anyway). Best-effort: never throws — it returns the outcome
+ * instead ("failed" on a swallowed error) so `backfillFiles` can count what
+ * actually landed rather than assuming every call succeeded.
  */
 export async function mirrorFileToSearchIndex(input: {
   bytes: Uint8Array;
   contentType: string;
   path: string;
   projectId: string;
-}): Promise<void> {
+}): Promise<MirrorFileOutcome> {
   try {
-    if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) return;
+    if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) return "skipped";
     await itxEnv.SEARCH_BUCKET.put(
       fileSearchKey({ projectId: input.projectId, path: input.path }),
       input.bytes,
       { httpMetadata: { contentType: input.contentType } },
     );
+    return "mirrored";
   } catch (error) {
     console.error("search index file mirror failed", { path: input.path, error });
+    return "failed";
   }
 }
 
