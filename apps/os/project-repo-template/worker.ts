@@ -102,11 +102,11 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
   /**
    * The platform dispatches dotted calls on this worker as ONE flattened
    * `invokeCapability({ path, args })` call, and this userspace method walks
-   * the path over the worker itself. That is what lets the `slack` getter
-   * below hand back the raw SDK client: nothing ever crosses RPC except the
-   * final method's arguments and result, so
-   * `itx.worker.slack.chat.postMessage({...})` — or any nested Web API
-   * family — is a single round trip into plain userland code.
+   * the path over the worker itself. That is what lets the `waitrose` getter
+   * below hand back a raw vendored client: nothing ever crosses RPC except
+   * the final method's arguments and result, so
+   * `itx.worker.waitrose.<connection>.<method>(...)` — or any nested surface
+   * a getter returns — is a single round trip into plain userland code.
    */
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     let receiver: unknown = this;
