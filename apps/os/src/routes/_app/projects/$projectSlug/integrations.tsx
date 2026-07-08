@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -190,6 +190,7 @@ function ProjectIntegrationsContent() {
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
   const [feedPanel, setFeedPanel] = useState<FeedPanel | null>(null);
+  const feedOpenRequestId = useRef(0);
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -286,9 +287,11 @@ function ProjectIntegrationsContent() {
     });
   };
   const openFeed = async (panel: FeedPanel) => {
+    const requestId = ++feedOpenRequestId.current;
     if (feedPanel == null || feedPanel.streamPath !== panel.streamPath) {
       await resetFeedViewSearch();
     }
+    if (feedOpenRequestId.current !== requestId) return;
     setFeedPanel(panel);
   };
   const openProjectFeed = () =>
@@ -414,6 +417,7 @@ function ProjectIntegrationsContent() {
         feedPanel={feedPanel}
         onOpenChange={(open) => {
           if (!open) {
+            feedOpenRequestId.current += 1;
             void resetFeedViewSearch();
             setFeedPanel(null);
           }
