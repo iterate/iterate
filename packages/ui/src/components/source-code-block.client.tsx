@@ -60,6 +60,11 @@ function CodeMirror({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // Extension changes (e.g. a lint schema arriving, diff mode toggling)
+    // rebuild the whole view; carry the selection and focus over so the
+    // rebuild isn't jarring mid-edit.
+    const previousState = viewRef.current?.state;
+    const previousHadFocus = viewRef.current?.hasFocus === true;
     viewRef.current?.destroy();
 
     const view = new EditorView({
@@ -95,6 +100,10 @@ function CodeMirror({
     });
 
     viewRef.current = view;
+    if (previousState !== undefined && previousState.doc.eq(view.state.doc)) {
+      view.dispatch({ selection: previousState.selection, scrollIntoView: true });
+      if (previousHadFocus) view.focus();
+    }
     if (
       latestSelectAllSignalRef.current !== undefined &&
       latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current

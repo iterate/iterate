@@ -8,7 +8,7 @@ branch: repo-ide-json-schema
 
 ## Status summary
 
-In progress. Spec fleshed out and committed first; implementation not started yet.
+Implementation done and unit-tested (12 specs, no egress); live browser verification pending. Notable find along the way: an upstream codemirror-json-schema bug (squigglies land on the `:` with @lezer/json 1.0.3) worked around with a wrapped parser.
 
 ## Ask (verbatim, from Misha — spinoff 4 of the repos mini IDE task)
 
@@ -33,15 +33,18 @@ In progress. Spec fleshed out and committed first; implementation not started ye
 
 ## Checklist
 
-- [ ] `repo-json-schema.ts`: schema URL resolution policy (`$schema` prop > YAML modeline > well-known filename map)
-- [ ] `repo-json-schema.ts`: codemirror extension bundle (lint + hover + completion + state) for json and yaml
-- [ ] `repo-json-schema.ts`: `useRepoFileJsonSchema` hook — tanstack query fetch, graceful failure
-- [ ] Wire into `RepoEditorPane` (editable + staged views) with header indicator
-- [ ] packages/ui: preserve selection across CodeMirror view rebuilds
-- [ ] Unit tests, no egress: URL resolution policy + diagnostics produced from an inline fixture schema
+- [x] `repo-json-schema.ts`: schema URL resolution policy (`$schema` prop > YAML modeline > well-known filename map) — _`repoFileSchemaUrl`; JSON.parse with regex fallback for mid-edit docs; http→https upgrade_
+- [x] `repo-json-schema.ts`: codemirror extension bundle (lint + hover + completion + state) for json and yaml — _`jsonSchemaCodeMirrorExtensions`, modular codemirror-json-schema API so the language extension isn't duplicated_
+- [x] `repo-json-schema.ts`: `useRepoFileJsonSchema` hook — tanstack query fetch, graceful failure — _`staleTime: Infinity`, retry 1, `status: "unavailable"` on failure_
+- [x] Wire into `RepoEditorPane` (editable + staged views) with header indicator — _extensions appended to both text branches; muted schema-name note (title = URL) or "schema unavailable"_
+- [x] packages/ui: preserve selection across CodeMirror view rebuilds — _selection + focus carried over when the doc is unchanged, in `source-code-block.client.tsx`_
+- [x] Unit tests, no egress: URL resolution policy + diagnostics produced from an inline fixture schema — _`repo-json-schema.test.ts`, 12 specs; headless EditorState + `ensureSyntaxTree`, no DOM, no network_
 - [ ] Live verification in local dev: package.json squiggly + hover, `$schema` file, screenshots in PR
 - [ ] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` (scoped sensibly)
 
 ## Implementation log
 
-- (empty so far)
+- Verified schemastore egress before committing to the design: `www.schemastore.org` serves `access-control-allow-origin: *`; `json.schemastore.org` 301s there; the pnpm-workspace schema lives at `/pnpm-workspace.json` (the `.yaml` URL 404s).
+- **Upstream bug found**: @lezer/json 1.0.3 (2024-12-29) added the `":"` token to the parse tree (1.0.2's nodeNames: `… Property PropertyName ] [ Array`; 1.0.3 adds `:`). codemirror-json-schema ≤0.8.1 takes `PropertyName.nextSibling` as the value node in JSON mode, so every diagnostic's from/to covered the colon, not the value. Worked around with `parseJsonDocumentColonFixed` — wraps their parser and shifts colon-shaped pointers one sibling over. YAML mode already skips the colon (they special-case it) and is unaffected. Worth an upstream issue/PR.
+- codemirror-json-schema ships ESM with extensionless relative imports; vite handles it, Node's ESM resolver (vitest deps) doesn't — inlined via `server.deps.inline` in apps/os/vitest.config.ts.
+- `@codemirror/lang-json`, `@codemirror/lang-yaml`, `@codemirror/language` added to apps/os (previously only in packages/ui; same semver ranges so pnpm dedupes to one instance — necessary for the `jsonLanguage.data.of(...)` singleton to match).

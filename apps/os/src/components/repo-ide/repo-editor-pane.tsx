@@ -8,6 +8,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { repoFileKind } from "./repo-file-kinds.ts";
+import { useRepoFileJsonSchema } from "./repo-json-schema.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -72,6 +73,21 @@ export function RepoEditorPane({
   // snapshot when one exists, else HEAD.
   const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
 
+  // json-schema diagnostics/hover/completion for JSON and YAML buffers: an
+  // explicit $schema (prop or yaml modeline) wins, else the well-known
+  // filename map (package.json, tsconfig, …). Resolved against the live
+  // buffer so adding a $schema line applies before any commit; the schema
+  // itself is fetched from schemastore/wherever by the browser and failure
+  // just means no squigglies.
+  const jsonSchema = useRepoFileJsonSchema({
+    path,
+    language:
+      kind.kind === "text" && (kind.language === "json" || kind.language === "yaml")
+        ? kind.language
+        : null,
+    content: working?.type === "write" ? working.content : (textBaseline ?? ""),
+  });
+
   // The plain editor carries vscode-style gutter bars for lines differing
   // from the baseline; diff mode swaps in the unified (inline) merge view on
   // the same document, whose per-chunk "+" controls STAGE the chunk — the
@@ -130,6 +146,28 @@ export function RepoEditorPane({
         : [],
     [stagedView, staged, headContent],
   );
+
+  const editorExtensionsWithSchema = useMemo(
+    () => [...editorExtensions, jsonSchema.extensions],
+    [editorExtensions, jsonSchema.extensions],
+  );
+  const stagedDiffExtensionsWithSchema = useMemo(
+    () => [...stagedDiffExtensions, jsonSchema.extensions],
+    [stagedDiffExtensions, jsonSchema.extensions],
+  );
+
+  // Subtle header note: which schema is validating the buffer, or that the
+  // fetch failed (in which case there are simply no squigglies).
+  const schemaNote =
+    jsonSchema.status === "active" ? (
+      <span title={jsonSchema.url} className="text-[10px] text-muted-foreground">
+        {new URL(jsonSchema.url).pathname.split("/").pop() || jsonSchema.url}
+      </span>
+    ) : jsonSchema.status === "unavailable" ? (
+      <span title={jsonSchema.url} className="text-[10px] text-muted-foreground italic">
+        schema unavailable
+      </span>
+    ) : null;
 
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
@@ -199,6 +237,7 @@ export function RepoEditorPane({
         status={status}
         actions={
           <>
+            {schemaNote}
             <Button variant="secondary" size="sm" className="text-xs" disabled>
               Diff
             </Button>
@@ -234,7 +273,7 @@ export function RepoEditorPane({
           wrapLongLines={false}
           code={staged.content}
           language={kind.language}
-          codeMirrorExtensions={stagedDiffExtensions}
+          codeMirrorExtensions={stagedDiffExtensionsWithSchema}
           onChange={() => {}}
         />
       </FileChrome>
@@ -255,6 +294,7 @@ export function RepoEditorPane({
         status={status}
         actions={
           <>
+            {schemaNote}
             {headHasPath || staged !== undefined ? (
               <Button
                 variant={diffOpen ? "secondary" : "ghost"}
@@ -278,7 +318,7 @@ export function RepoEditorPane({
           wrapLongLines={false}
           code={value}
           language={kind.language}
-          codeMirrorExtensions={editorExtensions}
+          codeMirrorExtensions={editorExtensionsWithSchema}
           onChange={stageText}
         />
       </FileChrome>
