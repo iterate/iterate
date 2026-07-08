@@ -91,7 +91,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", (
       },
     });
     await waitForCondition(
-      async () => (await connectionSecret.describe()).refresh === "github-app-installation",
+      async () => (await connectionSecret.__describe()).refresh === "github-app-installation",
       { description: "github installation strategy to fold" },
     );
 
@@ -112,11 +112,11 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", (
 
     // Confinement: the App private key never left the secret; describe() leaks
     // neither the key nor a minted token. Egress uses land on the audit trail.
-    const described = await connectionSecret.describe();
+    const described = await connectionSecret.__describe();
     expect(JSON.stringify(described)).not.toContain("BEGIN PRIVATE KEY");
     expect(described.hasMaterial).toBe(true);
     expect(described.refresh).toBe("github-app-installation");
-    await waitForCondition(async () => (await connectionSecret.describe()).audit.usedCount >= 1, {
+    await waitForCondition(async () => (await connectionSecret.__describe()).audit.usedCount >= 1, {
       description: "github connection egress use to audit",
     });
   });

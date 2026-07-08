@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
@@ -13,6 +14,23 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@iterate-com/ui/components/item";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/field";
+import { Input } from "@iterate-com/ui/components/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
@@ -33,8 +51,8 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { ProjectRpcTarget } from "~/types.ts";
+import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
+import type { ProjectProcessorState, ProjectRpcTarget } from "~/types.ts";
 
 type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
@@ -369,6 +387,8 @@ function ProjectIntegrationsContent() {
             </ItemContent>
           </Item>
         ) : null}
+
+        <AccountConnectionsItem />
       </ItemGroup>
     </div>
   );
@@ -519,4 +539,224 @@ function countScopes(scopes: string | null, separator: "," | " ") {
     .split(separator)
     .map((scope) => scope.trim())
     .filter((scope) => scope.length > 0).length;
+}
+
+const ACCOUNT_CONNECTION_PATH = /^\/secrets\/integrations\/([^/]+)\/([^/]+)\/session$/;
+
+const AccountConnectionForm = z.object({
+  slug: z
+    .string()
+    .trim()
+    .min(1, "Integration name is required")
+    .regex(/^[a-z][a-z0-9-]*$/, "Lowercase letters, digits and dashes"),
+  connection: z
+    .string()
+    .trim()
+    .min(1, "Connection name is required")
+    .regex(/^[a-z][a-z0-9-]*$/, "Lowercase letters, digits and dashes"),
+  username: z.string().trim().min(1, "Username is required"),
+  password: z.string().min(1, "Password is required"),
+  loginUrl: z.string().trim().url("Must be a full URL"),
+});
+
+const ACCOUNT_CONNECTION_DEFAULTS = {
+  slug: "waitrose",
+  connection: "",
+  username: "",
+  password: "",
+  // The one live example this spike ships with: Waitrose's session-login
+  // endpoint. Any provider with the username/password → short-lived-session
+  // shape works — point this at its login URL.
+  loginUrl: "https://www.waitrose.com/api/graphql-prod/graph/live",
+};
+
+/**
+ * The username/password connection lane (spike): providers with no OAuth —
+ * accounts whose credential is a login that mints short-lived sessions (the
+ * `waitrose-session` strategy). Creating one writes a single session secret:
+ * material `{ username, password }`, egress pinned to the login URL's origin,
+ * and the refresh strategy — the secret's own Durable Object logs in on first
+ * use and re-logins on 401. The integration code that USES the connection
+ * lives in the project repo (see integrations/waitrose/ there); this form
+ * only homes the credential.
+ */
+/** A username/password account connection, parsed from its session secret's
+ * path: `/secrets/integrations/<slug>/<connection>/session`. */
+type AccountConnection = { connection: string; path: string; slug: string };
+
+function AccountConnectionsItem() {
+  const itx = useItx();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  // The connections list is derived from the project processor's live secrets
+  // state — the same push-based slice the secrets page reads. Two payoffs over
+  // a second useItxQuery: it does not suspend a second time (which would bubble
+  // to the route ItxBoundary and flash the whole panel back to the global
+  // "Connecting…" placeholder), and a freshly-created session secret appears
+  // here the instant its stream folds, with no manual invalidation to race.
+  const secretsList = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  ).state?.secrets;
+  const accounts: AccountConnection[] = (secretsList ?? []).flatMap((secret) => {
+    const match = ACCOUNT_CONNECTION_PATH.exec(secret.path);
+    return match ? [{ connection: match[2], path: secret.path, slug: match[1] }] : [];
+  });
+
+  const createConnection = useMutation({
+    mutationFn: async (input: z.infer<typeof AccountConnectionForm>) => {
+      const path = `/secrets/integrations/${input.slug}/${input.connection}/session`;
+      // One update births the whole connection: credential material, the
+      // egress pin (the login URL's origin), and the session-login refresh
+      // strategy. The password is write-only from here on.
+      await itx.secrets.get(path).update({
+        egress: { urls: [new URL(input.loginUrl).origin] },
+        material: { password: input.password, username: input.username },
+        refresh: { graphqlUrl: input.loginUrl, kind: "waitrose-session" },
+      });
+      return input;
+    },
+    onSuccess: (input) => {
+      form.reset();
+      setSheetOpen(false);
+      // No refetch: the new session secret lands in the live secrets state
+      // above when its stream folds, so the account row appears on its own.
+      toast.success(
+        `Connected — address it as itx.worker.${input.slug}.${input.connection} from project code.`,
+      );
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+
+  const form = useForm({
+    defaultValues: ACCOUNT_CONNECTION_DEFAULTS,
+    validators: {
+      onChange: AccountConnectionForm,
+      onSubmit: AccountConnectionForm,
+    },
+    onSubmit: async ({ value }) => {
+      await createConnection.mutateAsync(AccountConnectionForm.parse(value));
+    },
+  });
+
+  const fieldInput = (
+    name: keyof typeof ACCOUNT_CONNECTION_DEFAULTS,
+    label: string,
+    options: { description?: string; placeholder?: string; type?: string } = {},
+  ) => (
+    <form.Field name={name}>
+      {(field) => {
+        const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+
+        return (
+          <Field data-invalid={isInvalid}>
+            <FieldLabel htmlFor={field.name}>{label}</FieldLabel>
+            <Input
+              id={field.name}
+              name={field.name}
+              type={options.type ?? "text"}
+              autoComplete="off"
+              placeholder={options.placeholder}
+              value={field.state.value}
+              onBlur={field.handleBlur}
+              onChange={(event) => field.handleChange(event.target.value)}
+              aria-invalid={isInvalid}
+            />
+            {options.description ? (
+              <FieldDescription>{options.description}</FieldDescription>
+            ) : null}
+            {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
+          </Field>
+        );
+      }}
+    </form.Field>
+  );
+
+  return (
+    <Item variant="outline" className="items-start justify-between gap-4 p-4">
+      <ItemMedia variant="icon">
+        <KeyRound className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>Account connections</ItemTitle>
+        <ItemDescription>
+          Username/password accounts for providers without OAuth. The credential lives in a
+          write-only session secret; the secret logs itself in and re-logins when the session
+          expires.
+        </ItemDescription>
+        {accounts.length > 0 ? (
+          <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
+            {accounts.map((account) => (
+              <IntegrationMetadataRow
+                key={account.path}
+                label={`${account.slug} / ${account.connection}`}
+                value={`itx.worker.${account.slug}.${account.connection}`}
+              />
+            ))}
+          </div>
+        ) : null}
+      </ItemContent>
+      <ItemActions>
+        <Sheet
+          open={sheetOpen}
+          onOpenChange={(open) => {
+            setSheetOpen(open);
+            if (!open) form.reset();
+          }}
+        >
+          <SheetTrigger render={<Button type="button" size="sm" />}>Connect account</SheetTrigger>
+          <SheetContent side="right" className="overflow-y-auto">
+            <form
+              className="flex h-full flex-col"
+              onSubmit={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void form.handleSubmit();
+              }}
+            >
+              <SheetHeader>
+                <SheetTitle>Connect an account</SheetTitle>
+                <SheetDescription>
+                  For providers that log in with a username and password (like Waitrose). The
+                  password is stored write-only and only ever leaves toward the login URL&apos;s
+                  origin.
+                </SheetDescription>
+              </SheetHeader>
+              <FieldGroup className="flex-1 space-y-4 p-4">
+                {fieldInput("slug", "Integration", {
+                  description: "The integration this account belongs to.",
+                  placeholder: "waitrose",
+                })}
+                {fieldInput("connection", "Connection name", {
+                  description: "Your name for this account, e.g. personal or mum.",
+                  placeholder: "personal",
+                })}
+                {fieldInput("username", "Username / email", {
+                  placeholder: "you@example.com",
+                })}
+                {fieldInput("password", "Password", { type: "password" })}
+                {fieldInput("loginUrl", "Login URL", {
+                  description:
+                    "The provider's session-login endpoint. Egress is pinned to this URL's origin.",
+                })}
+              </FieldGroup>
+              <SheetFooter>
+                <form.Subscribe
+                  selector={(state) => [state.canSubmit, state.isSubmitting] as const}
+                >
+                  {([canSubmit, isSubmitting]) => (
+                    <Button
+                      type="submit"
+                      disabled={!canSubmit || isSubmitting || createConnection.isPending}
+                    >
+                      {isSubmitting || createConnection.isPending ? "Connecting..." : "Connect"}
+                    </Button>
+                  )}
+                </form.Subscribe>
+              </SheetFooter>
+            </form>
+          </SheetContent>
+        </Sheet>
+      </ItemActions>
+    </Item>
+  );
 }

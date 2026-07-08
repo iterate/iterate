@@ -18,8 +18,12 @@ import type {
   CommitRepoFilesResult,
   EditRepoFileInput,
   EditRepoFileResult,
+  GithubRepoLink,
+  GithubSyncResult,
   RepoFileChange,
 } from "../../types.ts";
+import { parseConfig } from "../../config.ts";
+import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
@@ -28,6 +32,12 @@ import { RepoProcessor } from "./repo-processor-implementation.ts";
 const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
+
+// The durable GitHub link record: the mirror-push hot path (every commit)
+// reads it from KV instead of re-folding the stream. The link lifecycle events
+// on the repo stream are the record of TRUTH for inspection; this key is
+// written in the same methods that append them, so the two cannot drift.
+const GITHUB_LINK_KV_KEY = "github-link:v1";
 
 type RepoHead = {
   branch: string;
@@ -216,6 +226,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       contentHash: result.contentHash,
     });
+    if (!result.noChanges) this.#scheduleGithubMirrorPush(result.branch);
 
     return {
       branch: result.branch,
@@ -251,6 +262,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       contentHash: result.contentHash,
     });
+    if (!result.noChanges) this.#scheduleGithubMirrorPush(result.branch);
 
     return {
       branch: result.branch,
@@ -292,6 +304,269 @@ export class RepoDurableObject extends DurableObject<Env> {
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
+  }
+
+  // ===========================================================================
+  // GitHub mirror: an optional linked GitHub repository this repo pushes to.
+  //
+  // The Artifacts repo stays primary — commits succeed against it regardless
+  // of GitHub's availability — and the linked GitHub repo is a mirror kept
+  // fresh by a best-effort push after every commit. git push is cumulative, so
+  // a failed mirror push self-heals on the next commit; `pushToGithub` repairs
+  // on demand. `syncFromGithub` is the explicit reverse lane: adopt GitHub's
+  // branch head, fast-forward only unless forced.
+  // ===========================================================================
+
+  /** The current GitHub link, or null when this repo is not linked. */
+  getGithubLink(): GithubRepoLink | null {
+    const stored = this.ctx.storage.kv.get<unknown>(GITHUB_LINK_KV_KEY);
+    return isGithubLinkRecord(stored) ? stored : null;
+  }
+
+  // In both link verbs the journal append comes FIRST and the KV write last:
+  // the append is the only step that can fail (it crosses to the Stream DO),
+  // while the synchronous KV write inside this DO cannot, so ordering them
+  // this way means a failure changes nothing and the caller can just retry —
+  // the journal and the KV projection never diverge.
+
+  /** Record the GitHub link durably and journal the fact on the repo stream. */
+  async configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink> {
+    await this.#host.stream.append({
+      type: "events.iterate.com/repo/github-link-configured",
+      payload: { ...link },
+    });
+    this.ctx.storage.kv.put(GITHUB_LINK_KV_KEY, link);
+    return link;
+  }
+
+  /** Remove the GitHub link; returns the removed link or null when unlinked. */
+  async removeGithubLink(): Promise<GithubRepoLink | null> {
+    const link = this.getGithubLink();
+    if (link === null) return null;
+    await this.#host.stream.append({
+      type: "events.iterate.com/repo/github-unlinked",
+      payload: { connection: link.connection, owner: link.owner, repo: link.repo },
+    });
+    this.ctx.storage.kv.delete(GITHUB_LINK_KV_KEY);
+    return link;
+  }
+
+  /**
+   * Push the default branch head to the linked GitHub repository. Serialized
+   * with commits so a mirror push never races the write it mirrors. Never
+   * forced unless the caller says so — a non-fast-forward failure means GitHub
+   * has commits this repo does not (someone pushed to GitHub directly); the
+   * caller chooses between `pushToGithub({ force: true })` (this repo wins)
+   * and `syncFromGithub()` (GitHub wins).
+   */
+  pushToGithub(input: { force?: boolean } = {}): Promise<{ branch: string; commitOid: string }> {
+    return this.#serializeWrite(() => this.#pushToGithub(input));
+  }
+
+  async #pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }> {
+    const link = this.#requireGithubLink();
+    const branch = REPO_DEFAULT_BRANCH;
+    let commitOid: string | null = null;
+    try {
+      const repo = await this.gitAccess();
+      const token = await this.#mintGithubToken(link);
+
+      // Full single-branch clone: a mirror push must be able to send every
+      // commit GitHub is missing, not just the tip.
+      const clone = async () => {
+        const filesystem = new InMemoryFs();
+        const git = createGit(filesystem, REPO_DIR);
+        await git.clone({
+          branch,
+          singleBranch: true,
+          url: repo.remote,
+          username: "x",
+          password: repo.token,
+        });
+        const [head] = await git.log({ depth: 1 });
+        if (!head) throw new Error("Repo has no commits.");
+        return { git, head };
+      };
+
+      // Same read-your-write retry as getFilesSnapshot: the Artifacts remote
+      // is eventually consistent, and a mirror push runs right after the
+      // commit it mirrors — a stale clone here would push the PRE-commit head
+      // to GitHub and record success, leaving the mirror silently behind
+      // until the next commit.
+      let { git, head } = await clone();
+      const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+      for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
+        console.warn(
+          `github mirror clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        ({ git, head } = await clone());
+      }
+      commitOid = head.oid;
+
+      await git.remote({ add: { name: "github", url: githubRemoteUrl(link) } });
+      const pushed = await git.push({
+        force: input.force === true,
+        ref: branch,
+        remote: "github",
+        username: "x-access-token",
+        password: token,
+      });
+      if (!pushed.ok) {
+        throw new Error(
+          `GitHub push of ${branch} was rejected (non-fast-forward means GitHub has commits this repo does not; use syncFromGithub() to adopt them or pushToGithub({ force: true }) to overwrite): ${JSON.stringify(pushed.refs)}`,
+        );
+      }
+
+      await this.#host.stream.append({
+        type: "events.iterate.com/repo/github-push-completed",
+        idempotencyKey: `github-push-completed:${link.owner}/${link.repo}:${head.oid}`,
+        payload: { branch, commitOid: head.oid, owner: link.owner, repo: link.repo },
+      });
+      return { branch, commitOid: head.oid };
+    } catch (error) {
+      await this.#host.stream
+        .append({
+          type: "events.iterate.com/repo/github-push-failed",
+          idempotencyKey: `github-push-failed:${link.owner}/${link.repo}:${commitOid ?? "pre-clone"}:${String(error).slice(0, 80)}`,
+          payload: {
+            branch,
+            commitOid,
+            error: String(error),
+            owner: link.owner,
+            repo: link.repo,
+          },
+        })
+        .catch(() => {});
+      throw error;
+    }
+  }
+
+  /**
+   * Adopt the linked GitHub repository's default-branch head. Fast-forward
+   * only: if this repo has commits GitHub does not, the sync fails and names
+   * `force: true`, which discards them (they stay in the Artifacts object
+   * store, unreferenced). The adopted head is live for worker builds the
+   * moment this returns — same read-your-write boundary as commitFiles.
+   */
+  syncFromGithub(input: { force?: boolean } = {}): Promise<GithubSyncResult> {
+    return this.#serializeWrite(() => this.#syncFromGithub(input));
+  }
+
+  async #syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult> {
+    const link = this.#requireGithubLink();
+    const branch = REPO_DEFAULT_BRANCH;
+    const repo = await this.gitAccess();
+    const token = await this.#mintGithubToken(link);
+    const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, REPO_DIR);
+    try {
+      await git.clone({
+        branch,
+        singleBranch: true,
+        url: githubRemoteUrl(link),
+        username: "x-access-token",
+        password: token,
+      });
+    } catch (error) {
+      throw new Error(
+        `Could not clone ${link.owner}/${link.repo}#${branch} from GitHub (missing branch or empty repository?): ${String(error)}`,
+      );
+    }
+    const [head] = await git.log({ depth: 1 });
+    if (!head) throw new Error(`GitHub ${link.owner}/${link.repo}#${branch} has no commits.`);
+
+    if (head.oid === previousCommitOid) {
+      return { branch, changed: false, commitOid: head.oid, forced: false, previousCommitOid };
+    }
+
+    await git.remote({ add: { name: "artifacts", url: repo.remote } });
+    const pushed = await git.push({
+      force: input.force === true,
+      ref: branch,
+      remote: "artifacts",
+      username: "x",
+      password: repo.token,
+    });
+    if (!pushed.ok) {
+      throw new Error(
+        `syncFromGithub is not a fast-forward: this repo has commits GitHub does not. Pass force: true to discard them and adopt GitHub's head. (${JSON.stringify(pushed.refs)})`,
+      );
+    }
+
+    this.#recordPushedHead({ branch, commitOid: head.oid });
+    this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+      commitOid: head.oid,
+      contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
+    });
+
+    await this.#host.stream.append({
+      type: "events.iterate.com/repo/github-synced",
+      idempotencyKey: `github-synced:${link.owner}/${link.repo}:${head.oid}`,
+      payload: {
+        branch,
+        commitOid: head.oid,
+        forced: input.force === true,
+        owner: link.owner,
+        previousCommitOid,
+        repo: link.repo,
+      },
+    });
+    return {
+      branch,
+      changed: true,
+      commitOid: head.oid,
+      forced: input.force === true,
+      previousCommitOid,
+    };
+  }
+
+  #requireGithubLink(): GithubRepoLink {
+    const link = this.getGithubLink();
+    if (link === null) {
+      throw new Error(`Repo "${this.#name.path}" is not linked to GitHub (use linkGithub first).`);
+    }
+    return link;
+  }
+
+  /**
+   * Mint a short-lived installation token for the linked installation. Held
+   * in memory for one operation only: this is first-party trusted DO code
+   * (the same tier as the Secret DO's own mint strategy), and git-over-HTTPS
+   * needs the token as a Basic password, which the placeholder-substitution
+   * pipeline cannot produce.
+   */
+  #mintGithubToken(link: GithubRepoLink): Promise<string> {
+    const github = parseConfig(this.env).integrations.github;
+    if (!github?.appId || !github.privateKey) {
+      throw new Error("GitHub App is not configured for this deployment (appId/privateKey).");
+    }
+    return mintGithubInstallationToken({
+      apiBase: "https://api.github.com",
+      appId: github.appId,
+      installationId: link.installationId,
+      privateKeyPem: github.privateKey.exposeSecret(),
+    });
+  }
+
+  /**
+   * Best-effort mirror push after a commit. Chained onto the write chain (so
+   * pushes stay ordered behind the writes they mirror) but never awaited by
+   * the commit itself: a GitHub outage must not fail or slow `commitFiles`.
+   * The failure fact on the repo stream is the record; the next commit's push
+   * self-heals the mirror.
+   */
+  #scheduleGithubMirrorPush(branch: string): void {
+    if (branch !== REPO_DEFAULT_BRANCH || this.getGithubLink() === null) return;
+    const push = this.#serializeWrite(() => this.#pushToGithub({}));
+    this.ctx.waitUntil(
+      push.catch((error: unknown) => {
+        console.warn("github mirror push failed (recorded on the repo stream)", error);
+      }),
+    );
   }
 
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
@@ -601,6 +876,22 @@ function repoHeadStorageKey(branch: string) {
   // segment makes a contentHash recipe change a clean cache flush instead of
   // old and new hashes silently mixing in build keys.
   return `repo-head:v1:${branch}`;
+}
+
+/** The git-over-HTTPS remote of a linked GitHub repository. */
+function githubRemoteUrl(link: { owner: string; repo: string }): string {
+  return `https://github.com/${link.owner}/${link.repo}.git`;
+}
+
+function isGithubLinkRecord(value: unknown): value is GithubRepoLink {
+  if (value === null || typeof value !== "object") return false;
+  const record = value as Partial<GithubRepoLink>;
+  return (
+    typeof record.connection === "string" &&
+    typeof record.installationId === "string" &&
+    typeof record.owner === "string" &&
+    typeof record.repo === "string"
+  );
 }
 
 function isRepoHeadRecord(value: unknown): value is { commitOid: string; contentHash: string } {

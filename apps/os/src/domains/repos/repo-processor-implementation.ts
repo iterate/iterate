@@ -30,6 +30,43 @@ export class RepoProcessor extends StreamProcessor<
           defaultBranch: event.payload.defaultBranch,
           remote: event.payload.remote,
         };
+      case "events.iterate.com/repo/github-link-configured":
+        return { ...state, github: event.payload, lastGithubPush: null };
+      case "events.iterate.com/repo/github-unlinked":
+        return { ...state, github: null, lastGithubPush: null };
+      case "events.iterate.com/repo/github-push-completed":
+        return {
+          ...state,
+          lastGithubPush: {
+            at: event.createdAt,
+            branch: event.payload.branch,
+            commitOid: event.payload.commitOid,
+            error: null,
+            ok: true,
+          },
+        };
+      case "events.iterate.com/repo/github-push-failed":
+        return {
+          ...state,
+          lastGithubPush: {
+            at: event.createdAt,
+            branch: event.payload.branch,
+            commitOid: event.payload.commitOid,
+            error: event.payload.error,
+            ok: false,
+          },
+        };
+      case "events.iterate.com/repo/github-synced":
+        return {
+          ...state,
+          lastGithubPush: {
+            at: event.createdAt,
+            branch: event.payload.branch,
+            commitOid: event.payload.commitOid,
+            error: null,
+            ok: true,
+          },
+        };
       case "events.iterate.com/stream/created":
         return { ...state, initialized: true };
       default:
