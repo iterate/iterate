@@ -8,7 +8,7 @@ branch: repos-mini-ide
 
 ## Status summary
 
-Implementation largely complete; browser verification pending. Done: backend base64 lane (+unit & e2e tests), full-panel stream-view layout with the events feed in a sheet, pierre file tree with git-status annotations and context menu (new/rename/delete/upload), editable CodeMirror with all requested languages, image/PDF renderers with Replace, @codemirror/merge diff view, staged-changes store with single-batch commit. Missing: live verification against local dev (screenshots for the PR), possible pierre-tree styling polish.
+Implementation complete and verified live against local dev (edit → dirty annotation → diff → commit landed at HEAD; images, context menu, events sheet all exercised via playwright). Tree pinned to light theme per Misha's feedback. Remaining: review feedback, and a noted pre-existing gap around the project repo at path `/` not being addressable by the detail route.
 
 ## Ask (verbatim-ish, from Misha)
 
@@ -41,20 +41,25 @@ Change the `/repos` view on the OS dashboard to a mini IDE:
 
 ## Checklist
 
-- [ ] Backend: base64 read lane on repo DO + `RepoRpcTarget.readFile` (`encoding` option)
-- [ ] Backend: `contentBase64` variant in `RepoFileChange` accepted by `commitFiles` (validation + artifact commit implementation)
-- [ ] Backend: unit tests for the binary round trip (commit base64 → readFile base64 byte-identical)
-- [ ] UI: full-width layout for repo routes — panel takes the whole main pane, events feed behind a header "Events" button (popover/sheet)
-- [ ] UI: pierre file tree fed from `listFiles` + staged changes, with git-status row annotations
-- [ ] UI: editable CodeMirror editor with language extensions (js/ts/tsx/json/yaml/md/html/sql), dirty tracking into the staged store
-- [ ] UI: image renderer (png/jpg/jpeg/gif/svg/webp/ico) + PDF renderer (iframe/object), each with a Replace button (stages a base64 change)
-- [ ] UI: context menu — new file, rename, delete, upload
-- [ ] UI: diff view (staged vs HEAD) via `@codemirror/merge`, per-file toggle
-- [ ] UI: commit flow — message input, summary of staged changes, single `commitFiles` batch, staged state cleared and tree/queries refreshed on success
-- [ ] UI: discard changes (per file + all)
-- [ ] Repos index route: same full-width + events-popover treatment
-- [ ] Verify in local dev against a real project repo (screenshots/video in PR)
+- [x] Backend: base64 read lane on repo DO + `RepoRpcTarget.readFile` (`encoding` option) — _`#checkout` helper extracted so both read lanes share the read-your-write retry_
+- [x] Backend: `contentBase64` variant in `RepoFileChange` accepted by `commitFiles` — _`writeFileBytes` in `commitFilesToArtifactRepo`; parse validation in `parseCommitFilesInput`_
+- [x] Backend: tests for the binary round trip — _unit tests in `utils.test.ts`, e2e in `repo-binary.itx.e2e.test.ts`; also verified live against local dev via the CLI_
+- [x] UI: full-width layout — _`ProjectStreamView layout="fullPanel"`; feed (filter row, tabs, composer, overlays) in a right Sheet behind the header Events button; `events` URL param_
+- [x] UI: pierre file tree with git-status row annotations — _`repo-file-tree.tsx`; incremental `model.add/remove` sync preserves expansion_
+- [x] UI: editable CodeMirror with all languages — _`SourceCodeBlock` language surface extended in packages/ui (`sourceCodeLanguageExtension`)_
+- [x] UI: image + PDF renderers with Replace — _`repo-editor-pane.tsx`; PDF uses a blob URL (Chrome refuses data: URLs in iframes)_
+- [x] UI: context menu — new file, rename, delete, upload — _pierre `renderContextMenu` + inline-rename; new-file uses a placeholder + `startRenaming(removeIfCanceled)`_
+- [x] UI: diff view via `@codemirror/merge` — _`CodeDiffBlock` in packages/ui; right side editable, revert arrows, collapsed unchanged regions_
+- [x] UI: commit flow — _uncontrolled message input + single `commitFiles` batch; invalidates the listFiles query (content queries key off HEAD oid)_
+- [x] UI: discard changes — _per file (editor + context menu + changes popover) and Discard all_
+- [x] Repos index route: same full-width + events-popover treatment
+- [x] Verify in local dev against a real project repo — _playwright walkthrough: open, edit (dirty M annotation), diff, image, context menu, events sheet, commit landed at HEAD (`a3956d5`)_
+- [x] Tree forced to light theme — _Misha: dark mode theming was broken; pinned `color-scheme: light` on the tree host (the CodeMirror pane is vsCodeLight-only too)_
 
 ## Implementation log
 
-(nothing yet)
+- Backend lane + regenerated `itx-api.generated.ts` / `types-source.generated.ts` / template `sdk.ts` snapshot (the template test compares them verbatim).
+- The oxlint `codegen/codegen` fix didn't regenerate `project-repo-template.generated.ts`; ran the codegen preset manually via node.
+- Verified live on local dev (project `ide-demo`, repo `/repos/demo`): binary PNG commit + base64 read round-trip via CLI; full IDE walkthrough via playwright (screenshots in the PR).
+- Known gap (pre-existing on main): the project repo lives at path `/` but the detail route maps splats to `/repos/*`, so the `/` repo's detail page shows a nonexistent `/repos/` stream. Left alone here — needs a routing decision (sentinel splat or a dedicated route).
+- Staged changes live in a module-level per-repo store; they survive client-side navigation but not reloads (v1).

@@ -137,13 +137,10 @@ export function RepoFileTree({
       <FileTree
         model={model}
         className="min-h-0 flex-1 overflow-y-auto"
-        style={
-          {
-            "--trees-fg-override": "var(--foreground)",
-            "--trees-selected-bg-override": "var(--accent)",
-            "--trees-border-color-override": "var(--border)",
-          } as React.CSSProperties
-        }
+        // Pierre themes itself with CSS light-dark(); pin the tree to light
+        // for now — the CodeMirror pane beside it is light-only too (vsCodeLight),
+        // so following the app's dark mode would clash anyway.
+        style={{ colorScheme: "light" } as React.CSSProperties}
         renderContextMenu={(item, context) => (
           <RepoTreeContextMenu
             item={item}
