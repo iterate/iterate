@@ -18,6 +18,18 @@ default — added the `preview` label to force it; both reworked worker-build
 e2e tests passed against a real preview deployment). The template's `@main`
 URL goes live with the first push-to-main publish (i.e. when this PR merges).
 
+**2026-07-08 late merge with main (#1761/#1778):** main turned the template's
+`sdk.ts` into a runtime module — an `IterateProjectWorker` base class whose
+`processEvent` reaction appends `itx.agents.defaults` for newborn agent
+streams. Resolution (commit `7b76fc409`): types keep coming from `iterate/sdk`
+(the 2200-line generated snapshot stays dead), and the seeded `sdk.ts` returns
+as a ~40-line hand-written runtime companion (`ProjectWorkerEnv` +
+`IterateProjectWorker`, re-exporting the package's types). It is seeded rather
+than imported because the worker build pipeline installs registry
+`dependencies` only, and `iterate` is a URL-pinned devDependency. When
+`iterate` becomes a real registry dependency, the base class should move into
+the package and the seeded shim can shrink to a re-export.
+
 ## Motivation
 
 Customer project repos currently get the platform's itx types as a committed
