@@ -150,13 +150,13 @@ export function parseJsonDocumentColonFixed(state: EditorState) {
   return parsed;
 }
 
+const NO_EXTENSIONS: SourceCodeBlockExtension = [];
+
 type RepoFileJsonSchema =
   | { status: "none"; extensions: SourceCodeBlockExtension }
   | { status: "loading"; url: string; extensions: SourceCodeBlockExtension }
   | { status: "unavailable"; url: string; extensions: SourceCodeBlockExtension }
   | { status: "active"; url: string; extensions: SourceCodeBlockExtension };
-
-const NO_EXTENSIONS: SourceCodeBlockExtension = [];
 
 /**
  * Resolve and fetch the json-schema for a repo file buffer. The schema is
