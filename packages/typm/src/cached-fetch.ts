@@ -46,9 +46,14 @@ export function createCachedFetch(input: {
       inFlight.set(url, pending);
     }
     const { status, body } = await pending;
-    return new Response(body, { status });
+    // The Response constructor throws for null-body statuses given ANY body,
+    // even "" — replay those bodyless (204/205/304 shouldn't happen from a
+    // CDN, but a throw here would take down the whole acquisition wave).
+    return new Response(NULL_BODY_STATUSES.has(status) ? null : body, { status });
   };
 }
+
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 async function openCache(cacheName: string): Promise<Cache | null> {
   if (typeof caches === "undefined") return null;

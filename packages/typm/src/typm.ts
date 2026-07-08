@@ -176,6 +176,10 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
         continue;
       }
       seen.add(dependency.name);
+      if (!isValidPackageName(dependency.name)) {
+        warn(`skipping ${JSON.stringify(dependency.name)}: not a valid npm package name`);
+        continue;
+      }
       const unfetchable = unfetchableRangeReason(dependency.ranges[0]!);
       if (unfetchable) {
         warn(`skipping ${dependency.name}: ${unfetchable}`);
@@ -183,7 +187,17 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
       }
       batch.push(dependency);
     }
-    const nextDependencies = await Promise.all(batch.map((dependency) => acquireOne(dependency)));
+    const nextDependencies = await Promise.all(
+      batch.map((dependency) =>
+        // A THROWN fetch (network blip — unlike a non-ok response) must cost
+        // only its own package, not reject the wave and discard every
+        // completed one: degradation is per-package.
+        acquireOne(dependency).catch((error) => {
+          warn(`failed to acquire ${dependency.name}: ${String(error)}`);
+          return [];
+        }),
+      ),
+    );
     wave = nextDependencies.flat();
   }
 
@@ -233,11 +247,25 @@ function unfetchableRangeReason(range: string): string | null {
   return match ? `unsupported version range "${range}"` : null;
 }
 
+/**
+ * Names come from user-editable package.jsons (and from fetched transitive
+ * ones) but get interpolated into request URLs and vfs paths — npm's name
+ * grammar (uppercase kept for legacy unscoped packages like JSONStream)
+ * keeps `..`, `/`, `?`, `#`, and whitespace out of both.
+ */
+function isValidPackageName(name: string): boolean {
+  return (
+    name.length <= 214 && /^(@[a-z0-9~-][a-z0-9._~-]*\/)?[a-zA-Z0-9~-][a-zA-Z0-9._~-]*$/.test(name)
+  );
+}
+
 function createLimiter(max: number) {
   let active = 0;
   const waiters: Array<() => void> = [];
   return async function limited<T>(fn: () => Promise<T>): Promise<T> {
-    if (active >= max) await new Promise<void>((resolve) => waiters.push(resolve));
+    // Loop, don't `if`: a fresh synchronous caller can barge past a woken
+    // waiter (it resumes a microtask later), so every wake re-checks.
+    while (active >= max) await new Promise<void>((resolve) => waiters.push(resolve));
     active++;
     try {
       return await fn();

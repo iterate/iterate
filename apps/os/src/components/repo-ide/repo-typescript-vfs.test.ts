@@ -59,13 +59,15 @@ test("an unchanged vfs diffs to nothing", () => {
   expect(repoVfsDiff(contents, new Map(contents))).toEqual({ updates: {}, removals: [] });
 });
 
-test("the seed cap keeps tsconfig.json even though it sorts after src/", () => {
-  const paths = Array.from({ length: 600 }, (_, i) => `src/file-${String(i).padStart(3, "0")}.ts`);
-  paths.push("tsconfig.json", "logo.png");
+test("the seed cap keeps tsconfig.json and package.json even though they sort after app/", () => {
+  const paths = Array.from({ length: 600 }, (_, i) => `app/file-${String(i).padStart(3, "0")}.ts`);
+  paths.push("tsconfig.json", "package.json", "logo.png");
 
   const seeded = repoSeedPaths(paths);
-  expect(seeded).toHaveLength(501);
+  expect(seeded).toHaveLength(502);
   expect(seeded).toContain("tsconfig.json");
+  // Dropping package.json would silently disable typm for big repos.
+  expect(seeded).toContain("package.json");
   expect(seeded).not.toContain("logo.png");
 
   // Small repos are untouched (and still exclude non-TS files).

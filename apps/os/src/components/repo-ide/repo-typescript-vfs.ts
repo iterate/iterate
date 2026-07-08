@@ -40,11 +40,15 @@ export function vfsPath(repoPath: string): string {
 
 const MAX_SEED_FILES = 500;
 
+/** Behavior-carrying root files pinned past the seed cap: both sort
+ * lexicographically after most source directories, and silently dropping
+ * them would revert the repo's compiler options to the defaults
+ * (tsconfig.json) or stop typm from ever running (package.json). */
+const PINNED_SEED_PATHS = ["package.json", "tsconfig.json"];
+
 /**
  * Which HEAD paths seed the vfs: TypeScript-relevant, sorted, capped for
- * pathological repo sizes. `tsconfig.json` is pinned past the cap — it sorts
- * lexicographically after most source directories, and dropping it would
- * silently revert the repo's own compiler options to the defaults.
+ * pathological repo sizes (with {@link PINNED_SEED_PATHS} kept regardless).
  */
 export function repoSeedPaths(paths: string[]): string[] {
   const seedPaths = paths.filter(isTypeScriptSeedPath).sort();
@@ -53,8 +57,8 @@ export function repoSeedPaths(paths: string[]): string[] {
     `[repo-ide] TypeScript language service is only seeing the first ${MAX_SEED_FILES} of ${seedPaths.length} TypeScript-relevant files.`,
   );
   const capped = seedPaths.slice(0, MAX_SEED_FILES);
-  if (seedPaths.includes("tsconfig.json") && !capped.includes("tsconfig.json")) {
-    capped.push("tsconfig.json");
+  for (const pinned of PINNED_SEED_PATHS) {
+    if (seedPaths.includes(pinned) && !capped.includes(pinned)) capped.push(pinned);
   }
   return capped;
 }

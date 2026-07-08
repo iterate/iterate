@@ -201,6 +201,13 @@ const typmFetch = createCachedFetch({
  * dependencies (scripts, formatting) must not trigger anything. */
 let lastAcquiredDependencies: string | null = null;
 
+/** Serializes acquisition runs: overlapping runs would interleave their vfs
+ * writes, so a slow stale run (old dep ranges) could land its package
+ * versions AFTER a newer run's and stick. Chaining keeps writes in request
+ * order; the snapshot check happens inside the chain, so a queued duplicate
+ * no-ops once its predecessor acquired the same deps. */
+let acquireChain: Promise<unknown> = Promise.resolve();
+
 function dependencySnapshot(packageJsonText: string): string | null {
   try {
     const parsed = JSON.parse(packageJsonText) as {
@@ -242,32 +249,47 @@ const api = {
   /**
    * Run typm over the repo's package.json and write the acquired `.d.ts`
    * trees into the vfs. Returns whether anything new landed (the host
-   * force-relints open buffers when it did). No-ops when the dependency maps
-   * are unchanged or the JSON doesn't parse (mid-edit).
+   * force-relints open buffers when it did) and whether the run FAILED
+   * (nothing acquired for transient-looking reasons — the host then forgets
+   * its request so a later reconcile retriggers). No-ops when the dependency
+   * maps are unchanged or the JSON doesn't parse (mid-edit).
    */
-  async acquireTypes(input: { packageJsonText: string }): Promise<{ acquired: boolean }> {
-    const snapshot = dependencySnapshot(input.packageJsonText);
-    if (!snapshot || snapshot === lastAcquiredDependencies || !worker.getEnv()) {
-      return { acquired: false };
-    }
-    lastAcquiredDependencies = snapshot;
-    try {
-      const result = await typmAcquireTypes({
-        packageJson: input.packageJsonText,
-        fetch: typmFetch,
-        log: (message) => console.info(`[typm] ${message}`),
-        limits: TYPM_LIMITS,
-      });
-      for (const [path, content] of Object.entries(result.files)) {
-        worker.updateFile({ path, code: nonEmpty(content) });
+  acquireTypes(input: {
+    packageJsonText: string;
+  }): Promise<{ acquired: boolean; failed: boolean }> {
+    const run = acquireChain.then(async () => {
+      const snapshot = dependencySnapshot(input.packageJsonText);
+      if (!snapshot || snapshot === lastAcquiredDependencies || !worker.getEnv()) {
+        return { acquired: false, failed: false };
       }
-      return { acquired: Object.keys(result.files).length > 0 };
-    } catch (error) {
-      // Transient failure (offline, CDN hiccup): allow a later retrigger.
-      lastAcquiredDependencies = null;
-      console.error("[typm] type acquisition failed", error);
-      return { acquired: false };
-    }
+      lastAcquiredDependencies = snapshot;
+      try {
+        const result = await typmAcquireTypes({
+          packageJson: input.packageJsonText,
+          fetch: typmFetch,
+          log: (message) => console.info(`[typm] ${message}`),
+          limits: TYPM_LIMITS,
+        });
+        for (const [path, content] of Object.entries(result.files)) {
+          worker.updateFile({ path, code: nonEmpty(content) });
+        }
+        const acquired = Object.keys(result.files).length > 0;
+        // Warnings with NOTHING acquired usually means offline/CDN-down (the
+        // core degrades per-package, so total wipeout is transient-shaped).
+        // Reset so a retry is possible; retries stay cheap — they re-enter
+        // this dedupe.
+        const failed = !acquired && result.warnings.length > 0;
+        if (failed) lastAcquiredDependencies = null;
+        return { acquired, failed };
+      } catch (error) {
+        // Transient failure (offline, CDN hiccup): allow a later retrigger.
+        lastAcquiredDependencies = null;
+        console.error("[typm] type acquisition failed", error);
+        return { acquired: false, failed: true };
+      }
+    });
+    acquireChain = run.catch(() => {});
+    return run;
   },
   getLints(input: { path: string; diagnosticCodesToIgnore: number[] }) {
     ensurePathExists(input.path);

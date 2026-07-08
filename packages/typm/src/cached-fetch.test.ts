@@ -40,6 +40,18 @@ test("never caches URLs the policy excludes (range resolution moves over time)",
   expect(calls).toHaveLength(2);
 });
 
+test("replays null-body statuses without throwing (Response rejects any body for 204/304)", async () => {
+  const cachedFetch = createCachedFetch({
+    fetch: async () => new Response(null, { status: 204 }),
+    cacheName: "typm-test",
+    shouldCache: () => true,
+  });
+
+  const replayed = await cachedFetch("https://cdn.jsdelivr.net/npm/zod@3.24.1/index.d.ts");
+  expect(replayed).toMatchObject({ status: 204, ok: true });
+  expect(await replayed.text()).toBe("");
+});
+
 test("does not memoize failed responses", async () => {
   let attempts = 0;
   const cachedFetch = createCachedFetch({

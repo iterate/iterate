@@ -315,6 +315,69 @@ test("unresolvable packages warn but never break the rest", async () => {
   expect(result.warnings.join("\n")).toContain("not-on-npm");
 });
 
+test("skips names outside npm's grammar before they reach a URL or vfs path", async () => {
+  const registry = fakeRegistry({
+    resolve: { "fine@^1.0.0": "1.0.0" },
+    packages: {
+      "fine@1.0.0": {
+        packageJson: { name: "fine", version: "1.0.0" },
+        files: { "/index.d.ts": "export {};" },
+      },
+    },
+  });
+
+  const result = await acquireTypes(
+    input(registry, {
+      dependencies: {
+        fine: "^1.0.0",
+        "../escape": "^1.0.0",
+        "weird?query": "^1.0.0",
+        "frag#ment": "^1.0.0",
+        "with space": "^1.0.0",
+      },
+    }),
+  );
+
+  expect(result.packages).toMatchObject([{ name: "fine" }]);
+  expect(result.warnings).toHaveLength(4);
+  expect(result.warnings.join("\n")).toContain("not a valid npm package name");
+  // Nothing invalid ever became a request or a vfs path.
+  expect(registry.requests.filter((url) => !url.includes("fine"))).toEqual([]);
+  expect(Object.keys(result.files)).toEqual([
+    "/node_modules/fine/index.d.ts",
+    "/node_modules/fine/package.json",
+  ]);
+});
+
+test("a thrown fetch costs only its own package, not the whole wave", async () => {
+  const registry = fakeRegistry({
+    resolve: { "healthy@^1.0.0": "1.0.0", "flaky@^1.0.0": "1.0.0" },
+    packages: {
+      "healthy@1.0.0": {
+        packageJson: { name: "healthy", version: "1.0.0" },
+        files: { "/index.d.ts": "export {};" },
+      },
+      "flaky@1.0.0": {
+        packageJson: { name: "flaky", version: "1.0.0" },
+        files: { "/index.d.ts": "export {};" },
+      },
+    },
+  });
+  const flakyFetch = (url: string): Promise<Response> => {
+    if (url.includes("flaky")) return Promise.reject(new Error("network blip"));
+    return registry.fetch(url);
+  };
+
+  const result = await acquireTypes({
+    ...input(registry, { dependencies: { healthy: "^1.0.0", flaky: "^1.0.0" } }),
+    fetch: flakyFetch,
+  });
+
+  expect(result.packages).toMatchObject([{ name: "healthy" }]);
+  expect(result.warnings.join("\n")).toContain("network blip");
+  expect(Object.keys(result.files)).toContain("/node_modules/healthy/index.d.ts");
+});
+
 test("includes devDependencies from the root package.json", async () => {
   const registry = fakeRegistry({
     resolve: { "@types/node@^25.0.0": "25.0.10" },

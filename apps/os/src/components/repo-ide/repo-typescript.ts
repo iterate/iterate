@@ -154,13 +154,29 @@ class RepoTypeScriptSession {
     if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
     this.#acquireTimer = setTimeout(() => {
       if (this.#terminated) return;
+      // A failed run (offline at seed, CDN down) must forget the requested
+      // text — otherwise this guard blocks every retrigger until the
+      // package.json literally changes and the session stays wildcard-`any`
+      // for its whole life. Forgetting lets the next reconcile (any edit)
+      // retry; the worker dedupes retries by dependency snapshot, so they
+      // cost nothing once one succeeds. Guarded against a newer request
+      // having been made while this one ran.
+      const forgetOnFailure = () => {
+        if (this.#lastRequestedPackageJson === packageJsonText) {
+          this.#lastRequestedPackageJson = null;
+        }
+      };
       void this.#remote
         .acquireTypes({ packageJsonText })
         .then((result) => {
+          if (result.failed) return forgetOnFailure();
           if (!result.acquired) return;
           for (const listener of this.#typesAcquiredListeners) listener();
         })
-        .catch((error) => console.error("[repo-ide] typm type acquisition failed", error));
+        .catch((error) => {
+          forgetOnFailure();
+          console.error("[repo-ide] typm type acquisition failed", error);
+        });
     }, delayMs);
   }
 
