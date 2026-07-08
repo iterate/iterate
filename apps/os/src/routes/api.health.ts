@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { BLOAT_PROOF } from "../bloat-proof.ts";
 
 /**
  * Trivial liveness probe. Replaces the oRPC `__internal.health` procedure: a
@@ -8,7 +9,7 @@ import { createFileRoute } from "@tanstack/react-router";
 export const Route = createFileRoute("/api/health")({
   server: {
     handlers: {
-      GET: () => Response.json({ ok: true, app: "os" }),
+      GET: () => Response.json({ ok: true, app: "os", bloatProof: BLOAT_PROOF.length }),
     },
   },
 });
