@@ -60,6 +60,17 @@ test("relative $schema paths are ignored, falling back to the filename map", () 
   expect(resolveJson("data.json", content)).toBeNull();
 });
 
+test("regex fallback ignores deeply-indented (nested) $schema mid-edit", () => {
+  // A vendored-schema-collection shape, cut off mid-edit so JSON.parse fails.
+  const content = '{\n  "vendored": {\n      "$schema": "https://example.com/nested.json",\n  ';
+  expect(resolveJson("data.json", content)).toBeNull();
+});
+
+test("regex fallback still matches the minified top-level form", () => {
+  const content = '{"$schema": "https://example.com/custom.json", "name": '; // cut off mid-edit
+  expect(resolveJson("data.json", content)).toBe("https://example.com/custom.json");
+});
+
 test("nested $schema props do not count when the doc parses", () => {
   const content = JSON.stringify({ nested: { $schema: "https://example.com/custom.json" } });
   expect(resolveJson("data.json", content)).toBeNull();
