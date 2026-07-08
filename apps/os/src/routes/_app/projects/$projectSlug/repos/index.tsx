@@ -356,5 +356,10 @@ function compareRepoRows(
 }
 
 function repoPathToSplat(path: string) {
+  // TEMPORARY HACK: the legacy project repo lives at path "/", whose splat
+  // would be empty — its URL ".../repos//" normalizes to the repos index,
+  // making it unviewable. "ROOT" stands in for it until it becomes
+  // /repos/config. Must mirror repoPathFromSplat in ./$.tsx.
+  if (path === "/") return "ROOT";
   return path.startsWith("/repos/") ? path.slice("/repos/".length) : path;
 }
