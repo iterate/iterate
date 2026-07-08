@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { jsonLanguage, jsonParseLinter } from "@codemirror/lang-json";
 import { yamlLanguage } from "@codemirror/lang-yaml";
 import { syntaxTree } from "@codemirror/language";
@@ -44,6 +44,9 @@ export function repoFileSchemaUrl(input: {
 }
 
 function jsonDollarSchemaUrl(content: string): string | null {
+  // Runs per keystroke for every JSON buffer — skip the parse entirely for
+  // the overwhelmingly common no-$schema case.
+  if (!content.includes('"$schema"')) return null;
   try {
     const parsed: unknown = JSON.parse(content);
     const schema =
@@ -51,8 +54,11 @@ function jsonDollarSchemaUrl(content: string): string | null {
     return typeof schema === "string" ? httpsUrlOrNull(schema) : null;
   } catch {
     // Mid-edit the doc is usually invalid JSON; a cheap regex keeps the
-    // schema association from flickering away while the user types.
-    const match = content.match(/"\$schema"\s*:\s*"([^"]+)"/);
+    // schema association from flickering away while the user types. Anchored
+    // to line start at shallow indent (plus the minified `{"$schema":` form)
+    // to bias toward top-level props — nested `$schema`s (vendored schema
+    // collections, openapi docs) sit deeper and shouldn't be grabbed.
+    const match = content.match(/^(?:[ \t]{0,3}|\{[ \t]*)"\$schema"[ \t]*:[ \t]*"([^"]+)"/m);
     return match ? httpsUrlOrNull(match[1]) : null;
   }
 }
@@ -152,6 +158,9 @@ export function parseJsonDocumentColonFixed(state: EditorState) {
 
 const NO_EXTENSIONS: SourceCodeBlockExtension = [];
 
+/** Quiet period before a changed schema URL is allowed to hit the network. */
+const SCHEMA_URL_SETTLE_MS = 500;
+
 type RepoFileJsonSchema =
   | { status: "none"; extensions: SourceCodeBlockExtension }
   | { status: "loading"; url: string; extensions: SourceCodeBlockExtension }
@@ -163,6 +172,11 @@ type RepoFileJsonSchema =
  * fetched by the browser (schemastore.org serves `access-control-allow-origin:
  * *`) and cached for the session; fetch failure degrades to no diagnostics —
  * `status: "unavailable"` — never an error surface.
+ *
+ * Egress model, out loud: a committed file's `$schema` (or modeline) makes any
+ * *viewer's* browser GET that URL — https-only, credential-less, CORS-gated,
+ * and the response is only ever parsed as a JSON schema. That's intentional
+ * vscode/yaml-language-server parity for a user-controlled IDE surface.
  *
  * Pass `language: null` for files that aren't JSON/YAML; the hook is a no-op
  * (`status: "none"`) but must still be called so hook order is stable.
@@ -178,16 +192,39 @@ export function useRepoFileJsonSchema(input: {
     [path, language, content],
   );
 
+  // Trailing debounce so typing out a $schema URL doesn't fire a fetch per
+  // keystroke to every garbage prefix host ("https://w", "https://ww", …).
+  // Built on a query rather than useState/useEffect (repo convention): each
+  // url change starts a new "settle" timer query; `keepPreviousData` holds
+  // the last settled url until the new one has been quiet for the period, so
+  // abandoned prefixes never reach the fetch query below.
+  const settledUrlQuery = useQuery({
+    queryKey: ["repo-ide-json-schema-url", url],
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 30 * 1000,
+    retry: false,
+    placeholderData: keepPreviousData,
+    queryFn: async () => {
+      await new Promise((resolve) => setTimeout(resolve, SCHEMA_URL_SETTLE_MS));
+      // Wrapped: `url` itself may be null, which react-query would reject.
+      return { url };
+    },
+  });
+  const settledUrl = settledUrlQuery.data === undefined ? null : settledUrlQuery.data.url;
+
+  // Errored entries don't poison the infinite-staleTime cache: staleTime
+  // governs *data* freshness, and an errored query has none — react-query
+  // refetches it when the file is next opened.
   const schemaQuery = useQuery({
-    queryKey: ["repo-ide-json-schema", url],
-    enabled: url !== null,
+    queryKey: ["repo-ide-json-schema", settledUrl],
+    enabled: settledUrl !== null,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 60 * 60 * 1000,
     retry: 1,
     queryFn: async (): Promise<JSONSchema7> => {
-      if (url === null) throw new Error("unreachable: query disabled without a url");
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Schema fetch failed: ${response.status} ${url}`);
+      if (settledUrl === null) throw new Error("unreachable: query disabled without a url");
+      const response = await fetch(settledUrl);
+      if (!response.ok) throw new Error(`Schema fetch failed: ${response.status} ${settledUrl}`);
       return (await response.json()) as JSONSchema7;
     },
   });
@@ -202,7 +239,13 @@ export function useRepoFileJsonSchema(input: {
   );
 
   if (url === null) return { status: "none", extensions: NO_EXTENSIONS };
-  if (schema !== undefined) return { status: "active", url, extensions };
-  if (schemaQuery.status === "error") return { status: "unavailable", url, extensions };
+  // Mid-settle (url !== settledUrl) the previous schema keeps applying — the
+  // header note names what's actually validating the buffer.
+  if (schema !== undefined && settledUrl !== null) {
+    return { status: "active", url: settledUrl, extensions };
+  }
+  if (schemaQuery.status === "error" && settledUrl !== null) {
+    return { status: "unavailable", url: settledUrl, extensions };
+  }
   return { status: "loading", url, extensions };
 }
