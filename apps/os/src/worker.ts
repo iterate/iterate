@@ -27,7 +27,8 @@ import {
   workerBuildingResponse,
 } from "./domains/workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
-import { defaultProjectWorkerRef, UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
+import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
+import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";

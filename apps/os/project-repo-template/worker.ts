@@ -1,15 +1,7 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, ItxBinding, StreamEvent } from "./sdk.ts";
+import { IterateProjectWorker, type DynamicWorkerRef, type StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
 import { waitroseClient } from "./integrations/waitrose/client.ts";
-
-/** Bindings the platform supplies to every project worker. `ItxBinding`
- * (sdk.ts) documents the two channels: `get()` for capability method calls,
- * `fetch()` for HTTP into sibling workers. */
-type ProjectWorkerEnv = {
-  ITX: ItxBinding;
-};
 
 // The root project worker is a small ROUTER over the project's apps. Each app
 // is its own repo-backed dynamic worker built from this repo (multi-file
@@ -48,7 +40,7 @@ const APPS = {
   },
 } satisfies Record<string, DynamicWorkerRef>;
 
-export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
+export default class ProjectWorker extends IterateProjectWorker {
   async fetch(req: Request): Promise<Response> {
     const appSlug = req.headers.get("x-iterate-app");
     if (appSlug) {
@@ -97,8 +89,21 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     );
   }
 
-  processEvent(input: { event: StreamEvent }): void {
-    console.log("project worker processed", input.event.type);
+  override async processEvent(event: StreamEvent): Promise<void> {
+    // React to anything happening anywhere in the project. For example:
+    //
+    //   if (
+    //     event.path === "/integrations/email" &&
+    //     event.type === "events.iterate.com/email/received"
+    //   ) {
+    //     const itx = await this.env.ITX.get();
+    //     await itx.streams.get("/mailroom").append({
+    //       type: "events.iterate.com/test/mail-logged",
+    //       idempotencyKey: `mail-logged:${event.path}@${event.offset}`,
+    //       payload: { subject: event.payload?.subject ?? null },
+    //     });
+    //   }
+    console.log("project event", event.path, event.type);
   }
 
   /**
