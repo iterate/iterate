@@ -13,13 +13,7 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@iterate-com/ui/components/item";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@iterate-com/ui/components/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
@@ -42,6 +36,7 @@ import {
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
@@ -56,10 +51,8 @@ type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list
 };
 
 type FeedPanel = {
-  description: string;
   emptyLabel: string;
   streamPath: string;
-  title: string;
 };
 
 const Search = StreamViewSearch.extend({
@@ -274,34 +267,26 @@ function ProjectIntegrationsContent() {
     });
   };
   const openFeed = async (panel: FeedPanel) => {
-    if (feedPanel != null && feedPanel.streamPath !== panel.streamPath) {
+    if (feedPanel == null || feedPanel.streamPath !== panel.streamPath) {
       await resetFeedViewSearch();
     }
     setFeedPanel(panel);
   };
   const openProjectFeed = () =>
     openFeed({
-      description: "Project-wide integration lifecycle and routing events.",
       emptyLabel: "No events on the integrations stream yet.",
       streamPath: "/integrations",
-      title: "Integrations feed",
     });
 
   return (
     <main className="min-h-0 flex-1 overflow-y-auto bg-background">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 md:px-6">
-        <header className="flex flex-col gap-3 border-b pb-4 md:flex-row md:items-start md:justify-between">
-          <div className="min-w-0 space-y-1">
-            <h1 className="text-xl font-semibold tracking-normal">Integrations</h1>
-            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              Connect provider accounts, inspect project-mounted integrations, and use built-in
-              platform capabilities from this project.
-            </p>
-          </div>
-          <Button className="w-fit" variant="outline" onClick={openProjectFeed}>
-            <Activity className="size-4" />
-            Stream feed
-          </Button>
+        <header className="flex items-center pb-2">
+          <StreamPathPill
+            streamPath="/integrations"
+            title="/integrations — open stream feed"
+            onClick={openProjectFeed}
+          />
         </header>
 
         {oauthErrorLabel ? (
@@ -516,10 +501,8 @@ function ConnectableIntegrationCard({
                 onDisconnect={() => onDisconnect(entry.connection)}
                 onOpenFeed={() =>
                   onOpenFeed({
-                    description: entry.path,
                     emptyLabel: `No events on ${entry.path} yet.`,
                     streamPath: entry.path,
-                    title: `${name} feed`,
                   })
                 }
                 provider={provider}
@@ -539,8 +522,6 @@ function ProvidedIntegrationCard({
   entry: ConnectionEntry;
   onOpenFeed: (panel: FeedPanel) => void;
 }) {
-  const label = entry.connection ?? entry.integration;
-
   return (
     <Item variant="outline" className="min-w-0 items-start gap-4 p-4">
       <ItemMedia variant="icon">
@@ -565,10 +546,8 @@ function ProvidedIntegrationCard({
           variant="outline"
           onClick={() =>
             onOpenFeed({
-              description: entry.path,
               emptyLabel: `No events on ${entry.path} yet.`,
               streamPath: entry.path,
-              title: `${label} feed`,
             })
           }
         >
@@ -638,12 +617,12 @@ function IntegrationFeedSheet({
     <Sheet open={feedPanel != null} onOpenChange={onOpenChange}>
       {feedPanel == null ? null : (
         <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(92vw,56rem)] data-[side=right]:sm:max-w-[min(92vw,56rem)]">
-          <SheetHeader className="border-b px-4 py-3 pr-14">
-            <SheetTitle>{feedPanel.title}</SheetTitle>
-            <SheetDescription>{feedPanel.description}</SheetDescription>
+          <SheetHeader className="sr-only">
+            <SheetTitle>{feedPanel.streamPath} feed</SheetTitle>
           </SheetHeader>
           <div className="flex min-h-0 flex-1">
             <ProjectStreamView
+              showHeader={false}
               projectId={projectId}
               streamPath={feedPanel.streamPath}
               emptyLabel={feedPanel.emptyLabel}

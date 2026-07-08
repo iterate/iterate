@@ -1,4 +1,4 @@
-import { ChevronDownIcon, FilterIcon, MoreHorizontalIcon, PauseIcon, PlayIcon } from "lucide-react";
+import { FilterIcon, MoreHorizontalIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -15,6 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
+import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
 import { presenceLabel, sparklinePoints, type RttMetrics } from "~/lib/stream-presence.ts";
@@ -62,19 +63,11 @@ export function StreamViewHeader({
   return (
     <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
       <SidebarTrigger className="-ml-1 md:hidden" />
-      <button
-        type="button"
-        aria-haspopup="dialog"
+      <StreamPathPill
+        streamPath={streamPath}
         title={`${streamPath} — click or ⌘K to switch streams`}
         onClick={() => openGlobalCommandPalette()}
-        className="flex h-9 min-w-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 hover:bg-muted/70"
-      >
-        <span className="truncate font-mono text-sm">{streamPath}</span>
-        <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-        <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
-          ⌘K
-        </kbd>
-      </button>
+      />
 
       <div className="ml-auto flex items-center gap-3">
         {agentPause == null ? null : (

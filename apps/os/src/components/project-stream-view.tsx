@@ -74,6 +74,7 @@ export function ProjectStreamView({
   panel,
   projectId,
   projectSlug,
+  showHeader = true,
   streamSource,
   streamPath,
 }: {
@@ -91,6 +92,7 @@ export function ProjectStreamView({
   panel?: ReactNode;
   projectId: string | null;
   projectSlug?: string;
+  showHeader?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -236,14 +238,16 @@ export function ProjectStreamView({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
-      <StreamViewHeader
-        agentBusy={agentBusy}
-        agentPause={agentPauseControl}
-        metrics={metrics}
-        presence={presence}
-        streamPath={streamPath}
-      />
-      {search.filter !== true ? null : activeTab === "feed" ? (
+      {showHeader ? (
+        <StreamViewHeader
+          agentBusy={agentBusy}
+          agentPause={agentPauseControl}
+          metrics={metrics}
+          presence={presence}
+          streamPath={streamPath}
+        />
+      ) : null}
+      {!showHeader || search.filter !== true ? null : activeTab === "feed" ? (
         <StreamFeedFilterRow
           activePreset={activePreset}
           defaultPresetId={defaultPreset.id}
