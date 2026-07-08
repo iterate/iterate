@@ -107,6 +107,36 @@ request":
   close to a WebSocket reconnect loop. RPC callers of `workers.get` still
   get the named `WorkerBuildInProgressError` instead.
 
+## Live capabilities can serve WebSockets — as callback pairs, not sockets
+
+A live capability provided over Cap'n Web (say, a Node process holding an
+open `/api` session) can back a WebSocket app host end to end. This is proven
+by `e2e/vitest/live-capability-websocket.e2e.test.ts`: the vitest runner
+provides a plain `fetch(request)` handler that upgrades, and a browser-side
+socket connecting to `livews--<slug>.<base>` reaches it.
+
+The composition rule, empirically pinned by that test:
+
+- **The direct form does not cross the mesh.** If the capability's fetch
+  returns a `Response` carrying the socket, the capnweb fork happily tunnels
+  it across the session (stream pair) — and then the materialized socket dies
+  at the first internal workerd RPC hop with the DataCloneError. The test
+  asserts this exact failure so the boundary is visible when it moves.
+- **Callback stubs cross everywhere.** Functions are the one value RPC chains
+  natively through every hop — capnweb session, capability-host Durable
+  Object, loopback entrypoint, loader isolate. So a socket crosses the mesh
+  as two callback pairs facing each other (`send`/`close` in each direction),
+  and each end materializes its own real socket: the app isolate mints the
+  `WebSocketPair` that completes the eyeball's upgrade (the fetch lane
+  carries it from there), and the provider side adapts the author's fetch
+  handler with an in-memory socket-pair shim. Ownership footnote: RPC params
+  are released when the call returns, so the provider must `dup()` the
+  callbacks it keeps for the socket's lifetime.
+
+The bridge is ~60 lines of userspace on each side (see the e2e's
+`BRIDGE_APP_SOURCE` and `websocketFetchCapability`); no platform machinery is
+involved beyond what this document already describes.
+
 ## Rules of thumb
 
 - Serving HTTP from a dynamic worker? Implement the class's `fetch` handler —
