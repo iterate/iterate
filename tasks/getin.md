@@ -1,47 +1,51 @@
 ---
-status: in-progress
+status: in-review
 size: small
 branch: getin
+pr: https://github.com/iterate/iterate/pull/1760
 ---
 
 # `pnpm getin` — one command to get into local OS
 
-**Status summary**: spec written, implementation not started.
+**Status summary**: implemented and verified end-to-end (dev-server discovery, project get-or-create idempotency, sign-in URL sets a session cookie, `-w` named + interactive). Remaining: human review.
 
-One dumb-ish wrapper so you never have to remember the minting recipe. `pnpm getin` from the repo root should end with a browser tab open on the local OS dashboard, signed in as a test identity, with an org and project that exist. It automates the exact recipe documented in `docs/dev-environments.md` ("Acting as users and admins" → the `--orgs`/`--projects` recipe).
+One dumb-ish wrapper so you never have to remember the minting recipe. `pnpm getin` from the repo root ends with a browser tab open on the local OS dashboard, signed in as a test identity, with an org and project that exist. It automates the exact recipe documented in `docs/dev-environments.md` ("Acting as users and admins" → the `--orgs`/`--projects` recipe).
 
 ## Behavior
 
-`pnpm getin [flags]`, implemented as `scripts/getin.ts` (plain TypeScript per `docs/cli-scripts.md`), wired as `"getin": "tsx scripts/getin.ts"` in the root package.json.
+`pnpm getin [flags]` = `trpc-cli scripts/getin.ts` — a trpc-cli **module-mode** CLI (per Misha's mid-task request): the default-exported `getin(options)` function is the only command, flags and help text derive from the `GetinOptions` type and its jsdoc.
 
 Steps, in order:
 
-1. **Doppler env**: if the forge/auth env (`AUTH_FORGE_PRIVATE_JWK`, `APP_CONFIG_ITERATE_AUTH__ISSUER`) is missing, re-exec itself under `doppler run --project os --config dev --`. `--config <name>` overrides the config (preview slots etc. left out of scope — this is a local-dev convenience).
-2. **Dev server**: read `apps/os/.dev-server/dev-server.json` via `readDevServerInfo(appRoot, { requireLive: true })`. If no live server, run `pnpm dev start --detach` in `apps/os` and use the discovery info it returns.
-3. **Get-or-create project**: shell out to the operator path from `apps/os`: `pnpm cli itx run --base-url <baseUrl> --eval '...'` — list projects, find one with the target slug, else `itx.projects.create({ slug })`. Default slug `test`. (itx has `projects.list()` / `projects.create({slug})` — see `apps/os/src/README.md`.)
-4. **Org**: per the documented recipe, OS authorizes from claims, so the org claim can be deterministic/synthetic (`org_getin` / slug `getin`) unless the project row reports a real `organizationId`, in which case use that.
-5. **Mint**: run `pnpm auth:mint --email <email> --orgs <json> --projects <json> --browser-url` (or import the same building blocks) to get the one-shot sign-in URL. Default email `test+test@nustom.com`.
-6. **Open**: `open <url>` (darwin). `--print` prints the URL instead of opening — useful for agents and for piping to other browsers.
+1. **Dev server**: read `apps/os/.dev-server/dev-server.json` via `readDevServerInfo(appRoot, { requireLive: true })`; if no live server, `pnpm dev start --detach` in `apps/os` and re-read.
+2. **Get-or-create project**: `doppler run -- pnpm exec tsx scripts/cli.ts itx run --eval ...` from `apps/os` — `projects.list({scope:"deployment"})`, find slug, else `projects.create({slug})`. Default slug `test`.
+3. **Org**: OS authorizes from claims, so when the project has no auth-side org (operator lane leaves `organizationId` null) a synthetic `org_getin` claim is used; a real `organizationId` on the project wins when present.
+4. **Mint**: run `scripts/auth/mint-session.ts --email --orgs --projects --browser-url` under the same doppler wrap. Default email `test+test@nustom.com`.
+5. **Open**: `open <url>`; `--print` prints instead.
+
+Doppler: subcommands run under `doppler run` with cwd `apps/os`, so the project resolves to `os` and the config to the worktree's `doppler setup` choice (`dev`, `dev_<you>`); `--config` overrides.
 
 ## Flags
 
-- `--email <email>` — identity to mint (default `test+test@nustom.com`)
-- `--slug <slug>` — project slug to get-or-create (default `test`)
-- `--config <doppler config>` — default `dev`
-- `--print` — print the sign-in URL instead of `open`ing it
-- `--worktree <name>` / `-w [name]` — run `pnpm getin` in that worktree instead (matched by worktree directory name or path from `git worktree list`). Bare `-w` with no value prompts interactively: list all worktrees (including the main checkout), ordered by most recently touched (newest of HEAD commit time and worktree-root mtime), pick by number. Remaining flags pass through to the re-invocation.
+- `--email/-e`, `--slug`, `--config`, `--print`
+- `--worktree/-w [ref]` — typed `boolean | string`, so bare `-w` prompts (worktrees ordered by most recently touched = newest of HEAD commit time and root mtime) and `-w <ref>` matches directory name, branch, or path, then re-runs `pnpm getin` there with remaining flags passed through.
 
 ## Checklist
 
-- [ ] `scripts/getin.ts` with the flow above
-- [ ] root package.json `getin` script
-- [ ] `-w`/`--worktree` selection incl. interactive prompt ordered by most-recently-touched
-- [ ] verify `pnpm getin -w` end-to-end — confirm pnpm doesn't swallow bare `-w` (it's pnpm's own `--workspace-root` alias; if it does swallow it, document `pnpm getin -- -w` or pick a different short flag)
-- [ ] mention in `docs/dev-environments.md` next to the manual recipe
+- [x] `scripts/getin.ts` with the flow above — _module-mode trpc-cli commands file; helpers below the command per repo test/file conventions_
+- [x] root package.json `getin` script — _`"getin": "trpc-cli scripts/getin.ts"`, same shape as the `preview` script_
+- [x] `-w`/`--worktree` selection incl. interactive prompt ordered by most-recently-touched — _`boolean | string` option; readline numbered prompt, default 1_
+- [x] verify `pnpm getin -w` end-to-end — _pnpm 10 forwards bare `-w` to the script verbatim (tested; it is NOT swallowed as `--workspace-root`)_
+- [x] mention in `docs/dev-environments.md` next to the manual recipe — _paragraph after the `--orgs/--projects` recipe block_
 
-## Assumptions (made while Misha was AFK-ish)
+## Assumptions
 
 - Local-dev only (dev Doppler config family); pointing at previews/prod stays with the manual `auth:mint` recipe.
 - Fixed OTP test-email convention means `test+test@nustom.com` is safe and standard here.
 - "Find the running dev process" = the existing `.dev-server/dev-server.json` discovery file with a liveness check, not process-table grepping.
-- Re-running is idempotent: same email, same slug, same (or reused) org claim — `getin` twice should not create a second project.
+- Re-running is idempotent: same email, same slug, same synthetic org claim — verified (second run reused `prj_a5dd64f6...`).
+
+## Implementation log
+
+- Verified in the `getin` worktree against `dev_misha`: fresh detached dev-server start (first attempt hit a transient miniflare "remote connection" failure; retry succeeded), project `test` created once and found on re-run, `curl` of the minted URL returned 302 + `iterate_session` cookie, `-w getin` and piped `echo 1 | pnpm getin -w` both re-invoked correctly.
+- `runInWorktree` spawns `pnpm getin` in the target worktree, so a worktree whose branch predates this feature fails with pnpm's "Missing script: getin" — acceptable until this merges to main.
