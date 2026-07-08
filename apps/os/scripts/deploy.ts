@@ -30,8 +30,14 @@ import { envs } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
+import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
 import {
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SANDBOX_INSTANCE_TYPES,
+} from "../src/domains/sandboxes/instance-types.ts";
+import {
+  COMPATIBILITY_DATE,
   envShapedVars,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
@@ -82,6 +88,20 @@ export default async function deploy(
       // created here on their next deploy instead of a manual
       // ensure-resources run per environment.
       await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
+
+      // Sandbox container classes must exist container-enabled BEFORE the
+      // exports deploy — the exports reconciliation can't enable namespaces
+      // it creates (upstream gap; see ensureContainerClasses). Makes
+      // brand-new environments deployable from scratch; no-op everywhere
+      // else.
+      await ensureContainerClasses({
+        ctx,
+        workerName: ctx.env.osWorkerName,
+        containerClassNames: SANDBOX_INSTANCE_TYPES.map(
+          (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+        ),
+        compatibilityDate: COMPATIBILITY_DATE,
+      });
 
       // The builder sidecar deploys FIRST: the os worker's BUILDER service
       // binding is by name, and a binding to a not-yet-existing script fails
