@@ -20,6 +20,7 @@ import {
 } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { agentSandboxPath } from "../sandboxes/utils.ts";
+import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
@@ -478,6 +479,23 @@ function agentBirthCertificateEvents(input: {
           'The project repo is ALWAYS checked out at /workspace/repos/project, also the default working directory — a bare exec("ls") lists the project.',
       },
     },
+    // The agent's own workspace, mounted the same way as the sandbox: a
+    // durable itx-expression re-evaluated per call, so agent birth never
+    // touches the workspace Durable Object — the project-repo clone happens
+    // lazily on the first workspace call.
+    {
+      type: "events.iterate.com/capability-host/capability-provided" as const,
+      idempotencyKey: `capability-host/workspace-provided:${input.projectId}:${input.childPath}`,
+      payload: {
+        path: ["workspace"],
+        type: "itx-expression" as const,
+        expression: ["workspaces", ["get", agentWorkspacePath(input.childPath)]],
+        instructions:
+          `THIS agent's own workspace: a private checkout of the project repo at "${agentWorkspacePath(input.childPath)}" (your agent path under /workspaces), living in a Durable Object filesystem — no container, always warm. ` +
+          'The first call clones the project repo and every call waits for that clone. Read/write/edit freely (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root); nothing is shared until pushed. ' +
+          `workspace.git (add/commit/push) publishes to the project repo branch "${workspaceBranchName(agentWorkspacePath(input.childPath))}", never to main.`,
+      },
+    },
     // Per-agent boot context as a model-visible input (the system prompt is
     // static; ids and paths are not). dont-trigger-request: this must never
     // wake the LLM by itself.
@@ -494,6 +512,7 @@ function agentBirthCertificateEvents(input: {
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           '- You have your own sandbox: `itx.sandbox` is a real Linux container that is yours alone (it lives at your agent path under /sandboxes and was mounted on your scope at birth). Call it dotted: `await itx.sandbox.exec("...")`. First command boots it (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project, which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project. The Codex CLI (`codex`, gpt-5.5/high) is preinstalled for real coding work. Expose a server publicly with a quick tunnel: `const { url } = await itx.sandbox.tunnels.get(<port>)` → an ephemeral `*.trycloudflare.com` url.',
+          '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than the sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use the sandbox when you need to RUN things.',
           "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
