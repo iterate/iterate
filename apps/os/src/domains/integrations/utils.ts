@@ -2,7 +2,7 @@
 // path helpers ARE the address model: /integrations/{slug}/{connection} and
 // its projections (thread paths, secret paths, connection-from-path).
 
-import type { BuiltinIntegrationSlug } from "../../types.ts";
+import type { BuiltinIntegrationSlug } from "./types.ts";
 
 /**
  * Deployment-wide (projectId: null) stream mapping `(slug, externalId)` — a

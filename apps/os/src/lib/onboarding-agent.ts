@@ -1,4 +1,4 @@
-import type { ProjectProcessorState } from "~/types.ts";
+import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 

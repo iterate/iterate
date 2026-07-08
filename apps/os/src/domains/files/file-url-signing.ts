@@ -9,7 +9,7 @@
  * models return, and the whole point of accepting strings is piping
  * `itx.ai.run` output straight into storage.
  */
-export type ProjectFileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
 /** Normalizes a path to a leading-slash form (mirrors durable-object-names). */
 function normalizeFilePath(path: string): string {
@@ -19,7 +19,7 @@ function normalizeFilePath(path: string): string {
 /** Coerces every accepted input shape to bytes. Streams and blobs are fully
  * buffered — v1 files are megabytes, and buffering sidesteps R2's
  * known-length requirement for streaming puts. */
-export async function projectFileDataToBytes(data: ProjectFileData): Promise<Uint8Array> {
+export async function projectFileDataToBytes(data: FileData): Promise<Uint8Array> {
   if (typeof data === "string") {
     const base64 = data.startsWith("data:") ? (data.split(",", 2)[1] ?? "") : data;
     try {

@@ -1,6 +1,20 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
 
+/**
+ * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
+ * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
+ * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
+ * does not re-declare that surface (same stance as `McpClientRpc`); see
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
+ * project's repo is ALWAYS checked out at `/workspace/repos/project` (with
+ * working git credentials), which is also the default working directory — a
+ * bare `exec("ls")` lists the project; no `ensureProjectRepo()` call needed
+ * first.
+ */
+export type CloudflareSandbox = object;
+
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real sandbox names carry the caller's
 // projectId — it just has to be a legal projectId so stringify/parse run.

@@ -1,4 +1,4 @@
-import type { ProjectDeploymentStatus } from "~/types.ts";
+import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 
 export type RootRedirectProject = {
   id: string;

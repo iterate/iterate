@@ -23,6 +23,12 @@ export const mechanicalClassImplRule: StrictRule = {
   create(context) {
     const filename = context.filename || "";
     if (!filename.endsWith(".ts") && !filename.endsWith(".tsx")) return {};
+    // rpc-targets.ts is the SOURCE of the public itx contract, not a
+    // mechanical implementation of it: docstrings and explicit signatures on
+    // the RpcTarget classes are projected into src/itx-api.generated.ts (see
+    // apps/os/scripts/generate-itx-api.ts), so `Parameters<Contract[...]>`
+    // indirection there would erase the very text the generator publishes.
+    if (filename.replaceAll("\\", "/").endsWith("/apps/os/src/rpc-targets.ts")) return {};
 
     let fileService: TypeAwareLintFileService | undefined;
 

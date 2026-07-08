@@ -1,4 +1,4 @@
-import type { ItxExpression } from "../../types.ts";
+import type { ItxExpression } from "./types.ts";
 import { invokeFlattenedPath } from "./live-capability.ts";
 
 type EvaluatedExpression = {

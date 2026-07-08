@@ -15,7 +15,6 @@
 // Durable Object (repo-durable-object.ts), serialized with commits.
 
 import { itxEnv } from "../../env.ts";
-import type { GithubRepoLink, LinkGithubResult } from "../../types.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { getConnectionStatus } from "../integrations/connect-flows.ts";
 import { connectionOctokit, normalizeGithubError } from "../integrations/github-api.ts";
@@ -24,6 +23,7 @@ import {
   GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
   integrationConnectionStreamPath,
 } from "../integrations/utils.ts";
+import type { GithubRepoLink, LinkGithubResult } from "./types.ts";
 
 /** The one rule id a repo's GitHub webhook cross-post rule lives under, so
  * re-linking replaces it and unlinking knows what to remove. */

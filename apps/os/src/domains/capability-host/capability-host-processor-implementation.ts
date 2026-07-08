@@ -3,16 +3,16 @@ import {
   type StreamProcessorConstructorArgs,
 } from "../streams/stream-processor.ts";
 import { normalizePath } from "../durable-object-names.ts";
+import type { CapabilityDescription } from "../itx/describe.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
+import type { JsonValue } from "../workers/schemas.ts";
+import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
 import type {
   CapabilityProvidedPayload,
-  CapabilityDescription,
   CapabilityRecord,
-  CapabilityHost,
-  JsonValue,
-  ProjectRpcTarget,
+  ProvideCapabilityInput,
   RevokeCapabilityInput,
-  StreamEvent,
-} from "../../types.ts";
+} from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
@@ -21,7 +21,6 @@ import {
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
-export type ProvideCapabilityInput = Parameters<CapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
 
 type CompletedPayload = {
@@ -100,19 +99,17 @@ export type ParentCapabilityHost = {
   describeCapabilities(): Promise<CapabilityDescription[]>;
 };
 
-export class CapabilityHostProcessor extends StreamProcessor<
-  typeof CapabilityHostProcessorContract
-> {
+export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
-  #itx: ProjectRpcTarget;
+  #itx: Project;
   #path: string;
   #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
-    args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
-      itx: ProjectRpcTarget;
+    args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
+      itx: Project;
       path: string;
       /** Runs run-script workers in this scope. */
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
@@ -132,7 +129,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof CapabilityHostProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
@@ -188,9 +185,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<
-    StreamProcessor<typeof CapabilityHostProcessorContract>["processEvent"]
-  >[0]): undefined {
+  }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/capability-host/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
     runInBackground(() =>

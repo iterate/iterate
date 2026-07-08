@@ -15,7 +15,7 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../../apps/os/src/types.ts";
+import type { StreamEvent } from "../../../../apps/os/src/itx-api.generated.ts";
 
 export type AgentFeedSnapshot = {
   /** Settled conversation items in list order (user, assistant, activity). */

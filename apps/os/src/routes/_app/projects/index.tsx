@@ -12,6 +12,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
+import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
@@ -20,7 +21,6 @@ import {
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
 import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
-import type { ProjectListEntry } from "~/types.ts";
 
 type OrganizationSummary = {
   id: string;

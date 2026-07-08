@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   AgentProcessorContract,
@@ -11,14 +11,14 @@ import {
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
-export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
+export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof AgentProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<AgentProcessorContract>["reduce"]>[0]) {
     return reduceAgentEvent({ event, state });
   }
 
@@ -29,7 +29,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     previousState,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
         if (event.payload.systemPrompt === undefined) return;
@@ -215,7 +215,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
   }
 
   protected override async processEventBatch(
-    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
     await this.#settleLlmRequestScheduling(args);
@@ -231,7 +231,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
    * the same stream event.
    */
   async #settleLlmRequestScheduling(
-    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {

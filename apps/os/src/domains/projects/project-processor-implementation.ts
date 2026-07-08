@@ -4,7 +4,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import type { StreamEvent, StreamListItem } from "../../types.ts";
+import type { StreamEvent, StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -124,7 +124,7 @@ const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
 export class ProjectProcessor extends StreamProcessor<
-  typeof ProjectProcessorContract,
+  ProjectProcessorContract,
   {
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
@@ -137,7 +137,7 @@ export class ProjectProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<ProjectProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/project/create-requested":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
@@ -171,7 +171,7 @@ export class ProjectProcessor extends StreamProcessor<
     runInBackground,
     state,
     append,
-  }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
     if (previousState.created) {
       runInBackground(async () => {
         try {

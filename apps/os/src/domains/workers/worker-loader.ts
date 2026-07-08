@@ -1,6 +1,6 @@
 import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "../../types.ts";
+import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import { stableSha256 } from "./utils.ts";
