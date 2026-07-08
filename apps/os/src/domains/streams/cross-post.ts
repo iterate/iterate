@@ -27,7 +27,7 @@ import type { StreamPushEventBatch } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { compileJsonataExpression } from "./event-selector.ts";
 
-export type CrossPostProvenanceChain = NonNullable<
+type CrossPostProvenanceChain = NonNullable<
   NonNullable<StreamEvent["source"]>["crossPostedFrom"]
 >;
 

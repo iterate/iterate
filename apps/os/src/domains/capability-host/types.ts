@@ -12,7 +12,7 @@
  */
 import type { ItxExpression } from "../../itx/expression.ts";
 
-export type { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
+export type { ItxExpression } from "../../itx/expression.ts";
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {

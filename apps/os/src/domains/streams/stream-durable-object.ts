@@ -39,7 +39,7 @@ const MAX_GET_EVENTS_LIMIT = 500;
  * project-scoped stream configures on itself (see the constructor). Userspace
  * overrides it by re-appending `subscription-configured` with this same key.
  */
-export const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
+const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.

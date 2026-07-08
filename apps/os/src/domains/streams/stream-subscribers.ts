@@ -147,7 +147,7 @@ export type SubscriberDial = {
 };
 
 /** The policy/storage seams the owning Stream Durable Object provides. */
-export type StreamSubscribersHooks = {
+type StreamSubscribersHooks = {
   /** Synchronous committed-event range read from stream storage. */
   readEvents(args: { afterOffset: number; limit: number }): StreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */

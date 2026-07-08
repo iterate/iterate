@@ -123,7 +123,6 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
   z.strictObject({ mode: z.literal("push"), expression: ItxExpression }),
 ]);
 
-export type SubscriptionDelivery = z.infer<typeof SubscriptionDelivery>;
 
 /**
  * Initial cursor for a push subscription. `"new"` pins to the configuring
@@ -149,7 +148,6 @@ export type DeliverPolicy = z.infer<typeof DeliverPolicy>;
  */
 const OnPoisonPolicy = z.enum(["park", "skip"]);
 
-export type OnPoisonPolicy = z.infer<typeof OnPoisonPolicy>;
 
 // Payloads shared between the event catalog below and the reduced-state
 // records that store the latest committed configuration event, so the two can

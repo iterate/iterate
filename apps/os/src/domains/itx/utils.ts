@@ -125,7 +125,7 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
  * scripts) actually call. Both the stub and the root it returns are
  * per-acquisition and must be disposed by the caller.
  */
-export type ItxLoopbackStub = { get(): Promise<unknown> } & Partial<Disposable>;
+type ItxLoopbackStub = { get(): Promise<unknown> } & Partial<Disposable>;
 
 export function itxLoopbackStub(exports: unknown, props: ItxEntrypointProps): ItxLoopbackStub {
   return itxEntrypointBinding(exports, itxEntrypointProps(props)) as unknown as ItxLoopbackStub;
