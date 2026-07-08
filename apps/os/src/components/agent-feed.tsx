@@ -992,15 +992,23 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
       )}
       {/* A non-null preview is proof the text is code: the parser accepts
           forms looksLikeCode misses (bare `itx.chat.sendMessage("...`,
-          `void itx...`, bare `Promise.all([`) — those must render as a code
-          block with the preview above, not fall into the prose branch. */}
+          `void itx...`, bare `Promise.all([`) — those must render in the
+          code branch with the preview, not fall into the prose branch.
+          While the message literal is still streaming (not yet closed) the
+          bubble is the whole story, so the code block is suppressed — showing
+          both would render the same words twice. The block appears the moment
+          the literal closes (there's now code beyond what the bubble shows,
+          even when looksLikeCode is false) or the preview bails-to-null mid-
+          stream (`"hi" + name`) — the text is code and needs a home. */}
       {step.responseText === "" ? null : looksLikeCode(step.responseText) ||
         sendMessagePreview != null ? (
         <>
           {sendMessagePreview == null ? null : (
-            <StreamingSendMessagePreview text={sendMessagePreview} />
+            <StreamingSendMessagePreview text={sendMessagePreview.message} />
           )}
-          <StreamingCodeBlock code={step.responseText} />
+          {sendMessagePreview != null && !sendMessagePreview.literalClosed ? null : (
+            <StreamingCodeBlock code={step.responseText} />
+          )}
         </>
       ) : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
@@ -1016,8 +1024,9 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
  * The streamed snippet's leading `itx.chat.sendMessage("...")` literal,
  * rendered like a settled agent chat message while the script is still being
  * generated. Honest fakery: the message hasn't been sent — the blinking
- * cursor marks it as in-flight, and the streaming code block stays visible
- * below it. The text goes through the same MessageResponse markdown path as
+ * cursor marks it as in-flight. While the literal is still streaming this
+ * bubble renders alone; the streaming code block joins below it once the
+ * literal closes. The text goes through the same MessageResponse markdown path as
  * the settled web-message-sent row it hands off to (here in streaming mode,
  * i.e. the default parseIncompleteMarkdown the settled row opts out of), so
  * a markdown-y message previews with its final typography. Streamdown owns

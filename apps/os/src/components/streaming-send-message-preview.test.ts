@@ -1,8 +1,10 @@
 // The agent feed pre-parses a *streaming* code snippet: when the first real
 // statement is `itx.chat.sendMessage("...` (possibly still unclosed), the
-// partial string literal renders as a live chat-message preview. These tests
-// simulate token-by-token growth by extracting over successive prefixes of a
-// full snippet — helpers at the bottom.
+// partial string literal renders as a live chat-message preview —
+// `{ message, literalClosed }`, where `literalClosed` flips true once the
+// closing quote streams in (the feed hides the code block until then). These
+// tests simulate token-by-token growth by extracting over successive prefixes
+// of a full snippet — helpers at the bottom.
 
 import { expect, test } from "vitest";
 import { extractStreamingSendMessagePreview } from "./streaming-send-message-preview.ts";
@@ -11,16 +13,17 @@ test("streams the leading sendMessage literal as it grows, character by characte
   const snippet = 'await itx.chat.sendMessage("Hi there!")';
   expect(distinctPreviews(snippet)).toEqual([
     null, // no preview until the opening quote has streamed
-    "",
-    "H",
-    "Hi",
-    "Hi ",
-    "Hi t",
-    "Hi th",
-    "Hi the",
-    "Hi ther",
-    "Hi there",
-    "Hi there!", // the closing `")` doesn't extend it further
+    { message: "", literalClosed: false },
+    { message: "H", literalClosed: false },
+    { message: "Hi", literalClosed: false },
+    { message: "Hi ", literalClosed: false },
+    { message: "Hi t", literalClosed: false },
+    { message: "Hi th", literalClosed: false },
+    { message: "Hi the", literalClosed: false },
+    { message: "Hi ther", literalClosed: false },
+    { message: "Hi there", literalClosed: false },
+    { message: "Hi there!", literalClosed: false },
+    { message: "Hi there!", literalClosed: true }, // the closing quote flips literalClosed
   ]);
 });
 
@@ -67,8 +70,11 @@ test("single-quoted and backtick literals work too", () => {
 test("second options argument keeps the preview", () => {
   const snippet = 'await itx.chat.sendMessage("hello", { whatever: 123 })';
   expectPreviewOverEveryPrefix(snippet, "hello");
-  // Mid-stream, options still being generated:
-  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("hello", { wha')).toBe("hello");
+  // Mid-stream, options still being generated — the literal itself is closed:
+  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("hello", { wha')).toEqual({
+    message: "hello",
+    literalClosed: true,
+  });
 });
 
 test("escaped quotes and standard escapes read clean", () => {
@@ -77,12 +83,18 @@ test("escaped quotes and standard escapes read clean", () => {
 });
 
 test("a dangling backslash mid-stream holds the preview just before it", () => {
-  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("He said \\')).toBe("He said ");
+  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("He said \\')).toEqual({
+    message: "He said ",
+    literalClosed: false,
+  });
 });
 
 test("unicode escapes decode when complete and hold while partial", () => {
   expectPreviewOverEveryPrefix('itx.chat.sendMessage("cat: \\u{1F600}!")', "cat: 😀!");
-  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("cat: \\u{1F6')).toBe("cat: ");
+  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("cat: \\u{1F6')).toEqual({
+    message: "cat: ",
+    literalClosed: false,
+  });
   expectPreviewOverEveryPrefix('itx.chat.sendMessage("A\\u0042C")', "ABC");
 });
 
@@ -90,7 +102,10 @@ test("backtick interpolation bails; a lone $ at end of input is held back", () =
   expect(extractStreamingSendMessagePreview("itx.chat.sendMessage(`hi ${name}`)")).toBe(null);
   expect(extractStreamingSendMessagePreview("itx.chat.sendMessage(`hi ${")).toBe(null);
   // "$" could still become "${" — held back until the next character decides:
-  expect(extractStreamingSendMessagePreview("itx.chat.sendMessage(`costs $")).toBe("costs ");
+  expect(extractStreamingSendMessagePreview("itx.chat.sendMessage(`costs $")).toEqual({
+    message: "costs ",
+    literalClosed: false,
+  });
   expectPreviewOverEveryPrefix("itx.chat.sendMessage(`costs $5`)", "costs $5");
 });
 
@@ -100,17 +115,20 @@ test("a later token can invalidate an already-showing preview: appear, then vani
   // honestly disappears than previewing a message we can't know).
   expect(distinctPreviews('itx.chat.sendMessage("hi" + name)')).toEqual([
     null,
-    "",
-    "h",
-    "hi", // literal closed; trailing whitespace at end of input still looks well-formed
+    { message: "", literalClosed: false },
+    { message: "h", literalClosed: false },
+    { message: "hi", literalClosed: false },
+    // literal closed; trailing whitespace at end of input still looks well-formed
+    { message: "hi", literalClosed: true },
     null, // the `+` reveals the literal wasn't the whole message — bubble disappears
   ]);
   expect(distinctPreviews("itx.chat.sendMessage(`hi ${name}`)")).toEqual([
     null,
-    "",
-    "h",
-    "hi",
-    "hi ", // the lone `$` is held back — this stays "hi " until the next character decides
+    { message: "", literalClosed: false },
+    { message: "h", literalClosed: false },
+    { message: "hi", literalClosed: false },
+    // the lone `$` is held back — this stays "hi " until the next character decides
+    { message: "hi ", literalClosed: false },
     null, // `${` streams in: interpolation, value unknowable — bubble disappears
   ]);
 });
@@ -157,16 +175,22 @@ test("unrecognized snippets bail", () => {
 
 test("later statements never extend a closed preview", () => {
   const closed = 'async (itx) => {\n  await itx.chat.sendMessage("done!");\n';
-  const expected = "done!";
-  expect(extractStreamingSendMessagePreview(closed)).toBe(expected);
+  const expected = { message: "done!", literalClosed: true };
+  expect(extractStreamingSendMessagePreview(closed)).toEqual(expected);
   expect(
     extractStreamingSendMessagePreview(closed + '  await itx.chat.sendMessage("another");\n}'),
-  ).toBe(expected);
+  ).toEqual(expected);
 });
 
 test("empty message previews as empty string once the quote opens", () => {
-  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("')).toBe("");
-  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("")')).toBe("");
+  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("')).toEqual({
+    message: "",
+    literalClosed: false,
+  });
+  expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("")')).toEqual({
+    message: "",
+    literalClosed: true,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -177,10 +201,12 @@ test("empty message previews as empty string once the quote opens", () => {
  * Simulates token-by-token streaming: for every prefix of the snippet the
  * preview must be null or a leading slice of the final message, must never
  * revert to null once it appears (these are all well-formed snippets), and
- * the full snippet must yield exactly the final message.
+ * once the literal closes it must stay closed at exactly the final message.
+ * The full snippet must yield the final message, closed.
  */
 function expectPreviewOverEveryPrefix(snippet: string, finalMessage: string) {
   let seenPreview = false;
+  let seenClosed = false;
   for (let length = 0; length <= snippet.length; length++) {
     const prefix = snippet.slice(0, length);
     const preview = extractStreamingSendMessagePreview(prefix);
@@ -189,19 +215,29 @@ function expectPreviewOverEveryPrefix(snippet: string, finalMessage: string) {
       continue;
     }
     seenPreview = true;
-    expect({ prefix, preview, isLeadingSlice: finalMessage.startsWith(preview) }).toMatchObject({
-      isLeadingSlice: true,
-    });
+    const isLeadingSlice = finalMessage.startsWith(preview.message);
+    expect({ prefix, preview, isLeadingSlice }).toMatchObject({ isLeadingSlice: true });
+    if (seenClosed || preview.literalClosed) {
+      expect({ prefix, preview }).toMatchObject({
+        preview: { message: finalMessage, literalClosed: true },
+      });
+      seenClosed = true;
+    }
   }
-  expect(extractStreamingSendMessagePreview(snippet)).toBe(finalMessage);
+  expect(extractStreamingSendMessagePreview(snippet)).toEqual({
+    message: finalMessage,
+    literalClosed: true,
+  });
 }
 
 /** The ordered distinct previews seen while streaming the snippet character by character. */
-function distinctPreviews(snippet: string): (string | null)[] {
-  const seen: (string | null)[] = [];
+function distinctPreviews(snippet: string) {
+  const seen: ({ message: string; literalClosed: boolean } | null)[] = [];
   for (let length = 0; length <= snippet.length; length++) {
     const preview = extractStreamingSendMessagePreview(snippet.slice(0, length));
-    if (seen.length === 0 || seen.at(-1) !== preview) seen.push(preview);
+    if (seen.length === 0 || JSON.stringify(seen.at(-1)) !== JSON.stringify(preview)) {
+      seen.push(preview);
+    }
   }
   return seen;
 }

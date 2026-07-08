@@ -23,8 +23,16 @@
  * arrives — both then revert to null and the bubble disappears. Bail-to-null
  * is the honest choice; only for snippets that stay recognizable is the
  * preview a monotonically growing slice of the final message.
+ *
+ * `literalClosed` reports whether the closing quote has streamed in yet.
+ * While it's false the preview bubble IS the whole story — the feed hides
+ * the streaming code block so the message doesn't show twice. Once the
+ * literal closes (and the message can no longer grow), the code block
+ * reappears below the bubble for whatever streams next.
  */
-export function extractStreamingSendMessagePreview(partialCode: string): string | null {
+export function extractStreamingSendMessagePreview(
+  partialCode: string,
+): { message: string; literalClosed: boolean } | null {
   const text = partialCode;
   let i = skipWhitespace(text, 0);
 
@@ -131,31 +139,37 @@ function skipTrivia(text: string, index: number): number {
  * become `${` stops the preview *before* it — the next chunk re-derives and
  * picks those characters back up.
  */
-function readStringLiteral(text: string, start: number, quote: string): string | null {
+function readStringLiteral(
+  text: string,
+  start: number,
+  quote: string,
+): { message: string; literalClosed: boolean } | null {
   let out = "";
   let i = start;
   while (i < text.length) {
     const c = text[i];
     if (c === quote) {
-      return literalCloseLooksWellFormed(text, i + 1) ? out : null;
+      return literalCloseLooksWellFormed(text, i + 1)
+        ? { message: out, literalClosed: true }
+        : null;
     }
     if (c === "\\") {
       const escape = readEscape(text, i + 1);
       if (escape === "malformed") return null;
-      if (escape === "incomplete") return out;
+      if (escape === "incomplete") return { message: out, literalClosed: false };
       out += escape.value;
       i = escape.next;
       continue;
     }
     if ((c === "\n" || c === "\r") && quote !== "`") return null;
     if (quote === "`" && c === "$") {
-      if (i + 1 >= text.length) return out;
+      if (i + 1 >= text.length) return { message: out, literalClosed: false };
       if (text[i + 1] === "{") return null;
     }
     out += c;
     i += 1;
   }
-  return out;
+  return { message: out, literalClosed: false };
 }
 
 /**

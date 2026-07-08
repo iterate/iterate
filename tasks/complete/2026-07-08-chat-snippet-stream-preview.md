@@ -10,11 +10,13 @@ base: itx-chat-send-message-string
 ## Status summary
 
 Done. The pure parser (`extractStreamingSendMessagePreview`) is
-implemented with 15 hard unit tests (token-by-token prefix simulation), and
+implemented with 16 hard unit tests (token-by-token prefix simulation), and
 wired into `LiveStepStream` in `agent-feed.tsx` — the preview renders as an
-in-flight assistant message bubble above the streaming code block. A demo
-recording of a real streaming turn is in the PR body. PR 2 of 2,
-stacked on `itx-chat-send-message-string` (#1735) — depends on the
+in-flight assistant message bubble; while the message literal is still
+streaming the bubble renders ALONE (the code block is suppressed so the same
+words don't show twice), and the code block joins below it once the literal
+closes. A demo recording of a real streaming turn is in the PR body. PR 2 of
+2, stacked on `itx-chat-send-message-string` (#1735) — depends on the
 plain-string `itx.chat.sendMessage("...")` form landing first.
 
 ## Ask (verbatim-ish)
@@ -156,6 +158,29 @@ simple. It must be visually honest that it's in-progress.
      markdown mode, so it's typographically identical to the settled
      `web-message-sent` row it hands off to (cursor blinks on its own line —
      streamdown owns the markdown DOM).
+- Follow-up (Misha, top-level PR comment): only show the code block when we
+  "need" to — seeing the message twice (bubble + the same words inside the
+  streaming code block) was confusing. The parser now returns
+  `{ message, literalClosed } | null`; while the preview is active and the
+  literal hasn't closed, `LiveStepStream` renders ONLY the bubble and
+  suppresses `StreamingCodeBlock`. The moment the closing quote streams in,
+  the code block appears below the bubble (there's now code beyond what the
+  bubble shows) and everything proceeds as before. Edge cases decided:
+  - Preview bails-to-null mid-stream (`"hi" + name`, `` `hi ${` ``): the
+    preview-branch condition goes false the same render, so the code block
+    (or, for bare non-`looksLikeCode` forms, the pre-existing prose fallback)
+    appears immediately — never a blank step.
+  - Bare `itx.chat.sendMessage("...` forms where `looksLikeCode()` is false:
+    preview-only while streaming is correct anyway; once the literal closes,
+    the `looksLikeCode(...) || preview != null` gate still routes to the code
+    branch, and `literalClosed: true` un-suppresses the block — so the code
+    appears even though the heuristic alone would have called it prose.
+  - A closed-at-end-of-input literal (`sendMessage("hi"` with nothing after)
+    already shows the code block — "closed" is the signal, not "more code
+    after the call"; simpler and only a few characters early.
+    Tests updated for the new shape (every-prefix helper now also asserts
+    closed-stays-closed at exactly the final message; `distinctPreviews`
+    captures the `false → true` flip and the vanish sequences).
 - Demo recording (post-review): ran the OS dev server locally, drove a real
   agent turn in the browser ("how many lines does AGENTS.md have? message me
   first…"), and verified the feature end-to-end visually — the preview bubble
