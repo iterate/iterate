@@ -27,6 +27,7 @@ const network = vi.hoisted(() => {
     githubCreateStatus: 201,
     pushShouldFail: false,
     configureLinkShouldFail: false,
+    ruleRemoveAppendShouldFail: false,
   };
 
   function streamEvents(name: string): StoredEvent[] {
@@ -48,6 +49,7 @@ const network = vi.hoisted(() => {
       state.githubCreateStatus = 201;
       state.pushShouldFail = false;
       state.configureLinkShouldFail = false;
+      state.ruleRemoveAppendShouldFail = false;
     },
     seedStream(name: string, ...events: Array<{ payload: Record<string, unknown>; type: string }>) {
       const stored = streamEvents(name);
@@ -63,6 +65,12 @@ const network = vi.hoisted(() => {
         return {
           async append(...inputs: Array<{ payload: Record<string, unknown>; type: string }>) {
             for (const input of inputs) {
+              if (
+                network.state.ruleRemoveAppendShouldFail &&
+                input.type === "events.iterate.com/stream/rule-removed"
+              ) {
+                throw new Error("rule-removed append exploded");
+              }
               stored.push({
                 ...input,
                 createdAt: new Date().toISOString(),
@@ -339,5 +347,26 @@ describe("unlinkRepoFromGithub", () => {
       repoPath: "/repos/project",
     });
     expect(result).toEqual({ unlinked: false });
+  });
+
+  test("a failed rule removal keeps the link so unlink stays retryable", async () => {
+    seedConnectedFact();
+    await linkRepoToGithub(linkInput());
+
+    network.state.ruleRemoveAppendShouldFail = true;
+    await expect(
+      unlinkRepoFromGithub({ projectId: PROJECT_ID, repoPath: "/repos/project" }),
+    ).rejects.toThrow(/rule-removed append exploded/);
+    // The link is still in place — the rule is removed BEFORE the link, so a
+    // failure leaves a retryable state, never an orphaned rule with no link.
+    expect(network.state.githubLink).not.toBeNull();
+
+    network.state.ruleRemoveAppendShouldFail = false;
+    const retried = await unlinkRepoFromGithub({
+      projectId: PROJECT_ID,
+      repoPath: "/repos/project",
+    });
+    expect(retried).toEqual({ unlinked: true });
+    expect(network.state.githubLink).toBeNull();
   });
 });

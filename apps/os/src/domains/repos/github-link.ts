@@ -146,16 +146,23 @@ export async function unlinkRepoFromGithub(input: {
   repoPath: string;
 }): Promise<{ unlinked: boolean }> {
   const repoPath = normalizePath(input.repoPath);
-  const removed = await repoDurableObjectStub(input.projectId, repoPath).removeGithubLink();
-  if (removed === null) return { unlinked: false };
+  const repoStub = repoDurableObjectStub(input.projectId, repoPath);
+  const link = await repoStub.getGithubLink();
+  if (link === null) return { unlinked: false };
+
+  // Rule first, link last — mirroring linkRepoToGithub's ordering: the link
+  // is the commit point, so a failure anywhere leaves the link in place and a
+  // retried unlinkGithub() can still find the connection and finish the job
+  // (removing an already-removed rule is a no-op fold).
   await integrationStreamStub(
     input.projectId,
-    integrationConnectionStreamPath("github", removed.connection),
+    integrationConnectionStreamPath("github", link.connection),
   ).append({
     type: "events.iterate.com/stream/rule-removed",
     payload: { ruleId: githubCrossPostRuleId(repoPath) },
   });
-  return { unlinked: true };
+  const removed = await repoStub.removeGithubLink();
+  return { unlinked: removed !== null };
 }
 
 function repoDurableObjectStub(projectId: string, repoPath: string) {
