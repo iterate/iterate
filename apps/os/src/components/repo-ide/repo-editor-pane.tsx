@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { getOriginalDoc, unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import { LockIcon, MinusIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
@@ -396,6 +396,9 @@ function PdfPreview({ base64 }: { base64: string }) {
     const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
     return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
   }, [base64]);
+  // Revoked on change/unmount: an object URL pins its blob in memory until
+  // the page unloads otherwise.
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
   return <iframe title="PDF preview" src={url} className="min-h-0 flex-1" />;
 }
 
