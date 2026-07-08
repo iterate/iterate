@@ -336,9 +336,9 @@ export const DynamicWorkerRef = z.discriminatedUnion("type", [
  * Authority is identical on both channels: the binding's own scope, minted by
  * the host — worker code never picks its own project.
  *
- * @public consumed by project-worker code through the sdk.ts copy of the
- * generated contract (a string knip cannot traverse), and seeded into the
- * generated file explicitly by scripts/generate-itx-api.ts.
+ * @public — not reachable from the /api entrypoint walk; published for
+ * project-worker code, which imports it from the project repo's sdk.ts copy
+ * of this contract.
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;

@@ -1001,6 +1001,10 @@ export interface WorkspaceGit {
  *
  * Authority is identical on both channels: the binding's own scope, minted by
  * the host — worker code never picks its own project.
+ *
+ * @public — not reachable from the /api entrypoint walk; published for
+ * project-worker code, which imports it from the project repo's sdk.ts copy
+ * of this contract.
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
