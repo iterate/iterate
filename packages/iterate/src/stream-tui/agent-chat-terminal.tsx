@@ -27,7 +27,8 @@ import {
   type AgentConnectionStatus,
 } from "./agent-connection.ts";
 import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
-import { parseChatBangCommand } from "./chat-bang-command.ts";
+import { parseChatSlashCommand } from "./chat-slash-command.ts";
+import type { MachineShareScope } from "./agent-connection.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
@@ -58,13 +59,17 @@ type AppState = {
   feed: AgentFeedSnapshot;
   status: AgentConnectionStatus;
   notice: string;
+  /** Who can currently reach the human's machine: this session's agent, or the whole project. */
+  fsScope: MachineShareScope;
 };
 
 const model = createAgentFeedModel();
 let appState: AppState = {
   feed: model.snapshot(),
   status: { kind: "connecting" },
-  notice: "",
+  notice:
+    "your filesystem is shared with this agent (session only) — /share opens it to the whole project",
+  fsScope: "session",
 };
 const listeners = new Set<() => void>();
 
@@ -115,20 +120,28 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
 
-      // Bang commands (`!share` / `!unshare`) are handled locally and never sent
-      // to the agent as a chat turn, in the spirit of Slack's `!debug`.
-      const bang = parseChatBangCommand(message);
-      if (bang != null) {
+      // Slash commands (`/share` / `/unshare`) are handled locally and never sent
+      // to the agent as a chat turn. Your filesystem is already shared with this
+      // session's agent by default; these widen/narrow that to the whole project.
+      const slash = parseChatSlashCommand(message);
+      if (slash != null) {
         clearComposer();
-        if (bang.kind === "share") {
-          patchAppState({ notice: "sharing this machine — agent can run commands as you" });
-          connection.shareMachine().catch((error: unknown) => {
-            patchAppState({ notice: `!share failed: ${errorText(error)}` });
+        if (slash.kind === "share") {
+          patchAppState({
+            fsScope: "project",
+            notice:
+              "sharing your machine with the whole project (every agent can reach it while this CLI runs)",
+          });
+          connection.shareWithProject().catch((error: unknown) => {
+            patchAppState({ fsScope: "session", notice: `/share failed: ${errorText(error)}` });
           });
         } else {
-          patchAppState({ notice: "stopped sharing this machine" });
-          connection.stopSharingMachine().catch((error: unknown) => {
-            patchAppState({ notice: `!unshare failed: ${errorText(error)}` });
+          patchAppState({
+            fsScope: "session",
+            notice: "machine sharing narrowed back to this session's agent",
+          });
+          connection.unshareFromProject().catch((error: unknown) => {
+            patchAppState({ notice: `/unshare failed: ${errorText(error)}` });
           });
         }
         return;
@@ -148,7 +161,12 @@ function AgentChatApp() {
 
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.bg}>
-      <ChatHeader status={state.status} notice={state.notice} eventCount={state.feed.eventCount} />
+      <ChatHeader
+        status={state.status}
+        notice={state.notice}
+        eventCount={state.feed.eventCount}
+        fsScope={state.fsScope}
+      />
       <scrollbox
         width="100%"
         flexGrow={1}
@@ -184,7 +202,7 @@ function AgentChatApp() {
           key={composerRevision}
           width="100%"
           value={composerValue}
-          placeholder="Message the agent (Enter to send · !share to share this machine · Ctrl+C to quit)"
+          placeholder="Message the agent (Enter to send · /share opens your machine to the whole project · Ctrl+C to quit)"
           focused
           backgroundColor="transparent"
           focusedBackgroundColor="transparent"
@@ -202,7 +220,12 @@ function AgentChatApp() {
   );
 }
 
-function ChatHeader(props: { status: AgentConnectionStatus; notice: string; eventCount: number }) {
+function ChatHeader(props: {
+  status: AgentConnectionStatus;
+  notice: string;
+  eventCount: number;
+  fsScope: MachineShareScope;
+}) {
   const statusLabel =
     props.status.kind === "live"
       ? "live"
@@ -218,6 +241,7 @@ function ChatHeader(props: { status: AgentConnectionStatus; notice: string; even
   const meta = [
     `${props.eventCount} event${props.eventCount === 1 ? "" : "s"}`,
     statusLabel,
+    props.fsScope === "project" ? "fs: project" : "fs: session",
     props.notice,
   ]
     .filter(Boolean)

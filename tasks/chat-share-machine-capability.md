@@ -1,141 +1,126 @@
 ---
 status: in-progress
-size: small
+size: medium
 ---
 
-# `!share` in chat mode: session-scoped local-machine capability
+# Chat mode: share the human's machine with the agent
 
 ## Status summary
 
-POC implemented and **verified end-to-end against prod**. `!share`/`!unshare`
-work in the chat composer; the live capability (exec/readFile/writeFile/glob/notify)
-mounts on the agent's scope, is invocable, and re-provides across reconnects.
+Implemented and verified. The `iterate chat` TUI now **shares the human's
+filesystem/machine with the agent by default** (session-scoped), and `/share`
+widens that to the whole project. Live-verified against prod: both mounts land,
+the Workspace-aligned method surface is invocable, and the plumbing (connect at
+project scope → derive agent → mount on both scopes) works.
 
-Key finding during verification: the agent's system prompt is **static** (it embeds
-the types.ts surface + documents built-ins, but does not inject a live list of
-dynamically-mounted capabilities). So a mid-session mount is invisible unless the
-agent calls `__describe()` — which it won't do unprompted.
+Design in one paragraph: a live capability at `itx.usersMachine` — an ephemeral,
+session-scoped sibling of `itx.sandbox` (a real machine with a shell). On chat
+start it's mounted on the **agent scope** automatically (a coding agent that
+can't touch the filesystem makes no sense, so this is on by default, no command).
+`/share` additionally mounts it on the **project root** so every agent in the
+project can reach the machine while the CLI runs; `/unshare` narrows back. Both
+mounts are `type: "live"` so **Ctrl+C revokes everything** (the stub dies with
+the socket). Commands are `/`-prefixed, not `!` (on a CLI `!` means "run a shell
+command").
 
-Fix (general, not a workaround): a hard nudge in the agent prompt
-(`agent-processor-contract.ts`, DISCOVERING THE SURFACE) telling the agent its
-capability surface changes at runtime, so it must `__describe()` before claiming it
-can't do something. This makes ALL runtime-mounted capabilities discoverable, not
-just `usersMachine`. An earlier per-`!share` announcement message was tried and then
-**removed** in favour of this. The `eval-agent-discovers-runtime-capabilities` task
-guards the behavior.
+Also lands a general agent-prompt fix so runtime-mounted capabilities are
+discoverable at all (see below), and reshapes the capability to gel with the new
+itx-v4 filesystem model.
 
-One **pre-existing, unrelated** test failure found on `main` — see notes.
+One **pre-existing, unrelated** test failure remains on `main` — see notes.
 
-## Goal
+## Design decisions
 
-While chatting with an agent via `iterate chat` (the OpenTUI terminal app), typing
-`!share` should provide the agent a **live capability** that lets it interact with
-the user's machine — for exactly as long as the chat session is connected. `!unshare`
-revokes it. This mirrors the spirit of Slack's `!debug` bang command: a magic message
-prefix that does something mechanical instead of becoming an LLM turn.
+- **Default = session, `/share` = project.** Filesystem access is on from chat
+  start, mounted on the agent scope (only the agent you're talking to). `/share`
+  mounts on the project root too (all agents). `/unshare` revokes the project
+  mount. Rationale: a CLI coding agent must be able to operate on the filesystem
+  to be useful, so the useful default is "shared with this session"; "sharing"
+  as a verb should mean the bigger thing — opening it to the project.
+- **One socket, two scopes.** The `Agent` stub only exposes its own capability
+  host; only `Project` can mount on the project root (`capabilityHosts.get("/")`).
+  So the TUI connects at **project scope** and derives the agent from it
+  (`project.agents.get(agentPath)`), holding both stubs on one socket.
+- **Slash, not bang.** `/share` / `/unshare`, parsed in the composer and never
+  sent as chat turns. Unknown `/…` inputs fall through to normal messages.
+- **Capability shape gels with itx-v4.** `itx.usersMachine` is deliberately a
+  sibling of `itx.sandbox` (live machine + shell), NOT of the durable stores
+  (`itx.files` blob store / `itx.workspace` git-backed DO). So:
+  - `exec(command, cwd?) → { stdout, stderr, exitCode }` — sandbox-shaped.
+  - filesystem verbs copy **`itx.workspace`'s signatures** so agents transfer
+    their workspace fluency: `readFile(path) → string | null` (null when
+    missing), `writeFile(path, content)`, `edit({ path, oldString, newString,
+replaceAll? })`, `readDir(dir?)` / `glob(pattern, cwd?) → file-info objects
+{ path, name, type, size }`.
+  - `notify(message)` — local-only desktop notification.
+  - `readFile` refuses files > 1MB (throws) rather than silently truncating —
+    a truncated read fed back into `edit`/`writeFile` would corrupt the file.
+- **Discovery.** The agent prompt is static, so a mid-session mount is invisible
+  unless the agent calls `__describe()`. A hard nudge in
+  `agent-processor-contract.ts` (DISCOVERING THE SURFACE) tells the agent its
+  surface changes at runtime, so it must `__describe()` before claiming it can't
+  do something — a general fix for ALL runtime-mounted capabilities. (An earlier
+  per-share announcement message was tried and removed in favour of this.)
+- **Visibility & safety.** Every invocation surfaces as a TUI notice
+  (`machine ← exec: …`) and the header shows `fs: session` / `fs: project`.
+  ⚠️ POC still has **no per-command confirmation or allowlist** — the agent runs
+  as the human. Deferred (follow-ups).
 
-The transport already exists: the TUI holds an `Agent` capnweb stub
-(`apps/os/src/itx-client.ts` → `agent-connection.ts`), and `Agent` exposes
-`provideCapability` (`apps/os/src/types.ts` ~line 486). A `type: "live"` capability
-is held in-memory by the capability host and calls route back over the provider's
-WebSocket, failing `"offline"` when it drops — exactly the right lifetime semantics
-for "my laptop, while I'm in this chat".
+## Files
 
-## Decisions (assumptions marked ⚠️)
-
-- **Interception point**: `!share` / `!unshare` are intercepted in the TUI composer
-  (`agent-chat-terminal.tsx` `submit`) and never sent as chat messages. Result is
-  shown via the existing `notice` header slot. ⚠️ Unknown bang commands (e.g. `!foo`)
-  fall through and are sent as normal messages — the Slack-side compiler has richer
-  behavior (`itx.` expression eval) that we're not replicating here yet.
-- **Mount path**: `["usersMachine"]` on the **agent scope** (the `Agent` stub's
-  `provideCapability` mounts on the agent's own capability host). Agents call
-  `itx.usersMachine.exec({command: "ls"})` in codemode. ⚠️ Chose agent scope over
-  project scope on purpose: you're sharing with the agent you're talking to, not
-  every agent in the project.
-- **Capability surface** (all methods take a single object arg, return JSON-safe
-  values):
-  - `exec({command, cwd?}): {stdout, stderr, exitCode}` — shell out (`sh -c`),
-    output truncated to keep payloads sane.
-  - `readFile({path}): {content}` — utf8.
-  - `writeFile({path, content}): {bytesWritten}`
-  - `glob({pattern, cwd?}): {matches}` — passthrough for `fs.promises.glob`.
-  - `notify({message}): void` — macOS `osascript` notification, best-effort no-op
-    elsewhere.
-- **Visibility**: every incoming invocation is surfaced in the TUI as a notice
-  (e.g. `machine ← exec: ls ~/src`), so the user can see what the agent is doing
-  on their machine in real time.
-- **Safety**: ⚠️ POC has **no confirmation prompt or allowlist** — `!share` prints
-  a clear warning that the agent can now run arbitrary commands as you. Per-command
-  approval / read-only mode is explicitly deferred (see follow-ups).
-- **Reconnects**: `agent-connection.ts` re-dials on broken sessions. The live stub
-  dies with its socket, so when the connection re-establishes and sharing is active,
-  the TUI re-provides automatically (a newer mount at the same path shadows the old
-  record).
-- **Session end**: on quit, best-effort `revoke()` so the durable capability record
-  doesn't keep advertising a dead machine. Also revoked by `!unshare`.
-- **Home**: `packages/iterate/src/stream-tui/machine-capability.ts` (capability
-  factory, runtime-agnostic-ish but runs under Bun like the rest of the TUI) +
-  wiring in `agent-chat-terminal.tsx` / `agent-connection.ts`.
+- `machine-capability.ts` — the live capability + `__describe` instructions/types
+- `chat-slash-command.ts` (+ test) — `/share` / `/unshare` parsing
+- `agent-connection.ts` — project-scope connect, session default mount,
+  `shareWithProject`/`unshareFromProject`, re-provide on reconnect
+- `agent-chat-terminal.tsx` — slash interception, default-share notice, invocation
+  notices, `fs: session|project` header indicator
+- `apps/os/src/domains/agents/agent-processor-contract.ts` — the discovery nudge
 
 ## Checklist
 
-- [x] `machine-capability.ts`: capability factory (`exec`, `readFile`, `writeFile`,
-      `glob`, `notify`) with `instructions`/`types` strings for `__describe`
-      discovery, and an `onInvocation` hook for the TUI notices _(machine-capability.ts)_
-- [x] unit test for the capability methods (tmpdir roundtrip: write → glob → read;
-      exec echo; truncation) _(machine-capability.test.ts)_
-- [x] bang-command parsing for the composer (`!share` / `!unshare`), unit tested
-      _(chat-bang-command.ts + .test.ts)_
-- [x] `agent-connection.ts`: expose provide/revoke on the connection + re-provide
-      on reconnect while sharing is active _(shareMachine/stopSharingMachine + provideMachine() in establish())_
-- [x] `agent-chat-terminal.tsx`: intercept bang commands, warning + status notices,
-      invocation notices _(submit() interception + onMachineInvocation notice)_.
-      Revoke on quit is best-effort via the existing `connection.dispose()` on
-      process exit — the live stub dies with the socket regardless.
-- [x] make the agent discover mid-session mounts _(via prompt nudge in
-      `agent-processor-contract.ts` — the general fix; the earlier per-`!share`
-      announcement hack was removed)_
-- [x] verify end-to-end against a live agent _(done against prod: mount +
-      invocation + agent auto-discovery all confirmed)_
-- [x] typecheck / lint / format / new tests all pass
+- [x] `machine-capability.ts`: Workspace-aligned surface (exec/readFile/writeFile/
+      edit/readDir/glob/notify) + `instructions`/`types` + `onInvocation` hook
+- [x] unit tests (write→glob→read→edit roundtrip; readFile null; readDir; exec)
+- [x] `/share` / `/unshare` slash-command parsing, unit tested
+- [x] `agent-connection.ts`: project-scope connect, always-on session mount,
+      project mount toggle, re-provide both on reconnect
+- [x] `agent-chat-terminal.tsx`: slash interception, default-share notice,
+      invocation notices, `fs:` header indicator
+- [x] agent-prompt discovery nudge (general fix)
+- [x] merge latest `main`; reconcile with itx-v4 (types.ts → itx-api.generated.ts,
+      reducer union drift, capability shape gels with files/workspace/sandbox)
+- [x] verify end-to-end against a live agent (prod, admin secret): both mounts land,
+      Workspace-style verbs invocable, revoke works
+- [x] typecheck (iterate pkg — excluded from root typecheck by design) / lint /
+      format / tests green
 
 ## Pre-existing issue found (NOT introduced here)
 
-While running the package suite I found `agent-feed-model.test.ts > folds a chat
-round` failing on `origin/main`, independent of this branch. After
-`web-message-sent` the live activity no longer settles to null. I confirmed it
-fails even against the reducer from _before_ the recent `stream-woken` commit
-(`34f48c4f`), so it's an older stale test (likely a drifted event name), not
-caused by that commit or by this work. I fixed the _typecheck_ siblings of the
-same drift in `agent-chat-terminal.tsx` (a new `stream-woken` item kind and a
-removed `"waiting"` activity status) because they block compiling this package —
-but I deliberately did **not** touch the reducer test semantics, as that's a
-separate concern needing the feed-model author's intent. Flagged for the user.
+`agent-feed-model.test.ts > folds a chat round` fails on `main`, independent of
+this branch: after `web-message-sent` the live activity no longer settles to
+null. It failed even against the reducer from before the `stream-woken` commit,
+so it's older/stale (likely a drifted event name). I keep the TUI's `FeedItem`
+exhaustive over the (repeatedly drifting) reducer union, but do **not** touch the
+reducer test semantics — that needs the feed-model author's intent. Flagged.
 
 ## Follow-ups (out of scope)
 
 - Per-command approval mode or read-only default; allowlist config
-- Share on the project scope (`!share --project`) or to a named path
-- Surface shared-machine status in the chat header, not just notices
-- Slack `!share`-alike? (doesn't make sense there — no user machine attached)
+- Scope `/share` to a named path or a subset of methods
+- `edit` diff preview in the TUI before the write lands
 
 ## Implementation log
 
-- (start) Spec committed before implementation, per worktreeify flow.
-- Implemented the capability factory, bang parser, connection wiring, and TUI
-  interception. New tests green; package typecheck/lint/format clean.
-- Fixed two pre-existing typecheck errors in `agent-chat-terminal.tsx` from the
-  `stream-woken` reducer drift (needed to compile the package).
-- Found + attributed a pre-existing unrelated feed-model test failure on main
-  (see section above); left it untouched.
-- Verified end-to-end against prod (project prj_e44b8…962, /agents/1648): mount
-  shows in the capability-host `__describe()` at offset 16 as a live cap;
-  `usersMachine.glob` invoked cross-connection returned real results; agent used
-  `exec`+`readFile` once it knew about the capability. This exposed the
-  static-prompt discovery gap.
-- Closed the gap the right way: added a discovery nudge to the agent prompt
-  (`agent-processor-contract.ts`) so the agent `__describe()`s before saying it
-  can't — general fix for all runtime-mounted capabilities. Removed the earlier
-  per-`!share` announcement message that had been a stopgap. Added a task for the
-  first eval to guard this behavior (`eval-agent-discovers-runtime-capabilities`).
+- (v1) `!share`/`!unshare`, agent-scope-only, object-arg surface. Verified on
+  prod; exposed the static-prompt discovery gap → added the agent-prompt nudge,
+  removed an announcement-message stopgap. Added the first-eval task.
+- (v2, this pass) Merged 49 commits of `main` (itx-v4 engine). Reconciled: import
+  path `types.ts` → `itx-api.generated.ts`; `FeedItem` made exhaustive over the
+  new reducer union (`child-stream-created`, `stream-paused/resumed`).
+- (v2) Redesigned per feedback: `/`-commands; filesystem shared **by default**
+  (session/agent scope); `/share` widens to the project (project-root mount);
+  Ctrl+C revokes all. One socket, two scopes (connect at project, derive agent).
+- (v2) Reshaped the capability to gel with itx-v4: sibling of `itx.sandbox`,
+  filesystem verbs copy `itx.workspace` signatures (positional, `readFile →
+string|null`, `glob`/`readDir → file-info`), added `edit`.
+- (v2) Live-verified the two-scope plumbing against prod with the admin secret.

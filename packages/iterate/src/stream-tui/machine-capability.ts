@@ -1,17 +1,24 @@
 /**
- * The live capability the chat TUI hands to an agent when you type `!share`.
+ * The live capability the chat TUI hands to an agent: the human's actual machine,
+ * shared over the TUI's capnweb socket so the agent's calls run locally and stop
+ * the moment the chat session drops (the sharing lifetime IS the session lifetime).
  *
- * It exposes a small, JSON-safe surface for poking the machine running the CLI
- * (exec/readFile/writeFile/glob/notify). It's provided as a `type: "live"`
- * capability over the TUI's existing capnweb connection (see agent-connection.ts),
- * so the agent's calls travel back over this socket and stop working the moment
- * the chat session drops — the sharing lifetime is the session lifetime.
+ * Conceptually this is an ephemeral, session-scoped sibling of `itx.sandbox` (a
+ * live machine with a shell), NOT one of the durable project stores (`itx.files`
+ * is a blob store; `itx.workspace` is a git-backed DO checkout). So it mirrors
+ * two existing surfaces on purpose:
+ *   - `exec` returns `{ stdout, stderr, exitCode }`, like the sandbox.
+ *   - the filesystem verbs (`readFile`/`writeFile`/`edit`/`readDir`/`glob`) copy
+ *     `itx.workspace`'s signatures — positional args, `readFile → string | null`,
+ *     directory/glob → file-info objects — so an agent fluent in the workspace
+ *     drives the local machine identically.
  *
  * `instructions`/`types` are what the agent sees through `itx.__describe()`, so
  * they ARE the tool design: keep them accurate.
  */
 import { exec as execCallback } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { basename, resolve } from "node:path";
 import { platform } from "node:os";
 import { promisify } from "node:util";
 
@@ -19,8 +26,11 @@ const execAsync = promisify(execCallback);
 
 /** Cap on captured stdout/stderr so a chatty command can't blow up the payload. */
 const MAX_OUTPUT_CHARS = 20_000;
-/** Cap on returned file contents / match lists for the same reason. */
-const MAX_FILE_CHARS = 200_000;
+/**
+ * `readFile` refuses files larger than this rather than silently truncating —
+ * a truncated read fed back into `writeFile`/`edit` would corrupt the file.
+ */
+const MAX_READ_FILE_BYTES = 1_000_000;
 const MAX_GLOB_MATCHES = 1_000;
 
 export type MachineInvocation = {
@@ -29,34 +39,55 @@ export type MachineInvocation = {
   summary: string;
 };
 
+/** Mirrors the shape of `itx.workspace`'s file-info entries (the fields that matter locally). */
+export type LocalFileInfo = {
+  path: string;
+  name: string;
+  type: "file" | "directory" | "symlink";
+  size: number;
+};
+
 export type MachineCapability = {
-  exec(input: { command: string; cwd?: string }): Promise<{
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-  }>;
-  readFile(input: { path: string }): Promise<{ content: string }>;
-  writeFile(input: { path: string; content: string }): Promise<{ bytesWritten: number }>;
-  glob(input: { pattern: string; cwd?: string }): Promise<{ matches: string[] }>;
-  notify(input: { message: string }): Promise<void>;
+  exec(
+    command: string,
+    cwd?: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** utf8 file contents, or `null` when the file does not exist (like `itx.workspace.readFile`). */
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, content: string): Promise<void>;
+  edit(input: {
+    path: string;
+    oldString: string;
+    newString: string;
+    replaceAll?: boolean;
+  }): Promise<{ path: string; occurrenceCount: number }>;
+  readDir(dir?: string): Promise<LocalFileInfo[]>;
+  glob(pattern: string, cwd?: string): Promise<LocalFileInfo[]>;
+  notify(message: string): Promise<void>;
 };
 
 /** `instructions` shown to the agent through `__describe()`. */
 export const MACHINE_CAPABILITY_INSTRUCTIONS =
-  "The machine running the human's `iterate chat` session, shared for this chat only. " +
-  "`exec` runs a shell command (sh -c) and returns {stdout, stderr, exitCode}; output is truncated. " +
-  "`readFile`/`writeFile` take {path} (utf8). `glob` takes {pattern, cwd?} and returns {matches}. " +
-  "`notify` shows the human a desktop notification. Prefer relative-to-home paths the human would " +
-  "recognise, and ask before anything destructive — these calls run as the human on their own machine.";
+  "The human's own machine — the one running their `iterate chat` session — shared live over the " +
+  "chat socket. Think of it as an ephemeral, session-only sibling of `itx.sandbox`: a real machine " +
+  "with a shell, but it is the HUMAN'S computer and it goes away when they close the chat. " +
+  "`exec(command, cwd?)` runs a shell command and returns { stdout, stderr, exitCode } (output truncated). " +
+  "The filesystem verbs mirror `itx.workspace`: `readFile(path)` returns the utf8 contents or null if " +
+  "missing, `writeFile(path, content)`, `edit({ path, oldString, newString, replaceAll? })`, " +
+  "`readDir(dir?)` and `glob(pattern, cwd?)` return file-info objects { path, name, type, size }. " +
+  "`notify(message)` shows the human a desktop notification. These calls run AS THE HUMAN on their own " +
+  "machine, so use absolute or ~-relative paths they'd recognise and ask before anything destructive.";
 
 /** `types` shown to the agent through `__describe()`. */
 export const MACHINE_CAPABILITY_TYPES = [
   "{",
-  "  exec(input: { command: string; cwd?: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;",
-  "  readFile(input: { path: string }): Promise<{ content: string }>;",
-  "  writeFile(input: { path: string; content: string }): Promise<{ bytesWritten: number }>;",
-  "  glob(input: { pattern: string; cwd?: string }): Promise<{ matches: string[] }>;",
-  "  notify(input: { message: string }): Promise<void>;",
+  "  exec(command: string, cwd?: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;",
+  "  readFile(path: string): Promise<string | null>;",
+  "  writeFile(path: string, content: string): Promise<void>;",
+  "  edit(input: { path: string; oldString: string; newString: string; replaceAll?: boolean }): Promise<{ path: string; occurrenceCount: number }>;",
+  "  readDir(dir?: string): Promise<Array<{ path: string; name: string; type: 'file' | 'directory' | 'symlink'; size: number }>>;",
+  "  glob(pattern: string, cwd?: string): Promise<Array<{ path: string; name: string; type: 'file' | 'directory' | 'symlink'; size: number }>>;",
+  "  notify(message: string): Promise<void>;",
   "}",
 ].join("\n");
 
@@ -76,14 +107,17 @@ export function createMachineCapability(hooks: {
   const announce = (method: string, summary: string) =>
     hooks.onInvocation({ method, summary: `${method}: ${summary}` });
 
+  const fileInfo = async (path: string, name: string): Promise<LocalFileInfo> => {
+    const stats = await fs.lstat(path);
+    const type = stats.isDirectory() ? "directory" : stats.isSymbolicLink() ? "symlink" : "file";
+    return { path, name, type, size: stats.size };
+  };
+
   return {
-    async exec({ command, cwd }) {
+    async exec(command, cwd) {
       announce("exec", command);
       try {
-        const { stdout, stderr } = await execAsync(command, {
-          cwd,
-          maxBuffer: 10 * 1024 * 1024,
-        });
+        const { stdout, stderr } = await execAsync(command, { cwd, maxBuffer: 10 * 1024 * 1024 });
         return {
           stdout: truncate(stdout, MAX_OUTPUT_CHARS),
           stderr: truncate(stderr, MAX_OUTPUT_CHARS),
@@ -99,29 +133,64 @@ export function createMachineCapability(hooks: {
       }
     },
 
-    async readFile({ path }) {
+    async readFile(path) {
       announce("readFile", path);
-      const content = await fs.readFile(path, "utf8");
-      return { content: truncate(content, MAX_FILE_CHARS) };
+      let stats: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stats = await fs.stat(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+      if (stats.size > MAX_READ_FILE_BYTES) {
+        throw new Error(
+          `File is ${stats.size} bytes (> ${MAX_READ_FILE_BYTES} limit). Use exec with head/sed/grep instead of reading it whole.`,
+        );
+      }
+      return await fs.readFile(path, "utf8");
     },
 
-    async writeFile({ path, content }) {
+    async writeFile(path, content) {
       announce("writeFile", path);
       await fs.writeFile(path, content, "utf8");
-      return { bytesWritten: Buffer.byteLength(content, "utf8") };
     },
 
-    async glob({ pattern, cwd }) {
+    async edit({ path, oldString, newString, replaceAll }) {
+      announce("edit", path);
+      const content = await fs.readFile(path, "utf8");
+      const occurrenceCount = content.split(oldString).length - 1;
+      if (occurrenceCount === 0) {
+        throw new Error(`edit: oldString not found in ${path}.`);
+      }
+      const updated = replaceAll
+        ? content.split(oldString).join(newString)
+        : content.replace(oldString, newString);
+      await fs.writeFile(path, updated, "utf8");
+      return { path, occurrenceCount: replaceAll ? occurrenceCount : 1 };
+    },
+
+    async readDir(dir) {
+      const target = dir || process.cwd();
+      announce("readDir", target);
+      const entries = await fs.readdir(target, { withFileTypes: true });
+      return await Promise.all(
+        entries.map((entry) => fileInfo(resolve(target, entry.name), entry.name)),
+      );
+    },
+
+    async glob(pattern, cwd) {
       announce("glob", cwd ? `${pattern} (in ${cwd})` : pattern);
-      const matches: string[] = [];
-      for await (const match of fs.glob(pattern, cwd ? { cwd } : {})) {
-        matches.push(typeof match === "string" ? match : String(match));
+      const base = cwd || process.cwd();
+      const matches: LocalFileInfo[] = [];
+      for await (const match of fs.glob(pattern, { cwd: base })) {
+        const rel = typeof match === "string" ? match : String(match);
+        matches.push(await fileInfo(resolve(base, rel), basename(rel)));
         if (matches.length >= MAX_GLOB_MATCHES) break;
       }
-      return { matches };
+      return matches;
     },
 
-    async notify({ message }) {
+    async notify(message) {
       announce("notify", message);
       if (platform() !== "darwin") return;
       const escaped = message.replace(/"/g, '\\"');

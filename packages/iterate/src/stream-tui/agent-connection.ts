@@ -5,6 +5,18 @@
  * events into the caller; sends go through `agent.sendMessage`. On a broken
  * session the connection re-dials and re-subscribes from the caller's resume
  * cursor (feed folds are offset-deduped, so replay overlap is harmless).
+ *
+ * The connection also SHARES THE HUMAN'S MACHINE with the agent, as a live
+ * capability at `itx.usersMachine`. Two scopes:
+ *   - By default it's mounted on the AGENT'S scope — only the agent you're
+ *     chatting with can reach your machine, for this session only. A chat
+ *     without filesystem access would be a coding agent that can't touch code,
+ *     so this is on from the start, no command needed.
+ *   - `shareWithProject()` (the `/share` command) additionally mounts it on the
+ *     PROJECT root, so every agent in the project can reach your machine while
+ *     the CLI runs. `unshareFromProject()` (`/unshare`) removes that.
+ * Both mounts are `type: "live"`, so they die with the socket — closing the CLI
+ * (Ctrl+C) revokes all filesystem access.
  */
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../../../apps/os/src/itx-client.ts";
@@ -12,6 +24,7 @@ import type {
   Agent,
   CapabilityProvision,
   ItxAuthCredentials,
+  Project,
   StreamEvent,
 } from "../../../../apps/os/src/itx-api.generated.ts";
 import { readConfig } from "../config.ts";
@@ -22,7 +35,7 @@ import {
   type MachineInvocation,
 } from "./machine-capability.ts";
 
-/** Path the machine capability mounts at on the agent's scope. */
+/** Path the machine capability mounts at, on both the agent and project scopes. */
 export const MACHINE_CAPABILITY_PATH = ["usersMachine"];
 
 const RECONNECT_DELAY_MS = 1_000;
@@ -32,6 +45,9 @@ export type AgentConnectionStatus =
   | { kind: "connecting" }
   | { kind: "live" }
   | { kind: "reconnecting"; detail: string };
+
+/** Whether the machine is shared only with this session's agent, or the whole project. */
+export type MachineShareScope = "session" | "project";
 
 /**
  * Resolve itx credentials for the TUI, in priority order: an admin API secret
@@ -61,14 +77,10 @@ export function resolveItxAuth(input: { configName: string | undefined }): ItxAu
 type AgentConnection = {
   /** Append one user message to the agent stream (triggers the agent loop). */
   sendMessage(text: string): Promise<void>;
-  /**
-   * Provide the live machine capability on the current agent, and keep it
-   * provided across reconnects until `stopSharingMachine` (the live stub dies
-   * with its socket, so we re-provide on each fresh connection).
-   */
-  shareMachine(): Promise<void>;
-  /** Revoke the machine capability and stop re-providing it on reconnect. */
-  stopSharingMachine(): Promise<void>;
+  /** Widen machine sharing from this session's agent to the whole project (`/share`). */
+  shareWithProject(): Promise<void>;
+  /** Narrow machine sharing back to this session's agent only (`/unshare`). */
+  unshareFromProject(): Promise<void>;
   dispose(): void;
 };
 
@@ -85,48 +97,60 @@ export function connectAgentFeed(input: {
   onMachineInvocation?: (invocation: MachineInvocation) => void;
 }): AgentConnection {
   let disposed = false;
+  let project: RpcStub<Project> | undefined;
   let agent: RpcStub<Agent> | undefined;
   let subscription: Disposable | undefined;
   let consecutiveFailures = 0;
-  // When the user has `!share`d, this is set and we (re-)provide the capability
-  // on every fresh connection. `provision` is the current live mount, if any.
-  let sharingMachine = false;
-  let provision: CapabilityProvision | undefined;
+  // The default (agent-scope) mount is always provided; the project-scope mount
+  // only while the user has `/share`d. Both are re-provided on each fresh socket.
+  let sessionProvision: CapabilityProvision | undefined;
+  let projectProvision: CapabilityProvision | undefined;
+  let sharingWithProject = false;
 
   const machineCapability = createMachineCapability({
     onInvocation: (invocation) => input.onMachineInvocation?.(invocation),
   });
 
-  const provideMachine = async () => {
-    if (!sharingMachine || agent === undefined || provision !== undefined) return;
-    provision = await agent.provideCapability({
-      type: "live",
-      path: MACHINE_CAPABILITY_PATH,
-      capability: machineCapability,
-      instructions: MACHINE_CAPABILITY_INSTRUCTIONS,
-      types: MACHINE_CAPABILITY_TYPES,
-    });
+  const provideInput = {
+    type: "live" as const,
+    path: MACHINE_CAPABILITY_PATH,
+    capability: machineCapability,
+    instructions: MACHINE_CAPABILITY_INSTRUCTIONS,
+    types: MACHINE_CAPABILITY_TYPES,
   };
 
-  const disposeAgent = () => {
+  const provideSession = async () => {
+    if (agent === undefined || sessionProvision !== undefined) return;
+    sessionProvision = await agent.provideCapability(provideInput);
+  };
+
+  const provideProject = async () => {
+    if (!sharingWithProject || project === undefined || projectProvision !== undefined) return;
+    projectProvision = await project.provideCapability(provideInput);
+  };
+
+  const disposeConnection = () => {
     try {
-      // The provision's revoke rides the same socket, so once the agent stub is
-      // gone the mount is unreachable anyway; just drop our handle and re-provide
-      // on the next connection.
-      provision?.[Symbol.dispose]?.();
+      // Provisions ride the same socket, so once it's gone the mounts are
+      // unreachable anyway; drop the handles and re-provide on the next connect.
+      projectProvision?.[Symbol.dispose]?.();
+      sessionProvision?.[Symbol.dispose]?.();
       subscription?.[Symbol.dispose]?.();
       agent?.[Symbol.dispose]?.();
+      project?.[Symbol.dispose]?.();
     } catch {
-      // The socket may already be gone; the stub is dead either way.
+      // The socket may already be gone; the stubs are dead either way.
     }
-    provision = undefined;
+    projectProvision = undefined;
+    sessionProvision = undefined;
     subscription = undefined;
     agent = undefined;
+    project = undefined;
   };
 
   const scheduleReconnect = (detail: string) => {
     if (disposed) return;
-    disposeAgent();
+    disposeConnection();
     consecutiveFailures += 1;
     const delay = Math.min(RECONNECT_DELAY_MS * consecutiveFailures, MAX_RECONNECT_DELAY_MS);
     input.onStatus({ kind: "reconnecting", detail });
@@ -136,17 +160,21 @@ export function connectAgentFeed(input: {
   async function establish(): Promise<void> {
     if (disposed) return;
     input.onStatus({ kind: "connecting" });
-    const nextAgent = connectItx({
+    // Connect at the PROJECT scope and derive the agent from it, so we hold both
+    // stubs on ONE socket: the agent for chat + the session-scoped mount, the
+    // project for the `/share` mount.
+    const nextProject = connectItx({
       auth: input.auth,
       baseUrl: input.baseUrl,
       projectId: input.projectId,
-      agentPath: input.agentPath,
     });
+    const nextAgent = nextProject.agents.get(input.agentPath) as RpcStub<Agent>;
+    project = nextProject;
     agent = nextAgent;
     // Best-effort transport-death signal; a failed subscribe below covers the rest.
-    (nextAgent as { onRpcBroken?: (cb: (error: unknown) => void) => void }).onRpcBroken?.(
+    (nextProject as { onRpcBroken?: (cb: (error: unknown) => void) => void }).onRpcBroken?.(
       (error) => {
-        if (agent !== nextAgent) return;
+        if (project !== nextProject) return;
         scheduleReconnect(errorMessage(error));
       },
     );
@@ -157,13 +185,15 @@ export function connectAgentFeed(input: {
         subscriber: { description: "iterate chat TUI" },
       });
       if (disposed) {
-        disposeAgent();
+        disposeConnection();
         return;
       }
       consecutiveFailures = 0;
       input.onStatus({ kind: "live" });
-      // Re-establish sharing on a fresh socket (no-op if not sharing).
-      await provideMachine();
+      // Filesystem access is on by default for this session; re-establish the
+      // project-wide share too if the user had `/share`d.
+      await provideSession();
+      await provideProject();
     } catch (error) {
       if (agent === nextAgent) scheduleReconnect(errorMessage(error));
     }
@@ -176,14 +206,14 @@ export function connectAgentFeed(input: {
       if (agent === undefined) throw new Error("not connected");
       await agent.sendMessage(text);
     },
-    async shareMachine() {
-      sharingMachine = true;
-      await provideMachine();
+    async shareWithProject() {
+      sharingWithProject = true;
+      await provideProject();
     },
-    async stopSharingMachine() {
-      sharingMachine = false;
-      const current = provision;
-      provision = undefined;
+    async unshareFromProject() {
+      sharingWithProject = false;
+      const current = projectProvision;
+      projectProvision = undefined;
       if (current === undefined) return;
       try {
         await current.revoke();
@@ -193,8 +223,8 @@ export function connectAgentFeed(input: {
     },
     dispose() {
       disposed = true;
-      sharingMachine = false;
-      disposeAgent();
+      sharingWithProject = false;
+      disposeConnection();
     },
   };
 }
