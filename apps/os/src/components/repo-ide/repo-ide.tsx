@@ -48,10 +48,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   const changes = useWorkingTree(store);
   const headPaths = files.paths;
   const headPathSet = new Set(headPaths);
-  const { file: selectedPath, diff, scm, stagedView, patchSearch } = useRepoIdeSearch();
+  const { file: selectedPath, diff, preview, scm, stagedView, patchSearch } = useRepoIdeSearch();
 
   const selectFile = useCallback(
-    (path: string | undefined) => patchSearch({ file: path, diff: undefined, staged: undefined }),
+    (path: string | undefined) =>
+      patchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined }),
     [patchSearch],
   );
 
@@ -276,6 +277,12 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 change={changes.get(selectedPath)}
                 diffOpen={diff}
                 onToggleDiff={(open) => patchSearch({ diff: open ? true : undefined })}
+                previewOpen={preview}
+                // The preview replaces the editor wholesale, so it and the
+                // diff view are mutually exclusive.
+                onTogglePreview={(open) =>
+                  patchSearch({ preview: open ? true : undefined, diff: undefined })
+                }
                 onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
                 onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
                 onStageFile={() => store.stage(selectedPath)}
@@ -486,14 +493,17 @@ function GitPanel({
 
 /**
  * IDE view state, URL-owned like every stream view's: `file` is the open
- * path, `diff` whether the HEAD↔staged diff is showing, `scm` whether the
- * sidebar shows Source Control instead of the file tree. The repo detail
- * route validates these (RepoDetailSearch), so loose reads here are safe.
+ * path, `diff` whether the HEAD↔staged diff is showing, `preview` whether a
+ * markdown file shows its rendered preview instead of the editor, `scm`
+ * whether the sidebar shows Source Control instead of the file tree. The repo
+ * detail route validates these (RepoDetailSearch), so loose reads here are
+ * safe.
  */
 function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {
     file?: string;
     diff?: boolean;
+    preview?: boolean;
     scm?: boolean;
     staged?: boolean;
   };
@@ -502,6 +512,7 @@ function useRepoIdeSearch() {
     (patch: {
       file?: string | undefined;
       diff?: boolean | undefined;
+      preview?: boolean | undefined;
       scm?: boolean | undefined;
       staged?: boolean | undefined;
     }) => {
@@ -518,6 +529,7 @@ function useRepoIdeSearch() {
   return {
     file: search.file,
     diff: search.diff === true,
+    preview: search.preview === true,
     scm: search.scm === true,
     stagedView: search.staged === true,
     patchSearch,

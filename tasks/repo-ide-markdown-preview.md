@@ -10,7 +10,10 @@ Spinoff #1 from [repos mini IDE](complete/2026-07-08-repos-mini-ide.md).
 
 ## Status summary
 
-Spec committed, implementation not started yet.
+Implemented and verified live: Code | Preview toggle on `.md` files in the
+repo IDE, previewing the live working-tree buffer through streamdown
+(sanitized). Playwright spec covers the toggle, sanitization, and
+unsaved-buffer rendering. Remaining: nothing known; PR review.
 
 ## Ask (verbatim, from Misha)
 
@@ -52,15 +55,43 @@ Spec committed, implementation not started yet.
 
 ## Checklist
 
-- [ ] `preview` search param in `RepoDetailSearch` + `useRepoIdeSearch`
-- [ ] Code/Preview segmented toggle in FileChrome's top-left for `.md` files
-- [ ] Preview pane rendering the current buffer via `MessageResponse`
-      (streamdown), scrollable and prose-styled
-- [ ] `@source` streamdown dist in packages/ui globals.css so its built-in
-      component classes exist
-- [ ] Verify live in local dev (edit an .md, toggle preview, screenshot)
-- [ ] typecheck / lint / format / scoped tests green
+- [x] `preview` search param in `RepoDetailSearch` + `useRepoIdeSearch` — _same
+      shape as `diff`; toggling preview on clears `diff`; selecting a file
+      clears `preview`_
+- [x] Code/Preview segmented toggle in FileChrome's top-left for `.md` files —
+      _new `leading` slot on FileChrome + `CodePreviewToggle` (design-system
+      Tabs) in `repo-editor-pane.tsx`; Diff button hidden while previewing_
+- [x] Preview pane rendering the current buffer via `MessageResponse`
+      (streamdown), scrollable and prose-styled — _`MarkdownPreview` renders
+      the same `value` the editor edits (working → staged → HEAD precedence)_
+- [x] `@source` streamdown dist in packages/ui globals.css so its built-in
+      component classes exist — _also fixes heading/list/table styling for
+      agent-feed chat markdown, which silently relied on class overlap_
+- [x] Verify live in local dev (edit an .md, toggle preview, screenshot) —
+      _playwright walkthrough on `test` project's `/repos/demo`: code view,
+      preview of HEAD README, unsaved-edit preview with GFM table + code
+      block; screenshots in the PR_
+- [x] typecheck / lint / format / scoped tests green — _apps/os + packages/ui
+      typecheck, oxlint, oxfmt, apps/os vitest (578 passed), new spec passes_
+- [x] Playwright spec — _`specs/repo-markdown-preview.spec.ts`: seeds a repo
+      with hostile markdown (`<script>`, `onerror`), asserts prose renders,
+      scripts don't run, and the preview shows the unsaved buffer_
 
 ## Implementation log
 
-(nothing yet)
+- Renderer decision: `marked`+DOMPurify and `react-markdown` both rejected in
+  favor of streamdown, which was already in packages/ui (agent feed chat).
+  Streamdown pipes raw HTML through rehype-raw → rehype-sanitize →
+  rehype-harden by default (confirmed in its dist), so no
+  `dangerouslySetInnerHTML` anywhere and no new dependency.
+- Streamdown's built-in components carry Tailwind classes that were never
+  scanned (`@source` only covered our own src) — headings/lists/tables in chat
+  markdown only looked right where classes happened to overlap with app code.
+  Added `@source "../../node_modules/streamdown/dist/*.js"` per streamdown's
+  install docs; verified the preview's h1/table/code styling live.
+- First screenshot attempt typed markdown with `keyboard.type`, which fights
+  CodeMirror's list auto-continuation; `keyboard.insertText` is the way to
+  seed buffer text in specs/scripts.
+- Local dev workerd crashed once with `kj::Exception ... wrappable.wrapper !=
+nullptr` (pre-existing flake, not this change); `pnpm dev restart --detach`
+  recovered it.

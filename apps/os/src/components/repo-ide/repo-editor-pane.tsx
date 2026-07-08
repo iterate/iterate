@@ -3,9 +3,11 @@ import { getOriginalDoc, unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import { LockIcon, MinusIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { repoFileKind } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
@@ -28,6 +30,8 @@ export function RepoEditorPane({
   change,
   diffOpen,
   onToggleDiff,
+  previewOpen,
+  onTogglePreview,
   onSetWorking,
   onSetStaged,
   onStageFile,
@@ -44,6 +48,9 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
+  /** Markdown only: show the rendered preview instead of the editor. */
+  previewOpen: boolean;
+  onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
   onSetStaged: (entry: FileEntry | undefined) => void;
   onStageFile: () => void;
@@ -248,14 +255,23 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
+    // Markdown gets a vscode-style Code | Preview toggle in the header's top
+    // left; the preview renders the CURRENT buffer (unsaved edits included).
+    const showPreview = previewOpen && kind.language === "markdown";
     return (
       <FileChrome
         path={path}
         {...(diffOpen ? { suffix: "(Working Tree)" } : {})}
         status={status}
+        leading={
+          kind.language === "markdown" ? (
+            <CodePreviewToggle preview={showPreview} onChange={onTogglePreview} />
+          ) : undefined
+        }
         actions={
           <>
-            {headHasPath || staged !== undefined ? (
+            {/* The preview replaces the editor, diff and all. */}
+            {!showPreview && (headHasPath || staged !== undefined) ? (
               <Button
                 variant={diffOpen ? "secondary" : "ghost"}
                 size="sm"
@@ -269,18 +285,22 @@ export function RepoEditorPane({
           </>
         }
       >
-        <SourceCodeBlock
-          key={path}
-          className="min-h-0 flex-1"
-          plainChrome
-          showLineNumbers
-          editable
-          wrapLongLines={false}
-          code={value}
-          language={kind.language}
-          codeMirrorExtensions={editorExtensions}
-          onChange={stageText}
-        />
+        {showPreview ? (
+          <MarkdownPreview markdown={value} />
+        ) : (
+          <SourceCodeBlock
+            key={path}
+            className="min-h-0 flex-1"
+            plainChrome
+            showLineNumbers
+            editable
+            wrapLongLines={false}
+            code={value}
+            language={kind.language}
+            codeMirrorExtensions={editorExtensions}
+            onChange={stageText}
+          />
+        )}
       </FileChrome>
     );
   }
@@ -347,6 +367,7 @@ function FileChrome({
   suffix,
   readonly = false,
   status,
+  leading,
   actions,
   children,
 }: {
@@ -355,12 +376,15 @@ function FileChrome({
   suffix?: string;
   readonly?: boolean;
   status?: "added" | "deleted" | "modified";
+  /** Top-left slot before the path, e.g. the markdown Code | Preview toggle. */
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        {leading}
         <span className="min-w-0 truncate font-mono text-xs">
           {path}
           {suffix === undefined ? null : <span className="text-muted-foreground"> {suffix}</span>}
@@ -377,6 +401,50 @@ function FileChrome({
         <div className="ml-auto flex items-center gap-1">{actions}</div>
       </div>
       {children}
+    </div>
+  );
+}
+
+/** vscode's "Code | Preview" tab pair for markdown files. */
+function CodePreviewToggle({
+  preview,
+  onChange,
+}: {
+  preview: boolean;
+  onChange: (preview: boolean) => void;
+}) {
+  return (
+    <Tabs
+      value={preview ? "preview" : "code"}
+      onValueChange={(value) => onChange(value === "preview")}
+      className="shrink-0"
+    >
+      <TabsList className="h-7">
+        <TabsTrigger value="code" className="px-2 text-xs">
+          Code
+        </TabsTrigger>
+        <TabsTrigger value="preview" className="px-2 text-xs">
+          Preview
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+}
+
+/**
+ * Rendered markdown for the current working-tree buffer. Streamdown (already
+ * the agent feed's chat renderer, via MessageResponse) runs raw HTML through
+ * rehype-sanitize + rehype-harden, so user-supplied repo content is safe
+ * without any dangerouslySetInnerHTML.
+ */
+function MarkdownPreview({ markdown }: { markdown: string }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">
+        {/* A settled document, not a stream — skip streamdown's unpaired-
+            marker balancing (it appends a phantom `*` to text like "17 * 23"). */}
+        <MessageResponse parseIncompleteMarkdown={false}>{markdown}</MessageResponse>
+      </div>
     </div>
   );
 }
