@@ -74,9 +74,10 @@ describe("sandbox egress", () => {
       });
 
       // Sandboxes are pets: created explicitly, then addressed by the path
-      // create returns. Creating needs no container; the curl below boots one.
-      const sandboxName = `egress-proof/${crypto.randomUUID()}`;
-      const sandboxPath = `/sandboxes/lite/${sandboxName}`;
+      // create returns (names are one path segment). Creating needs no
+      // container; the curl below boots one.
+      const sandboxName = `egress-proof-${crypto.randomUUID()}`;
+      const sandboxPath = `/sandboxes/${sandboxName}`;
       const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
       const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
       // The issuer of the cert the container is presented for the echo host:

@@ -1,55 +1,48 @@
 import { describe, expect, test } from "vitest";
-import {
-  assertSandboxPath,
-  githubTokenEnvForConnections,
-  sandboxInstanceTypeForPath,
-  sandboxPathFor,
-} from "./utils.ts";
+import { assertSandboxPath, githubTokenEnvForConnections, sandboxPathFor } from "./utils.ts";
 
-describe("sandboxPathFor / sandboxInstanceTypeForPath", () => {
-  test("the instance type is the path's second segment — create's path mint and get's routing agree", () => {
-    expect(sandboxPathFor("basic", "my-pet")).toBe("/sandboxes/basic/my-pet");
-    expect(sandboxInstanceTypeForPath("/sandboxes/basic/my-pet")).toBe("basic");
-    // Nested names are fine — the path is the identity, the type the router.
-    expect(sandboxPathFor("standard-2", "team/scrapey")).toBe("/sandboxes/standard-2/team/scrapey");
-    expect(sandboxInstanceTypeForPath("/sandboxes/standard-2/team/scrapey")).toBe("standard-2");
+describe("sandboxPathFor", () => {
+  test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {
+    expect(sandboxPathFor("my-pet")).toBe("/sandboxes/my-pet");
   });
 
-  test("rejects paths whose segment is not a Cloudflare instance type", () => {
-    // Includes every pre-pet `/sandboxes/cloudflare/...` path — those sandboxes
-    // are gone with their container class; pets carry their type in the path.
-    expect(() => sandboxInstanceTypeForPath("/sandboxes/cloudflare/whatever")).toThrow(
-      /instance type/,
-    );
-    expect(() => sandboxInstanceTypeForPath("/sandboxes/huge/my-pet")).toThrow(/instance type/);
+  test("rejects multi-segment names — every extra segment would materialize an intermediate folder stream", () => {
+    expect(() => sandboxPathFor("team/scrapey")).toThrow(/single-segment/);
+    expect(() => sandboxPathFor("")).toThrow(/single-segment/);
   });
 });
 
 describe("assertSandboxPath", () => {
-  test("accepts /sandboxes/ paths verbatim, arbitrarily nested", () => {
-    expect(assertSandboxPath("/sandboxes/basic/whatever")).toBe("/sandboxes/basic/whatever");
-    expect(assertSandboxPath("/sandboxes/lite/bla/bla")).toBe("/sandboxes/lite/bla/bla");
+  test("accepts exactly /sandboxes/<name>, verbatim", () => {
+    expect(assertSandboxPath("/sandboxes/whatever")).toBe("/sandboxes/whatever");
+    expect(assertSandboxPath("/sandboxes/example-matrix")).toBe("/sandboxes/example-matrix");
   });
 
   test("validates, never rewrites — paths are exact strings", () => {
     // No normalization: a missing leading slash is an error, not a repair.
-    expect(() => assertSandboxPath("sandboxes/basic/deeply/nested")).toThrow(
-      /start with \/sandboxes/,
-    );
+    expect(() => assertSandboxPath("sandboxes/whatever")).toThrow(/single-segment/);
+  });
+
+  test("rejects nested paths — including every pre-flat /sandboxes/<instanceType>/<name> path", () => {
+    // The instance type is configuration (journaled on create-requested), not
+    // a path segment: nesting would materialize folder streams like
+    // /sandboxes/lite that are not sandboxes.
+    expect(() => assertSandboxPath("/sandboxes/lite/bla")).toThrow(/single-segment/);
+    expect(() => assertSandboxPath("/sandboxes/cloudflare/whatever")).toThrow(/single-segment/);
+    expect(() => assertSandboxPath("/sandboxes/a/b/c")).toThrow(/single-segment/);
   });
 
   test("rejects paths outside /sandboxes/", () => {
     // The domain prefix is the identity convention (like /secrets, /repos).
-    expect(() => assertSandboxPath("/agents/demo")).toThrow(/start with \/sandboxes/);
-    expect(() => assertSandboxPath("/sandboxes")).toThrow(/start with \/sandboxes/);
-    expect(() => assertSandboxPath("/")).toThrow(/start with \/sandboxes/);
-    expect(() => assertSandboxPath("")).toThrow(/start with \/sandboxes/);
+    expect(() => assertSandboxPath("/agents/demo")).toThrow(/\/sandboxes\/<name>/);
+    expect(() => assertSandboxPath("/sandboxes")).toThrow(/\/sandboxes\/<name>/);
+    expect(() => assertSandboxPath("/")).toThrow(/\/sandboxes\/<name>/);
+    expect(() => assertSandboxPath("")).toThrow(/\/sandboxes\/<name>/);
   });
 
   test("rejects paths the name codec would rewrite", () => {
-    // A space becomes %20 and `/x/../y` collapses to `/y`: two spellings would
-    // otherwise mint two Durable Objects for one identity.
-    expect(() => assertSandboxPath("/sandboxes/foo/../bar")).toThrow(/rewrite/);
+    // A space becomes %20: two spellings would otherwise mint two Durable
+    // Objects for one identity.
     expect(() => assertSandboxPath("/sandboxes/foo bar")).toThrow(/rewrite/);
   });
 });

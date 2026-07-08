@@ -19,7 +19,7 @@ import { useItx } from "~/itx/itx-react.tsx";
 const SANDBOXES_ROOT = "/sandboxes";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
-  // Sandboxes ARE streams (a sandbox lives at /sandboxes/<size>/<name>):
+  // Sandboxes ARE streams (a sandbox lives at /sandboxes/<name>):
   // this page is the /sandboxes catalogue stream's view, with the live
   // sandbox tree in the side panel.
   validateSearch: StreamViewSearch,
@@ -59,7 +59,7 @@ function ProjectSandboxesIndexContent() {
               <h2 className="text-sm font-semibold">Sandbox streams</h2>
               <p className="text-xs text-muted-foreground">
                 Sandboxes are created explicitly and addressed as{" "}
-                <code className="font-mono">/sandboxes/&lt;size&gt;/&lt;name&gt;</code>.
+                <code className="font-mono">/sandboxes/&lt;name&gt;</code>.
               </p>
             </div>
             <StreamTree

@@ -306,6 +306,15 @@ describe("linkRepoToGithub", () => {
       },
     });
 
+    // A failed old-rule removal aborts the re-link BEFORE anything changes:
+    // the link still names the old connection and a retry starts clean.
+    network.state.ruleRemoveAppendShouldFail = true;
+    await expect(linkRepoToGithub({ ...linkInput(), connection: otherConnection })).rejects.toThrow(
+      /rule-removed append exploded/,
+    );
+    expect(network.state.githubLink).toMatchObject({ connection: CONNECTION });
+    network.state.ruleRemoveAppendShouldFail = false;
+
     await linkRepoToGithub({ ...linkInput(), connection: otherConnection });
 
     // The new connection stream holds the rule; the old one got the removal.
@@ -318,6 +327,50 @@ describe("linkRepoToGithub", () => {
       ?.find((e) => e.type === "events.iterate.com/stream/rule-removed");
     expect(oldRemoved?.payload).toEqual({ ruleId: "github-repo:/repos/project" });
     expect(network.state.githubLink).toMatchObject({ connection: otherConnection });
+  });
+
+  test("a failed re-link restores the previous connection's rule", async () => {
+    seedConnectedFact();
+    await linkRepoToGithub(linkInput());
+
+    const otherConnection = "install-456";
+    const otherConnectionStream = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: `/integrations/github/${otherConnection}`,
+    });
+    network.seedStream(otherConnectionStream, {
+      type: GITHUB_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection: otherConnection,
+        externalId: "456",
+        installationId: "456",
+        projectId: PROJECT_ID,
+      },
+    });
+
+    // The old rule is removed first; when recording the new link then fails,
+    // the compensation must put the OLD connection's rule back so the still-
+    // recorded old link keeps its webhook lane.
+    network.state.configureLinkShouldFail = true;
+    await expect(linkRepoToGithub({ ...linkInput(), connection: otherConnection })).rejects.toThrow(
+      /link write exploded/,
+    );
+    expect(network.state.githubLink).toMatchObject({ connection: CONNECTION });
+
+    const oldStreamEvents = network.streams.get(CONNECTION_STREAM) ?? [];
+    const lastRuleFact = [...oldStreamEvents]
+      .reverse()
+      .find(
+        (e) =>
+          e.type === "events.iterate.com/stream/rule-configured" ||
+          e.type === "events.iterate.com/stream/rule-removed",
+      );
+    // The restore (a rule-configured) landed AFTER the removal.
+    expect(lastRuleFact?.type).toBe("events.iterate.com/stream/rule-configured");
+    expect(lastRuleFact?.payload).toMatchObject({
+      condition: 'payload.body.repository.full_name = "acme/widgets"',
+      ruleId: "github-repo:/repos/project",
+    });
   });
 });
 

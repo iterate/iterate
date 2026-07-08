@@ -5,6 +5,7 @@ import {
   FilesIcon,
   GitBranchIcon,
   GitCommitVerticalIcon,
+  GithubIcon,
   MinusIcon,
   PlusIcon,
   Undo2Icon,
@@ -20,6 +21,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
+import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import {
   commitPlan,
@@ -48,7 +50,15 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   const changes = useWorkingTree(store);
   const headPaths = files.paths;
   const headPathSet = new Set(headPaths);
-  const { file: selectedPath, diff, preview, scm, stagedView, patchSearch } = useRepoIdeSearch();
+  const {
+    file: selectedPath,
+    diff,
+    preview,
+    scm,
+    gh,
+    stagedView,
+    patchSearch,
+  } = useRepoIdeSearch();
 
   const selectFile = useCallback(
     (path: string | undefined) =>
@@ -192,12 +202,12 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       {/* vscode-style activity strip: Files / Source control. */}
       <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
         <Button
-          variant={scm ? "ghost" : "secondary"}
+          variant={scm || gh ? "ghost" : "secondary"}
           size="icon"
           title="Files"
           // The Files view browses working-tree files; leaving the SCM view
           // also leaves any Index pseudo-file it had open.
-          onClick={() => patchSearch({ scm: undefined, staged: undefined })}
+          onClick={() => patchSearch({ scm: undefined, gh: undefined, staged: undefined })}
           className="text-muted-foreground"
         >
           <FilesIcon className="size-4" />
@@ -206,7 +216,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm ? "secondary" : "ghost"}
           size="icon"
           title="Source control"
-          onClick={() => patchSearch({ scm: true })}
+          onClick={() => patchSearch({ scm: true, gh: undefined })}
           className="relative text-muted-foreground"
         >
           <GitBranchIcon className="size-4" />
@@ -216,11 +226,33 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             </span>
           )}
         </Button>
+        <Button
+          variant={gh ? "secondary" : "ghost"}
+          size="icon"
+          title="GitHub"
+          onClick={() => patchSearch({ gh: true, scm: undefined })}
+          className="text-muted-foreground"
+        >
+          <GithubIcon className="size-4" />
+        </Button>
       </div>
 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
-          {scm ? (
+          {gh ? (
+            // Own Suspense (like RepoEditorPane's): the panel's first
+            // connections read suspends, and without a local boundary that
+            // would bubble to the route's ItxBoundary and blank the whole IDE.
+            <Suspense
+              fallback={
+                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                  Loading…
+                </div>
+              }
+            >
+              <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+            </Suspense>
+          ) : scm ? (
             <GitPanel
               changes={changes}
               headPathSet={headPathSet}
@@ -498,9 +530,10 @@ function GitPanel({
 
 /**
  * IDE view state, URL-owned like every stream view's: `file` is the open
- * path, `diff` whether the HEAD↔staged diff is showing, `scm` whether the
- * sidebar shows Source Control instead of the file tree. The repo detail
- * route validates these (RepoDetailSearch), so loose reads here are safe.
+ * path, `diff` whether the HEAD↔staged diff is showing, `scm`/`gh` which
+ * sidebar shows instead of the file tree (Source Control / GitHub). The repo
+ * detail route validates these (RepoDetailSearch), so loose reads here are
+ * safe.
  */
 function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {
@@ -508,6 +541,7 @@ function useRepoIdeSearch() {
     diff?: boolean;
     preview?: boolean;
     scm?: boolean;
+    gh?: boolean;
     staged?: boolean;
   };
   const navigate = useNavigate();
@@ -517,6 +551,7 @@ function useRepoIdeSearch() {
       diff?: boolean | undefined;
       preview?: boolean | undefined;
       scm?: boolean | undefined;
+      gh?: boolean | undefined;
       staged?: boolean | undefined;
     }) => {
       void navigate({
@@ -534,6 +569,7 @@ function useRepoIdeSearch() {
     diff: search.diff === true,
     preview: search.preview === true,
     scm: search.scm === true,
+    gh: search.gh === true,
     stagedView: search.staged === true,
     patchSearch,
   };
