@@ -14,7 +14,7 @@ export type StagedEntry =
 
 export type StagedChanges = ReadonlyMap<string, StagedEntry>;
 
-export class StagedChangesStore {
+class StagedChangesStore {
   #changes: ReadonlyMap<string, StagedEntry> = new Map();
   #listeners = new Set<() => void>();
 

@@ -1,16 +1,5 @@
 import type { SourceCodeLanguage } from "@iterate-com/ui/components/source-code-block";
 
-/**
- * How the repo IDE opens a path: in a CodeMirror editor (with which language),
- * an image/PDF renderer, or the generic binary fallback. Extension-driven —
- * repo files have no content-type channel.
- */
-export type RepoFileKind =
-  | { kind: "text"; language: SourceCodeLanguage }
-  | { kind: "image"; mimeType: string }
-  | { kind: "pdf" }
-  | { kind: "binary" };
-
 const IMAGE_MIME_TYPES: Record<string, string> = {
   avif: "image/avif",
   bmp: "image/bmp",
@@ -57,6 +46,17 @@ const OPAQUE_BINARY_EXTENSIONS = new Set([
   "woff2",
   "zip",
 ]);
+
+/**
+ * How the repo IDE opens a path: in a CodeMirror editor (with which language),
+ * an image/PDF renderer, or the generic binary fallback. Extension-driven —
+ * repo files have no content-type channel.
+ */
+type RepoFileKind =
+  | { kind: "text"; language: SourceCodeLanguage }
+  | { kind: "image"; mimeType: string }
+  | { kind: "pdf" }
+  | { kind: "binary" };
 
 export function repoFileKind(path: string): RepoFileKind {
   const basename = path.split("/").pop() ?? path;
