@@ -1,6 +1,6 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
-import { SANDBOX_INSTANCE_TYPES, type SandboxInstanceType } from "./instance-types.ts";
+import type { SandboxInstanceType } from "./instance-types.ts";
 
 /**
  * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
@@ -38,8 +38,9 @@ export type CloudflareSandbox = object;
 /** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
  * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
 export type SandboxCreateInput = {
-  /** The sandbox's name; its path becomes `/sandboxes/<instanceType>/<name>`.
-   * Destroyed names are retired, not recycled — pick a new one. */
+  /** The sandbox's name — a single path segment (no `/`); its path becomes
+   * `/sandboxes/<name>`. Names are unique per project (across instance
+   * types), and destroyed names are retired, not recycled — pick a new one. */
   name: string;
   /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
   instanceType?: SandboxInstanceType;
@@ -67,28 +68,15 @@ const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 // so a project path names exactly one kind of object.
 const SANDBOX_PATH_PREFIX = "/sandboxes";
 
-/** The path a `create({ name, instanceType })` mints: the instance-type
- * segment then the caller's name — `/sandboxes/basic/my-pet`. The instance
- * type is part of identity because a Durable Object can never change
- * container class (= instance type). */
-export function sandboxPathFor(instanceType: SandboxInstanceType, name: string): string {
-  return assertSandboxPath(`${SANDBOX_PATH_PREFIX}/${instanceType}/${name}`);
-}
-
-/** The instance-type segment of a sandbox path — which container namespace
- * the sandbox lives in. Throws on paths that don't carry a known instance
- * type (which includes every pre-pet `/sandboxes/cloudflare/...` path). */
-export function sandboxInstanceTypeForPath(path: string): SandboxInstanceType {
-  const asserted = assertSandboxPath(path);
-  const segment = asserted.split("/")[2];
-  const instanceType = SANDBOX_INSTANCE_TYPES.find((candidate) => candidate === segment);
-  if (instanceType === undefined) {
-    throw new Error(
-      `sandbox paths carry their instance type as the segment after /sandboxes/ ` +
-        `(one of ${SANDBOX_INSTANCE_TYPES.join(", ")}), got "${asserted}"`,
-    );
-  }
-  return instanceType;
+/** The path a `create({ name })` mints: the prefix then the caller's name —
+ * `/sandboxes/my-pet`. Names are ONE path segment: every extra segment would
+ * materialize an intermediate "folder" stream (the streams system announces a
+ * new stream to all its ancestors, minting each one), and a folder that is
+ * not a sandbox is meaningless in `/sandboxes/`. The instance type is
+ * CONFIGURATION, not identity — it lives on the `create-requested` event and
+ * in the durable record, never in the path. */
+export function sandboxPathFor(name: string): string {
+  return assertSandboxPath(`${SANDBOX_PATH_PREFIX}/${name}`);
 }
 
 /**
@@ -96,17 +84,22 @@ export function sandboxInstanceTypeForPath(path: string): SandboxInstanceType {
  * This VALIDATES and never rewrites: the path a caller uses is exactly the
  * path `create` returned, or an error — no added slashes, no canonicalizing.
  *
- * Beyond the prefix, the one real constraint is codec safety. The Durable
- * Object NAME is `{projectId}.iterate{path}`, and recovering identity from a
- * name parses it through `new URL(...)`, which rewrites some paths (a space
- * becomes `%20`, `/x/../y` collapses to `/y`). A path the codec would rewrite
- * would let two spellings mint two Durable Objects for one identity — so
- * reject exactly those, and nothing more.
+ * Two real constraints:
+ * - Exactly `/sandboxes/<name>` with a single-segment name — see
+ *   {@link sandboxPathFor} for why nesting is rejected.
+ * - Codec safety. The Durable Object NAME is `{projectId}.iterate{path}`, and
+ *   recovering identity from a name parses it through `new URL(...)`, which
+ *   rewrites some paths (a space becomes `%20`). A path the codec would
+ *   rewrite would let two spellings mint two Durable Objects for one
+ *   identity — so reject exactly those, and nothing more.
  */
 export function assertSandboxPath(path: string): string {
-  if (!path.startsWith(`${SANDBOX_PATH_PREFIX}/`)) {
+  const name = path.startsWith(`${SANDBOX_PATH_PREFIX}/`)
+    ? path.slice(SANDBOX_PATH_PREFIX.length + 1)
+    : undefined;
+  if (name === undefined || name === "" || name.includes("/")) {
     throw new Error(
-      `sandbox paths start with ${SANDBOX_PATH_PREFIX}/<instanceType>/ ` +
+      `sandbox paths are exactly ${SANDBOX_PATH_PREFIX}/<name> with a single-segment name ` +
         `(use the exact path itx.sandboxes.create returned), got "${path}"`,
     );
   }
@@ -116,10 +109,33 @@ export function assertSandboxPath(path: string): string {
   if (roundTripped !== path) {
     throw new Error(
       `sandbox path must be a stable Durable Object path (the name codec would ` +
-        `rewrite "${path}" to "${roundTripped}") — avoid spaces, "..", and "//"`,
+        `rewrite "${path}" to "${roundTripped}") — avoid spaces and other characters the ` +
+        `codec re-encodes`,
     );
   }
   return path;
+}
+
+/**
+ * Validate a `sleepAfter` value BEFORE it can reach the SDK. The SDK's
+ * `setSleepAfter` persists the raw value to Durable Object storage before
+ * parsing it, and its constructor re-parses the stored value inside
+ * `blockConcurrencyWhile` — so an unparseable value ("1d", "30min") doesn't
+ * just fail the call, it permanently crash-loops the DO on every later
+ * instantiation (even `destroy()` becomes unreachable; only manual storage
+ * surgery recovers). Accepted forms mirror the SDK's parser exactly:
+ * a positive number of seconds, or `<digits><s|m|h>`. Lives here (not on the
+ * Durable Object) because the collection validates it before journaling a
+ * `create-requested`, and the Durable Object validates it again at its door.
+ */
+export function assertValidSleepAfter(value: string | number): void {
+  const valid =
+    typeof value === "number" ? Number.isFinite(value) && value > 0 : /^\d+[smh]$/.test(value);
+  if (!valid) {
+    throw new Error(
+      `invalid sleepAfter "${value}": pass a positive number of seconds or "<n>s"/"<n>m"/"<n>h" (e.g. "30s", "5m", "1h")`,
+    );
+  }
 }
 
 /**

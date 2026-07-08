@@ -33,7 +33,8 @@ describe("SandboxProcessor", () => {
     const processor = sandboxProcessor();
     await processor.ingest({
       events: [
-        event("events.iterate.com/sandbox/create-requested", { instanceType: "basic" }),
+        // create-requested lands on the /sandboxes catalogue stream, not here —
+        // the pet's own stream starts with the completion.
         event("events.iterate.com/sandbox/created", { instanceType: "basic" }),
       ],
       streamMaxOffset: nextOffset,
