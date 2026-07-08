@@ -21,8 +21,9 @@ import { SandboxInstanceType } from "./instance-types.ts";
 const SANDBOX_EVENTS = {
   "events.iterate.com/sandbox/create-requested": {
     description:
-      "itx.sandboxes.create was called for this path: the requested instance type (fixed for the sandbox's whole life) and any initial config. Setup follows; `created` confirms it.",
+      "itx.sandboxes.create was called: the claimed path, the requested instance type (fixed for the sandbox's whole life) and any initial config. UNLIKE every other sandbox event this lands on the /sandboxes CATALOGUE stream, idempotency-keyed by path — the append IS the atomic name claim, and its instance type is what routes get(path) to the right container namespace. Setup follows; `created` (on the sandbox's own stream) confirms it.",
     payloadSchema: z.object({
+      path: z.string(),
       instanceType: SandboxInstanceType,
       sleepAfter: z.union([z.string(), z.number()]).optional(),
       keepAlive: z.boolean().optional(),
@@ -89,17 +90,20 @@ const SANDBOX_EVENTS = {
 const SandboxStatus = z.enum(["created", "running", "stopped", "destroyed"]);
 
 /**
- * The contract for a sandbox's lifecycle events — the public declaration of
- * what the sandbox Durable Object appends to the stream at the sandbox's OWN
- * path. The Durable Object is the appender — it builds every event through
- * this contract (`SandboxProcessorContract.buildEvent`), so emission and
- * declaration cannot drift; the processor itself only folds the events into a
- * small status projection and takes no actions (`emits: []`).
+ * The contract for the sandbox lifecycle events. Two appenders, both building
+ * through this contract (`SandboxProcessorContract.buildEvent`) so emission
+ * and declaration cannot drift: the collection appends `create-requested` to
+ * the `/sandboxes` CATALOGUE stream (journal-first — the idempotency-keyed
+ * append both claims the name atomically and records the instance type that
+ * routes every later `get` to the right container namespace), and the sandbox
+ * Durable Object appends everything else to the stream at the sandbox's OWN
+ * path. The processor itself only folds the events into a small status
+ * projection and takes no actions (`emits: []`).
  *
- * A typical pet's stream reads: create-requested → created → started →
- * … work … → sleep-requested → backup-created → stopped → started (next day,
- * implicit wake) → workspace-restored → … → destroy-requested → stopped →
- * destroyed.
+ * A typical pet's own stream reads: created → started → … work … →
+ * sleep-requested → backup-created → stopped → started (next day, implicit
+ * wake) → workspace-restored → … → destroy-requested → stopped → destroyed —
+ * while the catalogue accumulates one create-requested per name ever claimed.
  */
 export const SandboxProcessorContract = defineProcessorContract({
   slug: "sandbox",

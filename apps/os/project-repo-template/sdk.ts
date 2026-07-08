@@ -152,7 +152,8 @@ export interface Project {
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
-  /** Path-addressed sandboxes (`itx.sandboxes.get("/sandboxes/cloudflare/whatever")`). */
+  /** The project's sandboxes — explicitly created, sized Linux containers
+   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
@@ -622,18 +623,28 @@ export interface ProjectRepoCollection extends RepoCollection {
  * The `itx.sandboxes` built-in. Sandboxes are PETS:
  * `create({ name, instanceType })` is the only way one comes to exist
  * (nothing mints a sandbox implicitly — `get` refuses paths that were never
- * created), the instance type is Cloudflare's, verbatim, and fixed for life
- * as the path's second segment (`/sandboxes/<instanceType>/<name>`), and the
- * sandbox itself carries the imperative lifecycle (`start`/`sleep`/`destroy`).
+ * created), names are one path segment (`/sandboxes/<name>` — no intermediate
+ * folders in the stream tree), and the sandbox itself carries the imperative
+ * lifecycle (`start`/`sleep`/`destroy`).
  *
  * `get(path)` returns the sandbox Durable Object's own RPC stub —
  * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
  * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding
  * code here. Confinement is by name: the stub is minted from this project's
  * id plus the validated path, after the same project-access assert every
- * collection performs. Each instance type is its own Durable Object namespace
- * (Cloudflare fixes instance type per container class — instance-types.ts),
- * so the path's instance-type segment is also the namespace routing key.
+ * collection performs.
+ *
+ * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
+ * instance type per container class (instance-types.ts), so each type is its
+ * own Durable Object namespace and routing needs the type. The `/sandboxes`
+ * catalogue stream is the directory: `create` journals `create-requested`
+ * there (idempotency-keyed by path, so the stream's native dedup makes the
+ * FIRST claim on a name authoritative — races settle atomically in one
+ * append) BEFORE touching any container namespace, and `get` routes by the
+ * claim's instance type. The catalogue and not the sandbox's own stream
+ * because reads materialize streams (any wake appends `created`/`woken`):
+ * routing a `get` through the sandbox's own stream would mint a junk stream
+ * for every typo'd path, and addressing must never create.
  */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
@@ -1332,6 +1343,7 @@ export type StreamEvent = {
   idempotencyKey?: string | undefined;
   offset: number;
   createdAt: string;
+  path: string;
 };
 
 /**
@@ -1455,8 +1467,9 @@ export type OpenApiConnectInput = {
 /** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
  * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
 export type SandboxCreateInput = {
-  /** The sandbox's name; its path becomes `/sandboxes/<instanceType>/<name>`.
-   * Destroyed names are retired, not recycled — pick a new one. */
+  /** The sandbox's name — a single path segment (no `/`); its path becomes
+   * `/sandboxes/<name>`. Names are unique per project (across instance
+   * types), and destroyed names are retired, not recycled — pick a new one. */
   name: string;
   /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
   instanceType?: SandboxInstanceType;

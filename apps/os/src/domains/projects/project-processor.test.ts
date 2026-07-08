@@ -26,6 +26,7 @@ class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(offset).toISOString(),
         offset,
+        path: this.path,
       };
       this.events.push(event);
       return event;
@@ -123,6 +124,7 @@ function event(type: string, payload: Record<string, unknown>, offset = 1): Stre
     payload,
     createdAt: new Date(offset).toISOString(),
     offset,
+    path: "/projects/test",
   };
 }
 
