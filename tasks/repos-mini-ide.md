@@ -60,6 +60,9 @@ Change the `/repos` view on the OS dashboard to a mini IDE:
 - [x] Feedback: full-height tree hitbox — _root New file/Upload context menu on the empty area; cancels itself (base-ui `eventDetails.cancel`) when the composedPath shows a pierre row_
 - [x] Feedback: inline diff as the default, always-available Diff toggle — _`unifiedMergeView` layered on the same editable editor; zero changes = plain view, so discard doesn't snap; side-by-side `CodeDiffBlock` deleted_
 - [x] Feedback: discard uses an undo arrow, not a bin
+- [x] Feedback: working tree persists to localStorage — _keyed by repo + HEAD oid so a moved HEAD orphans stale state (swept on load) instead of producing weird diffs; quota errors degrade to memory-only_
+- [x] Feedback: staging area — _working + staged slots per path (`staged-changes.ts`); `+`/`−` on SCM rows/headers/editor; file in both sections after post-stage edits; Commit = staged-only when anything is staged; post-commit migration of surviving working edits to the new oid's store (verified across reload)_
+- [x] Feedback: block-level staging — _inline diff baselines on the staged snapshot; its `+` chunk control IS accept-chunk, whose updated original doc writes back as the staged snapshot; `⨯` discards the block_
 
 ## Spinoffs (from Misha, more or less verbatim — each is its own future task)
 
