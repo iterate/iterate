@@ -26,7 +26,7 @@ import type {
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
+import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
@@ -584,7 +584,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: PROJECT_REPO_INITIAL_FILES,
+        files: projectRepoSeedFiles(parseConfig(this.env).iterateSdkPackageSpec),
         remote,
         token,
       }),

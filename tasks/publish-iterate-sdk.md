@@ -116,6 +116,27 @@ and the template depends on `https://pkg.pr.new/iterate/iterate/iterate@main`
 - [x] `pnpm typecheck && pnpm lint && pnpm format` green; unit tests green
 - [x] simulated customer repo: template + `pnpm pack` tarball + `npm install` + `tsc` passes
 
+### preview envs track the branch, not main (added after Misha's review)
+
+- [x] `AppConfig.iterateSdkPackageSpec` (optional) — when set, the repo DO's
+      seeding re-points the template's `iterate` dep via find/replace
+      _(apps/os/src/domains/repos/project-repo-seed.ts, guarded: throws if the
+      template no longer contains the @main URL)_
+- [x] preview deploys set it to `https://pkg.pr.new/iterate/iterate/iterate@<pr>`
+      _(scripts/preview/preview.ts passes PREVIEW_PULL_REQUEST_NUMBER; the os
+      deploy prepare hook bakes APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC, mirroring
+      the JWKS bake)_. PR-number refs, not shas: pkg.pr.new publishes under the
+      PR head sha while Depot deploys the merge sha, so `@<sha>` would dangle.
+- [x] pkg-pr-new.yml documents that it must run on every PR (no `paths:`
+      filter) — otherwise previews of unrelated PRs would seed dangling
+      `@<pr>` refs
+- [x] unit tests _(project-repo-seed.test.ts)_
+- prod and local dev leave the config unset → template's `@main` (prod can
+  later pin a real npm range via the same knob once we publish to npm proper)
+- known gap: local dev seeds `@main`, so uncommitted sdk changes aren't
+  reflected in locally created projects — there is no pkg.pr.new build of a
+  working tree at all; acceptable for now
+
 ## Implementation log
 
 - Generator now writes both copies; deleting the template sdk.ts was a

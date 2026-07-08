@@ -244,7 +244,13 @@ export async function deploy(
       async (app) => {
         return await deployPreviewAppWithStatus({
           app,
-          commandEnvironment: runtime.commandEnvironment,
+          commandEnvironment: {
+            ...runtime.commandEnvironment,
+            // apps/os/scripts/deploy.ts turns this into
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
+            // preview install this PR's pkg.pr.new `iterate` build, not @main.
+            PREVIEW_PULL_REQUEST_NUMBER: String(context.pullRequestNumber),
+          },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           pullRequestHeadSha: context.pullRequestHeadSha,
           repositoryRoot: runtime.repositoryRoot,
