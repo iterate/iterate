@@ -87,11 +87,16 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // The root saga and the onboarding-agent birth run in parallel — each
-          // is one batched append, cutting the create round-trips (see
+          // The root saga and the email router arm in parallel — each is one
+          // batched append, cutting the create round-trips (see
           // tasks/os-cold-create-latency.md). The Slack webhook router is NOT
           // armed here: connection streams (/integrations/slack/{connection})
-          // are born at connect time by recordSlackConnection.
+          // are born at connect time by recordSlackConnection. The onboarding
+          // agent is deliberately NOT born here: its policy comes from the
+          // project worker, so birth waits for the repo-created lane below —
+          // after the worker readiness probe — where the pump delivers the
+          // birth announcement to an already-built worker and policy lands
+          // immediately instead of opening a stock-defaults window.
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -144,15 +149,6 @@ export class ProjectProcessor extends StreamProcessor<
                       },
                     ]),
               ),
-            ),
-            // The user can already be sitting on /agents/onboarding while repo
-            // bootstrap and the project worker warm up. Birth the normal agent
-            // stream immediately; the repo-created lane below repeats this with
-            // the same idempotency keys as a belt-and-braces fallback.
-            timedStep("create-timing", timing, "onboarding-agent-birth", () =>
-              this.deps.itx.streams
-                .get(ONBOARDING_AGENT_PATH)
-                .append(...onboardingAgentStartEvents(this.deps)),
             ),
           ]);
         });
@@ -240,9 +236,10 @@ export class ProjectProcessor extends StreamProcessor<
               payload: state.createRequest!,
             }),
           );
-          // Fallback seed for existing/retried create flows. The create-requested
-          // lane normally did this already; idempotency makes the second append
-          // a no-op while preserving older streams that only reach this point.
+          // THE onboarding-agent birth, deliberately after the worker probe:
+          // the pump delivers the birth announcement to an already-built
+          // worker, so the policy (prompt, provider, kickoff) lands
+          // immediately — no window where the agent runs on stock defaults.
           await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
             this.deps.itx.streams
               .get(ONBOARDING_AGENT_PATH)
