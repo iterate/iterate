@@ -1,17 +1,22 @@
 ---
-status: in-progress
+status: implemented, in review
 size: large
 supersedes: https://github.com/iterate/iterate/pull/1655
+pr: https://github.com/iterate/iterate/pull/1745
 ---
 
 # itx API as one thing — base-class opt-in + native TS SDK
 
 ## Status summary
 
-Fresh remake of PR #1655 ("Spike: itx types as one thing — generate the contract
-from RpcTargets + zod") off current main, incorporating Misha's two concrete
-review suggestions. Not started yet beyond this spec; the port of #1655 lands as
-the next commit, then the two changes on top.
+Implemented; under review on PR #1745. All checks green (typecheck, lint,
+format, full test suite). The three main pieces each landed as their own
+commit: (1) the port of #1655 onto current main, (2) the
+`IterateRpcTarget<Name>` / `IterateRpcRelay<Name>` opt-in base classes with
+the generator's discovery rewritten around them, (3) the generator on the
+native TypeScript compiler plus the `implements`-injection soundness check.
+Nothing known missing; the `__describe()`/JSDoc overlap idea from #1655
+review stays out of scope.
 
 ## Context
 
@@ -116,8 +121,8 @@ practical (a temp-dir + `getSemanticDiagnostics` pass is acceptable there).
       produces 18 diagnostics)_
 - [x] Regenerate `itx-api.generated.ts`, `types-source.generated.ts`, and the
       project-repo-template `sdk.ts` copy
-- [ ] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green; PR open
-      as draft with monitors running
+- [x] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green; PR open
+      as draft with monitors running — _apps/os: 555 tests passing_
 
 ## Implementation log
 
