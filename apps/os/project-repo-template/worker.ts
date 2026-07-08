@@ -1,17 +1,14 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, ProjectRpcTarget, StreamEvent } from "./sdk.ts";
+import type { DynamicWorkerRef, ItxBinding, StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
 import { waitroseClient } from "./integrations/waitrose/client.ts";
 
-/** Bindings the platform supplies to every project worker. */
+/** Bindings the platform supplies to every project worker. `ItxBinding`
+ * (sdk.ts) documents the two channels: `get()` for capability method calls,
+ * `fetch()` for HTTP into sibling workers. */
 type ProjectWorkerEnv = {
-  ITX: {
-    get(): Promise<ProjectRpcTarget>;
-    /** The fetch-native worker lane — how the router below dispatches every
-     * app request (the ref rides in the x-iterate-worker-dispatch header). */
-    fetch(req: Request): Promise<Response>;
-  };
+  ITX: ItxBinding;
 };
 
 // The root project worker is a small ROUTER over the project's apps. Each app
