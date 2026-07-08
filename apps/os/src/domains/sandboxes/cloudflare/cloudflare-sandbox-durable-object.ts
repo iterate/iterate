@@ -792,6 +792,33 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
   }
 
+  /**
+   * Make plain `git` (and therefore `gitCheckout`) authenticate against
+   * github.com with the GH_TOKEN placeholder. `gh` reads GH_TOKEN from the
+   * environment natively, but stock git does not — it needs the
+   * `http.extraheader` config. A raw `AUTHORIZATION: Bearer <placeholder>`
+   * header (NOT a credential helper, which would send Basic auth — base64 —
+   * hiding the placeholder from egress substitution) is what lets the egress
+   * door swap in the real installation token. `$GH_TOKEN` expands INSIDE the
+   * container from the just-applied env map, so the placeholder string never
+   * needs shell-quoting here; when the project has no GitHub connection the
+   * guard makes this a no-op. Config lands on the ephemeral disk, hence
+   * re-run per container start. Best-effort: a hiccup must not fail
+   * provisioning — `gh` still works via the env var, and the next start
+   * retries.
+   */
+  async #configureGitAuth(): Promise<void> {
+    try {
+      await this.#redialOnInterruptedSessionSetup(() =>
+        super.exec(
+          'if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Bearer $GH_TOKEN"; fi',
+        ),
+      );
+    } catch (error) {
+      console.warn("sandbox git auth configuration failed; git-over-https may 401", error);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // The existence + workspace guarantee, enforced: every public command and
   // file operation below awaits `#ensureReady()` before touching the
@@ -976,6 +1003,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       // document env persistence across restart), so every guarded command
       // below runs with the configured vars.
       await this.#applyStoredEnvVars();
+      await this.#configureGitAuth();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag
