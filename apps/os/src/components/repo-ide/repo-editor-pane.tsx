@@ -432,10 +432,14 @@ function CodePreviewToggle({
 }
 
 /**
- * Rendered markdown for the current working-tree buffer. Streamdown (already
- * the agent feed's chat renderer, via MessageResponse) runs raw HTML through
- * rehype-sanitize + rehype-harden, so user-supplied repo content is safe
- * without any dangerouslySetInnerHTML.
+ * Rendered markdown for the current working-tree buffer, via MessageResponse
+ * (streamdown) — already the agent feed's chat renderer, so no new dependency
+ * and no dangerouslySetInnerHTML. SECURITY INVARIANT: repo content is
+ * user-supplied, and the layer that actually defuses it is rehype-sanitize's
+ * default (GitHub) schema in streamdown's DEFAULT rehype pipeline — its
+ * rehype-harden config is wide open (`allowedProtocols: ["*"]` etc.). That
+ * default only holds because nothing here passes `rehypePlugins`; don't add
+ * that prop without re-checking sanitization.
  */
 function MarkdownPreview({ markdown }: { markdown: string }) {
   return (

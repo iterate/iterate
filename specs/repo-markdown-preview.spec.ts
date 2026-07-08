@@ -46,6 +46,15 @@ test("markdown files get a sanitized Code | Preview toggle in the repo IDE", asy
   await page.keyboard.type("# Unsaved draft heading");
   await page.getByRole("tab", { name: "Preview" }).click();
   await page.getByRole("heading", { name: "Unsaved draft heading" }).waitFor();
+
+  // Clicking the modified file in the Source Control panel opens its DIFF —
+  // the lingering preview state must not hijack it.
+  // getByTitle: the activity-strip button's accessible name is its dirty-count
+  // badge ("1"), not the title.
+  await page.getByTitle("Source control").click();
+  await page.getByRole("button", { name: "notes.md" }).click();
+  await page.getByText("(Working Tree)").waitFor();
+  await page.locator(".cm-content").waitFor();
 });
 
 /** Creates `/repos/demo` in the project and commits the given files to HEAD. */

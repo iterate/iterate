@@ -234,10 +234,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 patchSearch({
                   file: path,
                   diff: status === "modified" ? true : undefined,
+                  preview: undefined,
                   staged: undefined,
                 })
               }
-              onOpenStaged={(path) => patchSearch({ file: path, diff: undefined, staged: true })}
+              onOpenStaged={(path) =>
+                patchSearch({ file: path, diff: undefined, preview: undefined, staged: true })
+              }
             />
           ) : (
             <RepoFileTree
@@ -276,10 +279,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 headHasPath={headPathSet.has(selectedPath)}
                 change={changes.get(selectedPath)}
                 diffOpen={diff}
-                onToggleDiff={(open) => patchSearch({ diff: open ? true : undefined })}
-                previewOpen={preview}
                 // The preview replaces the editor wholesale, so it and the
-                // diff view are mutually exclusive.
+                // diff view are mutually exclusive: opening either clears the
+                // other (as do the SCM open handlers above).
+                onToggleDiff={(open) =>
+                  patchSearch({ diff: open ? true : undefined, preview: undefined })
+                }
+                previewOpen={preview}
                 onTogglePreview={(open) =>
                   patchSearch({ preview: open ? true : undefined, diff: undefined })
                 }

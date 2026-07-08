@@ -95,3 +95,15 @@ unsaved-buffer rendering. Remaining: nothing known; PR review.
 - Local dev workerd crashed once with `kj::Exception ... wrappable.wrapper !=
 nullptr` (pre-existing flake, not this change); `pnpm dev restart --detach`
   recovered it.
+- Review round 1 (agent review on the PR): fixed a real mutual-exclusivity
+  hole — the SCM panel's `onOpen`/`onOpenStaged` (and `onToggleDiff`) did not
+  clear `preview`, so clicking a modified file from Source Control while
+  previewing showed the preview instead of the diff. All three handlers now
+  clear it; spec extended with the SCM→file-click path (selector gotcha: the
+  activity-strip button's accessible name is its badge count, so
+  `getByTitle("Source control")`). Also sharpened the MarkdownPreview security
+  comment (rehype-sanitize's default schema is the real guard — streamdown's
+  harden config is wide open; the invariant is "no `rehypePlugins` prop"), and
+  verified agent-feed chat markdown live after the `@source` change (assistant
+  message with headings/list/table/code seeded via
+  `events.iterate.com/agents/web-message-sent`; screenshot in the PR).
