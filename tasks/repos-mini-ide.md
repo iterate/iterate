@@ -55,6 +55,11 @@ Change the `/repos` view on the OS dashboard to a mini IDE:
 - [x] Repos index route: same full-width + events-popover treatment
 - [x] Verify in local dev against a real project repo — _playwright walkthrough: open, edit (dirty M annotation), diff, image, context menu, events sheet, commit landed at HEAD (`a3956d5`)_
 - [x] Tree forced to light theme — _Misha: dark mode theming was broken; pinned `color-scheme: light` on the tree host (the CodeMirror pane is vsCodeLight-only too)_
+- [x] Feedback: vscode-style change gutter outside the diff view — _`change-gutter.ts` over `presentableDiff`; bar is a child element so active-line gutter themes can't hide it_
+- [x] Feedback: Files/Source-control activity strip with dirty-count badge — _commit box + changes list moved into the SCM panel (vscode shape); top toolbar removed; `scm` URL param_
+- [x] Feedback: full-height tree hitbox — _root New file/Upload context menu on the empty area; cancels itself (base-ui `eventDetails.cancel`) when the composedPath shows a pierre row_
+- [x] Feedback: inline diff as the default, always-available Diff toggle — _`unifiedMergeView` layered on the same editable editor; zero changes = plain view, so discard doesn't snap; side-by-side `CodeDiffBlock` deleted_
+- [x] Feedback: discard uses an undo arrow, not a bin
 
 ## Spinoffs (from Misha, more or less verbatim — each is its own future task)
 
