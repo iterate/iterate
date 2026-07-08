@@ -621,7 +621,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return describeNode({
       instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
-        commitFiles: "Commit a batch of file changes ({ message, changes }).",
+        commitFiles:
+          "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         linkGithub:
@@ -629,7 +630,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         listFiles: "List file paths.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
-        readFile: "Read one file ({ path }).",
+        readFile:
+          'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
@@ -692,8 +694,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return this.#durableObjectStub.listFiles();
   }
 
-  /** Committed file contents at HEAD; null when the path does not exist. */
-  readFile(input: { path: string }): Promise<{
+  /**
+   * Committed file contents at HEAD; null when the path does not exist.
+   * `encoding: "base64"` reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
     commitOid: string;
     content: string;
     path: string;
