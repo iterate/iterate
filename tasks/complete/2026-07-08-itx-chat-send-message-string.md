@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 branch: itx-chat-send-message-string
 ---
