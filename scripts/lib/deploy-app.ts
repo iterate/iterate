@@ -1,5 +1,6 @@
-import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import JSON5 from "json5";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -7,6 +8,7 @@ import {
   run,
   smoke,
 } from "./deploy-helpers.ts";
+import { convergeDoMigrations, getWorkerDoState } from "./do-migrations.ts";
 import {
   assertProvisioned,
   resolveEnvContext,
@@ -123,14 +125,49 @@ export async function deployApp<E extends DeployableEnv>(input: {
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
 
-  await deployWithSecrets({
-    cwd: input.appRoot,
-    builtConfig,
-    secretValues,
-    credentials,
-    extraDeployArgs,
-    ...(hasDurableObjects ? { ensureClassesFor: { ctx, workerName } } : {}),
-  });
+  // Preview slots are deployed by many branches whose DO migration histories
+  // diverge (handovers, tag renumbering after main merges), so wrangler's
+  // static tag diff mis-fires there (API 10074/10061, or silently skipped
+  // classes). Deploy previews with migrations computed against the worker's
+  // LIVE class set instead — the deploy then converges from whatever state
+  // the previous deploy left behind, creating missing classes and tearing
+  // down stale ones. prd keeps the static append-only list from main.
+  let convergedConfig: string | undefined;
+  if (hasDurableObjects && ctx.name.startsWith("preview_")) {
+    const state = await getWorkerDoState(ctx, workerName);
+    if (state.scriptExists) {
+      // builtConfig may be app-relative (checked-in lane) or absolute (vite
+      // dist lane); resolve against the app root either way.
+      const builtConfigPath = resolve(input.appRoot, builtConfig);
+      const config = JSON5.parse(readFileSync(builtConfigPath, "utf8"));
+      const converged = convergeDoMigrations({
+        configMigrations: config.migrations ?? [],
+        liveTag: state.migrationTag,
+        liveClasses: state.namespaces.map((namespace) => namespace.className),
+      });
+      if (converged) {
+        config.migrations = converged.migrations;
+        // A sibling of the built config, so wrangler resolves relative paths
+        // (assets, containers) identically; never mutate a checked-in config.
+        convergedConfig = join(dirname(builtConfigPath), "wrangler.converged.json");
+        writeFileSync(convergedConfig, JSON.stringify(config));
+        console.log(`Durable Object migrations converged for ${ctx.name}: ${converged.summary}`);
+      }
+    }
+  }
+
+  try {
+    await deployWithSecrets({
+      cwd: input.appRoot,
+      builtConfig: convergedConfig ?? builtConfig,
+      secretValues,
+      credentials,
+      extraDeployArgs,
+      ...(hasDurableObjects ? { ensureClassesFor: { ctx, workerName } } : {}),
+    });
+  } finally {
+    if (convergedConfig) rmSync(convergedConfig, { force: true });
+  }
 
   for (const probe of input.smokes(ctx.env)) {
     await smoke(probe.url, probe.ok, probe.label);
