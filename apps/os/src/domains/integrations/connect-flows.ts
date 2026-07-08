@@ -616,11 +616,6 @@ async function completeGoogleConnect(input: {
 // Telegram connect (no OAuth — bot-token paste + setWebhook)
 // ---------------------------------------------------------------------------
 
-/** What `getMe` said about the pasted token's bot. The numeric id is the
- * stable identity (usernames can change) — it is the directory external id,
- * the webhook path segment, and the secret-token derivation input. */
-type TelegramBotIdentity = { firstName?: string; id: string; username?: string };
-
 /**
  * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
  * getMe (validate the token + learn the bot identity) → claim check →
@@ -706,6 +701,11 @@ export async function connectTelegram(input: {
 
   return { botId: bot.id, botUsername: bot.username ?? null, connection, ok: true };
 }
+
+/** What `getMe` said about the pasted token's bot. The numeric id is the
+ * stable identity (usernames can change) — it is the directory external id,
+ * the webhook path segment, and the secret-token derivation input. */
+type TelegramBotIdentity = { firstName?: string; id: string; username?: string };
 
 /** Validate the pasted token against the live Bot API and read the bot's
  * identity. Runs with the raw token (the connect flow holds it by definition,

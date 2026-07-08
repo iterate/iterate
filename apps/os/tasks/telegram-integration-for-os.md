@@ -13,13 +13,12 @@ the existing Slack/GitHub/Google integration machinery.
 
 ## Status summary
 
-Implementation is largely complete: URL secret substitution, connect/status/
+Implementation complete and tested: URL secret substitution, connect/status/
 disconnect flows, webhook door, router + agent processors, itx dispatch +
-`connectTelegram` verb, system prompt, and the dashboard card are all in and
-typechecking, with existing suites green. Main missing piece: the new Telegram
-test files (processors, webhook door, connect flow). PR is a draft with the
-`preview` label — the goal is for Misha to connect a real BotFather bot from
-his phone against the preview.
+`connectTelegram` verb, system prompt, dashboard card, and the four new test
+files are all in and green (typecheck/lint/unit). Remaining: full-repo test
+sweep + the phone-side manual test against the preview (paste token → message
+bot → agent replies).
 
 ## Objective
 
@@ -168,10 +167,16 @@ and outbound calls at a fake Bot API server (follow whatever pattern
       mutations; sheet-open useState mirrors the existing
       AccountConnectionsItem precedent); notes group privacy mode in the
       field description_
-- [ ] Tests: mirror `slack-processors.test.ts` (router + agent pair),
+- [x] Tests: mirror `slack-processors.test.ts` (router + agent pair),
       webhook door tests (secret token, unclaimed bot, dedupe), connect flow
-      tests with a fake Bot API (no `vi.mock`), URL substitution tests
-      — _URL substitution tests done (secrets/utils.test.ts); the rest next_
+      tests with a fake Bot API (no `vi.mock`), URL substitution tests —
+      _`telegram-processors.test.ts` (in-memory stream network, real
+      processors), `telegram-webhook.test.ts` (DI'd door, no module mocks),
+      `telegram-connect.test.ts` (REAL local HTTP fake Bot API via the config
+      apiBaseUrl knob; the itxEnv storage seam does use `vi.mock` — the exact
+      precedent of github-connect/google-connection tests, since itxEnv is a
+      module-level workerd binding), URL substitution in
+      `secrets/utils.test.ts`_
 
 ## Manual test plan (phone-friendly, against the preview)
 
