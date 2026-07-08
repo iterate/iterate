@@ -3,11 +3,14 @@
  *
  * A static JWKS lets a worker verify auth JWTs without a runtime fetch, and
  * is the only trustworthy carrier for the forge public key (identity minting
- * — scripts/auth/mint-session.ts). An explicit APP_CONFIG_ITERATE_AUTH__JWKS
- * in Doppler wins over the live fetch — the break-glass path for deploying
- * while the auth worker is down. Forge keys in production-serving configs
- * require the explicit AUTH_FORGE_ALLOW_PRODUCTION opt-in.
+ * — scripts/auth/mint-session.ts). The live auth worker JWKS is the deploy-time
+ * source of truth; if it cannot be fetched after the retry window, the deploy
+ * fails instead of baking stale trust from Doppler. Forge keys in
+ * production-serving configs require the explicit AUTH_FORGE_ALLOW_PRODUCTION
+ * opt-in.
  */
+type StaticJwks = { keys: Record<string, unknown>[] };
+
 export async function bakeStaticAuthJwks(input: {
   /** The env's auth worker origin, e.g. https://auth.iterate.com */
   authBaseUrl: string;
@@ -15,20 +18,15 @@ export async function bakeStaticAuthJwks(input: {
   envName: string;
   /** The env's Doppler config name (for error messages). */
   dopplerConfig: string;
-  /** The env's full Doppler secret map (reads the pinned JWKS and forge key). */
+  /** The env's full Doppler secret map (reads the forge key). */
   secrets: Record<string, string | undefined>;
+  /** Test seam for the deploy-time live JWKS fetch. */
+  fetchJwks?: (url: string, envName: string) => Promise<StaticJwks>;
 }): Promise<string> {
   const issuer = `${input.authBaseUrl}/api/auth`;
 
-  const pinned = input.secrets.APP_CONFIG_ITERATE_AUTH__JWKS?.trim();
-  if (pinned) {
-    console.warn(
-      `Using the JWKS pinned in Doppler (APP_CONFIG_ITERATE_AUTH__JWKS) instead of fetching ${issuer}/jwks.`,
-    );
-  }
-  const jwks = pinned
-    ? (JSON.parse(pinned) as { keys: Record<string, unknown>[] })
-    : await fetchJwksWithRetry(`${issuer}/jwks`, input.envName);
+  const fetchJwks = input.fetchJwks ?? fetchJwksWithRetry;
+  const jwks = await fetchJwks(`${issuer}/jwks`, input.envName);
 
   const forgePrivateJwk = input.secrets.AUTH_FORGE_PRIVATE_JWK?.trim();
   if (forgePrivateJwk) {
@@ -71,7 +69,7 @@ async function fetchJwksWithRetry(url: string, envName: string) {
       if (Date.now() > deadline) {
         throw new Error(
           `Deploy-time JWKS fetch from ${url} kept failing for 4 minutes (last: ${error}). ` +
-            `Deploy the auth worker for ${envName} first, or pin APP_CONFIG_ITERATE_AUTH__JWKS in Doppler.`,
+            `Deploy the auth worker for ${envName} first, or fix the auth JWKS endpoint.`,
         );
       }
       console.warn(

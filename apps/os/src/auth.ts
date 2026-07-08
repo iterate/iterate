@@ -36,7 +36,42 @@ import {
   type UserPrincipal,
 } from "./auth/principal.ts";
 import type { AppConfig } from "./config.ts";
-import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
+
+/**
+ * Credentials accepted by `UnauthenticatedOs.authenticate`.
+ *
+ * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
+ *   the signed-in user's session cookie riding the WebSocket handshake.
+ * - `bearer` — an auth access token presented as RPC data.
+ * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
+ * - `impersonate` — admin-secret-gated fake principal, for test suites that
+ *   exercise per-project confinement without minting real users.
+ */
+export type ItxAuthCredentials =
+  | { type: "from-server-cookie" }
+  | { type: "bearer"; token: string }
+  | { type: "admin-secret"; secret: string }
+  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+
+/** Principal shape for `impersonate` credentials. */
+export type ItxAuthToken =
+  | { type: "admin"; principal?: string }
+  | { type: "user"; principal: string; projectScopes: string[] };
+
+/** Authority object carried by server-side RPC target instances. */
+export interface ItxAuth {
+  readonly principal: string;
+  isAdmin(): boolean;
+  canAccessProject(projectId: string): boolean;
+  assertCanAccessProject(projectId: string | null): void;
+  listAccessibleProjects(): string[];
+  /**
+   * Async access check that may consult the project directory (source of
+   * truth) when synchronous claims miss — see the auth adapter. Optional so
+   * in-process trusted contexts stay trivially constructible.
+   */
+  ensureCanAccessProject?(projectId: string): Promise<void>;
+}
 
 type ProjectDirectory = {
   userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;
@@ -183,7 +218,7 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new Error("missing or invalid auth");
-    return contextFromPrincipal(config, principalFromAccessToken(accessToken));
+    return itxAuthFromPrincipal(config, principalFromAccessToken(accessToken));
   }
 
   // from-server-cookie: the admin cookie wins (browser REPL admin + Playwright
@@ -198,7 +233,7 @@ export async function resolveItxAuth(input: {
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
   if (!result.session) throw new Error("missing or invalid auth");
-  return contextFromPrincipal(config, principalFromSession(result.session));
+  return itxAuthFromPrincipal(config, principalFromSession(result.session));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
@@ -209,7 +244,14 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
   if (!admin) throw new Error("missing or invalid auth");
 }
 
-function contextFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
+/**
+ * The itx auth context for an already-authenticated principal — the in-process
+ * lane. Server-side code that already holds the request middleware's principal
+ * (server functions, server routes) builds its session objects through this
+ * instead of re-presenting credentials to the `/api` door: same confinement
+ * (claims + directory fallback), no loopback HTTP round trip.
+ */
+export function itxAuthFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
   if (principal.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }

@@ -12,7 +12,7 @@
 //      owning project's Durable Object (the same decision point dynamic
 //      workers' `globalOutbound` uses), because...
 //   3. Secret substitution — the echo sees the real secret MATERIAL in place of
-//      the `getSecret({ path })` placeholder the container sent. Substitution
+//      the `getSecret(path)` placeholder the container sent. Substitution
 //      only happens server-side in the Project DO's egress path; the container
 //      never holds the material.
 //
@@ -69,7 +69,7 @@ describe("sandbox egress", () => {
       const secretPath = `/secrets/sandbox-egress/${crypto.randomUUID()}`;
       using secret = project.secrets.get(secretPath);
       await secret.update({ egress: { urls: [echoOrigin] }, material });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "secret processor to fold the material",
       });
 
@@ -112,9 +112,9 @@ describe("sandbox egress", () => {
         // The material never transited the sandbox: the script and its egress
         // carried only the placeholder, and describe() still hides the value.
         expect(proof.body).not.toContain(`path: "${secretPath}"`);
-        const described = await secret.describe();
+        const described = await secret.__describe();
         expect(JSON.stringify(described)).not.toContain(material);
-        await waitForCondition(async () => (await secret.describe()).audit.usedCount >= 1, {
+        await waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 1, {
           description: "secret usage audit to record the substitution",
         });
       } finally {

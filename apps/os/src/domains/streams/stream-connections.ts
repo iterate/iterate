@@ -18,8 +18,8 @@ import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
   ProcessorRuntimeState,
-  StreamEvent,
-} from "../../types.ts";
+} from "./rpc-types.ts";
+import type { StreamEvent } from "./schemas.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,

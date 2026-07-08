@@ -82,10 +82,36 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "connect-public-mcp",
   "connect-openapi-petstore",
   "secret-postman-echo",
+  "github-mcp-connect",
+  "github-webhooks-project-worker",
+  // Built-in integration usage snippets: each needs a REAL connected
+  // GitHub/Google/Slack account, which e2e fixture projects never hold.
+  "github-list-repos",
+  "github-read-file",
+  "github-backed-repo",
+  "gmail-search-inbox",
+  "slack-post-message",
   "email-send",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
+  "stream-cross-post-rule": {
+    // Matrix runtimes share a project; per-runtime paths keep the rule and
+    // its copies from colliding with a sibling runtime's.
+    vars: ({ marker }) => ({
+      source: `/examples/cross-post/source-${marker}`,
+      target: `/examples/cross-post/target-${marker}`,
+    }),
+    assert: (result, _ctx, expect) => {
+      const shaped = result as {
+        copied: { importance: string; text: string };
+        provenance: Array<{ ruleId: string }>;
+      };
+      expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
+      expect(shaped.provenance).toHaveLength(1);
+      expect(shaped.provenance[0]).toMatchObject({ ruleId: "copy-important" });
+    },
+  },
   "scheduler-basics": {
     // Matrix runtimes can share a project; a per-runtime key keeps the
     // set/list/cancel dance from racing a sibling runtime's copy.
@@ -127,8 +153,11 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(Object.keys(shaped.rootChildren)).toEqual(
         expect.arrayContaining(["capabilityHost", "capabilityHosts", "streams"]),
       );
+      // The integrations collection's children are its management verbs;
+      // per-connection call surfaces (slack/google/github) are dotted
+      // dispatch, not member nodes — connections enumerate via list().
       expect(Object.keys(shaped.integrationsChildren)).toEqual(
-        expect.arrayContaining(["gmail", "slack"]),
+        expect.arrayContaining(["list", "getConnection", "completeConnect"]),
       );
     },
   },
@@ -226,6 +255,45 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect((result as { repoFiles: string[] }).repoFiles).toEqual(
         expect.arrayContaining(["README.md", "worker.ts"]),
       );
+    },
+  },
+  "workspace-edit-and-push": {
+    // Unique workspace per example × runtime: the path is durable identity
+    // (one Durable Object, one branch), so sharing one across the matrix
+    // would make the second runtime's edit() fail (oldString already
+    // replaced) and pushes race. Each run pays its own clone — seconds, not
+    // the sandbox's container boot — but the budget still covers a cold
+    // Artifacts clone with the 503-retry tail.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
+    assert: (result, ctx, expect) => {
+      expect(result).toMatchObject({
+        readmePresent: true,
+        edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
+        pushedBranch: `workspaces/examples/edit-${ctx.marker}`,
+      });
+      expect((result as { commitOid: string }).commitOid).toMatch(/^[0-9a-f]{40}$/);
+    },
+  },
+  "workspace-files-transfer": {
+    // Fresh workspace per run (same identity reasoning as above); the files
+    // paths are shared but every put() overwrites, and `note` makes each
+    // run's transferred content self-identifying.
+    completionTimeoutMs: 120_000,
+    vars: ({ marker }) => ({
+      note: `transfer-${marker}`,
+      workspacePath: `/workspaces/examples/transfer-${marker}`,
+    }),
+    assert: (result, ctx, expect) => {
+      expect(result).toMatchObject({
+        inWorkspace: `transfer-${ctx.marker}`,
+        published: {
+          contentType: "application/json",
+          path: "/examples/package-from-workspace.json",
+        },
+      });
+      expect((result as { published: { size: number } }).published.size).toBeGreaterThan(0);
+      expect((result as { urlHost: string }).urlHost).toContain("iterate-files--");
     },
   },
   "repo-commit-files": {

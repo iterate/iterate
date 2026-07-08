@@ -1,4 +1,21 @@
 import { normalizePath } from "../durable-object-names.ts";
+import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
+
+/**
+ * Minimal ExecutionContext shape the RPC adapter layer needs.
+ *
+ * Server-side plumbing, not part of the client-facing ITX contract. It is
+ * exported only so domain hosts can inject project/agent capability targets
+ * without importing the full worker module.
+ */
+export type CfExecutionContext = {
+  exports: ExecutionContext["exports"];
+  /** Required, not optional: budget-expired dynamic worker builds are handed
+   * to it (worker-loader.ts withBuildBudget) — a silent no-op here would
+   * strand every cold build the caller gave up on. Hosts without a real
+   * runtime hook must still supply an explicit function. */
+  waitUntil: ExecutionContext["waitUntil"];
+};
 
 type DisposableLike = {
   [Symbol.dispose]?(): void;
@@ -102,7 +119,7 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
 
 /**
  * Shape helper for the `__describe()` convention (see `Description` in
- * types.ts): fills the always-present fields so every node returns
+ * ./describe.ts): fills the always-present fields so every node returns
  * `{ instructions, types, children, ... }` even before it has real content.
  * Deliberately dumb — each node hand-writes its description; this is the
  * anchor the future transitive (parent-composes-children) mechanism hangs off.
@@ -146,13 +163,36 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 }
 
 /**
+/**
  * Guards `provideCapability` against shadowing the itx surface: a capability
  * path's root segment may not be a reserved RPC segment nor an existing member
  * name of the itx-facing surfaces (e.g. `streams`, `agents`). Runs in the
  * isolate because the member names come from RpcTarget prototypes, which the
  * capability-host Durable Object can't see (ITX_SURFACE_MEMBER_NAMES in
  * rpc-targets.ts).
+ *
+ * Namespace exception: some surface members are NAMESPACES whose children are
+ * the supported extension point. `integrations` is the exemplar — mounting at
+ * depth >= 2 under it is how a project adds its own integration — EXCEPT under
+ * the names the collection's own dispatch claims (built-in slugs and the
+ * collection's verbs), where a mount would be durable, journaled, and silently
+ * unreachable; those are rejected loudly at provide time.
  */
+const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [
+    "integrations",
+    new Set([
+      ...BUILTIN_INTEGRATION_SLUGS,
+      "list",
+      "getConnection",
+      "startOAuthFlow",
+      "completeConnect",
+      "disconnect",
+      "invokeCapability",
+    ]),
+  ],
+]);
+
 export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path: string[]): void {
   const root = path[0];
   if (!root) return;
@@ -160,6 +200,16 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
   if (surfaceMembers.has(root)) {
+    const reservedChildren = NAMESPACE_BUILTIN_ROOTS.get(root);
+    if (reservedChildren && path.length >= 2) {
+      const child = path[1]!;
+      if (reservedChildren.has(child)) {
+        throw new Error(
+          `cannot provide capability "${root}.${child}": "${child}" is a built-in ${root} member and would shadow deployment code`,
+        );
+      }
+      return;
+    }
     throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
   }
 }

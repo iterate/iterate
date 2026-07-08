@@ -1,15 +1,16 @@
 import { describe, expect, test } from "vitest";
+import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
 import {
   ONBOARDING_AGENT_PATH,
   hasActiveOnboardingAgent,
   isOnboardingActive,
 } from "./onboarding-agent.ts";
-import type { ProjectProcessorState } from "~/types.ts";
 
 const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState => ({
   agents: [],
   createRequest: null,
   created: true,
+  customDomains: [],
   onboardingActive: false,
   onboardingCompletedAt: null,
   repos: [],

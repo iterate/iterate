@@ -16,8 +16,8 @@ await itx.secrets.get("/secrets/openai").update({
 ```
 
 Secret paths are normalized and must start with `/secrets/`. The public secret
-capability has `update`, `describe`, `fetch`, and `processor`, but no method
-that returns material. `describe()` reports metadata only: whether material is
+capability has `update`, `__describe`, `fetch`, and `processor`, but no method
+that returns material. `__describe()` reports metadata only: whether material is
 present, the egress allowlist, and usage audit counters.
 
 The implementation lives in:
@@ -54,7 +54,7 @@ The project Durable Object is the egress decision point:
 
 1. If a live egress interceptor is installed, it handles the request before
    secret substitution.
-2. Otherwise, the project DO scans request headers for `getSecret({ path })`
+2. Otherwise, the project DO scans request headers for `getSecret(path)`
    placeholders.
 3. If no secret is referenced, the request is fetched directly.
 4. If exactly one secret is referenced, the request is forwarded to that

@@ -32,12 +32,12 @@ ON CONFLICT (session_id, client_id) DO UPDATE
 SET user_id = excluded.user_id,
   project_ids = excluded.project_ids,
   updated_at = excluded.updated_at
-RETURNING session_id AS sessionId,
-  client_id AS clientId,
-  user_id AS userId,
-  project_ids AS projectIds,
-  created_at AS createdAt,
-  updated_at AS updatedAt;
+RETURNING session_id,
+  client_id,
+  user_id,
+  project_ids,
+  created_at,
+  updated_at;
 
 /** @name deleteStaleOAuthProjectSelections */
 DELETE FROM oauthProjectSelection

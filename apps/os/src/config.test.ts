@@ -57,7 +57,6 @@ describe("AppConfig", () => {
           oauthClientId: "slack-client-id",
           oauthClientSecret: "slack-client-secret",
           webhookSigningSecret: "slack-signing-secret",
-          botToken: "slack-bot-token",
         }),
         APP_CONFIG_INTEGRATIONS__GOOGLE: JSON.stringify({
           oauthClientId: "google-client-id",
@@ -73,11 +72,29 @@ describe("AppConfig", () => {
     expect(parsed.integrations.slack?.webhookSigningSecret.exposeSecret()).toEqual(
       "slack-signing-secret",
     );
-    expect(parsed.integrations.slack?.botToken?.exposeSecret()).toEqual("slack-bot-token");
     expect(parsed.integrations.google?.oauthClientId).toEqual("google-client-id");
     expect(parsed.integrations.google?.oauthClientSecret.exposeSecret()).toEqual(
       "google-client-secret",
     );
+  });
+
+  it("accepts platform Parallel integration runtime config", () => {
+    const parsed = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: {
+        APP_CONFIG: JSON.stringify(baseConfig),
+        APP_CONFIG_INTEGRATIONS__EXA: JSON.stringify({
+          apiKey: "exa-api-key",
+        }),
+        APP_CONFIG_INTEGRATIONS__PARALLEL: JSON.stringify({
+          apiKey: "parallel-api-key",
+        }),
+      },
+    });
+
+    expect(parsed.integrations.exa?.apiKey.exposeSecret()).toEqual("exa-api-key");
+    expect(parsed.integrations.parallel?.apiKey.exposeSecret()).toEqual("parallel-api-key");
   });
 
   it("requires an OpenAI API key for upcoming OS AI-backed features", () => {

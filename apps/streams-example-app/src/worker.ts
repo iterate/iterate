@@ -7,7 +7,7 @@ import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
-import type { Stream } from "~/types.ts";
+import type { Stream } from "~/itx-api.generated.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 

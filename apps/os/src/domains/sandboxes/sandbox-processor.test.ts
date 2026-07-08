@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { Stream, StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
 
@@ -59,7 +60,7 @@ describe("SandboxProcessor", () => {
     await processor.ingest({
       events: [
         event("events.iterate.com/sandbox/configured", {
-          env: { ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })', FOO: "bar" },
+          env: { GH_TOKEN: 'getSecret({ path: "/secrets/gh" })', FOO: "bar" },
         }),
         event("events.iterate.com/sandbox/configured", {
           env: { OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })', FOO: "baz" },
@@ -70,7 +71,7 @@ describe("SandboxProcessor", () => {
     const snap: { state: z.infer<typeof SandboxProcessorContract.stateSchema> } =
       await processor.snapshot();
     expect(snap.state.env).toEqual({
-      ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })',
+      GH_TOKEN: 'getSecret({ path: "/secrets/gh" })',
       OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })',
       FOO: "baz",
     });

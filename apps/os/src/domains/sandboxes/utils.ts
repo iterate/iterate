@@ -1,4 +1,19 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
+
+/**
+ * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
+ * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
+ * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
+ * does not re-declare that surface (same stance as `McpClientRpc`); see
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
+ * project's repo is ALWAYS checked out at `/workspace/repos/project` (with
+ * working git credentials), which is also the default working directory — a
+ * bare `exec("ls")` lists the project; no `ensureProjectRepo()` call needed
+ * first.
+ */
+export type CloudflareSandbox = object;
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real sandbox names carry the caller's
@@ -72,4 +87,25 @@ export function normalizeSandboxPath(path: string): string {
     );
   }
   return normalized;
+}
+
+/**
+ * The `GH_TOKEN` value a sandbox plants for a project's GitHub connections,
+ * or null when there is none: a `getSecret` placeholder for the connection
+ * secret's `accessToken` field, so `gh` (which reads GH_TOKEN natively) and
+ * the warm-up script's git extraheader authenticate against github.com while
+ * the installation token itself is minted and substituted only at the egress
+ * door. Several connections: the lexicographically first connection name wins
+ * — arbitrary but deterministic, so a container restart can't silently flip
+ * which installation a sandbox acts as; `configureEnvVars({ GH_TOKEN })`
+ * overrides the pick. Pure so the choice is testable without a container.
+ */
+export function githubTokenEnvForConnections(
+  connections: readonly { connection: string; integration: string }[],
+): string | null {
+  const [first] = connections
+    .filter((entry) => entry.integration === "github")
+    .map((entry) => entry.connection)
+    .sort();
+  return first === undefined ? null : githubAccessTokenPlaceholder(first);
 }

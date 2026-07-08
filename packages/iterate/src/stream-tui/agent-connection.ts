@@ -13,7 +13,7 @@ import type {
   CapabilityProvision,
   ItxAuthCredentials,
   StreamEvent,
-} from "../../../../apps/os/src/types.ts";
+} from "../../../../apps/os/src/itx-api.generated.ts";
 import { readConfig } from "../config.ts";
 import {
   createMachineCapability,

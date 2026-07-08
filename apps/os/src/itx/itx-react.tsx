@@ -29,7 +29,7 @@
  *
  *   ACTIONS (mutations) → imperative on the handle, no extra primitive:
  *                           const itx = useItx();
- *                           <button onClick={() => itx.chat.sendMessage({ text })} />
+ *                           <button onClick={() => itx.chat.sendMessage(text)} />
  *                         or, for pending/error/refetch tracking, TanStack Query's useMutation.
  *
  * ───────────────────────────────────────────────────────────────────────────
@@ -84,12 +84,8 @@ import {
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type {
-  ProcessorSnapshot,
-  ProjectRpcTarget as ProjectItx,
-  Session,
-  UnauthenticatedOs,
-} from "../types.ts";
+import type { ProcessorSnapshot } from "../domains/streams/rpc-types.ts";
+import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project
@@ -97,7 +93,7 @@ import type {
  * intersection keeps the four primitives monomorphic — a wrong call for the
  * context fails at runtime exactly like a missing capability would.
  */
-type ItxHandle = RpcStub<Session & ProjectItx>;
+type ItxHandle = RpcStub<Session & Project>;
 export type { ItxHandle as ItxReactHandle };
 
 /**
@@ -291,7 +287,7 @@ export function ItxProvider({
  * in `useItxQuery` / `useItxEffect`.
  *
  *   const itx = useItx();
- *   const onSend = () => itx.chat.sendMessage({ text });
+ *   const onSend = () => itx.chat.sendMessage(text);
  */
 export function useItx(override?: ItxAddress): ItxHandle {
   const contextAddress = use(ItxAddressContext);

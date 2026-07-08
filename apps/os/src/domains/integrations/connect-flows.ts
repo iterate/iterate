@@ -1,58 +1,69 @@
-// itx-side OAuth connect flows for Slack and Google, resurrected from the
-// legacy integration plumbing (pre-migration integration-api.ts, git history, +
-// the pre-purge secrets domain) and re-homed onto itx:
+// itx-side connect/disconnect flows for the built-in integrations (Slack +
+// Google OAuth, GitHub App installation). Each provider contributes only its
+// exchange half; the storage half is the shared recordConnection.
 //
-//   - OAuth state:    stateless HMAC-signed token (oauth-state.ts), no D1.
-//   - Slack token:    itx secret DO `/secrets/integrations/slack/bot-token`
-//                     (egress-substituted; material never read back).
-//   - Slack facts:    `/integrations/slack` project stream (connected/
-//                     disconnected + the webhook router's events).
-//   - Team routing:   deployment-wide `/integrations/slack-team-directory`
-//                     stream (claimed/unclaimed events, folded per webhook).
-//   - Google tokens:  AES-GCM ciphertext events on `/integrations/google`
-//                     (google-tokens.ts).
+// Every connection is NAMED: a project can hold several Slack workspaces /
+// Google accounts / GitHub installations, each at a sanitized connection name.
 //
-// These functions run with the itx bindings (they need SECRET_ENCRYPTION_KEY and
-// the DO bindings). The dashboard's /api/integrations/* routes reach them
-// through the itx surface (rpc-targets.ts).
+//   - Connect state:  stateless HMAC-signed token (oauth-state.ts), no D1.
+//   - Credentials:    a Secret DO per connection at
+//                     `/secrets/integrations/<slug>/<connection>` — a bot token
+//                     (slack), `{ accessToken, refreshToken }` + the shared
+//                     oauth-refresh-token strategy (google), or an empty
+//                     material + the github-app-installation mint strategy
+//                     (github). Material is never read back: refresh runs in
+//                     the Secret DO's own trusted code.
+//   - Facts:          `/integrations/<slug>/<connection>` project stream
+//                     (connected/disconnected + inbound webhook events).
+//   - Routing:        the deployment-wide `(slug, externalId)` directory
+//                     (integration-streams.ts) — claimed at connect, folded by
+//                     the webhook door to route inbound events.
+//
+// These run with the itx bindings (SECRET_ENCRYPTION_KEY + the DO bindings).
+// The dashboard's /api/integrations/* routes reach them via itx (rpc-targets.ts).
 
-import type {
-  CompleteConnectResult,
-  IntegrationConnectionStatus,
-  IntegrationProvider,
-  RouteSlackWebhookResult,
-} from "../../types.ts";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
+import type { SecretRefresh } from "../secrets/types.ts";
+import type {
+  CompleteConnectResult,
+  IntegrationConnectionStatus,
+  BuiltinIntegrationSlug,
+} from "./types.ts";
 import {
   createOAuthState,
   randomBase64Url,
   sha256Base64Url,
   verifyOAuthState,
+  type OAuthStateData,
 } from "./oauth-state.ts";
 import {
-  foldSlackTeamDirectory,
+  appendConnectionDirectoryEvent,
   integrationStreamStub,
-  lookupSlackTeamProject,
-  readAllStreamEvents,
+  lookupConnectionClaim,
+  streamEventsNewestFirst,
 } from "./integration-streams.ts";
-import { readGoogleTokenState } from "./google-tokens.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
+  GITHUB_CONNECTED_EVENT_TYPE,
+  GITHUB_CONNECTION_EGRESS_URLS,
+  GITHUB_DISCONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTED_EVENT_TYPE,
+  GOOGLE_CONNECTION_EGRESS_URLS,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_INTEGRATION_STREAM_PATH,
-  SLACK_BOT_TOKEN_SECRET_PATH,
+  GOOGLE_OAUTH_TOKEN_URL,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
-  SLACK_INTEGRATION_STREAM_PATH,
-  SLACK_TEAM_CLAIMED_EVENT_TYPE,
-  SLACK_TEAM_DIRECTORY_STREAM_PATH,
-  SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
-  SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
+  githubConnectionSecretPath,
+  googleConnectionSecretPath,
+  integrationCoordinatesFromStreamPath,
+  readRecord,
+  readString,
+  integrationConnectionStreamPath,
+  sanitizeConnectionName,
+  slackBotTokenSecretPath,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -62,13 +73,19 @@ function requireSlackConfig(config: AppConfig) {
   return slack;
 }
 
+function requireGithubConfig(config: AppConfig) {
+  const github = config.integrations.github;
+  if (!github) throw new Error("GitHub integration runtime config is not configured.");
+  return github;
+}
+
 function requireGoogleConfig(config: AppConfig) {
   const google = config.integrations.google;
   if (!google) throw new Error("Google integration runtime config is not configured.");
   return google;
 }
 
-function oauthRedirectUri(input: { baseUrl: string; provider: IntegrationProvider }) {
+function oauthRedirectUri(input: { baseUrl: string; provider: BuiltinIntegrationSlug }) {
   return `${input.baseUrl.replace(/\/$/, "")}/api/integrations/${input.provider}/callback`;
 }
 
@@ -85,7 +102,7 @@ export async function startOAuthFlow(input: {
   callbackUrl?: string;
   config: AppConfig;
   projectId: string;
-  provider: IntegrationProvider;
+  provider: BuiltinIntegrationSlug;
   /** The user to bind the OAuth state to. Browser-supplied, not authority; the
    * callback's user check against the signed state is the backstop. */
   userId: string;
@@ -109,6 +126,31 @@ export async function startOAuthFlow(input: {
       oauthRedirectUri({ baseUrl, provider: "slack" }),
     );
     authorizationUrl.searchParams.set("scope", slack.scopes.join(","));
+    authorizationUrl.searchParams.set("state", state);
+    return { authorizationUrl: authorizationUrl.toString() };
+  }
+
+  if (input.provider === "github") {
+    const github = requireGithubConfig(input.config);
+    // GitHub App installation (D5), not OAuth-user: the user installs the App on
+    // their org/repos and GitHub redirects back with an `installation_id` (not a
+    // code). Our signed `state` round-trips the project + user so the callback
+    // can bind the installation to them.
+    if (!github.appSlug) {
+      throw new Error(
+        "GitHub App is not configured (integrations.github.appSlug); cannot start an installation.",
+      );
+    }
+    const state = await createOAuthState(
+      {
+        callbackUrl: input.callbackUrl,
+        projectId: input.projectId,
+        provider: "github",
+        userId: input.userId,
+      },
+      itxEnv.SECRET_ENCRYPTION_KEY,
+    );
+    const authorizationUrl = new URL(`https://github.com/apps/${github.appSlug}/installations/new`);
     authorizationUrl.searchParams.set("state", state);
     return { authorizationUrl: authorizationUrl.toString() };
   }
@@ -146,24 +188,155 @@ export async function startOAuthFlow(input: {
 // OAuth completion (called from the dashboard's callback routes)
 // ---------------------------------------------------------------------------
 
-export async function completeSlackConnect(input: {
+/**
+ * The one connect-completion verb: the app worker's OAuth callback route calls
+ * this provider-blind. Each provider contributes only its exchange half; the
+ * storage half is the shared {@link recordConnection}.
+ */
+export async function completeConnect(input: {
+  /** OAuth authorization code (slack/google). */
+  code?: string;
+  config: AppConfig;
+  /** GitHub App installation id — github's callback carries this, not a code. */
+  installationId?: string;
+  projectId: string;
+  provider: BuiltinIntegrationSlug;
+  state: string;
+  userId: string | null;
+}): Promise<CompleteConnectResult> {
+  switch (input.provider) {
+    case "slack":
+      if (input.code === undefined) {
+        return { callbackUrl: null, error: "slack_oauth_missing_code", ok: false };
+      }
+      return await completeSlackConnect({ ...input, code: input.code });
+    case "google":
+      if (input.code === undefined) {
+        return { callbackUrl: null, error: "google_oauth_missing_code", ok: false };
+      }
+      return await completeGoogleConnect({ ...input, code: input.code });
+    case "github":
+      if (input.installationId === undefined) {
+        return { callbackUrl: null, error: "github_missing_installation_id", ok: false };
+      }
+      return await completeGithubConnect({ ...input, installationId: input.installationId });
+  }
+}
+
+/**
+ * The shared front door of every provider's connect completion: verify the
+ * HMAC-signed state, bind it to the calling project, and check the caller is
+ * the user who started the flow. Error codes keep the provider-specific
+ * strings: `${errorPrefix}_invalid_state` / `${errorPrefix}_user_mismatch`.
+ */
+async function gateConnectState(input: {
+  errorPrefix: string;
+  projectId: string;
+  provider: BuiltinIntegrationSlug;
+  state: string;
+  userId: string | null;
+}): Promise<
+  | { callbackUrl: string | null; ok: true; stateData: OAuthStateData }
+  | { ok: false; result: CompleteConnectResult }
+> {
+  const stateData = await verifyOAuthState(
+    { provider: input.provider, state: input.state },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+  if (!stateData || stateData.projectId !== input.projectId) {
+    return {
+      ok: false,
+      result: { callbackUrl: null, error: `${input.errorPrefix}_invalid_state`, ok: false },
+    };
+  }
+  const callbackUrl = stateData.callbackUrl ?? null;
+  if (input.userId === null || stateData.userId !== input.userId) {
+    return {
+      ok: false,
+      result: { callbackUrl, error: `${input.errorPrefix}_user_mismatch`, ok: false },
+    };
+  }
+  return { callbackUrl, ok: true, stateData };
+}
+
+/**
+ * The provider-invariant storage half of a connect, shared by every provider's
+ * exchange half and by admin/e2e seeding (which has a token but no OAuth
+ * code). Material travels by argument into Secret DOs — never onto journals.
+ */
+async function recordConnection(input: {
+  connection: string;
+  projectId: string;
+  slug: string;
+  /** Credential material, each written to its own Secret DO with an egress
+   * allowlist. `material` is any serializable value (a bare token string for
+   * Slack; `{ accessToken, refreshToken }` for Google). An optional `refresh`
+   * configures the secret's named refresh strategy (run by the Secret DO's own
+   * trusted code) — no provider stores tokens on the journal. */
+  secrets: readonly {
+    egressUrls: readonly string[];
+    material: unknown;
+    path: string;
+    refresh?: SecretRefresh;
+  }[];
+  /** The connected fact, appended to /integrations/{slug}/{connection}. */
+  connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
+  /** Arm a webhook-router processor on the connection stream (providers that
+   * route inbound events). Connect time is THE arming point — connection
+   * streams are born here, not at project create. */
+  processorSubscription?: { idempotencyKey: string; processorSlug: string };
+  /** Claim this connection's external id in the deployment-wide directory
+   * (providers with first-party webhook ingress). The generic door folds it to
+   * route inbound events (D4). */
+  directoryClaim?: { externalId: string };
+}): Promise<void> {
+  const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
+  for (const secret of input.secrets) {
+    await itxEnv.SECRET.getByName(
+      DurableObjectNameCodec.stringify({ projectId: input.projectId, path: secret.path }),
+    ).update({
+      egress: { urls: [...secret.egressUrls] },
+      material: secret.material,
+      ...(secret.refresh ? { refresh: secret.refresh } : {}),
+    });
+  }
+  await integrationStreamStub(input.projectId, streamPath).append(
+    ...(input.processorSubscription
+      ? [
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName: DurableObjectNameCodec.stringify({
+              projectId: input.projectId,
+              path: streamPath,
+            }),
+            idempotencyKey: input.processorSubscription.idempotencyKey,
+            processorSlug: input.processorSubscription.processorSlug,
+            subscriberType: "project" as const,
+          }),
+        ]
+      : []),
+    input.connectedEvent,
+  );
+  if (input.directoryClaim) {
+    await appendConnectionDirectoryEvent({
+      claimed: true,
+      connection: input.connection,
+      externalId: input.directoryClaim.externalId,
+      projectId: input.projectId,
+      slug: input.slug,
+    });
+  }
+}
+
+async function completeSlackConnect(input: {
   code: string;
   config: AppConfig;
   projectId: string;
   state: string;
   userId: string | null;
 }): Promise<CompleteConnectResult> {
-  const stateData = await verifyOAuthState(
-    { provider: "slack", state: input.state },
-    itxEnv.SECRET_ENCRYPTION_KEY,
-  );
-  if (!stateData || stateData.projectId !== input.projectId) {
-    return { callbackUrl: null, error: "slack_oauth_invalid_state", ok: false };
-  }
-  const callbackUrl = stateData.callbackUrl ?? null;
-  if (input.userId === null || stateData.userId !== input.userId) {
-    return { callbackUrl, error: "slack_oauth_user_mismatch", ok: false };
-  }
+  const gate = await gateConnectState({ ...input, errorPrefix: "slack_oauth", provider: "slack" });
+  if (!gate.ok) return gate.result;
+  const { callbackUrl } = gate;
 
   const slack = requireSlackConfig(input.config);
   const baseUrl = requestBaseUrl(input);
@@ -193,13 +366,21 @@ export async function completeSlackConnect(input: {
   }
 
   const teamId = tokenData.team.id;
-  const existingClaim = await lookupSlackTeamProject(teamId);
-  if (existingClaim !== null && existingClaim !== input.projectId) {
+  const existingClaim = await lookupConnectionClaim("slack", teamId);
+  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
     return { callbackUrl, error: "slack_team_already_claimed", ok: false };
   }
 
+  // Reconnects reuse the claiming connection's name; fresh connects derive it
+  // from the workspace domain (or the team id when the domain sanitizes away).
+  const connection =
+    existingClaim?.connection ??
+    (sanitizeConnectionName(tokenData.team.domain ?? teamId) ||
+      `team-${sanitizeConnectionName(teamId)}`);
+
   await recordSlackConnection({
     accessToken: tokenData.access_token,
+    connection,
     projectId: input.projectId,
     scopes: slack.scopes,
     teamDomain: tokenData.team.domain,
@@ -210,46 +391,38 @@ export async function completeSlackConnect(input: {
   return { callbackUrl, ok: true };
 }
 
-/**
- * The storage half of a Slack connect, shared by the OAuth callback and by
- * admin/e2e seeding (which has a token but no OAuth code): store the bot
- * token as an egress-substituted secret, arm the webhook router subscription,
- * record the connected fact, and claim the team in the global directory.
- */
+/** Slack's storage half, expressed through the shared {@link recordConnection}. */
 async function recordSlackConnection(input: {
   accessToken: string;
+  connection: string;
   projectId: string;
   scopes: readonly string[];
   teamDomain?: string;
   teamId: string;
   teamName: string;
 }): Promise<void> {
-  await itxEnv.SECRET.getByName(
-    DurableObjectNameCodec.stringify({
-      projectId: input.projectId,
-      path: SLACK_BOT_TOKEN_SECRET_PATH,
-    }),
-  ).update({
-    egress: { urls: ["https://slack.com"] },
-    material: input.accessToken,
-  });
-
-  await integrationStreamStub(input.projectId, SLACK_INTEGRATION_STREAM_PATH).append(
-    // Arm the webhook router processor on this stream (idempotent; also armed
-    // at project create by the project processor).
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: DurableObjectNameCodec.stringify({
-        projectId: input.projectId,
-        path: SLACK_INTEGRATION_STREAM_PATH,
-      }),
-      idempotencyKey: `slack-router-subscription:${input.projectId}`,
-      processorSlug: SlackProcessorContract.slug,
-      subscriberType: "project",
-    }),
-    {
+  await recordConnection({
+    connection: input.connection,
+    projectId: input.projectId,
+    slug: "slack",
+    secrets: [
+      {
+        // files.slack.com serves shared-file downloads (url_private); the Web
+        // API itself lives on slack.com.
+        egressUrls: ["https://slack.com", "https://files.slack.com"],
+        material: input.accessToken,
+        path: slackBotTokenSecretPath(input.connection),
+      },
+    ],
+    // Deliberately NO idempotency keys on the connected/claim facts: a
+    // disconnect->reconnect cycle must append fresh facts, and a key of
+    // (team, project) would dedupe the reconnect into silence (connected
+    // never re-folds, the team never re-claims). The OAuth code exchange is
+    // single-use, so the callback cannot double-fire these appends.
+    connectedEvent: {
       type: SLACK_CONNECTED_EVENT_TYPE,
-      idempotencyKey: `slack:connected:${input.teamId}:${input.projectId}`,
       payload: {
+        connection: input.connection,
         externalId: input.teamId,
         projectId: input.projectId,
         scopes: [...input.scopes],
@@ -258,44 +431,96 @@ async function recordSlackConnection(input: {
         teamName: input.teamName,
       },
     },
-  );
-
-  await integrationStreamStub(null, SLACK_TEAM_DIRECTORY_STREAM_PATH).append({
-    type: SLACK_TEAM_CLAIMED_EVENT_TYPE,
-    idempotencyKey: `slack-team-claimed:${input.teamId}:${input.projectId}`,
-    payload: {
-      projectId: input.projectId,
-      teamId: input.teamId,
-      teamName: input.teamName,
+    processorSubscription: {
+      idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
+      processorSlug: SlackProcessorContract.slug,
     },
+    directoryClaim: { externalId: input.teamId },
   });
 }
 
-export async function completeGoogleConnect(input: {
+async function completeGithubConnect(input: {
+  config: AppConfig;
+  installationId: string;
+  projectId: string;
+  state: string;
+  userId: string | null;
+}): Promise<CompleteConnectResult> {
+  const gate = await gateConnectState({
+    ...input,
+    errorPrefix: "github_oauth",
+    provider: "github",
+  });
+  if (!gate.ok) return gate.result;
+  const { callbackUrl } = gate;
+
+  const github = requireGithubConfig(input.config);
+  if (!github.appId) {
+    return { callbackUrl, error: "github_app_not_configured", ok: false };
+  }
+
+  // App installation (D5), not OAuth-user: no code exchange, no user lookup. The
+  // installation id is the stable handle (it names the connection AND is the
+  // directory external id the webhook door routes on). It is public, so it
+  // lives in the refresh strategy config, not in material: the Secret DO's
+  // github-app-installation strategy mints the installation token on first use
+  // (and re-mints on 401) by signing an App JWT with the first-party App key
+  // resolved from deployment config — trusted DO code.
+  const connection = `install-${sanitizeConnectionName(input.installationId)}`;
+  await recordConnection({
+    connection,
+    projectId: input.projectId,
+    slug: "github",
+    secrets: [
+      {
+        egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
+        material: {},
+        path: githubConnectionSecretPath(connection),
+        refresh: {
+          kind: "github-app-installation",
+          apiBase: "https://api.github.com",
+          appId: github.appId,
+          installationId: input.installationId,
+          privateKey: { platform: "integrations.github" },
+        },
+      },
+    ],
+    connectedEvent: {
+      type: GITHUB_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection,
+        externalId: input.installationId,
+        installationId: input.installationId,
+        projectId: input.projectId,
+      },
+    },
+    directoryClaim: { externalId: input.installationId },
+  });
+
+  return { callbackUrl, ok: true };
+}
+
+async function completeGoogleConnect(input: {
   code: string;
   config: AppConfig;
   projectId: string;
   state: string;
   userId: string | null;
 }): Promise<CompleteConnectResult> {
-  const stateData = await verifyOAuthState(
-    { provider: "google", state: input.state },
-    itxEnv.SECRET_ENCRYPTION_KEY,
-  );
-  if (!stateData || stateData.projectId !== input.projectId) {
-    return { callbackUrl: null, error: "google_oauth_invalid_state", ok: false };
-  }
-  const callbackUrl = stateData.callbackUrl ?? null;
-  if (input.userId === null || stateData.userId !== input.userId) {
-    return { callbackUrl, error: "google_oauth_user_mismatch", ok: false };
-  }
+  const gate = await gateConnectState({
+    ...input,
+    errorPrefix: "google_oauth",
+    provider: "google",
+  });
+  if (!gate.ok) return gate.result;
+  const { callbackUrl, stateData } = gate;
   if (!stateData.codeVerifier) {
     return { callbackUrl, error: "google_oauth_missing_verifier", ok: false };
   }
 
   const google = requireGoogleConfig(input.config);
   const baseUrl = requestBaseUrl(input);
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+  const tokenResponse = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
     body: new URLSearchParams({
       client_id: google.oauthClientId,
       client_secret: google.oauthClientSecret.exposeSecret(),
@@ -331,31 +556,48 @@ export async function completeGoogleConnect(input: {
     return { callbackUrl, error: "google_userinfo_failed", ok: false };
   }
 
+  // The full email names the connection (domain included), so two accounts
+  // that share a local part — jonas@nustom.com vs jonas@gmail.com — get
+  // distinct connections instead of colliding on one journal; opaque Google
+  // ids are the fallback when the email is missing or sanitizes away.
+  const connection =
+    sanitizeConnectionName(userInfo.email ?? "") || `google-${sanitizeConnectionName(userInfo.id)}`;
   const scopes = tokenData.scope?.split(" ") ?? google.scopes;
-  await integrationStreamStub(input.projectId, GOOGLE_INTEGRATION_STREAM_PATH).append({
-    type: GOOGLE_CONNECTED_EVENT_TYPE,
-    payload: {
-      email: userInfo.email,
-      encryptedAccessToken: await encryptSecretMaterial(
-        tokenData.access_token,
-        itxEnv.SECRET_ENCRYPTION_KEY,
-      ),
-      ...(tokenData.refresh_token
-        ? {
-            encryptedRefreshToken: await encryptSecretMaterial(
-              tokenData.refresh_token,
-              itxEnv.SECRET_ENCRYPTION_KEY,
-            ),
-          }
-        : {}),
-      expiresAt: tokenData.expires_in
-        ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
-        : undefined,
-      googleUserId: userInfo.id,
-      name: userInfo.name,
-      picture: userInfo.picture,
-      projectId: input.projectId,
-      scopes,
+  // Tokens live in a connection secret (write-only), refreshed on 401 by the
+  // shared oauth-refresh-token strategy in the Secret DO's own trusted code,
+  // with the platform Google client credential resolved from deployment
+  // config. No tokens on the journal — the connected fact carries only
+  // display metadata.
+  await recordConnection({
+    connection,
+    projectId: input.projectId,
+    slug: "google",
+    secrets: [
+      {
+        egressUrls: GOOGLE_CONNECTION_EGRESS_URLS,
+        material: {
+          accessToken: tokenData.access_token,
+          ...(tokenData.refresh_token ? { refreshToken: tokenData.refresh_token } : {}),
+        },
+        path: googleConnectionSecretPath(connection),
+        refresh: {
+          kind: "oauth-refresh-token",
+          tokenEndpoint: GOOGLE_OAUTH_TOKEN_URL,
+          clientCreds: { platform: "integrations.google" },
+        },
+      },
+    ],
+    connectedEvent: {
+      type: GOOGLE_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection,
+        email: userInfo.email,
+        googleUserId: userInfo.id,
+        name: userInfo.name,
+        picture: userInfo.picture,
+        projectId: input.projectId,
+        scopes,
+      },
     },
   });
 
@@ -366,143 +608,261 @@ export async function completeGoogleConnect(input: {
 // Connection status + disconnect (the itx.integrations surface)
 // ---------------------------------------------------------------------------
 
-export async function getConnectionStatus(input: {
+/**
+ * The most recent lifecycle fact (connected/disconnected) of one connection
+ * journal, folded newest-first — the one status machine every provider shares.
+ * Reading the journal directly (not a processor snapshot) gives read-your-writes
+ * right after connect and skips the project-DO cold-start chain. Null when the
+ * journal holds no lifecycle fact (never connected).
+ */
+async function latestLifecycleFact(input: {
+  connectedType: string;
+  connection: string;
+  disconnectedType: string;
   projectId: string;
-  provider: IntegrationProvider;
-}): Promise<IntegrationConnectionStatus> {
-  if (input.provider === "google") {
-    const state = await readGoogleTokenState(input.projectId);
+  slug: string;
+}): Promise<{ connected: boolean; payload: Record<string, unknown> } | null> {
+  const path = integrationConnectionStreamPath(input.slug, input.connection);
+  for await (const event of streamEventsNewestFirst(input.projectId, path)) {
+    if (event.type !== input.connectedType && event.type !== input.disconnectedType) continue;
     return {
-      connected: state.connected,
-      displayName: state.email ?? state.name ?? null,
-      externalId: state.googleUserId ?? null,
-      metadata: {
-        email: state.email,
-        expiresAt: state.expiresAt,
-        name: state.name,
-        picture: state.picture,
-        refreshTokenStored: state.encryptedRefreshToken !== undefined,
-        scopes: state.scopes,
-      },
+      connected: event.type === input.connectedType,
+      payload: readRecord(event.payload) ?? {},
     };
   }
+  return null;
+}
 
-  // The slack router processor's reduced state is the connection projection.
-  const project = itxEnv.PROJECT.getByName(
-    DurableObjectNameCodec.stringify({
-      projectId: input.projectId,
-      path: SLACK_INTEGRATION_STREAM_PATH,
-    }),
-  );
-  const snapshot = await (await project.slackProcessor).snapshot();
-  const connection = snapshot.state.connection;
-  return {
-    connected: connection.status === "connected",
-    displayName: connection.teamName ?? null,
-    externalId: connection.externalId ?? null,
-    metadata: {
-      teamId: connection.teamId,
-      teamName: connection.teamName,
-    },
-  };
+/** The "never connected" status — also google's disconnected shape (its
+ * disconnected fact carries no metadata). */
+function notConnectedStatus(): IntegrationConnectionStatus {
+  return { connected: false, displayName: null, externalId: null, metadata: {} };
+}
+
+export async function getConnectionStatus(input: {
+  connection: string;
+  projectId: string;
+  provider: BuiltinIntegrationSlug;
+}): Promise<IntegrationConnectionStatus> {
+  switch (input.provider) {
+    case "slack": {
+      const fact = await latestLifecycleFact({
+        connectedType: SLACK_CONNECTED_EVENT_TYPE,
+        connection: input.connection,
+        disconnectedType: SLACK_DISCONNECTED_EVENT_TYPE,
+        projectId: input.projectId,
+        slug: "slack",
+      });
+      if (!fact) return notConnectedStatus();
+      return {
+        connected: fact.connected,
+        displayName: readString(fact.payload.teamName) ?? null,
+        externalId: readString(fact.payload.externalId) ?? null,
+        metadata: {
+          teamId: readString(fact.payload.teamId),
+          teamName: readString(fact.payload.teamName),
+        },
+      };
+    }
+    case "github": {
+      const fact = await latestLifecycleFact({
+        connectedType: GITHUB_CONNECTED_EVENT_TYPE,
+        connection: input.connection,
+        disconnectedType: GITHUB_DISCONNECTED_EVENT_TYPE,
+        projectId: input.projectId,
+        slug: "github",
+      });
+      if (!fact) return notConnectedStatus();
+      return {
+        connected: fact.connected,
+        displayName: readString(fact.payload.connection) ?? null,
+        externalId: readString(fact.payload.externalId) ?? null,
+        metadata: { installationId: readString(fact.payload.installationId) },
+      };
+    }
+    case "google": {
+      const fact = await latestLifecycleFact({
+        connectedType: GOOGLE_CONNECTED_EVENT_TYPE,
+        connection: input.connection,
+        disconnectedType: GOOGLE_DISCONNECTED_EVENT_TYPE,
+        projectId: input.projectId,
+        slug: "google",
+      });
+      if (!fact?.connected) return notConnectedStatus();
+      const email = readString(fact.payload.email);
+      const name = readString(fact.payload.name);
+      return {
+        connected: true,
+        displayName: email ?? name ?? null,
+        externalId: readString(fact.payload.googleUserId) ?? null,
+        metadata: {
+          email,
+          name,
+          picture: readString(fact.payload.picture),
+          scopes: Array.isArray(fact.payload.scopes)
+            ? fact.payload.scopes.filter((s): s is string => typeof s === "string")
+            : undefined,
+        },
+      };
+    }
+  }
 }
 
 export async function disconnectProvider(input: {
-  config: AppConfig;
+  connection: string;
   projectId: string;
-  provider: IntegrationProvider;
+  provider: BuiltinIntegrationSlug;
 }): Promise<{ success: true }> {
-  if (input.provider === "slack") {
-    const status = await getConnectionStatus(input);
-    // Revoke the token Slack-side (auth.revoke revokes the calling token, so
-    // the secret-substituted egress path works without reading material).
-    await callProjectSlackWebApi({
-      body: {},
-      method: "auth.revoke",
+  switch (input.provider) {
+    case "slack":
+      return await disconnectSlack(input);
+    case "github":
+      return await disconnectGithub(input);
+    case "google":
+      return await disconnectGoogle(input);
+  }
+}
+
+/**
+ * The provider-invariant storage half of a disconnect, mirroring
+ * {@link recordConnection}: secrets have no delete, so emptying the egress
+ * allowlist makes the stored material unusable; then the disconnected fact is
+ * appended and (optionally) the external id unclaimed in the deployment-wide
+ * directory. The unclaim names the connection: the fold only clears a claim
+ * when BOTH match, so disconnecting a stale connection of an external id that
+ * has since been re-claimed under a new name cannot tear down the live one.
+ */
+async function recordDisconnection(input: {
+  connection: string;
+  disconnectedEvent: { payload: Record<string, unknown>; type: string };
+  projectId: string;
+  secretPath: string;
+  slug: string;
+  unclaimExternalId?: string;
+}): Promise<void> {
+  await itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({ projectId: input.projectId, path: input.secretPath }),
+  )
+    .update({ egress: { urls: [] } })
+    .catch(() => null);
+  await integrationStreamStub(
+    input.projectId,
+    integrationConnectionStreamPath(input.slug, input.connection),
+  ).append(input.disconnectedEvent);
+  if (input.unclaimExternalId) {
+    await appendConnectionDirectoryEvent({
+      claimed: false,
+      connection: input.connection,
+      externalId: input.unclaimExternalId,
       projectId: input.projectId,
-    }).catch(() => null);
-    // Secrets have no delete; emptying the egress allowlist makes the stored
-    // material unusable.
-    await itxEnv.SECRET.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: input.projectId,
-        path: SLACK_BOT_TOKEN_SECRET_PATH,
-      }),
-    )
-      .update({ egress: { urls: [] } })
-      .catch(() => null);
-    await integrationStreamStub(input.projectId, SLACK_INTEGRATION_STREAM_PATH).append({
+      slug: input.slug,
+    });
+  }
+}
+
+async function disconnectSlack(input: {
+  connection: string;
+  projectId: string;
+}): Promise<{ success: true }> {
+  const status = await getConnectionStatus({ ...input, provider: "slack" });
+  // Revoke the token Slack-side (auth.revoke revokes the calling token, so
+  // the secret-substituted egress path works without reading material).
+  await callProjectSlackWebApi({
+    body: {},
+    connection: input.connection,
+    method: "auth.revoke",
+    projectId: input.projectId,
+  }).catch(() => null);
+  const teamId = status.metadata.teamId as string | undefined;
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
       type: SLACK_DISCONNECTED_EVENT_TYPE,
       payload: {
+        connection: input.connection,
         externalId: status.externalId ?? undefined,
         projectId: input.projectId,
-        teamId: (status.metadata.teamId as string | undefined) ?? undefined,
+        teamId,
         teamName: (status.metadata.teamName as string | undefined) ?? undefined,
       },
-    });
-    const teamId = status.metadata.teamId as string | undefined;
-    if (teamId) {
-      await integrationStreamStub(null, SLACK_TEAM_DIRECTORY_STREAM_PATH).append({
-        type: SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
-        payload: { projectId: input.projectId, teamId },
-      });
-    }
-    return { success: true };
-  }
-
-  const state = await readGoogleTokenState(input.projectId);
-  if (state.connected && state.encryptedAccessToken !== undefined) {
-    const token = await decryptSecretMaterial(
-      state.encryptedAccessToken,
-      itxEnv.SECRET_ENCRYPTION_KEY,
-    ).catch(() => null);
-    if (token !== null) {
-      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        method: "POST",
-      }).catch(() => null);
-    }
-  }
-  await integrationStreamStub(input.projectId, GOOGLE_INTEGRATION_STREAM_PATH).append({
-    type: GOOGLE_DISCONNECTED_EVENT_TYPE,
-    payload: { projectId: input.projectId },
+    },
+    projectId: input.projectId,
+    secretPath: slackBotTokenSecretPath(input.connection),
+    slug: "slack",
+    unclaimExternalId: teamId,
   });
   return { success: true };
 }
 
-// ---------------------------------------------------------------------------
-// Webhook routing (deployment-wide, admin/internal only)
-// ---------------------------------------------------------------------------
+async function disconnectGithub(input: {
+  connection: string;
+  projectId: string;
+}): Promise<{ success: true }> {
+  const status = await getConnectionStatus({ ...input, provider: "github" });
+  // No provider-side revocation: installation tokens are short-lived and
+  // uninstalling the App is a GitHub-side action. Emptying the egress
+  // allowlist makes the connection secret unusable (the secret's fetch/mint
+  // can no longer reach GitHub), and unclaiming the installation stops webhook
+  // routing — disconnect never reads material.
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
+      type: GITHUB_DISCONNECTED_EVENT_TYPE,
+      payload: { connection: input.connection, projectId: input.projectId },
+    },
+    projectId: input.projectId,
+    secretPath: githubConnectionSecretPath(input.connection),
+    slug: "github",
+    unclaimExternalId: status.externalId ?? undefined,
+  });
+  return { success: true };
+}
+
+async function disconnectGoogle(input: {
+  connection: string;
+  projectId: string;
+}): Promise<{ success: true }> {
+  // No provider-side revocation — it would need the raw token back, and tokens
+  // live write-only in the connection secret. Emptying the egress allowlist
+  // makes the stored tokens unusable (same as GitHub/Slack). No directory
+  // unclaim: google has no webhook ingress, so nothing was claimed.
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
+      type: GOOGLE_DISCONNECTED_EVENT_TYPE,
+      payload: { projectId: input.projectId },
+    },
+    projectId: input.projectId,
+    secretPath: googleConnectionSecretPath(input.connection),
+    slug: "google",
+  });
+  return { success: true };
+}
 
 /**
- * Routes one validly-signed Slack webhook body to the project that claimed its
- * team, by appending it to that project's `/integrations/slack` stream. The
- * unclaimed case reports `ignored` so the webhook route can ACK-and-drop —
- * see handleVerifiedSlackWebhook in integration-api.ts for why that MUST be a
- * 200.
+ * Lists the project's named integration connections by reading the project
+ * root processor's stream catalogue: every `/integrations/<slug>/<connection>`
+ * stream the project has created is one connection entry — the path shape is
+ * the truth, deliberately not filtered to built-in slugs, so a provided
+ * integration that journals its facts there (e.g. webhooks landing on
+ * /integrations/github/main) enumerates like everything else.
  */
-export async function routeSlackWebhook(input: {
-  headers: { slackEventId: string | null; slackRequestTimestamp: string | null };
-  payload: Record<string, unknown>;
-  teamId: string;
-}): Promise<RouteSlackWebhookResult> {
-  const events = await readAllStreamEvents(null, SLACK_TEAM_DIRECTORY_STREAM_PATH);
-  const projectId = foldSlackTeamDirectory(events).get(input.teamId);
-  if (projectId === undefined) return { ignored: "team-not-claimed", ok: true };
-
-  await integrationStreamStub(projectId, SLACK_INTEGRATION_STREAM_PATH).append({
-    type: SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
-    idempotencyKey:
-      typeof input.payload.event_id === "string"
-        ? `slack-webhook:${input.payload.event_id}`
-        : typeof input.payload.trigger_id === "string"
-          ? `slack-webhook:${input.payload.trigger_id}`
-          : `slack-webhook:${crypto.randomUUID()}`,
-    payload: {
-      headers: input.headers,
-      slackTeamId: input.teamId,
-      body: input.payload,
-    },
-  });
-  return { ok: true, projectId };
+export async function listIntegrationConnections(
+  projectId: string,
+): Promise<{ connection: string; integration: string; path: string }[]> {
+  const project = itxEnv.PROJECT.getByName(
+    DurableObjectNameCodec.stringify({ projectId, path: "/" }),
+  );
+  const snapshot = await (await project.processor).snapshot();
+  const entries: { connection: string; integration: string; path: string }[] = [];
+  for (const stream of snapshot.state.streams) {
+    const coordinates = integrationCoordinatesFromStreamPath(stream.path);
+    if (coordinates === null) continue;
+    entries.push({
+      connection: coordinates.connection,
+      integration: coordinates.slug,
+      path: stream.path,
+    });
+  }
+  return entries;
 }

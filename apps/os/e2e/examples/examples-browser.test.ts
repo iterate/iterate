@@ -14,7 +14,11 @@
 import { describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { ProjectRpcTarget, Session, UnauthenticatedOs } from "../../src/types.ts";
+import type {
+  Project as ProjectRpcTarget,
+  Session,
+  UnauthenticatedOs,
+} from "../../src/itx-api.generated.ts";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,

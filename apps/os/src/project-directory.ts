@@ -16,7 +16,7 @@
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import type { AppConfig } from "./config.ts";
 
-type ProjectDirectoryRecord = {
+export type ProjectDirectoryRecord = {
   id: string;
   slug: string;
   organizationId: string | null;
@@ -159,33 +159,4 @@ async function lookupAuthWorker(
   } catch {
     return { ok: false };
   }
-}
-
-/**
- * Custom-hostname resolution: `bla.com` set as a project's custom hostname
- * serves the project worker; `someapp.bla.com` serves it with that app
- * selected. Registrations live under `hostname:<host>` KV keys — written by
- * custom-hostname provisioning (tasks/os-project-archival.md; until it lands the lane is wired
- * but nothing populates it). No auth-worker fallback yet: the directory has
- * no byHostname endpoint (also tasks/os-project-archival.md).
- */
-export async function readProjectByHostname(
-  directory: KVNamespace,
-  host: string,
-): Promise<{ record: ProjectDirectoryRecord; appSlug: string | null } | null> {
-  const exact = await directory
-    .get<ProjectDirectoryRecord>(`hostname:${host}`, "json")
-    .catch(() => null);
-  if (exact) return { record: exact, appSlug: null };
-
-  const dotIndex = host.indexOf(".");
-  if (dotIndex <= 0) return null;
-  const appSlug = host.slice(0, dotIndex);
-  const parent = host.slice(dotIndex + 1);
-  const parentRecord = await directory
-    .get<ProjectDirectoryRecord>(`hostname:${parent}`, "json")
-    .catch(() => null);
-  if (parentRecord) return { record: parentRecord, appSlug };
-
-  return null;
 }

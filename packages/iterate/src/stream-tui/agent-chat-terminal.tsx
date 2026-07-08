@@ -247,11 +247,20 @@ function ChatHeader(props: { status: AgentConnectionStatus; notice: string; even
 }
 
 function FeedItem(props: { item: AgentUiItem }) {
-  if (props.item.kind === "activity") return <SettledActivity activity={props.item} />;
-  if (props.item.kind === "stream-woken") {
-    return <text fg={COLORS.textMuted}>✦ {props.item.text}</text>;
+  const item = props.item;
+  switch (item.kind) {
+    case "activity":
+      return <SettledActivity activity={item} />;
+    case "user":
+    case "assistant":
+      return <Message item={item} />;
+    case "child-stream-created":
+      return <text fg={COLORS.textMuted}>✦ child stream {item.childPath}</text>;
+    case "stream-woken":
+    case "stream-paused":
+    case "stream-resumed":
+      return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
   }
-  return <Message item={props.item} />;
 }
 
 function Message(props: { item: AgentUiMessageItem }) {

@@ -22,7 +22,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { readRecord, readString } from "./utils.ts";
+import { readRecord, readString, slackConnectionFromAgentPath } from "./utils.ts";
 import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
@@ -32,7 +32,7 @@ import {
 type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
 
 export class SlackAgentProcessor extends StreamProcessor<
-  typeof SlackAgentProcessorContract,
+  SlackAgentProcessorContract,
   {
     callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
     /** Downloads Slack-shared files into project file storage (see
@@ -50,7 +50,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<
-    StreamProcessor<typeof SlackAgentProcessorContract>["reduce"]
+    StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":
@@ -84,9 +84,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     blockProcessorWhile,
     event,
     state,
-  }: Parameters<
-    StreamProcessor<typeof SlackAgentProcessorContract>["processEvent"]
-  >[0]): undefined {
+  }: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":
         // Route context (channel/thread_ts/streamPath) is captured in reduce().
@@ -148,6 +146,8 @@ export class SlackAgentProcessor extends StreamProcessor<
           readStringField(slackEvent, "ts");
         const bangCommand = compileBangCommand({
           channel,
+          connection:
+            state.streamPath == null ? null : slackConnectionFromAgentPath(state.streamPath),
           message: readStringField(slackEvent, "text")?.trim(),
           threadTs,
         });
@@ -347,6 +347,9 @@ function readNestedMessageStringField(value: unknown, key: string): string | und
 
 export function compileBangCommand(input: {
   channel: string | undefined;
+  /** The Slack connection recovered from the agent stream path; the debug
+   * reply posts through it. */
+  connection: string | null | undefined;
   message: string | undefined;
   threadTs: string | undefined;
 }): { code: string } | null {
@@ -358,12 +361,12 @@ export function compileBangCommand(input: {
   if (!rawCommand) return null;
 
   if (rawCommand === "debug" || rawCommand === "debug()") {
-    if (input.channel == null || input.threadTs == null) return null;
+    if (input.channel == null || input.threadTs == null || input.connection == null) return null;
     return {
       code: [
         "async (itx) => {",
         "  const debug = await itx.debug();",
-        "  await itx.integrations.slack.chat.postMessage({",
+        `  await itx.integrations.slack[${JSON.stringify(input.connection)}].chat.postMessage({`,
         `    channel: ${JSON.stringify(input.channel)},`,
         `    thread_ts: ${JSON.stringify(input.threadTs)},`,
         "    text: `Debug info:\\n${debug}`,",

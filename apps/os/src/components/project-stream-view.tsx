@@ -4,6 +4,7 @@ import type {
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type { Stream } from "../itx-api.generated.ts";
 import {
   AGENT_UI_FEED_TABLE,
   AGENT_UI_SCHEMA_VERSION,
@@ -28,7 +29,6 @@ import {
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import type { Stream } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
@@ -73,6 +73,7 @@ export function ProjectStreamView({
   messageComposer,
   panel,
   projectId,
+  projectSlug,
   streamSource,
   streamPath,
 }: {
@@ -89,6 +90,7 @@ export function ProjectStreamView({
    */
   panel?: ReactNode;
   projectId: string | null;
+  projectSlug?: string;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -141,7 +143,9 @@ export function ProjectStreamView({
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
+  const agentPauseState = useStreamPauseState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
+  const [pauseMutationPending, setPauseMutationPending] = useState(false);
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
@@ -204,11 +208,37 @@ export function ProjectStreamView({
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
   const presence = agentUiState?.presence ?? [];
+  const agentPauseControl = streamPath.startsWith("/agents/")
+    ? {
+        paused: agentPauseState.paused,
+        reason: agentPauseState.reason,
+        pending: pauseMutationPending,
+        setPaused: async (paused: boolean) => {
+          if (pauseMutationPending) return;
+          setPauseMutationPending(true);
+          try {
+            const stream = await resolvedStreamSource(streamPath);
+            await stream.append({
+              type: paused
+                ? "events.iterate.com/stream/paused"
+                : "events.iterate.com/stream/resumed",
+              payload: {
+                reason: paused ? "Paused by operator from the agent UI." : "Resumed by operator.",
+              },
+            });
+            nudgeDeliveries();
+          } finally {
+            setPauseMutationPending(false);
+          }
+        },
+      }
+    : undefined;
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
       <StreamViewHeader
         agentBusy={agentBusy}
+        agentPause={agentPauseControl}
         metrics={metrics}
         presence={presence}
         streamPath={streamPath}
@@ -252,6 +282,7 @@ export function ProjectStreamView({
                 search={feedSearch}
                 emptyLabel={connectionLabel}
                 isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
+                projectSlug={projectSlug}
                 // The reduced-state row only exists once the processor has
                 // checkpointed; an already-subscribed empty stream is "nothing
                 // here yet", not "connecting".
@@ -389,4 +420,21 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
       return null;
     }
   }, [result.data]);
+}
+
+function useStreamPauseState(database: StreamBrowserDatabase): {
+  paused: boolean;
+  reason: string | null;
+} {
+  const result = useStreamQuery(
+    database,
+    `SELECT type, json_extract(raw_jsonb, '$.payload.reason') AS reason
+     FROM events
+     WHERE type IN ('events.iterate.com/stream/paused', 'events.iterate.com/stream/resumed')
+     ORDER BY offset DESC
+     LIMIT 1`,
+  );
+  const latest = result.data[0];
+  const reason = latest == null || typeof latest.reason !== "string" ? null : latest.reason;
+  return { paused: latest?.type === "events.iterate.com/stream/paused", reason };
 }

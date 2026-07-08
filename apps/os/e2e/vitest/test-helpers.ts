@@ -1,12 +1,12 @@
 import type { RpcStub } from "capnweb";
 import { connectItx, type ItxWebSocketMessage } from "../../src/itx-client.ts";
+import type { ItxAuthCredentials } from "../../src/auth.ts";
 import type {
   Agent,
-  ItxAuthCredentials,
-  ProjectRpcTarget,
+  Project as ProjectRpcTarget,
   Session,
   UnauthenticatedOs,
-} from "../../src/types.ts";
+} from "../../src/itx-api.generated.ts";
 
 export type { ItxWebSocketMessage };
 

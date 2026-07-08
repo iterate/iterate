@@ -11,7 +11,6 @@ export const BROWSER_EVENT_FEED_TABLE = "feed_items";
 /** Bumped into the writer-lock name so a feed_items schema change lets a fresh tab take over. */
 export const BROWSER_EVENT_FEED_SCHEMA_VERSION = 2;
 
-export type BrowserEventFeedContract = typeof BrowserEventFeedContract;
 export type BrowserEventFeedState = FeedState;
 
 /**

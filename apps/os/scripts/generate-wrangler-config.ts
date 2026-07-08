@@ -49,14 +49,19 @@ export const REQUIRED_SECRETS = [
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
+  // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
+  // entries) — collectSecrets ships only names listed here, so a key absent
+  // from this list never reaches a deployed worker even when Doppler has it.
+  "APP_CONFIG_INTEGRATIONS__EXA",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
+  "APP_CONFIG_INTEGRATIONS__PARALLEL",
+  // The first-party dummy-petshop client credentials (integration proofs);
+  // backs /secrets/platform/integrations/petshop. Optional — only preview/dev
+  // envs running the petshop e2e carry it.
+  "APP_CONFIG_INTEGRATIONS__PETSHOP",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
-  // Local dev must load the baked auth JWKS too; otherwise forge-minted
-  // browser sessions from `pnpm auth:mint --browser-url` fail with
-  // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
-  "APP_CONFIG_ITERATE_AUTH__JWKS",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
@@ -148,6 +153,7 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  WORKSPACE: "WorkspaceDurableObject",
 } as const;
 
 // Durable Object migration history. Deployed workers only apply tags NEWER
@@ -170,6 +176,7 @@ const DO_MIGRATIONS = [
     ],
   },
   { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
+  { tag: "v3", new_sqlite_classes: ["WorkspaceDurableObject"] },
 ];
 
 // Every bound class needs a migration entry (and nothing else does).
@@ -191,9 +198,8 @@ function workerBindings(input: {
   accountId: string;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Sandbox container instance cap. Preview slots get extra headroom: e2e
-   * churn spins sandboxes faster than they idle out, and a saturated cap
-   * 503s every sandbox exec (observed live at 10/10 on preview-3). */
+  /** Sandbox container instance cap. standard-1 reserves quota per slot, so
+   * preview headroom is bounded by the preview account's memory allocation. */
   maxContainerInstances?: number;
 }) {
   return {
@@ -323,53 +329,53 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, and the project-host patterns. The zone is the hostname minus
- * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
+ * catch-all routes. The zone is the hostname minus its first label for
+ * app/MCP/event-docs hosts; project bases are themselves zones.
  *
- * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
- * The catch-all `*base/*` should subsume the others, but the live preview
- * zone only reliably invoked the worker for project hosts once all three
- * existed (observed 2026-06) — kept verbatim; collapse only with an edge
- * experiment proving it.
+ * Project bases get three built-in project-host patterns: `base/*`,
+ * `*.base/*`, and `*base/*`.
+ * The `*base/*` pattern should subsume the first two, but the live preview zone
+ * only reliably invoked the worker for project hosts once all three existed
+ * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
+ * proving it.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
   const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
+  const cloudflareForSaasBases = new Set(env.cloudflareForSaasProjectHostnameBases);
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
     { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
-    ...env.projectHostnameBases.flatMap((base) => [
-      { pattern: `${base}/*`, zone_name: base },
-      { pattern: `*.${base}/*`, zone_name: base },
-      { pattern: `*${base}/*`, zone_name: base },
-    ]),
+    ...env.projectHostnameBases.flatMap((base) => {
+      const projectRoutes = [
+        { pattern: `${base}/*`, zone_name: base },
+        { pattern: `*.${base}/*`, zone_name: base },
+        { pattern: `*${base}/*`, zone_name: base },
+      ];
+      return cloudflareForSaasBases.has(base)
+        ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
+        : projectRoutes;
+    }),
   ];
 }
 
 function envBlock(env: DeployedEnv) {
+  const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // Sandbox containers are `lite` and bill on usage, not reservation, so a
-    // high cap is free headroom. Idle containers are destroyed (not just
-    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
-    // which releases their instance slot — but under sustained churn the
-    // platform backfills released slots into an "assigned" warm pool that
-    // rides at max_instances, and sandbox start latency grows as the pool
-    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
-    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
-    // `wrangler containers info` reached the cap;
-    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
-    // comfortably exceed a whole marathon's cumulative sandbox creations
-    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
-    // prd churns far less (real agent sandboxes, no fixture storms) and
-    // destroy-on-idle bounds its growth.
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
+    // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
+    // against account memory quota at deploy time. Preview slot 6 currently
+    // deploys at 31 and a jump to 150 is rejected by the shared preview account
+    // quota before e2e can run. Keep previews at the deployable cap until the
+    // account quota is raised; production has its own account and cap.
+    maxContainerInstances: isProduction ? 50 : 31,
   });
   return {
     name: env.osWorkerName,
@@ -390,16 +396,35 @@ function envBlock(env: DeployedEnv) {
  */
 function localDevBindings() {
   const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  const localAuthJwks = localDevAuthJwks();
   return {
     ...bindings,
     vars: {
       ...bindings.vars,
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev trusts forge-minted sessions by deriving the public key from
+      // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
+      // Doppler here: stale snapshots caused login verification failures.
+      ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
     },
   };
 }
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
+
+function localDevAuthJwks() {
+  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  if (!forgePrivateJwk) return undefined;
+
+  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
+    string,
+    unknown
+  > & { d?: string };
+  if (!publicJwk.kid || !publicJwk.kty) {
+    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
+  }
+  return JSON.stringify({ keys: [publicJwk] });
+}
 
 export const config = {
   $schema: "node_modules/wrangler/config-schema.json",

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import type { Stream, StreamEvent } from "../../types.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 import { StreamProcessor } from "./stream-processor.ts";
 
@@ -193,5 +194,128 @@ describe("StreamProcessor.onStateChange", () => {
 
     handle.unsubscribe(); // idempotent: a second call must not double-dispose
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Streams accept raw appends by design, so a committed event can carry a
+// consumed TYPE with a shape the contract rejects. These tests pin the
+// skip-and-record behavior: the fold advances past the event (no wedged
+// checkpoint) and the skip is recorded on the stream, idempotently.
+describe("StreamProcessor parse-failure skipping", () => {
+  function unparseableEvent(offset?: number): StreamEvent {
+    nextOffset = offset ?? nextOffset + 1;
+    return {
+      type: "events.iterate.com/test/incremented",
+      payload: { by: "not-a-number" },
+      createdAt: new Date(nextOffset).toISOString(),
+      offset: nextOffset,
+    };
+  }
+
+  function recordingStream() {
+    const appends: StreamEventInput[] = [];
+    const stream = {
+      append: (...events: StreamEventInput[]) => {
+        appends.push(...events);
+        return Promise.resolve(
+          events.map((event, index) => ({
+            ...event,
+            offset: 1_000 + appends.length + index,
+            createdAt: new Date(0).toISOString(),
+          })),
+        );
+      },
+    } as unknown as Stream;
+    return { appends, stream };
+  }
+
+  function recordingCounter() {
+    nextOffset = 0;
+    const { appends, stream } = recordingStream();
+    return { appends, processor: new CounterProcessor({ stream }) };
+  }
+
+  it("skips an unparseable consumed-type event and folds the rest of the batch", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { processor } = recordingCounter();
+      await processor.ingest({
+        events: [incrementedEvent(2), unparseableEvent(), incrementedEvent(3)],
+        streamMaxOffset: 3,
+      });
+      await expect(processor.snapshot()).resolves.toEqual({ offset: 3, state: { count: 5 } });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("advances the checkpoint past a batch containing only an unparseable event", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { processor } = recordingCounter();
+      await processor.ingest({ events: [unparseableEvent()], streamMaxOffset: 1 });
+      await expect(processor.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("records each skip on the stream with an offset-scoped idempotency key", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { appends, processor } = recordingCounter();
+      await processor.ingest({
+        events: [incrementedEvent(1), unparseableEvent()],
+        streamMaxOffset: 2,
+      });
+
+      // The record append is fire-and-forget background work.
+      await vi.waitFor(() => expect(appends).toHaveLength(1));
+      expect(appends[0]).toMatchObject({
+        type: "events.iterate.com/stream/error-occurred",
+        idempotencyKey: "processor-event-parse-failed:test-counter:2",
+      });
+      expect(consoleError).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("redelivery of an already-skipped event neither re-reduces nor re-records", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { appends, processor } = recordingCounter();
+      const batch = [incrementedEvent(2), unparseableEvent()];
+      await processor.ingest({ events: batch, streamMaxOffset: 2 });
+      await vi.waitFor(() => expect(appends).toHaveLength(1));
+
+      await processor.ingest({ events: batch, streamMaxOffset: 2 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      await expect(processor.snapshot()).resolves.toEqual({ offset: 2, state: { count: 2 } });
+      expect(appends).toHaveLength(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("a failing record append is logged, never rethrown into the batch", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      nextOffset = 0;
+      const processor = new CounterProcessor({
+        stream: {
+          append: () => Promise.reject(new Error("append transport down")),
+        } as unknown as Stream,
+      });
+
+      await processor.ingest({ events: [unparseableEvent()], streamMaxOffset: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The skip committed even though recording it failed.
+      await expect(processor.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

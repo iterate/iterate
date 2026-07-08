@@ -11,18 +11,17 @@ import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resourc
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
-// oxlint-disable-next-line iterate/no-capnweb-http-batch -- exec_js is a one-shot request-scoped call: a single pipelined batch (authenticate -> runScript) with no socket lifecycle to manage.
-import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
 import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
+import { trustedInternalAuthContext } from "~/auth.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { UnauthenticatedOs } from "~/types.ts";
+import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {
@@ -103,9 +102,7 @@ export async function handleInboundMcpRequest(input: {
     route: MCP_START_MOUNT_PATH,
     sessionIdGenerator: undefined,
   });
-  return withCorsHeaders(
-    await handler(input.request, input.env, mcpExecutionContext(input.context)),
-  );
+  return withCorsHeaders(await handler(input.request, input.env, input.context.executionCtx));
 }
 
 function createServer(input: {
@@ -141,6 +138,15 @@ function createServer(input: {
   // /agents/mcp/request-* stream instead of minting a stream per call.
   let sessionAgentPath: Promise<string> | undefined;
   const resolveSessionAgentPath = () => (sessionAgentPath ??= resolveMcpSessionAgentPath(input));
+  // In-process itx: resolveProject verified the caller's access (OAuth project
+  // grants / admin secret), so the tool then runs with first-party authority
+  // in this same worker — no loopback HTTP batch to our own /api.
+  const projectItxFor = (projectId: string) =>
+    new ProjectCollectionRpcTarget({
+      auth: trustedInternalAuthContext(),
+      config: input.context.config,
+      ctx: input.context.executionCtx,
+    }).get(projectId);
 
   server.registerTool(
     "exec_js",
@@ -153,20 +159,15 @@ function createServer(input: {
       const parsedInput = ExecJsInput.parse(rawInput);
       const project = await resolveProject(parsedInput.project);
 
-      // Access was verified above (OAuth project grants / admin secret), so the
-      // script runs through the itx admin lane over one pipelined
-      // HTTP batch. runScript executes the async arrow function in a fresh
-      // dynamic-worker isolate scoped to this MCP session's agent stream, so
-      // the session transcript at /agents/mcp/** records every execution.
+      // runScript executes the async arrow function in a fresh dynamic-worker
+      // isolate scoped to this MCP session's agent stream, so the session
+      // transcript at /agents/mcp/** records every execution.
       try {
         const agentPath = await resolveSessionAgentPath();
-        const session = engineBatchSession(input.context);
-        const root = session.authenticate({
-          type: "admin-secret",
-          secret: requireAdminSecret(input.context),
-        });
-        const sessionAgent = root.projects.get(project.id).agents.get(agentPath);
-        const execution = await sessionAgent.capabilityHost.runScript(parsedInput.code);
+        const projectItx = await projectItxFor(project.id);
+        const execution = await projectItx.agents
+          .get(agentPath)
+          .capabilityHost.runScript(parsedInput.code);
         return {
           content: [
             {
@@ -206,11 +207,7 @@ function createServer(input: {
       // model as one person running exec_js mid-conversation).
       let reply;
       try {
-        const root = engineBatchSession(input.context).authenticate({
-          type: "admin-secret",
-          secret: requireAdminSecret(input.context),
-        });
-        const projectItx = await root.projects.get(project.id);
+        const projectItx = await projectItxFor(project.id);
         await ensureMcpSessionAgentReady({ agentPath, projectItx });
         reply = await projectItx.agents.get(agentPath).ask({
           message: parsedInput.message,
@@ -427,21 +424,6 @@ async function resolveToolProject(
   return project;
 }
 
-function requireAdminSecret(context: RequestContext): string {
-  const secret = context.config.adminApiSecret?.exposeSecret();
-  if (!secret) throw new Error("Admin API secret is not configured.");
-  return secret;
-}
-
-function engineBatchSession(context: RequestContext) {
-  const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
-  if (!baseUrl) throw new Error("baseUrl is not configured");
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per exec_js call; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedOs>(
-    new Request(`${baseUrl}/api`, { method: "POST" }),
-  );
-}
-
 function requireScope(auth: McpAuth, scope: string) {
   if (auth.authType === "admin_api_secret") return;
   if (!auth.scopes.includes(scope)) {
@@ -491,15 +473,6 @@ function unauthorizedMcpResponse(
       "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}"`,
     },
   });
-}
-
-function mcpExecutionContext(context: RequestContext): ExecutionContext {
-  return {
-    exports: {} as Cloudflare.Exports,
-    passThroughOnException() {},
-    props: {},
-    waitUntil: (promise: Promise<unknown>) => context.waitUntil(promise),
-  } as ExecutionContext;
 }
 
 function withCorsHeaders(response: Response) {

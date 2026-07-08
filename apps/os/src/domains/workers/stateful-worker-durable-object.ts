@@ -1,8 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { StatefulDynamicWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
+import { isWorkerBuildInProgressError } from "./worker-loader.ts";
+import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
@@ -33,6 +35,37 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     scopePath: this.#name.path,
     waitUntil: (promise) => this.ctx.waitUntil(promise),
   });
+
+  /**
+   * The fetch-native lane into the hosted facet — how WebSocket upgrades (and
+   * streaming fetch generally) reach a stateful dynamic worker. A Durable
+   * Object fetch handler has no argument channel besides the request, so the
+   * ref rides in the internal dispatch header (set by
+   * DynamicWorkerRunner.fetch). The facet stub's own `fetch` tunnels the
+   * upgrade natively, which method replay through invokeCapability cannot.
+   */
+  async fetch(request: Request): Promise<Response> {
+    const taken = takeWorkerFetchDispatch(request);
+    if (taken === null) {
+      return new Response("stateful worker fetch requires the worker dispatch header", {
+        status: 400,
+      });
+    }
+    if (taken.dispatch.ref.type !== "stateful") {
+      throw new Error("StatefulWorkerDurableObject.fetch dispatched with a non-stateful ref.");
+    }
+    let facet: unknown;
+    try {
+      facet = await this.#facet(taken.dispatch.ref, taken.dispatch.buildBudgetMs);
+    } catch (error) {
+      // Answer the building case HERE rather than relying on the error name
+      // surviving the Durable Object fetch hop back to the dispatching
+      // entrypoint — same retryable building page every fetch-lane hop serves.
+      if (!isWorkerBuildInProgressError(error)) throw error;
+      return workerBuildingResponse();
+    }
+    return await (facet as Fetcher).fetch(taken.request);
+  }
 
   async invokeCapability({
     args = [],

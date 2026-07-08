@@ -11,13 +11,20 @@
 // message (see incident_agent_anchor_skips_first_input).
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../src/types.ts";
+import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
+import {
+  CONNECTION_CLAIMED_EVENT_TYPE,
+  INTEGRATION_DIRECTORY_STREAM_PATH,
+} from "../../src/domains/integrations/utils.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
-const SLACK_BOT_TOKEN_SECRET_PATH = "/secrets/integrations/slack/bot-token";
-const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-directory";
+const CONNECTION = "main-slack";
+const SLACK_BOT_TOKEN_SECRET_PATH = `/secrets/integrations/slack/${CONNECTION}/bot-token`;
+const SLACK_INTEGRATION_STREAM_PATH = `/integrations/slack/${CONNECTION}`;
 
 function slackSigningSecret(): string | null {
   const raw = process.env.APP_CONFIG_INTEGRATIONS__SLACK;
@@ -85,7 +92,7 @@ test.skipIf(signingSecret === null)(
     const teamId = `T0E2E${RUN_SUFFIX.toUpperCase()}`;
     const channel = "C0E2ESLACK";
     const threadTs = `${Math.floor(Date.now() / 1000)}.000100`;
-    const agentStreamPath = `/agents/slack/${channel.toLowerCase()}/ts-${threadTs.replace(".", "-")}`;
+    const agentStreamPath = `/agents/slack/${CONNECTION}/${channel.toLowerCase()}/ts-${threadTs.replace(".", "-")}`;
 
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -93,22 +100,44 @@ test.skipIf(signingSecret === null)(
     const { projectId } = await project.__describe();
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +
-    // global team directory claim (the storage the OAuth callback writes).
+    // connection stream (router subscription + connected fact) + global team
+    // directory claim (the storage the OAuth callback writes).
     using secret = project.secrets.get(SLACK_BOT_TOKEN_SECRET_PATH);
     await secret.update({
       egress: { urls: ["https://slack.com"] },
       material: `xoxb-e2e-fake-${RUN_SUFFIX}`,
     });
     await waitFor(
-      () => secret.describe(),
+      () => secret.__describe(),
       (description) => description.hasMaterial,
       () => "bot token secret material to fold",
     );
-    using directory = root.streams.get(SLACK_TEAM_DIRECTORY_STREAM_PATH);
+    using seededIntegrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
+    await seededIntegrationStream.append(
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId,
+          path: SLACK_INTEGRATION_STREAM_PATH,
+        }),
+        idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
+        processorSlug: "slack",
+        subscriberType: "project",
+      }),
+      {
+        type: "events.iterate.com/slack/connected",
+        payload: {
+          connection: CONNECTION,
+          externalId: teamId,
+          projectId,
+          teamId,
+          teamName: `e2e-${RUN_SUFFIX}`,
+        },
+      },
+    );
+    using directory = root.streams.get(INTEGRATION_DIRECTORY_STREAM_PATH);
     await directory.append({
-      type: "events.iterate.com/slack/team-claimed",
-      idempotencyKey: `slack-team-claimed:${teamId}:${projectId}`,
-      payload: { projectId, teamId, teamName: `e2e-${RUN_SUFFIX}` },
+      type: CONNECTION_CLAIMED_EVENT_TYPE,
+      payload: { connection: CONNECTION, externalId: teamId, projectId, slug: "slack" },
     });
 
     // --- An unclaimed team's validly-signed event must be ACKed 200 and
@@ -123,7 +152,10 @@ test.skipIf(signingSecret === null)(
       await signedSlackWebhookRequest(unclaimedBody, signingSecret!),
     );
     expect(unclaimedResponse.status).toBe(200);
-    expect(await unclaimedResponse.json()).toMatchObject({ ok: true, ignored: "team-not-claimed" });
+    expect(await unclaimedResponse.json()).toMatchObject({
+      ok: true,
+      ignored: "external-id-not-claimed",
+    });
 
     // --- A badly-signed request is the one deliberate non-2xx (trust boundary).
     const badSignature = await signedSlackWebhookRequest(unclaimedBody, "wrong-signing-secret");
@@ -147,9 +179,9 @@ test.skipIf(signingSecret === null)(
     expect(webhookResponse.status).toBe(200);
     expect(await webhookResponse.json()).toMatchObject({ ok: true });
 
-    // --- Router: the webhook lands on /integrations/slack and is forwarded to
-    // the routed agent stream with its thread route fact.
-    using integrationStream = project.streams.get("/integrations/slack");
+    // --- Router: the webhook lands on the connection's integration stream and
+    // is forwarded to the routed agent stream with its thread route fact.
+    using integrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
     await waitFor(
       () => integrationStream.getEvents({ afterOffset: 0 }),
       (events) =>
@@ -179,7 +211,7 @@ test.skipIf(signingSecret === null)(
     );
 
     // --- LLM reply: codemode script execution requested on the agent stream.
-    // The Slack prompt tells the model to reply via itx.integrations.slack.chat.postMessage.
+    // The Slack prompt tells the model to reply via its connection's postMessage.
     const withScript = await waitFor(
       () => agentStream.getEvents({ afterOffset: 0 }),
       (events) => hasEvent(events, "events.iterate.com/capability-host/script-execution-requested"),
@@ -198,7 +230,7 @@ test.skipIf(signingSecret === null)(
     // the bot token secret — its audit trail records the slack.com attempt.
     // We assert up to this outbound attempt; the fake token cannot go further.
     await waitFor(
-      () => secret.describe(),
+      () => secret.__describe(),
       (description) =>
         description.audit.usedCount >= 1 &&
         (description.audit.lastUsedUrl ?? "").startsWith("https://slack.com/api/"),

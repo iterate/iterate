@@ -4,7 +4,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import type { StreamEvent, StreamListItem } from "../../types.ts";
+import type { StreamEvent, StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -20,13 +20,18 @@ import {
 } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { agentSandboxPath } from "../sandboxes/utils.ts";
+import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
-import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
+import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -37,24 +42,51 @@ const PROJECT_REPO_ONBOARDING_MD = PROJECT_REPO_INITIAL_FILES.find(
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
  * router forwards raw thread webhooks to their stream, the `slack-agent`
- * processor transcribes them, and replies go out through the itx.integrations.slack Web
- * API capability instead of web chat.
+ * processor transcribes them, and replies go out through the named Slack
+ * connection's itx.integrations.slack[connection] Web API capability instead
+ * of web chat. The connection comes from the agent's path
+ * (`/agents/slack/{connection}/...`).
  */
-export const SLACK_AGENT_SYSTEM_PROMPT = [
-  "You are an iterate AI agent running inside a Slack thread.",
+export function slackAgentSystemPrompt(connection: string): string {
+  const postMessage = `itx.integrations.slack[${JSON.stringify(connection)}].chat.postMessage`;
+  return [
+    "You are an iterate AI agent running inside a Slack thread.",
+    "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+    "The code block must contain a single async arrow function: async (itx) => { ... }.",
+    "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
+    `To reply in the thread, use await ${postMessage}({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.`,
+    "FILES people share in the thread are downloaded into project file storage and attached to your inputs automatically: images are directly visible to you; other formats carry a hint line telling you how to read them: fetch bytes via itx.files.get(path).bytes(), then convert documents to markdown with const [converted] = await itx.ai.toMarkdown([{ name, blob: new Blob([bytes]) }]) — supports PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, and XML.",
+    `To SEND a file or image to the thread — including ones you generate with itx.ai.run (image models return base64 in response.image) — store it and post its signed url; Slack unfurls image urls into inline previews. NEVER paste base64 into message text: const stored = await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); await ${postMessage}({ channel, thread_ts, text: "Here you go! " + stored.files[0].url }); Stored images also stay visible to you on later turns, so you can iterate on what you made.`,
+    'If someone posts a URL to an image you need to look at, download it and attach it to your conversation so you can actually see it: const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); then return a short confirmation — the image is visible to you from your next turn.',
+    'If asked about email, Gmail, or an inbox: await itx.integrations.list() shows the project\'s connections; a connected Google connection gives Gmail access via await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Do not claim you lack inbox access before checking.',
+    'If asked about GitHub: itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION — enumerate repos with await itx.integrations.github["<conn>"].rest.apps.listReposAccessibleToInstallation({ per_page: 5 }) (repos are in data.repositories; user-scoped ...ForAuthenticatedUser endpoints answer 403), .rest.issues.create({ owner, repo, title }), the escape hatch .request("GET /repos/{owner}/{repo}/readme", { owner, repo, headers: { accept: "application/vnd.github.raw+json" } }), or .graphql(query, variables). There is NO generic .api.request({ method, path }) shape. Known-good snippets: itx.examples.get({ id: "github-list-repos" }) and "github-read-file".',
+    "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
+    `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.google["<connection>"].gmail.request(...)]) — so the thread is never silent while you fetch.`,
+    "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+    `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call ${postMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
+    "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  ].join("\n");
+}
+
+/**
+ * Agents under `/agents/email/**` are email-thread agents: the email router
+ * forwards inbound mail to their stream, the `email-agent` processor
+ * transcribes it, and replies go out through itx.email.reply — which derives
+ * the counterpart, subject, and threading headers from the thread stream.
+ */
+export const EMAIL_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent handling one email conversation.",
   "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
-  "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
-  "To reply in the thread, use await itx.integrations.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.",
-  "FILES people share in the thread are downloaded into project file storage and attached to your inputs automatically: images are directly visible to you; other formats carry a hint line telling you how to read them (fetch bytes via itx.files.get(path).bytes(), convert documents with itx.ai.toMarkdown).",
-  'To SEND a file or image to the thread — including ones you generate with itx.ai.run (image models return base64 in response.image) — store it and post its signed url; Slack unfurls image urls into inline previews. NEVER paste base64 into message text: const stored = await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); await itx.integrations.slack.chat.postMessage({ channel, thread_ts, text: "Here you go! " + stored.files[0].url }); Stored images also stay visible to you on later turns, so you can iterate on what you made.',
-  'If someone posts a URL to an image you need to look at, download it and attach it to your conversation so you can actually see it: const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); then return a short confirmation — the image is visible to you from your next turn.',
-  'If asked about email, Gmail, or an inbox, use the project Google integration: first check await itx.integrations.getConnection({ provider: "google" }), then call await itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). A connected Google account gives this Slack agent Gmail access through itx.integrations.gmail; do not claim you lack inbox access before checking it.',
-  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
-  'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.integrations.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.request(...)]) — so the thread is never silent while you fetch.',
+  "Inbound emails on this thread arrive as your inputs (from, subject, body, attachments).",
+  "To answer, use await itx.email.reply({ text }) (or { html }). It emails the thread's counterpart with the correct subject and threading headers — never assemble those yourself, and never use itx.chat.sendMessage or itx.email.send to answer this thread.",
+  "ATTACHMENTS people email you are stored in project file storage and attached to your inputs automatically: images (png/jpeg/webp/svg) are directly visible to you — just look at them. Documents are NOT directly readable; convert them to markdown first with Cloudflare's converter: const bytes = await itx.files.get(path).bytes(); const [converted] = await itx.ai.toMarkdown([{ name: filename, blob: new Blob([bytes]) }]); converted.data is the markdown. Supported formats: PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, XML, and images. The stored `path` for each attachment is in your input's file list.",
+  'To attach files when replying (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
+  "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
+  "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
-  'To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call itx.integrations.slack.chat.postMessage. itx.scheduler.list() / cancel(key) manage schedules.',
-  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
 /**
@@ -67,7 +99,7 @@ const MCP_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
-  "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage({ message }). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
+  "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage(message). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
 
 /**
@@ -92,11 +124,12 @@ const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
 export class ProjectProcessor extends StreamProcessor<
-  typeof ProjectProcessorContract,
+  ProjectProcessorContract,
   {
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
     itx: ProjectRpcTarget;
+    customDomains?: ProjectCustomDomainDeps;
   }
 > {
   readonly contract = ProjectProcessorContract;
@@ -104,7 +137,7 @@ export class ProjectProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<ProjectProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/project/create-requested":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
@@ -127,7 +160,7 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/stream/child-stream-created":
         return recordStream(state, event.payload.childPath, event.createdAt);
       default:
-        return state;
+        return reduceCustomDomainEvent({ event, state }) ?? state;
     }
   }
 
@@ -138,7 +171,7 @@ export class ProjectProcessor extends StreamProcessor<
     runInBackground,
     state,
     append,
-  }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
     if (previousState.created) {
       runInBackground(async () => {
         try {
@@ -158,12 +191,11 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // One atomic root append (itx subscription + repo kickoff, original
-          // relative order preserved) in parallel with the independent Slack
-          // stream append. The previous three sequential awaits were the
-          // slowest lane of the create saga (~1.2-2.6s measured on preview-7;
-          // tasks/os-cold-create-latency.md) — batching cuts it to one
-          // round-trip apiece.
+          // The root saga and the onboarding-agent birth run in parallel — each
+          // is one batched append, cutting the create round-trips (see
+          // tasks/os-cold-create-latency.md). The Slack webhook router is NOT
+          // armed here: connection streams (/integrations/slack/{connection})
+          // are born at connect time by recordSlackConnection.
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -185,20 +217,36 @@ export class ProjectProcessor extends StreamProcessor<
                 },
               ),
             ),
-            // Arm the Slack webhook router on `/integrations/slack` from birth,
-            // so a claimed workspace's first webhook routes even if the connect
-            // flow's own belt-and-braces subscription append raced.
-            timedStep("create-timing", timing, "slack-router-append", () =>
-              this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
+            // Arm the email thread router on `/integrations/email` from birth
+            // (Slack routers are per-connection and armed by the connect
+            // flow); the email ingress door repeats the subscription append
+            // (same idempotency key) for projects born before the router
+            // existed. The creator's email seeds the project sender allowlist
+            // so the owner can email their project from day one without any
+            // config.
+            timedStep("create-timing", timing, "email-router-append", () =>
+              this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
-                    path: SLACK_INTEGRATION_STREAM_PATH,
+                    path: EMAIL_INTEGRATION_STREAM_PATH,
                   }),
-                  idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
-                  processorSlug: SlackProcessorContract.slug,
+                  idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: EmailProcessorContract.slug,
                   subscriberType: "project",
                 }),
+                ...(event.payload.creatorEmail === undefined
+                  ? []
+                  : [
+                      {
+                        type: "events.iterate.com/email/sender-allowed" as const,
+                        idempotencyKey: `email-sender-allowed:${this.deps.itx.projectId}:${event.payload.creatorEmail.toLowerCase()}`,
+                        payload: {
+                          pattern: event.payload.creatorEmail,
+                          reason: "project-owner",
+                        },
+                      },
+                    ]),
               ),
             ),
             // The user can already be sitting on /agents/onboarding while repo
@@ -244,34 +292,23 @@ export class ProjectProcessor extends StreamProcessor<
           }
           if (childPath.startsWith("/agents/")) {
             // The agent path picks the prompt (agentSystemPromptForPath);
-            // Slack agents additionally get the slack-agent processor
+            // Slack/email agents additionally get their domain processor
             // subscription.
-            const isSlack = isSlackAgentPath(childPath);
+            // Slack-agent wiring requires the full thread shape — the
+            // connection segment is what replies authenticate with.
+            const isSlack = slackConnectionFromAgentPath(childPath) !== null;
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
               ...agentBirthCertificateEvents({
                 childPath,
+                email: isEmailAgentPath(childPath),
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
                 systemPrompt: agentSystemPromptForPath(childPath),
               }),
             );
-            // Every agent owns the sandbox at its own path under /sandboxes
-            // (`itx.sandbox` → agentSandboxPath). Awaiting the get mints the
-            // Durable Object and pins its identity durably — that IS creation;
-            // no container starts here (the first command boots it, idle puts
-            // it back to sleep), so agent birth stays cheap however many
-            // agents a project accumulates. Non-fatal on purpose:
-            // `itx.sandbox` re-ensures identity on every use, so this is eager
-            // minting only — and in container-less local dev the sandbox
-            // constructor throws, which must not wedge agent birth.
-            await this.deps.itx.sandboxes
-              .get(agentSandboxPath(childPath))
-              .catch((error: unknown) => {
-                console.error(`agent sandbox create failed for ${childPath}`, error);
-              });
             return;
           }
 
@@ -319,17 +356,33 @@ export class ProjectProcessor extends StreamProcessor<
       }
 
       default:
+        if (
+          processCustomDomainEvent({
+            append,
+            blockProcessorWhile,
+            customDomains: this.deps.customDomains,
+            event,
+            projectId: this.deps.itx.projectId,
+            state,
+          })
+        ) {
+          return;
+        }
         return;
     }
   }
 }
 
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
- * agents reply via itx.integrations.slack, inbound MCP session agents via their blocked
+ * agents reply via their connection's Slack Web API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string) {
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
-  if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
+  const slackConnection = slackConnectionFromAgentPath(agentPath);
+  if (slackConnection !== null) {
+    return slackAgentSystemPrompt(slackConnection);
+  }
+  if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
@@ -364,6 +417,7 @@ const DEFAULT_MODEL_BY_LLM_PROVIDER = {
 
 function agentBirthCertificateEvents(input: {
   childPath: string;
+  email?: boolean;
   llmProvider: AgentLlmProvider;
   projectId: string;
   slack?: boolean;
@@ -388,6 +442,7 @@ function agentBirthCertificateEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,
@@ -407,7 +462,9 @@ function agentBirthCertificateEvents(input: {
     // and replays with the stream. A durable itx-expression, not a live mount:
     // every `itx.sandbox.<method>(...)` re-evaluates
     // `itx.sandboxes.get(/sandboxes/cloudflare<agent path>)` against the agent's own itx
-    // at call time, so nothing here holds a connection or a container open.
+    // at call time. Agent birth itself does not call `sandboxes.get`, because
+    // that mints the container-backed Durable Object identity and creates
+    // Cloudflare container inventory rows even before a Linux container starts.
     {
       type: "events.iterate.com/capability-host/capability-provided" as const,
       idempotencyKey: `capability-host/sandbox-provided:${input.projectId}:${input.childPath}`,
@@ -420,6 +477,23 @@ function agentBirthCertificateEvents(input: {
           "Full Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, …). " +
           "The first command boots the container; it sleeps after idle. " +
           'The project repo is ALWAYS checked out at /workspace/repos/project, also the default working directory — a bare exec("ls") lists the project.',
+      },
+    },
+    // The agent's own workspace, mounted the same way as the sandbox: a
+    // durable itx-expression re-evaluated per call, so agent birth never
+    // touches the workspace Durable Object — the project-repo clone happens
+    // lazily on the first workspace call.
+    {
+      type: "events.iterate.com/capability-host/capability-provided" as const,
+      idempotencyKey: `capability-host/workspace-provided:${input.projectId}:${input.childPath}`,
+      payload: {
+        path: ["workspace"],
+        type: "itx-expression" as const,
+        expression: ["workspaces", ["get", agentWorkspacePath(input.childPath)]],
+        instructions:
+          `THIS agent's own workspace: a private checkout of the project repo at "${agentWorkspacePath(input.childPath)}" (your agent path under /workspaces), living in a Durable Object filesystem — no container, always warm. ` +
+          'The first call clones the project repo and every call waits for that clone. Read/write/edit freely (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root); nothing is shared until pushed. ' +
+          `workspace.git (add/commit/push) publishes to the project repo branch "${workspaceBranchName(agentWorkspacePath(input.childPath))}", never to main.`,
       },
     },
     // Per-agent boot context as a model-visible input (the system prompt is
@@ -435,11 +509,12 @@ function agentBirthCertificateEvents(input: {
           `- Your agent stream path: ${input.childPath} (your itx scope; your transcript lives here)`,
           '- The project repo is at repo path "/" — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus an itx.worker.slack.* Slack SDK surface), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time), sdk.ts (platform capability types), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
-          "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
+          "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           '- You have your own sandbox: `itx.sandbox` is a real Linux container that is yours alone (it lives at your agent path under /sandboxes and was mounted on your scope at birth). Call it dotted: `await itx.sandbox.exec("...")`. First command boots it (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project, which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project. The Codex CLI (`codex`, gpt-5.5/high) is preinstalled for real coding work. Expose a server publicly with a quick tunnel: `const { url } = await itx.sandbox.tunnels.get(<port>)` → an ephemeral `*.trycloudflare.com` url.',
+          '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than the sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use the sandbox when you need to RUN things.',
           "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
-          '- If Google is connected, Gmail is available at itx.integrations.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
+          '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
       },
@@ -477,6 +552,11 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {
+      // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
+      // method call whose Response comes back as a serialized copy — exactly
+      // enough for "the worker built, loaded, and answered". Protocol traffic
+      // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
+      // protocol needs (docs/dynamic-worker-dispatch.md).
       const response = await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
       // This probe only cares that the project worker accepted the request. The
       // returned Response can be a Cap'n Web RPC stub, and keeping that stub

@@ -48,6 +48,16 @@ export type ItxExample = {
   title: string;
 };
 
+/** One example without its code — what `itx.examples.list()` returns. */
+export type ItxExampleSummary = {
+  description: string;
+  id: string;
+  title: string;
+};
+
+/** One example with its full script body — what `itx.examples.get({ id })` returns. */
+export type ItxExampleWithCode = ItxExampleSummary & { code: string };
+
 const ALL_RUNTIMES: ItxExampleRuntime[] = [...ITX_EXAMPLE_RUNTIMES];
 
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
@@ -395,6 +405,79 @@ return {
 `.trim(),
   },
   {
+    id: "workspace-edit-and-push",
+    title: "Edit files in a workspace, then push its branch",
+    description:
+      'A workspace is a private checkout of the project repo in a durable virtual filesystem (no container, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other. The first call clones the project repo and every call waits for that clone. Changes stay private until pushed: git.push() publishes to the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// The path IS the identity: same path, same filesystem. An agent's own
+// workspace is itx.workspace — for the example we address one by path.
+const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+
+// Reads wait for the clone, so a successful read proves the checkout exists.
+// Paths are absolute; "/" is the repo root.
+const readme = await workspace.readFile("/README.md");
+
+// Write and edit freely — this is a working tree, not a commit-per-change.
+await workspace.writeFile("/notes/workspace-example.md", "status: draft\\n");
+const edited = await workspace.edit({
+  path: "/notes/workspace-example.md",
+  oldString: "status: draft",
+  newString: "status: reviewed",
+});
+
+// Ordinary git publishes to the workspace's own branch (never main).
+await workspace.git.add({ filepath: "." });
+const commit = await workspace.git.commit({ message: "Workspace example note" });
+const pushed = await workspace.git.push();
+
+return {
+  readmePresent: readme !== null,
+  edited,
+  commitOid: commit.oid,
+  pushedBranch: pushed.branch,
+};
+`.trim(),
+  },
+  {
+    id: "workspace-files-transfer",
+    title: "Move bytes between itx.files and a workspace",
+    description:
+      "itx.files (R2-backed project file storage: uploads, attachments, signed URLs) and workspaces (repo checkouts) compose through bytes: files.get(path).bytes() → workspace.writeFileBytes pulls a stored file into the checkout; workspace.readFileBytes → files.get(path).put({ data, contentType }) publishes a checkout file to storage (e.g. to mint a signed URL). Gotcha: files.put string data must be base64 — encode plain text with new TextEncoder().encode(text).",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+
+// files -> workspace: pull a stored file into the checkout. put() string data
+// must be base64, so encode plain text as bytes instead.
+await itx.files.get("/examples/transfer.txt").put({
+  data: new TextEncoder().encode(vars.note ?? "born in itx.files"),
+  contentType: "text/plain",
+});
+const stored = await itx.files.get("/examples/transfer.txt").bytes();
+await workspace.writeFileBytes("/imported/transfer.txt", stored);
+const inWorkspace = await workspace.readFile("/imported/transfer.txt");
+
+// workspace -> files: publish a checkout file (here the seeded package.json)
+// to project file storage and mint a shareable signed URL.
+const packageJsonBytes = await workspace.readFileBytes("/package.json");
+const published = await itx.files.get("/examples/package-from-workspace.json").put({
+  data: packageJsonBytes,
+  contentType: "application/json",
+});
+const url = await itx.files.get("/examples/package-from-workspace.json").url();
+
+return {
+  inWorkspace,
+  published,
+  urlHost: new URL(url).host,
+};
+`.trim(),
+  },
+  {
     id: "repo-commit-files",
     title: "Commit files into the project repo",
     description:
@@ -466,7 +549,13 @@ await repo.commitFiles({
   changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
 });
 
-const before = await repo.readFile({ path });
+// commitFiles is durable when it returns, but a freshly-created repo's first
+// reads can race its bootstrap; poll briefly rather than flake.
+let before = await repo.readFile({ path });
+for (let attempt = 0; attempt < 25 && before === null; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  before = await repo.readFile({ path });
+}
 if (before === null) throw new Error("Expected seeded file to exist.");
 
 const edit = await repo.edit({
@@ -476,7 +565,13 @@ const edit = await repo.edit({
   newString: afterText,
 });
 
-const after = await repo.readFile({ path });
+// The same bootstrap race can serve a pre-edit snapshot right after the
+// commit; poll until the read reflects the edit.
+let after = await repo.readFile({ path });
+for (let attempt = 0; attempt < 25 && (after === null || after.content === before.content); attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  after = await repo.readFile({ path });
+}
 if (after === null) throw new Error("Expected edited file to exist.");
 
 return {
@@ -491,7 +586,7 @@ return {
     id: "secrets-lifecycle",
     title: "Store a secret; describe() never shows the material",
     description:
-      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret({ path }) placeholders; substitution happens server-side.",
+      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret(path) placeholders; substitution happens server-side.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -505,10 +600,10 @@ await secret.update({
 });
 
 // The secret processor folds the update asynchronously — poll describe().
-let described = await secret.describe();
+let described = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  described = await secret.describe();
+  described = await secret.__describe();
 }
 
 // Metadata only: hasMaterial, the egress allowlist, and the usage audit.
@@ -520,7 +615,7 @@ return described;
     id: "secret-postman-echo",
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret({ path }) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -536,10 +631,10 @@ await secret.update({
 
 // update() is durable immediately, but the secret processor folds the stream
 // asynchronously. Wait until the request path can see the new material.
-let before = await secret.describe();
+let before = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  before = await secret.describe();
+  before = await secret.__describe();
 }
 
 const response = await itx.egress.fetch(
@@ -554,7 +649,7 @@ if (!response.ok) {
 }
 
 const body = await response.json();
-const after = await secret.describe();
+const after = await secret.__describe();
 const echoedSecret = body?.headers?.["x-itx-secret"];
 
 return {
@@ -770,6 +865,274 @@ const list = Array.isArray(models) ? models : [];
 return {
   count: list.length,
   sample: list.slice(0, 5).map((model) => model?.name ?? model),
+};
+`.trim(),
+  },
+  {
+    id: "github-list-repos",
+    title: "List repositories through the built-in GitHub integration",
+    description:
+      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+// The connection is a GitHub App installation: this endpoint (not the
+// user-scoped listForAuthenticatedUser, which 403s) enumerates its repos.
+const repos = await itx.integrations.github[github.connection].rest.apps.listReposAccessibleToInstallation({
+  per_page: Number(vars.count ?? 5),
+});
+
+return repos.data.repositories.map((repo) => ({ fullName: repo.full_name, updatedAt: repo.updated_at }));
+`.trim(),
+  },
+  {
+    id: "github-read-file",
+    title: "Read a file from a repo through the built-in GitHub integration",
+    description:
+      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const owner = vars.owner ?? "octocat";
+const repo = vars.repo ?? "hello-world";
+// README shortcut; use "GET /repos/{owner}/{repo}/contents/{path}" with a path param for any file.
+const readme = await itx.integrations.github[github.connection].request(
+  "GET /repos/{owner}/{repo}/readme",
+  { owner, repo, headers: { accept: "application/vnd.github.raw+json" } },
+);
+
+return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo };
+`.trim(),
+  },
+  {
+    id: "github-backed-repo",
+    title: "Back a project repo with a real GitHub repository",
+    description:
+      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const owner = vars.owner; // an org the GitHub App is installed on
+const repoName = vars.repo ?? "iterate-linked-repo-demo";
+if (!owner) return { error: "Pass vars.owner (the GitHub org)." };
+
+const repo = itx.repo; // or itx.repos.get("/repos/<path>") for a path-scoped repo
+const link = await repo.linkGithub({ connection: github.connection, owner, repo: repoName });
+// link.initialPush reports the seeding push; a commit now mirrors automatically:
+await repo.commitFiles({
+  message: "Hello from iterate",
+  changes: [{ path: "hello.md", content: "Mirrored to GitHub.\\n" }],
+});
+// Webhooks about the repository (pushes, PRs, issues) now land on the repo's
+// own stream as events.iterate.com/github/webhook-received — including the
+// echo of the mirror pushes themselves.
+const state = await repo.processor.snapshot();
+return { link, github: state.state.github, lastGithubPush: state.state.lastGithubPush };
+`.trim(),
+  },
+  {
+    id: "stream-cross-post-rule",
+    title: "Cross-post matching events between streams with a rule",
+    description:
+      'Streams have a built-in rule primitive: append events.iterate.com/stream/rule-configured with { ruleId, type: "cross-post", path, eventTypes, condition? } and every later matching event is copied to the target stream. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), rules never copy into a stream already on the chain (cycles are safe), and rule-removed deletes a rule.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const source = itx.streams.get(vars.source ?? "/examples/cross-post/source");
+const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
+
+await source.append({
+  type: "events.iterate.com/stream/rule-configured",
+  payload: {
+    ruleId: "copy-important",
+    type: "cross-post",
+    path: vars.target ?? "/examples/cross-post/target",
+    eventTypes: ["events.iterate.example/note"],
+    condition: 'payload.importance = "high"', // JSONata over the event; optional
+  },
+});
+
+await source.append(
+  { type: "events.iterate.example/note", payload: { importance: "low", text: "ignored" } },
+  { type: "events.iterate.example/note", payload: { importance: "high", text: "copied" } },
+);
+
+const copied = await target.waitForEvent({
+  eventTypes: ["events.iterate.example/note"],
+  afterOffset: 0,
+  timeoutMs: 10_000,
+});
+return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
+`.trim(),
+  },
+  {
+    id: "gmail-search-inbox",
+    title: "Search the inbox through the built-in Gmail integration",
+    description:
+      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const google = connections.find((entry) => entry.integration === "google");
+if (!google) return { error: "No Google connection — connect one from the dashboard integrations page." };
+
+const gmail = itx.integrations.google[google.connection].gmail;
+const inbox = await gmail.request({
+  path: "/users/me/messages",
+  query: { maxResults: 5, q: vars.q ?? "in:inbox is:unread" },
+});
+
+const messages = await Promise.all(
+  (inbox.data.messages ?? []).map((message) =>
+    gmail.request({
+      path: "/users/me/messages/" + message.id,
+      query: { format: "metadata", metadataHeaders: "Subject" },
+    }),
+  ),
+);
+
+return {
+  resultSizeEstimate: inbox.data.resultSizeEstimate,
+  subjects: messages.map((m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value),
+};
+`.trim(),
+  },
+  {
+    id: "slack-post-message",
+    title: "Post a message through the built-in Slack integration",
+    description:
+      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace, so run it interactively.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const slack = connections.find((entry) => entry.integration === "slack");
+if (!slack) return { error: "No Slack connection — connect one from the dashboard integrations page." };
+
+const client = itx.integrations.slack[slack.connection];
+// Find a channel to talk in; vars.channel (an id like C0123...) skips the lookup.
+const channels = await client.conversations.list({ exclude_archived: true, limit: 20, types: "public_channel" });
+const channel = vars.channel ?? channels.channels?.[0]?.id;
+if (!channel) return { error: "No channel found", channels };
+
+const posted = await client.chat.postMessage({ channel, text: vars.text ?? "Hello from itx!" });
+return { channel, ok: posted.ok, ts: posted.ts };
+`.trim(),
+  },
+  {
+    id: "github-mcp-connect",
+    title: "GitHub's MCP server as a provided integration",
+    description:
+      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.',
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const connection = vars.connection ?? "main";
+const tokenPath = \`/secrets/integrations/github-mcp/\${connection}/token\`;
+
+// 1. The PAT lives in a Secret DO with a GitHub-only egress allowlist.
+const secret = itx.secrets.get(tokenPath);
+await secret.update({
+  egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
+  material: vars.githubPat,
+});
+let described = await secret.__describe();
+for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  described = await secret.__describe();
+}
+
+// 2. One durable mount makes GitHub part of the integrations collection. The
+// itx-expression is a journaled recipe: replayed per call, revocable,
+// enumerated by itx.integrations.list(). Mount at the PROJECT ROOT:
+// itx.integrations.* resolves through the project capability table, so an
+// own-scope itx.provideCapability from an agent is unreachable there.
+const rootHost = await itx.capabilityHosts.get("/");
+await rootHost.provideCapability({
+  path: ["integrations", "github-mcp", connection],
+  type: "itx-expression",
+  instructions:
+    "GitHub via the official MCP server: create_issue({ owner, repo, title }), list_pull_requests, get_file_contents, search_code, ...",
+  expression: [
+    "mcp",
+    [
+      "connect",
+      {
+        url: "https://api.githubcopilot.com/mcp/",
+        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
+      },
+    ],
+  ],
+});
+
+// 3. Same address shape as a builtin — {slug}.{connection}.{method}.
+const me = await itx.integrations["github-mcp"][connection].get_me({});
+return { login: me?.login ?? me, listed: await itx.integrations.list() };
+`.trim(),
+  },
+  {
+    id: "github-webhooks-project-worker",
+    title: "GitHub webhooks land on the project's own host",
+    description:
+      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const connection = vars.connection ?? "main";
+const urlToken = vars.urlToken ?? crypto.randomUUID();
+const journalPath = \`/integrations/github/\${connection}\`;
+
+await itx.repo.commitFiles({
+  message: "Receive GitHub webhooks on the project host",
+  changes: [
+    {
+      path: "worker.ts",
+      content: \`
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export default class ProjectWorker extends WorkerEntrypoint {
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname === "/webhooks/github/\${urlToken}" && req.method === "POST") {
+      const project = await this.env.ITX.get();
+      await project.streams.get("\${journalPath}").append({
+        type: "events.iterate.com/github/webhook-received",
+        idempotencyKey: "github:" + (req.headers.get("x-github-delivery") ?? crypto.randomUUID()),
+        payload: {
+          delivery: req.headers.get("x-github-delivery"),
+          event: req.headers.get("x-github-event"),
+          body: await req.json(),
+        },
+      });
+      return Response.json({ ok: true });
+    }
+    return new Response("not found", { status: 404 });
+  }
+
+  processEvent() {}
+}
+\`,
+    },
+  ],
+});
+
+return {
+  webhookPathOnProjectHost: \`/webhooks/github/\${urlToken}\`,
+  journalPath,
+  note: "Set the GitHub webhook URL to the project host + that path; deliveries land on the journal, where itx.integrations.list() enumerates the connection.",
 };
 `.trim(),
   },

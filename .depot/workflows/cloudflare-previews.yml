@@ -25,6 +25,12 @@
 
 name: Cloudflare Previews (Depot CI)
 
+# Draft PRs don't claim a preview slot unless they ask — the `preview` label,
+# marking ready for review, or a manual dispatch (dispatch passes
+# --allow-draft below). The policy lives in scripts/preview/preview.ts
+# (decideDraftPreviewPolicy) where it's unit-tested; the trigger types beyond
+# open/reopen/synchronize/close just make sure the script runs whenever a
+# PR's draft or label state changes, so it can claim a slot or give one back.
 on:
   pull_request:
     types:
@@ -32,6 +38,10 @@ on:
       - reopened
       - synchronize
       - closed
+      - ready_for_review
+      - converted_to_draft
+      - labeled
+      - unlabeled
     paths:
       - .depot/workflows/cloudflare-previews.yml
       - packages/shared/**
@@ -63,7 +73,12 @@ concurrency:
 
 jobs:
   preview:
-    if: github.event.action != 'closed'
+    # Label events for anything but the preview opt-in label change nothing
+    # about the preview lifecycle — skip the checkout+install entirely.
+    if: |-
+      github.event.action != 'closed' &&
+        (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
+        (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
     # 8-core: the job is network-bound (waiting on deployed slots), not
     # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
@@ -99,9 +114,12 @@ jobs:
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
+          # A manual dispatch is an explicit ask for a preview, so it
+          # overrides the draft policy.
           doppler run --project _shared --config prd -- pnpm preview deploy \
             --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
+            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}
       - name: Preview / e2e
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -112,16 +130,17 @@ jobs:
           doppler run --project _shared --config prd -- pnpm preview test \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+      - name: Collect OS preview test artifacts
+        if: always()
+        run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload OS preview test artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: preview-os-test-artifacts
-          path: |-
-            test-results
-            apps/os/test-results
-            /tmp/os-e2e-*
+          path: test-results
+          include-hidden-files: true
           if-no-files-found: ignore
   cleanup:
     if: github.event.action == 'closed'

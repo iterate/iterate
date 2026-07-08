@@ -7,7 +7,8 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import type { Stream, StreamEvent } from "../../../../types.ts";
+import type { StreamEvent } from "../../schemas.ts";
+import type { Stream } from "../../../../itx-api.generated.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,

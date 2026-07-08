@@ -10,10 +10,10 @@
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
-import type { GetProcessorRuntimeState } from "../../types.ts";
 import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRef } from "../workers/schemas.ts";
+import type { GetProcessorRuntimeState } from "./rpc-types.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
@@ -36,7 +36,14 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 // - 7: core's empty state is expressed directly by this schema's optional and
 //      defaulted fields instead of a separate initial state object.
 // - 8: cross-post stream rules are reduced into core state.
-export const CORE_STATE_VERSION = 8;
+// - 9: stream circuit breaker token bucket added.
+export const CORE_STATE_VERSION = 9;
+
+// Restored from the old built-in circuit-breaker processor. These defaults are
+// intentionally high for normal browser/load tests; the breaker exists to stop
+// runaway producers, not to meter ordinary stream traffic.
+const DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY = 100_000;
+const DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE = 6_000_000;
 
 /**
  * Persisted configured subscriber target. The stream resolves these narrow
@@ -97,6 +104,27 @@ const RuleConfiguredPayload = z.object({
   projectId: z.string().trim().min(1).nullable().optional(),
   path: z.string().trim().min(1),
   eventTypes: z.array(z.string().trim().min(1)).min(1),
+  /**
+   * Optional JSONata expression evaluated against the committed event
+   * (`{ type, payload, metadata, source, offset, createdAt }`). The event is
+   * cross-posted only when the expression evaluates to exactly `true` — e.g.
+   * `payload.body.repository.full_name = "acme/widgets"` narrows a GitHub
+   * connection stream's webhook firehose to one repository. Parse errors are
+   * rejected at configure time; an expression that throws or returns non-true
+   * at match time skips the event and records a stream error.
+   */
+  condition: z.string().trim().min(1).optional(),
+});
+
+const CircuitBreakerConfig = z.object({
+  burstCapacity: z.number().int().positive(),
+  refillRatePerMinute: z.number().int().positive(),
+});
+
+const StreamConfiguredPayload = z.object({
+  config: z.object({
+    circuitBreaker: CircuitBreakerConfig.optional(),
+  }),
 });
 
 /** Durable desired-state record: the latest committed configuration event for one key. */
@@ -210,6 +238,25 @@ export const CoreProcessorContract = defineProcessorContract({
     childPaths: z.array(z.string().trim().min(1)).default([]),
     paused: z.boolean().default(false),
     pauseReason: z.string().nullable().default(null),
+    circuitBreaker: z
+      .object({
+        availableTokens: z.number().default(DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY),
+        lastRefillAtMs: z.number().int().nonnegative().nullable().default(null),
+        burstCapacity: z.number().int().positive().default(DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY),
+        refillRatePerMinute: z
+          .number()
+          .int()
+          .positive()
+          .default(DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE),
+        trippedAtOffset: z.number().int().positive().nullable().default(null),
+      })
+      .default({
+        availableTokens: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
+        lastRefillAtMs: null,
+        burstCapacity: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
+        refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
+        trippedAtOffset: null,
+      }),
     processorsBySlug: z
       .record(
         z.string(),
@@ -272,6 +319,10 @@ export const CoreProcessorContract = defineProcessorContract({
         metadata: z.record(z.string(), z.unknown()),
       }),
     },
+    "events.iterate.com/stream/configured": {
+      description: "Configures core stream runtime policy.",
+      payloadSchema: StreamConfiguredPayload,
+    },
     "events.iterate.com/stream/child-stream-created": {
       description: "Records the immediate child stream segment under this stream.",
       payloadSchema: z.object({
@@ -291,6 +342,12 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/rule-configured": {
       description: "Configures or replaces a local stream rule.",
       payloadSchema: RuleConfiguredPayload,
+    },
+    "events.iterate.com/stream/rule-removed": {
+      description: "Removes a previously configured local stream rule.",
+      payloadSchema: z.object({
+        ruleId: z.string().trim().min(1),
+      }),
     },
     "events.iterate.com/stream/subscriber-connected": {
       description:
@@ -340,11 +397,13 @@ export const CoreProcessorContract = defineProcessorContract({
     "*",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/configured",
     "events.iterate.com/stream/metadata-updated",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/stream/rule-configured",
+    "events.iterate.com/stream/rule-removed",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/stream/subscriber-disconnected",
     "events.iterate.com/stream/error-occurred",
@@ -357,5 +416,12 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/child-stream-created",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<CoreProcessorContract>`,
+ * `ConsumedEvent<CoreProcessorContract>`, `ProcessorEvent<CoreProcessorContract, T>`.
+ */
+export type CoreProcessorContract = typeof CoreProcessorContract;
 
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;

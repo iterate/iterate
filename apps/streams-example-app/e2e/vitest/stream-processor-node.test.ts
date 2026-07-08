@@ -16,7 +16,7 @@ import {
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "~/domains/streams/stream-processor.ts";
-import type { Stream } from "~/types.ts";
+import type { Stream } from "~/itx-api.generated.ts";
 
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 
