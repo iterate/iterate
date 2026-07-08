@@ -3,8 +3,10 @@ import type { DynamicWorkerRef } from "../../types.ts";
 import {
   isWebSocketUpgradeRequest,
   takeWorkerFetchDispatch,
+  WORKER_BUILDING_HEADER,
   WORKER_FETCH_DISPATCH_HEADER,
   withWorkerFetchDispatchHeader,
+  workerBuildingResponse,
 } from "./worker-fetch-dispatch.ts";
 
 const ref: DynamicWorkerRef = {
@@ -44,6 +46,14 @@ describe("worker fetch dispatch header", () => {
     expect(() =>
       takeWorkerFetchDispatch(new Request("https://snake.example.com/ws", { headers })),
     ).toThrow();
+  });
+
+  test("building response is a marked, retryable, self-refreshing 503", async () => {
+    const response = workerBuildingResponse();
+    expect(response.status).toBe(503);
+    expect(response.headers.get(WORKER_BUILDING_HEADER)).toBe("1");
+    expect(response.headers.get("retry-after")).not.toBeNull();
+    expect(await response.text()).toContain('http-equiv="refresh"');
   });
 
   test("upgrade detection is header-cased", () => {

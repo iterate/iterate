@@ -3,7 +3,10 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { itxForScope } from "../../rpc-targets.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
-import { takeWorkerFetchDispatch } from "../workers/worker-fetch-dispatch.ts";
+import {
+  takeWorkerFetchDispatch,
+  workerBuildingResponse,
+} from "../workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
 
@@ -25,17 +28,17 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   }
 
   /**
-   * Fetch-native dispatch into one of the project's dynamic workers —
-   * `env.ITX.fetch(request)` with the target ref in the
-   * `x-iterate-worker-dispatch` header (JSON `{ ref, buildBudgetMs? }`, same
-   * ref shape as `project.workers.get`).
+   * The fetch-native worker lane for userspace: `env.ITX.fetch(request)` with
+   * the target ref in the `x-iterate-worker-dispatch` header (JSON
+   * `{ ref, buildBudgetMs? }`, same ref shape as `project.workers.get`).
    *
-   * This exists because WebSocket upgrades cannot cross RPC method calls: a
-   * userspace router doing `app.fetch(req)` over `project.workers.get(ref)`
-   * gets a DataCloneError when the 101 response's socket serializes back. The
-   * binding itself is a loopback service stub, so ITS fetch handler is a real
-   * upgrade-capable hop; from here the runner stays on fetch-native channels
-   * (Durable Object stub fetch → facet fetch) all the way into the app.
+   * HTTP into a dynamic worker always goes through here — the seeded router
+   * dispatches every app request this way, not just WebSockets. The binding
+   * is a loopback service stub, so its fetch handler is a real fetch hop, and
+   * from here the runner stays on fetch-native channels (loader entrypoint
+   * fetch; Durable Object stub fetch → facet fetch) all the way into the app.
+   * That is what lets 101 upgrades and streaming bodies tunnel through —
+   * RPC method calls (`app.fetch(req)` on a worker stub) cannot carry them.
    *
    * The authority is the binding's own scope: the ref executes under this
    * scope's project, exactly like `project.workers.get(ref)` would.
@@ -65,12 +68,9 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       });
     } catch (error) {
       // Fetch responses can't carry a named error across the hop the way RPC
-      // does; a budget-expired cold build becomes a retryable 503 instead.
+      // does; a budget-expired cold build becomes the retryable building page.
       if (!isWorkerBuildInProgressError(error)) throw error;
-      return new Response("This worker is still building.", {
-        headers: { "retry-after": "2" },
-        status: 503,
-      });
+      return workerBuildingResponse();
     }
   }
 }

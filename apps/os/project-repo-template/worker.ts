@@ -7,8 +7,8 @@ import { slackConfig } from "./slack.config.ts";
 type ProjectWorkerEnv = {
   ITX: {
     get(): Promise<ProjectRpcTarget>;
-    /** Fetch-native dispatch into a dynamic worker — see the WebSocket
-     * branch in the router below for why and how. */
+    /** The fetch-native worker lane — how the router below dispatches every
+     * app request (the ref rides in the x-iterate-worker-dispatch header). */
     fetch(req: Request): Promise<Response>;
   };
 };
@@ -57,37 +57,19 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
       const ref = Object.hasOwn(APPS, appSlug) ? APPS[appSlug as keyof typeof APPS] : undefined;
       if (!ref) return new Response(`unknown app: ${appSlug}`, { status: 404 });
 
-      // WebSocket upgrades must NOT go through `app.fetch(req)` below: that is
-      // an RPC method call, and a 101 response carrying a socket cannot
-      // serialize back across it. The ITX binding itself is a real fetch hop,
-      // so upgrades dispatch through its fetch handler with the target ref in
-      // the x-iterate-worker-dispatch header (JSON { ref, buildBudgetMs? } —
-      // same ref shape as project.workers.get). A cold build answers 503; the
-      // client's reconnect retries into the finished build.
-      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-        const headers = new Headers(req.headers);
-        headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
-        return await this.env.ITX.fetch(new Request(req, { headers }));
-      }
-
-      const project = await this.env.ITX.get();
-      try {
-        // Workers RPC: await the capability before calling through it.
-        const app = await project.workers.get<{ fetch(req: Request): Promise<Response> }>(ref, {
-          buildBudgetMs: 15_000,
-        });
-        return await app.fetch(req);
-      } catch (error) {
-        // Each app is its own build (distinct include mask), so its first use
-        // after a commit can be a cold build. Past the budget the platform
-        // throws this named error (name survives Workers RPC) while the build
-        // finishes into the cache; refreshes then hit it.
-        if ((error as { name?: string } | null)?.name !== "WorkerBuildInProgressError") throw error;
-        return new Response(
-          `<!doctype html><html><body><main><p>Building ${appSlug}… this page refreshes automatically.</p></main></body></html>`,
-          { headers: { "content-type": "text/html; charset=utf-8", refresh: "3" }, status: 503 },
-        );
-      }
+      // Every app request — pages, APIs, streaming bodies, WebSocket upgrades
+      // — dispatches over the platform's fetch-native worker lane:
+      // `env.ITX.fetch` with the target ref in the x-iterate-worker-dispatch
+      // header (JSON { ref, buildBudgetMs? } — same ref shape as
+      // project.workers.get). Real fetch hops are what let a 101 upgrade
+      // tunnel through; an `app.fetch(req)` RPC method call cannot carry one.
+      // A cold build answers a 503 building page that refreshes itself
+      // (marked with x-iterate-worker-building — intercept it here to render
+      // your own). Method calls on apps still go through
+      // `project.workers.get(ref)` RPC dispatch; HTTP never does.
+      const headers = new Headers(req.headers);
+      headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
+      return await this.env.ITX.fetch(new Request(req, { headers }));
     }
 
     // The seeded homepage is a static page linking to the apps. Platform
