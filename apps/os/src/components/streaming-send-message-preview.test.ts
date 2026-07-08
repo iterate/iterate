@@ -1,29 +1,35 @@
 // The agent feed pre-parses a *streaming* code snippet: when the first real
 // statement is `itx.chat.sendMessage("...` (possibly still unclosed), the
 // partial string literal renders as a live chat-message preview —
-// `{ message, literalClosed }`, where `literalClosed` flips true once the
-// closing quote streams in (the feed hides the code block until then). These
-// tests simulate token-by-token growth by extracting over successive prefixes
-// of a full snippet — helpers at the bottom.
+// `{ message, literalClosed, redactedCode }`. `literalClosed` flips true once
+// the closing quote streams in; the feed hides the streaming code block while
+// a preview is showing until `redactedCode` goes non-null — which happens only
+// when a word character streams in after the close (real further code, not
+// just `");` + `}` ending the turn) — and then shows THAT: the snippet with
+// the message literal redacted to `itx.chat.sendMessage(...)`. These tests
+// simulate token-by-token growth by extracting over successive prefixes of a
+// full snippet — helpers at the bottom.
 
 import { expect, test } from "vitest";
 import { extractStreamingSendMessagePreview } from "./streaming-send-message-preview.ts";
 
 test("streams the leading sendMessage literal as it grows, character by character", () => {
   const snippet = 'await itx.chat.sendMessage("Hi there!")';
+  // The trailing `)` is mere punctuation, so redactedCode stays null
+  // throughout — this snippet never needs a code block at all.
   expect(distinctPreviews(snippet)).toEqual([
     null, // no preview until the opening quote has streamed
-    { message: "", literalClosed: false },
-    { message: "H", literalClosed: false },
-    { message: "Hi", literalClosed: false },
-    { message: "Hi ", literalClosed: false },
-    { message: "Hi t", literalClosed: false },
-    { message: "Hi th", literalClosed: false },
-    { message: "Hi the", literalClosed: false },
-    { message: "Hi ther", literalClosed: false },
-    { message: "Hi there", literalClosed: false },
-    { message: "Hi there!", literalClosed: false },
-    { message: "Hi there!", literalClosed: true }, // the closing quote flips literalClosed
+    { message: "", literalClosed: false, redactedCode: null },
+    { message: "H", literalClosed: false, redactedCode: null },
+    { message: "Hi", literalClosed: false, redactedCode: null },
+    { message: "Hi ", literalClosed: false, redactedCode: null },
+    { message: "Hi t", literalClosed: false, redactedCode: null },
+    { message: "Hi th", literalClosed: false, redactedCode: null },
+    { message: "Hi the", literalClosed: false, redactedCode: null },
+    { message: "Hi ther", literalClosed: false, redactedCode: null },
+    { message: "Hi there", literalClosed: false, redactedCode: null },
+    { message: "Hi there!", literalClosed: false, redactedCode: null },
+    { message: "Hi there!", literalClosed: true, redactedCode: null }, // closing quote flips literalClosed
   ]);
 });
 
@@ -39,12 +45,16 @@ test("full realistic snippet: fence + wrapper + Promise.all progress message", (
     "}",
     "```",
   ].join("\n");
-  expectPreviewOverEveryPrefix(snippet, "Checking your email now...");
+  expectPreviewOverEveryPrefix(snippet, "Checking your email now...", {
+    finalRedactedCode: snippet.replace('"Checking your email now..."', "..."),
+  });
 });
 
 test("bare await Promise.all([ without assignment", () => {
   const snippet = 'await Promise.all([itx.chat.sendMessage("Working on it"), slowThing()]);';
-  expectPreviewOverEveryPrefix(snippet, "Working on it");
+  expectPreviewOverEveryPrefix(snippet, "Working on it", {
+    finalRedactedCode: snippet.replace('"Working on it"', "..."),
+  });
 });
 
 test("wrapper opener and leading comments are stripped", () => {
@@ -56,46 +66,63 @@ test("wrapper opener and leading comments are stripped", () => {
     "  return itx.integrations.list();",
     "}",
   ].join("\n");
-  expectPreviewOverEveryPrefix(snippet, "On it!");
+  expectPreviewOverEveryPrefix(snippet, "On it!", {
+    finalRedactedCode: snippet.replace('"On it!"', "..."),
+  });
 });
 
 test("single-quoted and backtick literals work too", () => {
-  expectPreviewOverEveryPrefix("await itx.chat.sendMessage('Single quoted')", "Single quoted");
+  expectPreviewOverEveryPrefix("await itx.chat.sendMessage('Single quoted')", "Single quoted", {
+    finalRedactedCode: null,
+  });
   expectPreviewOverEveryPrefix(
     "await itx.chat.sendMessage(`Backtick message`)",
     "Backtick message",
+    { finalRedactedCode: null },
   );
 });
 
 test("second options argument keeps the preview", () => {
   const snippet = 'await itx.chat.sendMessage("hello", { whatever: 123 })';
-  expectPreviewOverEveryPrefix(snippet, "hello");
-  // Mid-stream, options still being generated — the literal itself is closed:
+  expectPreviewOverEveryPrefix(snippet, "hello", {
+    finalRedactedCode: snippet.replace('"hello"', "..."),
+  });
+  // Mid-stream, options still being generated — the literal itself is closed,
+  // and the options' word characters are enough to surface the code block:
   expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("hello", { wha')).toEqual({
     message: "hello",
     literalClosed: true,
+    redactedCode: "itx.chat.sendMessage(..., { wha",
   });
 });
 
 test("escaped quotes and standard escapes read clean", () => {
   const snippet = 'await itx.chat.sendMessage("He said \\"hi\\" — line one\\nline two \\\\ done")';
-  expectPreviewOverEveryPrefix(snippet, 'He said "hi" — line one\nline two \\ done');
+  expectPreviewOverEveryPrefix(snippet, 'He said "hi" — line one\nline two \\ done', {
+    finalRedactedCode: null,
+  });
 });
 
 test("a dangling backslash mid-stream holds the preview just before it", () => {
   expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("He said \\')).toEqual({
     message: "He said ",
     literalClosed: false,
+    redactedCode: null,
   });
 });
 
 test("unicode escapes decode when complete and hold while partial", () => {
-  expectPreviewOverEveryPrefix('itx.chat.sendMessage("cat: \\u{1F600}!")', "cat: 😀!");
+  expectPreviewOverEveryPrefix('itx.chat.sendMessage("cat: \\u{1F600}!")', "cat: 😀!", {
+    finalRedactedCode: null,
+  });
   expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("cat: \\u{1F6')).toEqual({
     message: "cat: ",
     literalClosed: false,
+    redactedCode: null,
   });
-  expectPreviewOverEveryPrefix('itx.chat.sendMessage("A\\u0042C")', "ABC");
+  expectPreviewOverEveryPrefix('itx.chat.sendMessage("A\\u0042C")', "ABC", {
+    finalRedactedCode: null,
+  });
 });
 
 test("backtick interpolation bails; a lone $ at end of input is held back", () => {
@@ -105,8 +132,11 @@ test("backtick interpolation bails; a lone $ at end of input is held back", () =
   expect(extractStreamingSendMessagePreview("itx.chat.sendMessage(`costs $")).toEqual({
     message: "costs ",
     literalClosed: false,
+    redactedCode: null,
   });
-  expectPreviewOverEveryPrefix("itx.chat.sendMessage(`costs $5`)", "costs $5");
+  expectPreviewOverEveryPrefix("itx.chat.sendMessage(`costs $5`)", "costs $5", {
+    finalRedactedCode: null,
+  });
 });
 
 test("a later token can invalidate an already-showing preview: appear, then vanish", () => {
@@ -115,20 +145,20 @@ test("a later token can invalidate an already-showing preview: appear, then vani
   // honestly disappears than previewing a message we can't know).
   expect(distinctPreviews('itx.chat.sendMessage("hi" + name)')).toEqual([
     null,
-    { message: "", literalClosed: false },
-    { message: "h", literalClosed: false },
-    { message: "hi", literalClosed: false },
+    { message: "", literalClosed: false, redactedCode: null },
+    { message: "h", literalClosed: false, redactedCode: null },
+    { message: "hi", literalClosed: false, redactedCode: null },
     // literal closed; trailing whitespace at end of input still looks well-formed
-    { message: "hi", literalClosed: true },
+    { message: "hi", literalClosed: true, redactedCode: null },
     null, // the `+` reveals the literal wasn't the whole message — bubble disappears
   ]);
   expect(distinctPreviews("itx.chat.sendMessage(`hi ${name}`)")).toEqual([
     null,
-    { message: "", literalClosed: false },
-    { message: "h", literalClosed: false },
-    { message: "hi", literalClosed: false },
+    { message: "", literalClosed: false, redactedCode: null },
+    { message: "h", literalClosed: false, redactedCode: null },
+    { message: "hi", literalClosed: false, redactedCode: null },
     // the lone `$` is held back — this stays "hi " until the next character decides
-    { message: "hi ", literalClosed: false },
+    { message: "hi ", literalClosed: false, redactedCode: null },
     null, // `${` streams in: interpolation, value unknowable — bubble disappears
   ]);
 });
@@ -173,23 +203,45 @@ test("unrecognized snippets bail", () => {
   expect(extractStreamingSendMessagePreview("/* thinking about")).toBe(null);
 });
 
-test("later statements never extend a closed preview", () => {
+test("later statements never extend a closed preview (but do surface the redacted block)", () => {
   const closed = 'async (itx) => {\n  await itx.chat.sendMessage("done!");\n';
-  const expected = { message: "done!", literalClosed: true };
-  expect(extractStreamingSendMessagePreview(closed)).toEqual(expected);
+  expect(extractStreamingSendMessagePreview(closed)).toEqual({
+    message: "done!",
+    literalClosed: true,
+    redactedCode: null, // `);` and a newline: punctuation only, block stays hidden
+  });
+  // A second statement streams in — real code, so the block appears with the
+  // FIRST literal redacted; only the leading message lives in the bubble.
   expect(
     extractStreamingSendMessagePreview(closed + '  await itx.chat.sendMessage("another");\n}'),
-  ).toEqual(expected);
+  ).toEqual({
+    message: "done!",
+    literalClosed: true,
+    redactedCode:
+      "async (itx) => {\n" +
+      "  await itx.chat.sendMessage(...);\n" +
+      '  await itx.chat.sendMessage("another");\n}',
+  });
+});
+
+test("code block stays hidden through trailing punctuation, fence and all", () => {
+  // The whole turn is just the one message: `");` then `}` then the closing
+  // fence stream in, and at no prefix does a code block appear — it would
+  // only have flashed in to render punctuation.
+  const snippet = '```js\nasync (itx) => {\n  await itx.chat.sendMessage("All done!");\n}\n```';
+  expectPreviewOverEveryPrefix(snippet, "All done!", { finalRedactedCode: null });
 });
 
 test("empty message previews as empty string once the quote opens", () => {
   expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("')).toEqual({
     message: "",
     literalClosed: false,
+    redactedCode: null,
   });
   expect(extractStreamingSendMessagePreview('itx.chat.sendMessage("")')).toEqual({
     message: "",
     literalClosed: true,
+    redactedCode: null,
   });
 });
 
@@ -202,11 +254,20 @@ test("empty message previews as empty string once the quote opens", () => {
  * preview must be null or a leading slice of the final message, must never
  * revert to null once it appears (these are all well-formed snippets), and
  * once the literal closes it must stay closed at exactly the final message.
- * The full snippet must yield the final message, closed.
+ * `redactedCode` must stay null until after the close, then — once it appears
+ * (a word character streamed in after the close) — grow monotonically without
+ * ever hiding again. The full snippet must yield the final message, closed,
+ * with `finalRedactedCode` (null when the snippet is nothing but the message
+ * call and trailing punctuation — such a snippet never shows a code block).
  */
-function expectPreviewOverEveryPrefix(snippet: string, finalMessage: string) {
+function expectPreviewOverEveryPrefix(
+  snippet: string,
+  finalMessage: string,
+  { finalRedactedCode }: { finalRedactedCode: string | null },
+) {
   let seenPreview = false;
   let seenClosed = false;
+  let lastRedactedCode: string | null = null;
   for (let length = 0; length <= snippet.length; length++) {
     const prefix = snippet.slice(0, length);
     const preview = extractStreamingSendMessagePreview(prefix);
@@ -223,16 +284,28 @@ function expectPreviewOverEveryPrefix(snippet: string, finalMessage: string) {
       });
       seenClosed = true;
     }
+    if (preview.redactedCode === null) {
+      // The code block never hides again once it has appeared.
+      expect({ prefix, lastRedactedCode }).toMatchObject({ lastRedactedCode: null });
+    } else {
+      const growsMonotonically = preview.redactedCode.startsWith(lastRedactedCode || "");
+      expect({ prefix, preview, growsMonotonically }).toMatchObject({
+        preview: { literalClosed: true }, // block only ever surfaces after the close
+        growsMonotonically: true,
+      });
+      lastRedactedCode = preview.redactedCode;
+    }
   }
   expect(extractStreamingSendMessagePreview(snippet)).toEqual({
     message: finalMessage,
     literalClosed: true,
+    redactedCode: finalRedactedCode,
   });
 }
 
 /** The ordered distinct previews seen while streaming the snippet character by character. */
 function distinctPreviews(snippet: string) {
-  const seen: ({ message: string; literalClosed: boolean } | null)[] = [];
+  const seen: ReturnType<typeof extractStreamingSendMessagePreview>[] = [];
   for (let length = 0; length <= snippet.length; length++) {
     const preview = extractStreamingSendMessagePreview(snippet.slice(0, length));
     if (seen.length === 0 || JSON.stringify(seen.at(-1)) !== JSON.stringify(preview)) {

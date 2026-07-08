@@ -10,14 +10,17 @@ base: itx-chat-send-message-string
 ## Status summary
 
 Done. The pure parser (`extractStreamingSendMessagePreview`) is
-implemented with 16 hard unit tests (token-by-token prefix simulation), and
+implemented with 17 hard unit tests (token-by-token prefix simulation), and
 wired into `LiveStepStream` in `agent-feed.tsx` — the preview renders as an
-in-flight assistant message bubble; while the message literal is still
-streaming the bubble renders ALONE (the code block is suppressed so the same
-words don't show twice), and the code block joins below it once the literal
-closes. A demo recording of a real streaming turn is in the PR body. PR 2 of
-2, stacked on `itx-chat-send-message-string` (#1735) — depends on the
-plain-string `itx.chat.sendMessage("...")` form landing first.
+in-flight assistant message bubble, and the streaming code block is
+show-only-when-needed: hidden while the message literal streams (the same
+words would show twice), held back through trailing punctuation after the
+close (`");` + `}` would flash it in just to end the turn), and shown — with
+the leading call redacted to `itx.chat.sendMessage(...)` — only once a word
+character streams in after the close. The settled "Ran code" view shows the
+unmodified script. A demo recording of a real streaming turn is in the PR
+body. PR 2 of 2, stacked on `itx-chat-send-message-string` (#1735) — depends
+on the plain-string `itx.chat.sendMessage("...")` form landing first.
 
 ## Ask (verbatim-ish)
 
@@ -91,14 +94,22 @@ simple. It must be visually honest that it's in-progress.
       (mid-stream truncation cases, escapes, Promise.all, template literals,
       comments, non-first-statement bails, object-form `{ message:` bails)
       _`apps/os/src/components/streaming-send-message-preview.ts` + `.test.ts`
-      (15 tests; `expectPreviewOverEveryPrefix` simulates token-by-token
+      (17 tests; `expectPreviewOverEveryPrefix` simulates token-by-token
       growth over every prefix; second-options-arg cases included)_
 - [x] Wire into the live step rendering in `agent-feed.tsx` (preview styled as
       an in-flight agent chat message with streaming affordance)
       _`LiveStepStream` derives the preview from `step.responseText` via
       `useMemo`; `StreamingSendMessagePreview` renders a
-      `Message from="assistant"` bubble with the shared `StreamingCursor`,
-      above the still-visible `StreamingCodeBlock`_
+      `Message from="assistant"` bubble with the shared `StreamingCursor`_
+- [x] Show the code block only when "needed" (Misha's review comment): hide it
+      while the message literal streams, buffer through trailing punctuation
+      after the close, then show it with the message redacted to
+      `itx.chat.sendMessage(...)`
+      _parser now returns `{ message, literalClosed, redactedCode }`;
+      `redactedCode` goes non-null only once a `\w` character streams in
+      after the closing quote, and IS the display code (literal spliced out);
+      `LiveStepStream` renders `StreamingCodeBlock` from it — settled "Ran
+      code" rows are untouched_
 - [x] Real `web-message-sent` event cleanly supersedes the preview (no
       double-render moment worth worrying about; verify visually)
       _by construction: the preview only renders for the live *streaming* LLM
@@ -160,27 +171,40 @@ simple. It must be visually honest that it's in-progress.
      streamdown owns the markdown DOM).
 - Follow-up (Misha, top-level PR comment): only show the code block when we
   "need" to — seeing the message twice (bubble + the same words inside the
-  streaming code block) was confusing. The parser now returns
-  `{ message, literalClosed } | null`; while the preview is active and the
-  literal hasn't closed, `LiveStepStream` renders ONLY the bubble and
-  suppresses `StreamingCodeBlock`. The moment the closing quote streams in,
-  the code block appears below the bubble (there's now code beyond what the
-  bubble shows) and everything proceeds as before. Edge cases decided:
+  streaming code block) was confusing, and the block shouldn't flash in just
+  to render `");` + `}` before the turn ends. The parser now returns
+  `{ message, literalClosed, redactedCode } | null`:
+  1. while the literal is still streaming, `LiveStepStream` renders ONLY the
+     bubble and suppresses `StreamingCodeBlock`;
+  2. after the closing quote, the block stays hidden through trailing
+     punctuation/whitespace (`");`, newlines, `}`, the closing fence) and
+     only appears once a `\w` character streams in after the close — real
+     further code is coming (`redactedCode` non-null is exactly that signal);
+  3. when it appears, the block renders `redactedCode` — the partial snippet
+     with the message literal spliced out to `...`, reading
+     `itx.chat.sendMessage(...)` — the message text lives only in the bubble.
+     Display-only for the live stream; the settled "Ran code" expandable
+     shows the unmodified js.
+     Edge cases decided:
   - Preview bails-to-null mid-stream (`"hi" + name`, `` `hi ${` ``): the
-    preview-branch condition goes false the same render, so the code block
-    (or, for bare non-`looksLikeCode` forms, the pre-existing prose fallback)
-    appears immediately — never a blank step.
+    preview-branch condition goes false the same render, so the plain code
+    block (or, for bare non-`looksLikeCode` forms, the pre-existing prose
+    fallback) appears immediately — never a blank step.
   - Bare `itx.chat.sendMessage("...` forms where `looksLikeCode()` is false:
-    preview-only while streaming is correct anyway; once the literal closes,
-    the `looksLikeCode(...) || preview != null` gate still routes to the code
-    branch, and `literalClosed: true` un-suppresses the block — so the code
-    appears even though the heuristic alone would have called it prose.
-  - A closed-at-end-of-input literal (`sendMessage("hi"` with nothing after)
-    already shows the code block — "closed" is the signal, not "more code
-    after the call"; simpler and only a few characters early.
-    Tests updated for the new shape (every-prefix helper now also asserts
-    closed-stays-closed at exactly the final message; `distinctPreviews`
-    captures the `false → true` flip and the vanish sequences).
+    preview-only while streaming is correct anyway; once further code
+    streams after the close, the `looksLikeCode(...) || preview != null`
+    gate still routes to the code branch and the redacted block appears —
+    even though the heuristic alone would have called it prose.
+  - An options second argument (`sendMessage("hello", { wha…`) counts as
+    further code (word characters), so the block shows as
+    `itx.chat.sendMessage(..., { wha` while the options stream — only the
+    message literal is redacted, and only the FIRST one (a later
+    `sendMessage("another")` in the snippet keeps its literal).
+    Tests updated for the new shape (every-prefix helper now takes the
+    expected `finalRedactedCode` and asserts the block only surfaces after
+    the close, grows monotonically, and never hides again; `distinctPreviews`
+    captures the `false → true` flip and the vanish sequences; new
+    fence-to-fence test pins that a message-only turn never shows a block).
 - Demo recording (post-review): ran the OS dev server locally, drove a real
   agent turn in the browser ("how many lines does AGENTS.md have? message me
   first…"), and verified the feature end-to-end visually — the preview bubble

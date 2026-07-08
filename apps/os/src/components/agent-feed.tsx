@@ -994,20 +994,28 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
           forms looksLikeCode misses (bare `itx.chat.sendMessage("...`,
           `void itx...`, bare `Promise.all([`) — those must render in the
           code branch with the preview, not fall into the prose branch.
-          While the message literal is still streaming (not yet closed) the
-          bubble is the whole story, so the code block is suppressed — showing
-          both would render the same words twice. The block appears the moment
-          the literal closes (there's now code beyond what the bubble shows,
-          even when looksLikeCode is false) or the preview bails-to-null mid-
-          stream (`"hi" + name`) — the text is code and needs a home. */}
+          While a preview is showing, the code block only renders when we
+          NEED it: not while the message literal is still streaming (the
+          bubble is the whole story — showing both would render the same
+          words twice), and not for mere trailing punctuation after the close
+          (`");` + `}` would flash the block in just to end the turn). Only
+          once a word character streams in after the close — real further
+          code — does the block appear, and then with the leading sendMessage
+          call redacted to `itx.chat.sendMessage(...)` (that's exactly when
+          redactedCode is non-null). The message text lives only in the
+          bubble; the settled "Ran code" view shows the unmodified script.
+          If the preview bails-to-null mid-stream (`"hi" + name`), the plain
+          block takes over — the text is code and needs a home. */}
       {step.responseText === "" ? null : looksLikeCode(step.responseText) ||
         sendMessagePreview != null ? (
         <>
           {sendMessagePreview == null ? null : (
             <StreamingSendMessagePreview text={sendMessagePreview.message} />
           )}
-          {sendMessagePreview != null && !sendMessagePreview.literalClosed ? null : (
+          {sendMessagePreview == null ? (
             <StreamingCodeBlock code={step.responseText} />
+          ) : sendMessagePreview.redactedCode == null ? null : (
+            <StreamingCodeBlock code={sendMessagePreview.redactedCode} />
           )}
         </>
       ) : (
@@ -1025,8 +1033,9 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
  * rendered like a settled agent chat message while the script is still being
  * generated. Honest fakery: the message hasn't been sent — the blinking
  * cursor marks it as in-flight. While the literal is still streaming this
- * bubble renders alone; the streaming code block joins below it once the
- * literal closes. The text goes through the same MessageResponse markdown path as
+ * bubble renders alone; the streaming code block (with this message redacted
+ * to `itx.chat.sendMessage(...)`) joins below it only once real further code
+ * streams in. The text goes through the same MessageResponse markdown path as
  * the settled web-message-sent row it hands off to (here in streaming mode,
  * i.e. the default parseIncompleteMarkdown the settled row opts out of), so
  * a markdown-y message previews with its final typography. Streamdown owns

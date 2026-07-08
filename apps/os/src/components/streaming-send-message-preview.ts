@@ -26,13 +26,19 @@
  *
  * `literalClosed` reports whether the closing quote has streamed in yet.
  * While it's false the preview bubble IS the whole story — the feed hides
- * the streaming code block so the message doesn't show twice. Once the
- * literal closes (and the message can no longer grow), the code block
- * reappears below the bubble for whatever streams next.
+ * the streaming code block so the message doesn't show twice. Even after the
+ * close the block stays hidden through trailing punctuation and whitespace
+ * (`");`, newlines, `}`, the closing fence) — otherwise it would flash in
+ * just to render a semicolon and a brace before the turn ends. `redactedCode`
+ * flips non-null once a word character (`\w`) streams in after the close,
+ * i.e. real further code is coming: it's the partial snippet with the message
+ * literal replaced by `...` — reading `itx.chat.sendMessage(...)` — since the
+ * message text already lives in the bubble. Display-only fakery for the live
+ * stream; the settled "Ran code" view shows the unmodified script.
  */
 export function extractStreamingSendMessagePreview(
   partialCode: string,
-): { message: string; literalClosed: boolean } | null {
+): { message: string; literalClosed: boolean; redactedCode: string | null } | null {
   const text = partialCode;
   let i = skipWhitespace(text, 0);
 
@@ -70,7 +76,17 @@ export function extractStreamingSendMessagePreview(
 
   const quote = text[i];
   if (quote !== '"' && quote !== "'" && quote !== "`") return null;
-  return readStringLiteral(text, i + 1, quote);
+  const literal = readStringLiteral(text, i + 1, quote);
+  if (literal == null) return null;
+  if (literal.endOfClose == null) {
+    return { message: literal.message, literalClosed: false, redactedCode: null };
+  }
+  const tail = text.slice(literal.endOfClose);
+  return {
+    message: literal.message,
+    literalClosed: true,
+    redactedCode: /\w/.test(tail) ? text.slice(0, i) + "..." + tail : null,
+  };
 }
 
 /** `async (itx) => {` and friends (`export default async itx => {`). */
@@ -138,38 +154,40 @@ function skipTrivia(text: string, index: number): number {
  * half-streamed escape (dangling `\`, partial `\u1F...`) or a `$` that might
  * become `${` stops the preview *before* it — the next chunk re-derives and
  * picks those characters back up.
+ *
+ * `endOfClose` is the index just past the closing quote once it has streamed
+ * in (null while the literal is still open) — the caller redacts the literal
+ * out of the display code by splicing around it.
  */
 function readStringLiteral(
   text: string,
   start: number,
   quote: string,
-): { message: string; literalClosed: boolean } | null {
+): { message: string; endOfClose: number | null } | null {
   let out = "";
   let i = start;
   while (i < text.length) {
     const c = text[i];
     if (c === quote) {
-      return literalCloseLooksWellFormed(text, i + 1)
-        ? { message: out, literalClosed: true }
-        : null;
+      return literalCloseLooksWellFormed(text, i + 1) ? { message: out, endOfClose: i + 1 } : null;
     }
     if (c === "\\") {
       const escape = readEscape(text, i + 1);
       if (escape === "malformed") return null;
-      if (escape === "incomplete") return { message: out, literalClosed: false };
+      if (escape === "incomplete") return { message: out, endOfClose: null };
       out += escape.value;
       i = escape.next;
       continue;
     }
     if ((c === "\n" || c === "\r") && quote !== "`") return null;
     if (quote === "`" && c === "$") {
-      if (i + 1 >= text.length) return { message: out, literalClosed: false };
+      if (i + 1 >= text.length) return { message: out, endOfClose: null };
       if (text[i + 1] === "{") return null;
     }
     out += c;
     i += 1;
   }
-  return { message: out, literalClosed: false };
+  return { message: out, endOfClose: null };
 }
 
 /**
