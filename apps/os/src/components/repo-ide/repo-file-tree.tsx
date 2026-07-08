@@ -13,7 +13,7 @@ import {
   ContextMenuTrigger,
 } from "@iterate-com/ui/components/context-menu";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { stagedGitStatus, type StagedChanges } from "./staged-changes.ts";
+import { effectiveEntry, workingTreeGitStatus, type WorkingTreeChanges } from "./staged-changes.ts";
 
 /**
  * Everything a tree row's context menu (and the header buttons) can do. The
@@ -47,7 +47,7 @@ export function RepoFileTree({
   className,
 }: {
   headPaths: string[];
-  changes: StagedChanges;
+  changes: WorkingTreeChanges;
   selectedPath: string | undefined;
   onSelect: (path: string) => void;
   actions: RepoTreeActions;
@@ -111,7 +111,7 @@ export function RepoFileTree({
   }, [model, mergedPathsKey]);
 
   useEffect(() => {
-    model.setGitStatus(stagedGitStatus(changes, new Set(headPaths)));
+    model.setGitStatus(workingTreeGitStatus(changes, new Set(headPaths)));
   }, [model, changes, headPaths]);
 
   const startNewFile = (directoryPath: string | null) => {
@@ -256,10 +256,10 @@ function RepoTreeContextMenu({
 
 /** All visible tree paths: HEAD files plus staged additions (staged deletes
  * stay visible, annotated as deleted, until committed or discarded). */
-function mergePaths(headPaths: string[], changes: StagedChanges): string[] {
+function mergePaths(headPaths: string[], changes: WorkingTreeChanges): string[] {
   const merged = new Set(headPaths);
-  for (const [path, entry] of changes) {
-    if (entry.type !== "delete") merged.add(path);
+  for (const [path, change] of changes) {
+    if (effectiveEntry(change)?.type !== "delete") merged.add(path);
   }
   return [...merged].sort();
 }

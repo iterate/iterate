@@ -1,7 +1,14 @@
 import { Suspense, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { FilesIcon, GitBranchIcon, GitCommitVerticalIcon, Undo2Icon } from "lucide-react";
+import {
+  FilesIcon,
+  GitBranchIcon,
+  GitCommitVerticalIcon,
+  MinusIcon,
+  PlusIcon,
+  Undo2Icon,
+} from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import {
@@ -15,28 +22,30 @@ import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import {
-  stagedChangesStore,
-  stagedGitStatus,
-  stagedRepoFileChanges,
-  useStagedChanges,
-  type StagedEntry,
+  commitPlan,
+  effectiveEntry,
+  useWorkingTree,
+  workingTreeStore,
+  type FileEntry,
+  type WorkingTreeChanges,
 } from "./staged-changes.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
  * The repo mini-IDE: pierre file tree + per-kind file renderers over one
- * repo's HEAD, with an in-browser staged working tree committed through
+ * repo's HEAD, with a persistent in-browser working tree (working + staged
+ * slots per path, localStorage-backed per HEAD oid) committed through
  * `itx.repos.get(path).commitFiles` as a single batch.
  */
 export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: string }) {
   const itx = useItx();
   const queryClient = useQueryClient();
-  const store = stagedChangesStore({ projectId, repoPath });
-  const changes = useStagedChanges(store);
   const files = useItxQuery({
     key: ["repo-files", projectId, repoPath],
     query: (itx) => itx.repos.get(repoPath).listFiles(),
   });
+  const store = workingTreeStore({ projectId, repoPath, commitOid: files.commitOid });
+  const changes = useWorkingTree(store);
   const headPaths = files.paths;
   const headPathSet = new Set(headPaths);
   const { file: selectedPath, diff, scm, patchSearch } = useRepoIdeSearch();
@@ -46,11 +55,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
     [patchSearch],
   );
 
-  /** The current content of a path as a staged entry — staged if dirty, else
-   * read from HEAD on the lane the extension calls for. Rename fuel. */
-  const resolveEntry = async (path: string): Promise<StagedEntry> => {
-    const staged = changes.get(path);
-    if (staged !== undefined && staged.type !== "delete") return staged;
+  /** The current content of a path — live edit, staged snapshot, or HEAD on
+   * the lane the extension calls for. Rename fuel. */
+  const resolveEntry = async (path: string): Promise<FileEntry> => {
+    const current = effectiveEntry(changes.get(path) ?? {});
+    if (current !== undefined && current.type !== "delete") return current;
     const lane = isBinaryRepoPath(path) ? "base64" : "utf8";
     const read = await itx.repos.get(repoPath).readFile({ path, encoding: lane });
     if (read === null) throw new Error(`Repo file does not exist: "${path}".`);
@@ -59,30 +68,37 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       : { type: "write", content: read.content };
   };
 
+  const dropChange = (path: string) => {
+    store.setWorking(path, undefined);
+    store.setStaged(path, undefined);
+  };
+
   const removePath = (path: string) => {
-    // Deleting a not-yet-committed file just discards it; deleting a HEAD
-    // file stages the deletion.
-    if (headPathSet.has(path)) store.stage(path, { type: "delete" });
-    else store.discard(path);
-    if (selectedPath === path && !headPathSet.has(path)) selectFile(undefined);
+    // Deleting a not-yet-committed file just drops its change; deleting a
+    // HEAD file stages the deletion in the working slot.
+    if (headPathSet.has(path)) store.setWorking(path, { type: "delete" });
+    else {
+      dropChange(path);
+      if (selectedPath === path) selectFile(undefined);
+    }
   };
 
   const pathsUnder = (directoryPath: string) => {
     const prefix = `${directoryPath}/`;
     const affected = new Set<string>();
     for (const path of headPaths) if (path.startsWith(prefix)) affected.add(path);
-    for (const [path, entry] of changes) {
-      if (entry.type !== "delete" && path.startsWith(prefix)) affected.add(path);
+    for (const [path, change] of changes) {
+      if (effectiveEntry(change)?.type !== "delete" && path.startsWith(prefix)) affected.add(path);
     }
     return [...affected];
   };
 
   const actions: RepoTreeActions = {
     createFile: (path) => {
-      store.stage(path, { type: "write", content: "" });
+      store.setWorking(path, { type: "write", content: "" });
       selectFile(path);
     },
-    discard: (path) => store.discard(path),
+    discard: (path) => store.discardWorking(path),
     remove: (path, isFolder) => {
       for (const affected of isFolder ? pathsUnder(path) : [path]) removePath(affected);
     },
@@ -96,13 +112,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           : [{ from: fromPath, to: toPath }];
         try {
           // Resolve every source BEFORE staging anything so a failed read
-          // leaves the staged map untouched (the tree row already moved; the
-          // path-sync effect heals it on the next staged change).
+          // leaves the working tree untouched (the tree row already moved;
+          // the path-sync effect heals it on the next change).
           const resolved = await Promise.all(
             moves.map(async (move) => ({ ...move, entry: await resolveEntry(move.from) })),
           );
           for (const move of resolved) {
-            store.stage(move.to, move.entry);
+            store.setWorking(move.to, move.entry);
             removePath(move.from);
           }
           if (selectedPath === fromPath) selectFile(toPath);
@@ -117,7 +133,10 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
         if (!file) return;
         const path = directoryPath === "" ? file.name : `${directoryPath}/${file.name}`;
         try {
-          store.stage(path, { type: "write-base64", contentBase64: await localFileToBase64(file) });
+          store.setWorking(path, {
+            type: "write-base64",
+            contentBase64: await localFileToBase64(file),
+          });
           selectFile(path);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Could not read the picked file.");
@@ -128,14 +147,20 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
 
   const commit = useMutation({
     mutationFn: async (message: string) => {
-      return await itx.repos.get(repoPath).commitFiles({
+      const plan = commitPlan(changes);
+      const result = await itx.repos.get(repoPath).commitFiles({
         message,
-        changes: stagedRepoFileChanges(changes),
+        changes: plan.fileChanges,
       });
+      return { plan, result };
     },
-    onSuccess: (result) => {
-      store.discardAll();
-      // New HEAD: refetch the file list; content queries key off its commitOid.
+    onSuccess: ({ plan, result }) => {
+      if (plan.mode === "everything") store.discardAll();
+      else store.clearStaged(plan.paths);
+      // HEAD moved: surviving working edits belong under the new oid's
+      // (localStorage) key, and the file list refetches; content queries key
+      // off the commitOid it reports.
+      store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
       void queryClient.invalidateQueries({
         queryKey: ["itx", "repo-files", projectId, repoPath],
       });
@@ -187,7 +212,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
               headPathSet={headPathSet}
               commitPending={commit.isPending}
               onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
-              onDiscard={(path) => store.discard(path)}
+              onStage={(path) => store.stage(path)}
+              onUnstage={(path) => store.unstage(path)}
+              onDiscard={(path) => store.discardWorking(path)}
               onDiscardAll={() => store.discardAll()}
               onOpen={(path, status) =>
                 patchSearch({ file: path, diff: status === "modified" ? true : undefined })
@@ -228,11 +255,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 path={selectedPath}
                 headCommitOid={files.commitOid}
                 headHasPath={headPathSet.has(selectedPath)}
-                staged={changes.get(selectedPath)}
+                change={changes.get(selectedPath)}
                 diffOpen={diff}
                 onToggleDiff={(open) => patchSearch({ diff: open ? true : undefined })}
-                onStage={(entry) => store.stage(selectedPath, entry)}
-                onDiscard={() => store.discard(selectedPath)}
+                onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
+                onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
+                onStageFile={() => store.stage(selectedPath)}
+                onRestore={() => dropChange(selectedPath)}
               />
             </Suspense>
           )}
@@ -242,27 +271,85 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   );
 }
 
-/** The Source Control sidebar: commit box on top, staged changes under it —
- * vscode's SCM view shape. Clicking a change opens the file (in diff view for
- * modifications). */
+/** The Source Control sidebar: commit box on top, then Staged Changes and
+ * Changes — vscode's SCM view shape, including a file appearing in both when
+ * it was edited again after staging. Commit takes the staged snapshots when
+ * anything is staged, otherwise everything. */
 function GitPanel({
   changes,
   headPathSet,
   commitPending,
   onCommit,
+  onStage,
+  onUnstage,
   onDiscard,
   onDiscardAll,
   onOpen,
 }: {
-  changes: ReturnType<typeof useStagedChanges>;
+  changes: WorkingTreeChanges;
   headPathSet: ReadonlySet<string>;
   commitPending: boolean;
   onCommit: (message: string, reset: () => void) => void;
+  onStage: (path: string) => void;
+  onUnstage: (path: string) => void;
   onDiscard: (path: string) => void;
   onDiscardAll: () => void;
   onOpen: (path: string, status: "added" | "deleted" | "modified") => void;
 }) {
-  const statuses = stagedGitStatus(changes, headPathSet);
+  const rowStatus = (path: string, entry: FileEntry) =>
+    entry.type === "delete"
+      ? ("deleted" as const)
+      : headPathSet.has(path)
+        ? ("modified" as const)
+        : ("added" as const);
+
+  const staged = [...changes].filter(([, change]) => change.staged !== undefined);
+  const working = [...changes].filter(([, change]) => change.working !== undefined);
+  const plan = commitPlan(changes);
+
+  const row = (path: string, entry: FileEntry, buttons: React.ReactNode): React.ReactNode => {
+    const status = rowStatus(path, entry);
+    return (
+      <div
+        key={path}
+        className="group flex items-center gap-1.5 rounded-sm px-1.5 py-1 hover:bg-accent"
+      >
+        <button
+          type="button"
+          className="min-w-0 flex-1 truncate text-left font-mono text-xs"
+          title={path}
+          onClick={() => onOpen(path, status)}
+        >
+          {path}
+        </button>
+        <span className="hidden items-center gap-0.5 group-hover:flex">{buttons}</span>
+        <span
+          className={
+            status === "deleted"
+              ? "font-mono text-xs font-semibold text-red-600"
+              : status === "added"
+                ? "font-mono text-xs font-semibold text-green-600"
+                : "font-mono text-xs font-semibold text-blue-600"
+          }
+        >
+          {status === "deleted" ? "D" : status === "added" ? "A" : "M"}
+        </span>
+      </div>
+    );
+  };
+
+  const iconButton = (title: string, onClick: () => void, icon: React.ReactNode) => (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      title={title}
+      onClick={onClick}
+      className="text-muted-foreground"
+    >
+      {icon}
+    </Button>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <form
@@ -288,65 +375,76 @@ function GitPanel({
           className="text-xs"
         >
           <GitCommitVerticalIcon className="size-3.5" />
-          {commitPending ? "Committing…" : `Commit ${changes.size || ""}`}
+          {commitPending
+            ? "Committing…"
+            : plan.mode === "staged"
+              ? `Commit ${plan.paths.length} staged`
+              : `Commit ${plan.paths.length || ""}`}
         </Button>
       </form>
-      <div className="flex items-center justify-between px-3 pb-1 pt-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Changes
-        </span>
-        {changes.size === 0 ? null : (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            title="Discard all changes"
-            onClick={onDiscardAll}
-            className="text-muted-foreground"
-          >
-            <Undo2Icon className="size-3" />
-          </Button>
-        )}
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1.5 pb-2">
-        {statuses.length === 0 ? (
-          <span className="px-1.5 py-2 text-xs text-muted-foreground">No changes.</span>
-        ) : (
-          statuses.map(({ path, status }) => (
-            <div
-              key={path}
-              className="group flex items-center gap-1.5 rounded-sm px-1.5 py-1 hover:bg-accent"
-            >
-              <button
-                type="button"
-                className="min-w-0 flex-1 truncate text-left font-mono text-xs"
-                title={path}
-                onClick={() => onOpen(path, status)}
-              >
-                {path}
-              </button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                title="Discard change"
-                onClick={() => onDiscard(path)}
-                className="text-muted-foreground opacity-0 group-hover:opacity-100"
-              >
-                <Undo2Icon className="size-3" />
-              </Button>
-              <span
-                className={
-                  status === "deleted"
-                    ? "font-mono text-xs font-semibold text-red-600"
-                    : status === "added"
-                      ? "font-mono text-xs font-semibold text-green-600"
-                      : "font-mono text-xs font-semibold text-blue-600"
-                }
-              >
-                {status === "deleted" ? "D" : status === "added" ? "A" : "M"}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
+        {staged.length === 0 ? null : (
+          <>
+            <div className="flex items-center justify-between px-3 pb-1 pt-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Staged Changes
               </span>
+              {iconButton(
+                "Unstage all",
+                () => staged.forEach(([path]) => onUnstage(path)),
+                <MinusIcon className="size-3" />,
+              )}
             </div>
-          ))
+            <div className="flex flex-col gap-0.5 px-1.5">
+              {staged.map(([path, change]) =>
+                row(
+                  path,
+                  change.staged!,
+                  iconButton(
+                    "Unstage change",
+                    () => onUnstage(path),
+                    <MinusIcon className="size-3" />,
+                  ),
+                ),
+              )}
+            </div>
+          </>
         )}
+        <div className="flex items-center justify-between px-3 pb-1 pt-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Changes
+          </span>
+          {working.length === 0 ? null : (
+            <span className="flex items-center gap-0.5">
+              {iconButton("Discard all changes", onDiscardAll, <Undo2Icon className="size-3" />)}
+              {iconButton(
+                "Stage all changes",
+                () => working.forEach(([path]) => onStage(path)),
+                <PlusIcon className="size-3" />,
+              )}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-col gap-0.5 px-1.5">
+          {working.length === 0 ? (
+            <span className="px-1.5 py-2 text-xs text-muted-foreground">No changes.</span>
+          ) : (
+            working.map(([path, change]) =>
+              row(
+                path,
+                change.working!,
+                <>
+                  {iconButton(
+                    "Discard changes",
+                    () => onDiscard(path),
+                    <Undo2Icon className="size-3" />,
+                  )}
+                  {iconButton("Stage change", () => onStage(path), <PlusIcon className="size-3" />)}
+                </>,
+              ),
+            )
+          )}
+        </div>
       </div>
     </div>
   );
