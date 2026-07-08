@@ -1,5 +1,5 @@
 ---
-state: in-progress
+state: done
 priority: high
 size: large
 dependsOn: []
@@ -13,12 +13,12 @@ the existing Slack/GitHub/Google integration machinery.
 
 ## Status summary
 
-Implementation complete and tested: URL secret substitution, connect/status/
-disconnect flows, webhook door, router + agent processors, itx dispatch +
-`connectTelegram` verb, system prompt, dashboard card, and the four new test
-files are all in and green (typecheck/lint/unit). Remaining: full-repo test
-sweep + the phone-side manual test against the preview (paste token → message
-bot → agent replies).
+DONE — implemented, CI fully green, and verified end-to-end by Misha from his
+phone against preview-2 (BotFather token pasted in the dashboard, message sent
+to the bot, agent replied in the chat). All pieces landed: URL secret
+substitution, connect/status/disconnect flows, webhook door (plus the ingress
+lane fix), router + agent processors, itx dispatch + `connectTelegram` verb,
+system prompt via agent-defaults, dashboard card, four new test files.
 
 ## Objective
 
@@ -258,3 +258,8 @@ and outbound calls at a fake Bot API server (follow whatever pattern
   regenerated rather than hand-merged; `StreamEvent.path` from #1745 threaded
   into the test MemoryStream). Post-merge CI then flagged three unused
   telegram exports (knip) — un-exported.
+- 2026-07-08 (night): CI "Preview / deploy + e2e" flaked once on the new
+  births-agents test (timed out right after deploy; passes in ~7s when run
+  against the live slot) — re-dispatched, green. Misha verified the round trip
+  from his phone on preview-2: connect → message → agent reply. Task moved to
+  complete.
