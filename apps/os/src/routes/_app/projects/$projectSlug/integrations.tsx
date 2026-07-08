@@ -51,8 +51,8 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { ProjectRpcTarget } from "~/types.ts";
+import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
+import type { ProjectProcessorState, ProjectRpcTarget } from "~/types.ts";
 
 type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
@@ -388,7 +388,7 @@ function ProjectIntegrationsContent() {
           </Item>
         ) : null}
 
-        <AccountConnectionsItem projectSlug={project.slug} />
+        <AccountConnectionsItem />
       </ItemGroup>
     </div>
   );
@@ -584,17 +584,22 @@ const ACCOUNT_CONNECTION_DEFAULTS = {
  * path: `/secrets/integrations/<slug>/<connection>/session`. */
 type AccountConnection = { connection: string; path: string; slug: string };
 
-function AccountConnectionsItem({ projectSlug }: { projectSlug: string }) {
+function AccountConnectionsItem() {
   const itx = useItx();
-  const queryClient = useQueryClient();
   const [sheetOpen, setSheetOpen] = useState(false);
-  const secretPaths = useItxQuery({
-    key: ["account-connections", projectSlug],
-    query: async (itx) => (await itx.secrets.list()).map((entry) => entry.path),
-  });
-  const accounts: AccountConnection[] = (secretPaths ?? []).flatMap((path) => {
-    const match = ACCOUNT_CONNECTION_PATH.exec(path);
-    return match ? [{ connection: match[2], path, slug: match[1] }] : [];
+  // The connections list is derived from the project processor's live secrets
+  // state — the same push-based slice the secrets page reads. Two payoffs over
+  // a second useItxQuery: it does not suspend a second time (which would bubble
+  // to the route ItxBoundary and flash the whole panel back to the global
+  // "Connecting…" placeholder), and a freshly-created session secret appears
+  // here the instant its stream folds, with no manual invalidation to race.
+  const secretsList = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  ).state?.secrets;
+  const accounts: AccountConnection[] = (secretsList ?? []).flatMap((secret) => {
+    const match = ACCOUNT_CONNECTION_PATH.exec(secret.path);
+    return match ? [{ connection: match[2], path: secret.path, slug: match[1] }] : [];
   });
 
   const createConnection = useMutation({
@@ -610,12 +615,11 @@ function AccountConnectionsItem({ projectSlug }: { projectSlug: string }) {
       });
       return input;
     },
-    onSuccess: async (input) => {
+    onSuccess: (input) => {
       form.reset();
       setSheetOpen(false);
-      await queryClient.invalidateQueries({
-        queryKey: ["itx", "account-connections", projectSlug],
-      });
+      // No refetch: the new session secret lands in the live secrets state
+      // above when its stream folds, so the account row appears on its own.
       toast.success(
         `Connected — address it as itx.worker.${input.slug}.${input.connection} from project code.`,
       );
