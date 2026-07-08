@@ -129,49 +129,6 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         );
         return;
       }
-      // The agent's own sandbox came (back) up. Record a model-visible FYI —
-      // never a trigger — so that next time the agent acts it knows the state
-      // of its `itx.sandbox`, and is reminded how it works. `dont-trigger-request`
-      // means this sits in context for later, it does not start an LLM turn.
-      case "events.iterate.com/sandbox/workspace-restored":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/sandbox-restored@${event.offset}`,
-            payload: {
-              content:
-                "FYI (no reply needed): your sandbox (`itx.sandbox`) resumed and `/workspace` was RESTORED from a snapshot — files you kept there are back. But gitignored paths were NOT snapshotted (e.g. `node_modules`, build outputs): reinstall/rebuild them before use if a task needs them. The container filesystem otherwise resets between sleeps, so treat anything outside `/workspace` as gone. (The repo at `/workspace/repos/project` is always checked out; if the snapshot lacked it, a separate FYI notes it was freshly cloned.)",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-          }),
-        );
-        return;
-      case "events.iterate.com/sandbox/workspace-cloned":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/sandbox-cloned@${event.offset}`,
-            payload: {
-              content:
-                "FYI (no reply needed): the project repo was freshly cloned in your sandbox (`itx.sandbox`) at `/workspace/repos/project` (your cwd) — no usable snapshot of the checkout existed, so uncommitted repo work from a previous container, if any, is gone. Baked tools (e.g. `codex`) are preinstalled; anything else a task needs must be installed. Work you want to keep across sleeps lives under `/workspace`; commit durable changes to the repo.",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-          }),
-        );
-        return;
-      case "events.iterate.com/sandbox/warmed-up":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/sandbox-warmed-up@${event.offset}`,
-            payload: {
-              content:
-                "FYI (no reply needed): your sandbox finished warming up — baked coding tools with a configured provider key (e.g. `codex` via the project's OpenAI secret) are logged in, no per-command login needed. If `codex` still reports an auth error, the project likely has no OpenAI key seeded — ask the user to add one rather than retrying.",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-          }),
-        );
-        return;
       default:
         return;
     }

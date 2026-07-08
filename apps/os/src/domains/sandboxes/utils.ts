@@ -1,5 +1,6 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
+import { SANDBOX_INSTANCE_TYPES, type SandboxInstanceType } from "./instance-types.ts";
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real sandbox names carry the caller's
@@ -8,34 +9,31 @@ const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
 // Every sandbox lives under this prefix — the domain-prefix convention every
 // other domain already follows (`/secrets/...`, `/repos/...`, `/agents/...`),
-// so a project path names exactly one kind of object. Module-local: callers
-// spell full paths; only the guard and the agent mapping need the pieces.
+// so a project path names exactly one kind of object.
 const SANDBOX_PATH_PREFIX = "/sandboxes";
 
-// Cloudflare is today's only sandbox provider; the segment keeps room for
-// others (the daytona precedent) without renaming everything again.
-const CLOUDFLARE_SANDBOX_PREFIX = `${SANDBOX_PATH_PREFIX}/cloudflare`;
-
-/**
- * Where an agent's own sandbox (`itx.sandbox`) lives: the agent path under
- * the Cloudflare sandbox prefix — `/agents/bla` →
- * `/sandboxes/cloudflare/agents/bla`. One function so the birth-certificate
- * mount, the eager mint at birth, and the lifecycle-event fan-out can never
- * disagree on the mapping.
- */
-export function agentSandboxPath(agentPath: string): string {
-  return normalizeSandboxPath(`${CLOUDFLARE_SANDBOX_PREFIX}${normalizePath(agentPath)}`);
+/** The path a `create({ name, instanceType })` mints: the instance-type
+ * segment then the caller's name — `/sandboxes/basic/my-pet`. The instance
+ * type is part of identity because a Durable Object can never change
+ * container class (= instance type). */
+export function sandboxPathFor(instanceType: SandboxInstanceType, name: string): string {
+  return normalizeSandboxPath(`${SANDBOX_PATH_PREFIX}/${instanceType}${normalizePath(name)}`);
 }
 
-/**
- * The agent that owns a sandbox path, or null when the path isn't an agent
- * sandbox — the inverse of {@link agentSandboxPath}. Used to fan an agent
- * sandbox's lifecycle events out to the agent's own journal as well.
- */
-export function agentPathForSandbox(sandboxPath: string): string | null {
-  return sandboxPath.startsWith(`${CLOUDFLARE_SANDBOX_PREFIX}/agents/`)
-    ? sandboxPath.slice(CLOUDFLARE_SANDBOX_PREFIX.length)
-    : null;
+/** The instance-type segment of a sandbox path — which container namespace
+ * the sandbox lives in. Throws on paths that don't carry a known instance
+ * type (which includes every pre-pet `/sandboxes/cloudflare/...` path). */
+export function sandboxInstanceTypeForPath(path: string): SandboxInstanceType {
+  const normalized = normalizeSandboxPath(path);
+  const segment = normalized.split("/")[2];
+  const instanceType = SANDBOX_INSTANCE_TYPES.find((candidate) => candidate === segment);
+  if (instanceType === undefined) {
+    throw new Error(
+      `sandbox paths carry their instance type as the segment after /sandboxes/ ` +
+        `(one of ${SANDBOX_INSTANCE_TYPES.join(", ")}), got "${normalized}"`,
+    );
+  }
+  return instanceType;
 }
 
 /**
@@ -49,18 +47,13 @@ export function agentPathForSandbox(sandboxPath: string): string | null {
  * becomes `%20`, `/x/../y` collapses to `/y`). A path that does not survive
  * that round trip would let two spellings mint two Durable Objects that parse
  * back to one canonical path — so reject exactly those, and nothing more.
- * This accepts precisely the paths an agent's own Durable Object can already
- * tolerate (e.g. `/agents/foo@bar`), keeping {@link agentSandboxPath} in
- * lockstep with the agent path it mirrors, rather than a stricter
- * hand-rolled charset.
  */
 export function normalizeSandboxPath(path: string): string {
   const normalized = normalizePath(path);
   if (normalized === SANDBOX_PATH_PREFIX || !normalized.startsWith(`${SANDBOX_PATH_PREFIX}/`)) {
     throw new Error(
-      `sandbox paths live under ${SANDBOX_PATH_PREFIX}/ (an agent's sandbox at ` +
-        `${SANDBOX_PATH_PREFIX}<agent path>, standalone ones conventionally under ` +
-        `${SANDBOX_PATH_PREFIX}/cloudflare/), got "${normalized}"`,
+      `sandbox paths live under ${SANDBOX_PATH_PREFIX}/<instanceType>/ ` +
+        `(create one with itx.sandboxes.create), got "${normalized}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(
@@ -79,12 +72,12 @@ export function normalizeSandboxPath(path: string): string {
  * The `GH_TOKEN` value a sandbox plants for a project's GitHub connections,
  * or null when there is none: a `getSecret` placeholder for the connection
  * secret's `accessToken` field, so `gh` (which reads GH_TOKEN natively) and
- * the warm-up script's git extraheader authenticate against github.com while
- * the installation token itself is minted and substituted only at the egress
- * door. Several connections: the lexicographically first connection name wins
- * — arbitrary but deterministic, so a container restart can't silently flip
- * which installation a sandbox acts as; `configureEnvVars({ GH_TOKEN })`
- * overrides the pick. Pure so the choice is testable without a container.
+ * git-over-https against github.com authenticate while the installation token
+ * itself is minted and substituted only at the egress door. Several
+ * connections: the lexicographically first connection name wins — arbitrary
+ * but deterministic, so a container restart can't silently flip which
+ * installation a sandbox acts as; `setEnvVars({ GH_TOKEN })` overrides
+ * the pick. Pure so the choice is testable without a container.
  */
 export function githubTokenEnvForConnections(
   connections: readonly { connection: string; integration: string }[],

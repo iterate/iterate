@@ -23,6 +23,11 @@ import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
+import {
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SANDBOX_INSTANCE_TYPES,
+  type SandboxInstanceType,
+} from "../src/domains/sandboxes/instance-types.ts";
 import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
@@ -148,11 +153,19 @@ const DO_CLASSES = {
   CAPABILITY_HOST: "CapabilityHostDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
-  SANDBOX: "CloudflareSandboxDurableObject",
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
+  // class) — bindings and class names come from the canonical table in
+  // src/domains/sandboxes/instance-types.ts.
+  ...Object.fromEntries(
+    SANDBOX_INSTANCE_TYPES.map((instanceType) => [
+      SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding,
+      SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+    ]),
+  ),
 } as const;
 
 // Durable Object migration history. Deployed workers only apply tags NEWER
@@ -175,11 +188,30 @@ const DO_MIGRATIONS = [
     ],
   },
   { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
+  // Sandboxes became pets with a fixed per-sandbox size: one container class
+  // per Cloudflare instance type replaces the single implicit-size class.
+  // The old class is DELETED (its Durable Objects and their data go with it —
+  // old sandboxes were ephemeral by design and their R2 snapshots age out).
+  {
+    tag: "v3",
+    new_sqlite_classes: SANDBOX_INSTANCE_TYPES.map(
+      (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+    ),
+    deleted_classes: ["CloudflareSandboxDurableObject"],
+  },
 ];
 
-// Every bound class needs a migration entry (and nothing else does).
+// Every bound class needs a live (created and not later deleted) migration
+// entry — and every live migrated class must still be bound.
 {
-  const migrated = new Set(DO_MIGRATIONS.flatMap((migration) => migration.new_sqlite_classes));
+  const migrated = new Set(
+    DO_MIGRATIONS.flatMap((migration) => migration.new_sqlite_classes ?? []),
+  );
+  for (const migration of DO_MIGRATIONS) {
+    for (const deleted of ("deleted_classes" in migration && migration.deleted_classes) || []) {
+      migrated.delete(deleted);
+    }
+  }
   const bound = Object.values(DO_CLASSES);
   const missing = bound.filter((className) => !migrated.has(className));
   const stale = [...migrated].filter((className) => !(bound as string[]).includes(className));
@@ -190,15 +222,35 @@ const DO_MIGRATIONS = [
   }
 }
 
+/**
+ * Per-size concurrent-instance caps. Cloudflare validates
+ * `max_instances × instance memory` against the account's concurrent-memory
+ * quota AT DEPLOY TIME, summed across every container app — and the preview
+ * account is shared by every preview slot — so preview caps are deliberately
+ * small (a slot's sandbox fleet reserves ~75 GiB vs production's ~260 GiB).
+ * Billing is while-running only (idle sandboxes are torn down and snapshotted),
+ * so production headroom is cheap; raise a cap here if a real workload hits it
+ * (exceeding one surfaces as HTTP 503 on sandbox start).
+ */
+const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; production: number }> =
+  {
+    lite: { preview: 20, production: 50 },
+    basic: { preview: 10, production: 30 },
+    "standard-1": { preview: 5, production: 20 },
+    "standard-2": { preview: 2, production: 10 },
+    "standard-3": { preview: 2, production: 5 },
+    "standard-4": { preview: 1, production: 3 },
+  };
+
 /** Binding config identical across local dev and every deployed env, apart from names/ids. */
 function workerBindings(input: {
   workerName: string;
   accountId: string;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Sandbox container instance cap. standard-1 reserves quota per slot, so
-   * preview headroom is bounded by the preview account's memory allocation. */
-  maxContainerInstances?: number;
+  /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
+   * is validated per account, and previews share one account. */
+  sandboxCaps?: "preview" | "production";
 }) {
   return {
     vars: {
@@ -218,15 +270,15 @@ function workerBindings(input: {
       // See docs/cloudflare-sandboxes.md.
       SANDBOX_TRANSPORT: "rpc",
       // Container startup budget must cover the IMAGE PULL on a host that
-      // hasn't cached it: the baked-monorepo image is ~3 GB and a cold-host
-      // pull measured 1.5-3.2 min. The SDK defaults (instance-get 30s, i.e.
-      // schedule+start INCLUDING the pull; port-ready 90s) both sat inside a
-      // pull, so fresh sandboxes on cold hosts died with
-      // OPERATION_INTERRUPTED / transport_disposed on utils.createSession —
-      // the dominant e2e flake after the image grew (fast ~30-60s failures =
-      // the instance-get cap; ~150s ones = the dial budget). 300s each (the
-      // SDK's validation max for instance-get) clears the worst observed
-      // pull; anything slower is a genuinely stuck container and should fail.
+      // hasn't cached it. The SDK defaults (instance-get 30s — schedule+start
+      // INCLUDING the pull; port-ready 90s) both sat inside a cold pull back
+      // when the image baked the monorepo (~3 GB), killing the control-plane
+      // dial mid-startup (OPERATION_INTERRUPTED / transport_disposed on
+      // utils.createSession — the dominant e2e flake of that era). The image
+      // is the stock Cloudflare one now, but a generous ceiling costs nothing
+      // when startup is fast and only extends patience when a host is cold —
+      // 300s is the SDK's validation max; anything slower is a genuinely
+      // stuck container and should fail.
       SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
       SANDBOX_PORT_TIMEOUT_MS: "300000",
     },
@@ -285,41 +337,24 @@ function workerBindings(input: {
     // dynamic per-project set. Local dev gets the same binding; miniflare
     // simulates sends instead of delivering real mail.
     send_email: [{ name: "EMAIL" }],
-    containers: [
-      {
-        class_name: DO_CLASSES.SANDBOX,
-        image: "./sandbox/Dockerfile",
-        // The sandbox image bakes this repo into /opt/iterate/iterate, so the
-        // Docker build context must be the monorepo root, not apps/os/sandbox.
-        image_build_context: "../..",
-        // standard-1 (1/2 vCPU, 4 GiB, 8 GB disk), NOT lite: the baked-monorepo
-        // image unpacks to ~3 GB, over lite's 2 GB disk — instances then fail
-        // with ImagePullRequestedDiskSizeToSmall, the rollout wedges the app
-        // "degraded", and every sandbox op storms transport_disposed (observed
-        // live on preview-1, 2026-07-06). The push itself SUCCEEDS — the limit
-        // bites at instance provisioning, so a too-big image degrades envs
-        // instead of failing the deploy. 8 GB fits the image + /workspace +
-        // the backup staging in /var/backups; if the image grows, move up a
-        // tier. Custom types can't help (platform: ≥1 vCPU, disk ≤ 2× memory,
-        // enterprise-only). Billing is while-running only, so the
-        // idle-destroyed fleet stays cheap.
-        instance_type: "standard-1",
-        // Sized for e2e churn: the preview lanes provision a fresh project
-        // (and sandbox container) per test, and idle containers hold an
-        // instance slot until sleepAfter (3m, see
-        // CloudflareSandboxDurableObject). 10 wedged the sandbox-exec specs
-        // after ~5 back-to-back runs; lite instances bill on usage, not
-        // reservation, so headroom is free.
-        max_instances: input.maxContainerInstances ?? 40,
-        // Interactive shell into any running sandbox via `wrangler containers
-        // ssh <instance-id>` (find ids with `wrangler containers instances`).
-        // Account-authenticated + gated on the keys below; opens no public
-        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
-        // the wrangler schema, so it is set explicitly.
-        ssh: { enabled: true },
-        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-      },
-    ],
+    // One container app per sandbox size, all running the STOCK Cloudflare
+    // sandbox image (sandbox/Dockerfile is a one-line FROM — no bake, so
+    // builds and deploys are fast and every size shares one cached image).
+    // `instance_type` is the size verbatim: our size names ARE Cloudflare's
+    // instance-type names (instance-types.ts).
+    containers: SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
+      class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+      image: "./sandbox/Dockerfile",
+      instance_type: instanceType,
+      max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
+      // Interactive shell into any running sandbox via `wrangler containers
+      // ssh <instance-id>` (find ids with `wrangler containers instances`).
+      // Account-authenticated + gated on the keys below; opens no public
+      // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+      // the wrangler schema, so it is set explicitly.
+      ssh: { enabled: true },
+      authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+    })),
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
   };
@@ -368,12 +403,7 @@ function envBlock(env: DeployedEnv) {
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
-    // against account memory quota at deploy time. Preview slot 6 currently
-    // deploys at 31 and a jump to 150 is rejected by the shared preview account
-    // quota before e2e can run. Keep previews at the deployable cap until the
-    // account quota is raised; production has its own account and cap.
-    maxContainerInstances: isProduction ? 50 : 31,
+    sandboxCaps: isProduction ? "production" : "preview",
   });
   return {
     name: env.osWorkerName,

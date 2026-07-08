@@ -62,8 +62,29 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
-  SANDBOX: DurableObjectNamespace<
-    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
+  /**
+   * Sandbox container namespaces, ONE PER INSTANCE TYPE: Cloudflare fixes the
+   * container instance type per container class, so each instance type is its own
+   * Durable Object class and binding (src/domains/sandboxes/instance-types.ts is the
+   * canonical table; the collection routes by the path's instance-type segment).
+   */
+  SANDBOX_LITE: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxLiteDurableObject
+  >;
+  SANDBOX_BASIC: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxBasicDurableObject
+  >;
+  SANDBOX_STANDARD_1: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard1DurableObject
+  >;
+  SANDBOX_STANDARD_2: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard2DurableObject
+  >;
+  SANDBOX_STANDARD_3: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard3DurableObject
+  >;
+  SANDBOX_STANDARD_4: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is

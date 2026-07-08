@@ -226,7 +226,8 @@ export interface ProjectRpcTarget {
   projectId: string;
   repo: Repo;
   repos: ProjectRepoCollection;
-  /** Path-addressed sandboxes (`itx.sandboxes.get(path)`) — see {@link SandboxCollection}. */
+  /** The project's sandboxes — explicitly created, sized Linux containers
+   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
@@ -241,18 +242,6 @@ export interface ProjectRpcTarget {
   // derived from the scope path, not mounted capabilities — see rpc-targets.ts.
   agent?: Agent;
   chat?: AgentChat;
-  /**
-   * THIS agent's own sandbox — the sandbox at the agent's path under the
-   * sandbox prefix (`/agents/bla` → `/sandboxes/cloudflare/agents/bla`).
-   * NOT a built-in: it is a durable itx-expression capability mounted
-   * on the agent's capability host at birth
-   * (`expression: ["sandboxes", ["get", "/sandboxes/cloudflare" + <agent path>]]`), so every
-   * `itx.sandbox.exec(...)` re-resolves through `itx.sandboxes.get` at call
-   * time and dispatches like any provided capability. Created with the agent;
-   * the container boots on the first command and sleeps after idle. Prefer
-   * dotted calls (`await itx.sandbox.exec("...")`) over grabbing the value.
-   */
-  sandbox?: CloudflareSandbox;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
@@ -893,33 +882,98 @@ export interface Repo extends Describable {
 }
 
 /**
- * Catalog of sandboxes within one project.
+ * A sandbox's instance type — Cloudflare's container instance-type names,
+ * verbatim (https://developers.cloudflare.com/containers/platform-details/limits/):
+ * lite (1/16 vCPU, 256 MiB, 2 GB disk), basic (1/4, 1 GiB, 4 GB),
+ * standard-1 (1/2, 4 GiB, 8 GB), standard-2 (1, 6 GiB, 12 GB),
+ * standard-3 (2, 8 GiB, 16 GB), standard-4 (4, 12 GiB, 20 GB).
+ * Fixed for the sandbox's whole life — it is a segment of the sandbox's path.
+ */
+export type SandboxInstanceType =
+  | "lite"
+  | "basic"
+  | "standard-1"
+  | "standard-2"
+  | "standard-3"
+  | "standard-4";
+
+/** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
+ * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
+export type SandboxCreateInput = {
+  /** The sandbox's name; its path becomes `/sandboxes/<instanceType>/<name>`.
+   * Destroyed names are retired, not recycled — pick a new one. */
+  name: string;
+  /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
+  instanceType?: SandboxInstanceType;
+  /** Idle time before the container is snapshotted and torn down (e.g.
+   * `"5m"`, `"1h"`, or seconds). Defaults to the SDK's 10 minutes. The
+   * workspace survives — see {@link CloudflareSandbox}. */
+  sleepAfter?: string | number;
+  /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
+   * `sleep()` or `destroy()` explicitly. */
+  keepAlive?: boolean;
+  /** Initial env-var map, merged as if by `setEnvVars` — values are
+   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw
+   * secret material. */
+  env?: Record<string, string>;
+};
+
+/**
+ * The project's sandboxes: real Linux containers — computers for rent, kept
+ * like PETS. Each one is explicitly created with a name and a Cloudflare
+ * instance type, lives at `/sandboxes/<instanceType>/<name>`, and has an
+ * imperative lifecycle (`start`/`sleep`/`destroy` on the sandbox itself).
+ * Nothing here is implicit: `get` refuses paths that were never created, and
+ * no agent or workflow gets a sandbox automatically.
  *
- * A sandbox is addressed by its FULL path, which always lives under
- * `/sandboxes/` — the same domain-prefix convention as `/secrets/...` and
- * `/repos/...`: an agent's sandbox is the agent path under the Cloudflare
- * provider segment (`/sandboxes/cloudflare/agents/...`, exposed as
- * `itx.sandbox` in that agent's scope), and standalone sandboxes
- * conventionally live under `/sandboxes/cloudflare/<anything>`.
  * Getting a sandbox is cheap and does not start a container; the first
- * command does, and the sandbox sleeps again after idle.
+ * command (or an explicit `start()`) boots one, and the sandbox is
+ * snapshotted + torn down again after `sleepAfter` idle time. Every
+ * lifecycle transition is an event on the stream at the sandbox's own path.
  */
 export interface SandboxCollection extends Describable {
+  /** Create a sandbox. Strict: an existing or destroyed path is an error.
+   * Returns the path to `get`. */
+  create(
+    input: SandboxCreateInput,
+  ): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }>;
+  /** The sandbox at a path. Throws unless the path was created (and not destroyed). */
   get(path: string): Promise<CloudflareSandbox>;
+  /** Every sandbox stream path in the project (`/sandboxes/...`), including
+   * destroyed sandboxes' streams — the stream is the history. */
+  list(): Promise<StreamListItem[]>;
 }
 
 /**
- * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
- * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
+ * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
- * does not re-declare that surface (same stance as {@link McpClientRpc}); see
- * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
- * project repo is ALWAYS checked out at `/workspace/repos/project`, which is
- * also the default working directory — a bare `exec("ls")` lists the project.
- * Every command awaits that provisioning internally, so no explicit
- * `ensureProjectRepo()` is needed first (it stays available to await the
- * checkout deterministically).
+ * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
+ * contract deliberately does not re-declare that surface (same stance as
+ * {@link McpClientRpc}); https://developers.cloudflare.com/sandbox/api/ is
+ * the authoritative reference. The image is the stock Cloudflare sandbox
+ * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
+ * you need at runtime.
+ *
+ * Platform deltas over stock Cloudflare (everything else passes through):
+ * - Sandboxes are created explicitly (`itx.sandboxes.create`), never minted
+ *   by addressing.
+ * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the
+ *   idle timer, restored on the next start — where stock Cloudflare loses all
+ *   state. Everything outside `/workspace` is ephemeral, and a crash loses
+ *   anything since the last snapshot.
+ * - `start()` boots the container now instead of lazily; `sleep()` snapshots
+ *   and tears down now instead of waiting for `sleepAfter` (the SDK's
+ *   `stop()` forwards to it); `destroy()` is permanent — the name is retired.
+ * - `describe()` — the durable record ({ path, instanceType, createdAt,
+ *   sleepAfter }).
+ * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
+ *   journaled as a `configured` event); values are conventionally
+ *   `getSecret({ path })` placeholders substituted only at egress — real
+ *   secret material never enters the container. All sandbox egress flows
+ *   through project egress policy; there is no direct internet path.
+ * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
+ *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object;
 
