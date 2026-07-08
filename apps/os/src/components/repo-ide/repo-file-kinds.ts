@@ -25,8 +25,8 @@ const TEXT_LANGUAGES: Record<string, SourceCodeLanguage> = {
   mjs: "javascript",
   mts: "typescript",
   sql: "sql",
-  // svg is xml-ish text; the html grammar highlights it well and editing
-  // beats a raster preview for repo-committed icons.
+  // svg is xml-ish text; the html grammar highlights it well, and the
+  // Code/Preview toggle (isHtmlPreviewPath) covers the rendered view.
   svg: "html",
   ts: "typescript",
   tsx: "typescript",
@@ -75,8 +75,12 @@ export function isBinaryRepoPath(path: string): boolean {
   return repoFileKind(path).kind !== "text";
 }
 
-/** Only real html documents get the editor pane's Code/Preview toggle — .svg
- * also opens as html-highlighted text but is an image format, not a page. */
+/** Paths whose Code/Preview toggle renders through the sandboxed html iframe:
+ * real html documents, plus .svg — raw svg markup is valid in an html body
+ * (the parser switches to foreign content at `<svg>`; an XML prolog degrades
+ * to an ignored bogus comment), so the same srcdoc lane previews it with the
+ * same script-inert sandbox. An `<img>` would also neuter scripts but breaks
+ * height-less/percentage sizing and never runs legitimate svg animations. */
 export function isHtmlPreviewPath(path: string): boolean {
-  return /\.html?$/i.test(path);
+  return /\.(html?|svg)$/i.test(path);
 }

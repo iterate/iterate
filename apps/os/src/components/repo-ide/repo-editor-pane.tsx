@@ -47,7 +47,8 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
-  /** Html files only: the sandboxed rendered view of the current buffer. */
+  /** Html/svg files only: the sandboxed rendered view of the current buffer
+   * (or of the staged snapshot in the Index view). */
   previewOpen: boolean;
   onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
@@ -197,12 +198,20 @@ export function RepoEditorPane({
     entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
 
   if (stagedView && staged?.type === "write" && kind.kind === "text") {
+    // Same Code/Preview toggle as the working view, over the staged snapshot
+    // — the Index pseudo-file stays readonly either way.
+    const showStagedPreview = previewOpen && isHtmlPreviewPath(path);
     return (
       <FileChrome
         path={path}
-        suffix="(Index)"
+        suffix={showStagedPreview ? "(Index Preview)" : "(Index)"}
         readonly
         status={status}
+        leading={
+          isHtmlPreviewPath(path) ? (
+            <CodePreviewToggle previewOpen={showStagedPreview} onTogglePreview={onTogglePreview} />
+          ) : undefined
+        }
         actions={
           <>
             <Button variant="secondary" size="sm" className="text-xs" disabled>
@@ -231,18 +240,22 @@ export function RepoEditorPane({
           </>
         }
       >
-        <SourceCodeBlock
-          key={`${path}:staged`}
-          className="min-h-0 flex-1"
-          plainChrome
-          showLineNumbers
-          editable={false}
-          wrapLongLines={false}
-          code={staged.content}
-          language={kind.language}
-          codeMirrorExtensions={stagedDiffExtensions}
-          onChange={() => {}}
-        />
+        {showStagedPreview ? (
+          <HtmlPreview html={staged.content} />
+        ) : (
+          <SourceCodeBlock
+            key={`${path}:staged`}
+            className="min-h-0 flex-1"
+            plainChrome
+            showLineNumbers
+            editable={false}
+            wrapLongLines={false}
+            code={staged.content}
+            language={kind.language}
+            codeMirrorExtensions={stagedDiffExtensions}
+            onChange={() => {}}
+          />
+        )}
       </FileChrome>
     );
   }
@@ -358,8 +371,8 @@ export function RepoEditorPane({
   );
 }
 
-/** The vscode-style "Preview | Code" tab pair at the top-left of an html
- * file's header. */
+/** The vscode-style "Preview | Code" tab pair at the top-left of an html or
+ * svg file's header. */
 function CodePreviewToggle({
   previewOpen,
   onTogglePreview,

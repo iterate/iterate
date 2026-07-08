@@ -8,10 +8,12 @@ branch: repo-ide-preview-followups
 
 ## Status summary
 
-Spec committed; implementation starting. Two follow-ups the HTML preview PR
-(#1767) deliberately left out: the Code/Preview toggle for `.svg` files, and
-the same toggle on the readonly Index (staged) pseudo-file view. Stacked on
-`repo-ide-html-preview`.
+Implemented and verified live; PR #1773 (stacked on #1767). `.svg` files get
+the same Code/Preview toggle via the existing sandboxed srcdoc iframe (an
+svg with an embedded `alert`/`window.top` script rendered inert — no dialog,
+top title untouched), and the readonly Index view gets the identical toggle
+over the staged snapshot (header flips to `(Index Preview)`). No missing
+pieces.
 
 ## Ask
 
@@ -61,15 +63,32 @@ Follow-up work identified in `tasks/repo-ide-html-preview.md` / PR #1767:
 
 ## Checklist
 
-- [ ] `.svg` joins `isHtmlPreviewPath`; comment updates in
-      `repo-file-kinds.ts` and `html-preview.tsx`
-- [ ] Code/Preview toggle + `HtmlPreview` in the readonly Index view branch
-      of `repo-editor-pane.tsx`, rendering `staged.content`
-- [ ] Verify live in local dev: an `.svg` with an embedded `<script>alert`
+- [x] `.svg` joins `isHtmlPreviewPath`; comment updates in
+      `repo-file-kinds.ts` and `html-preview.tsx` — _one-line regex change
+      (`/\.(html?|svg)$/i`); the img-vs-iframe rationale lives on the
+      predicate's doc comment_
+- [x] Code/Preview toggle + `HtmlPreview` in the readonly Index view branch
+      of `repo-editor-pane.tsx`, rendering `staged.content` — _same
+      `CodePreviewToggle` in the same `leading` slot; suffix flips
+      `(Index)` ↔ `(Index Preview)`; content stays the staged snapshot_
+- [x] Verify live in local dev: an `.svg` with an embedded `<script>alert`
       renders inert in preview; a staged `.html` shows preview in the Index
-      view; screenshots in the PR body
-- [ ] typecheck / lint / format / scoped tests
+      view; screenshots in the PR body — _Playwright walkthrough against
+      `pnpm dev` + `getin`-minted session: svg with `alert("pwned")` +
+      `window.top.document.title` hijack rendered animated but inert (no
+      dialog, top title still "OS", `sandbox="allow-scripts"`); staged
+      hello.html edit previewed in the Index view_
+- [x] typecheck / lint / format / scoped tests — _all green; no tests
+      exist for the repo-ide components (matching the parent PR)_
 
 ## Implementation log
 
-(append as work happens)
+- Seeding gotcha for future verifiers: `itx.repos.get("demo")` creates
+  `/demo`, but the IDE lives at `/repos/demo` — pass the full
+  `/repos/demo` path to `get()`.
+- The Chrome-extension browser wasn't connected, so verification ran as a
+  root-level Playwright script (repo's own `playwright` dep) against the
+  detached dev server; sign-in via `pnpm getin --print`'s one-shot URL.
+- The Source-control activity button's accessible name is the pending-change
+  badge count (the `title` attr loses to text content), so scripts must
+  select it by `button[title="Source control"]`.
