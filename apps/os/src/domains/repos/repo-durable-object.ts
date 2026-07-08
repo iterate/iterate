@@ -103,6 +103,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     // stale head forever (the cache never self-invalidates).
     const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (isRepoHeadRecord(raced)) return { branch, ...raced };
+    // Same staleness rule against the recorded push: a checkout that lags the
+    // last pushed head (snapshot retries exhausted, or a syncFromGithub moved
+    // the branch while this clone was in flight) may be SERVED once, but must
+    // never be CACHED — an un-invalidatable cache entry would pin builds to
+    // the pre-sync head forever.
+    const pushed = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+    if (typeof pushed === "string" && pushed !== head.commitOid) return { branch, ...head };
     this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
     return { branch, ...head };
   }
@@ -494,60 +501,74 @@ export class RepoDurableObject extends DurableObject<Env> {
 
     // `noCheckout`: the sync only moves OBJECTS from GitHub to Artifacts; the
     // working tree would double peak memory (and the content hash that used
-    // to need it is repaired lazily below). This is what lets a monorepo-
-    // sized history fit the 128MB isolate.
-    const filesystem = new InMemoryFs();
-    const git = createGit(filesystem, REPO_DIR);
-    try {
-      await git.clone({
-        branch,
-        noCheckout: true,
-        singleBranch: true,
-        url: githubRemoteUrl(link),
-        username: "x-access-token",
-        password: token,
+    // to need it is repaired via getHead below). Scoped in its own closure so
+    // the clone's in-memory fs is unreachable — collectable — before the
+    // head-cache rebuild clones again. Both together are what let a
+    // monorepo-sized history fit the 128MB isolate.
+    const headOid = await (async () => {
+      const filesystem = new InMemoryFs();
+      const git = createGit(filesystem, REPO_DIR);
+      try {
+        await git.clone({
+          branch,
+          noCheckout: true,
+          singleBranch: true,
+          url: githubRemoteUrl(link),
+          username: "x-access-token",
+          password: token,
+        });
+      } catch (error) {
+        throw new Error(
+          `Could not clone ${link.owner}/${link.repo}#${branch} from GitHub (missing branch or empty repository?): ${String(error)}`,
+        );
+      }
+      const [head] = await git.log({ depth: 1 });
+      if (!head) throw new Error(`GitHub ${link.owner}/${link.repo}#${branch} has no commits.`);
+      if (head.oid === previousCommitOid) return null;
+
+      await git.remote({ add: { name: "artifacts", url: repo.remote } });
+      const pushed = await git.push({
+        force: input.force === true,
+        ref: branch,
+        remote: "artifacts",
+        username: "x",
+        password: repo.token,
       });
-    } catch (error) {
-      throw new Error(
-        `Could not clone ${link.owner}/${link.repo}#${branch} from GitHub (missing branch or empty repository?): ${String(error)}`,
-      );
-    }
-    const [head] = await git.log({ depth: 1 });
-    if (!head) throw new Error(`GitHub ${link.owner}/${link.repo}#${branch} has no commits.`);
+      if (!pushed.ok) {
+        throw new Error(
+          `syncFromGithub is not a fast-forward: this repo has commits GitHub does not. Pass force: true to discard them and adopt GitHub's head. (${JSON.stringify(pushed.refs)})`,
+        );
+      }
+      return head.oid;
+    })();
 
-    if (head.oid === previousCommitOid) {
-      return { branch, changed: false, commitOid: head.oid, forced: false, previousCommitOid };
-    }
-
-    await git.remote({ add: { name: "artifacts", url: repo.remote } });
-    const pushed = await git.push({
-      force: input.force === true,
-      ref: branch,
-      remote: "artifacts",
-      username: "x",
-      password: repo.token,
-    });
-    if (!pushed.ok) {
-      throw new Error(
-        `syncFromGithub is not a fast-forward: this repo has commits GitHub does not. Pass force: true to discard them and adopt GitHub's head. (${JSON.stringify(pushed.refs)})`,
-      );
+    if (headOid === null) {
+      return {
+        branch,
+        changed: false,
+        commitOid: previousCommitOid!,
+        forced: false,
+        previousCommitOid,
+      };
     }
 
-    // The adopted head is recorded for read-your-write, but the head CACHE is
-    // invalidated instead of recomputed: computing the contentHash here would
-    // need a full checkout (the memory hog this sync deliberately avoids).
-    // The next getHead() cold-misses and repairs the cache from a shallow
-    // depth-1 clone — the same lazy path a brand-new incarnation uses — so
-    // the synced head is still immediately live for worker builds.
-    this.#recordPushedHead({ branch, commitOid: head.oid });
+    // The adopted head is recorded for read-your-write, then the head cache
+    // is invalidated and rebuilt through getHead's own cold-miss path rather
+    // than recomputed inline (the inline contentHash needed a full checkout —
+    // the memory hog this sync deliberately avoids). Ordering matters: with
+    // the pushed head recorded first, getHead's lags-the-push guard keeps any
+    // concurrently in-flight pre-sync checkout from repopulating the cache
+    // with the old head.
+    this.#recordPushedHead({ branch, commitOid: headOid });
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    await this.getHead({ branch });
 
     await this.#host.stream.append({
       type: "events.iterate.com/repo/github-synced",
-      idempotencyKey: `github-synced:${link.owner}/${link.repo}:${head.oid}`,
+      idempotencyKey: `github-synced:${link.owner}/${link.repo}:${headOid}`,
       payload: {
         branch,
-        commitOid: head.oid,
+        commitOid: headOid,
         forced: input.force === true,
         owner: link.owner,
         previousCommitOid,
@@ -557,7 +578,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     return {
       branch,
       changed: true,
-      commitOid: head.oid,
+      commitOid: headOid,
       forced: input.force === true,
       previousCommitOid,
     };
