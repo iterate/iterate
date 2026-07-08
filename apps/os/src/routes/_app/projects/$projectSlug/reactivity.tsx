@@ -3,8 +3,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import type { ProjectProcessorState } from "../../../../domains/projects/project-processor-contract.ts";
+import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import type { ProjectProcessorState, StreamEvent } from "~/types.ts";
 import {
   useItx,
   useItxState,

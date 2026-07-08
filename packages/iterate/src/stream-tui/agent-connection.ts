@@ -8,7 +8,11 @@
  */
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../../../apps/os/src/itx-client.ts";
-import type { Agent, ItxAuthCredentials, StreamEvent } from "../../../../apps/os/src/types.ts";
+import type {
+  Agent,
+  ItxAuthCredentials,
+  StreamEvent,
+} from "../../../../apps/os/src/itx-api.generated.ts";
 import { readConfig } from "../config.ts";
 
 const RECONNECT_DELAY_MS = 1_000;

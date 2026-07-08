@@ -7,7 +7,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,

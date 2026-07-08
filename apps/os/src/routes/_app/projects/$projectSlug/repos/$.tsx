@@ -13,12 +13,12 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import type { RepoProcessorState } from "../../../../../domains/repos/repo-processor-contract.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import type { RepoProcessorState } from "~/types.ts";
 import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
 
 const CommitFileForm = z.object({

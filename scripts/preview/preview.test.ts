@@ -88,6 +88,84 @@ describe("preview workflow scope", () => {
   });
 });
 
+describe("draft preview policy", () => {
+  const { decideDraftPreviewPolicy } = previewInternals;
+
+  it("deploys ready PRs regardless of labels or leases", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: false,
+        isDraft: false,
+        labels: [],
+      }),
+    ).toBe("deploy");
+  });
+
+  it("skips drafts that never had a slot", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: false,
+        isDraft: true,
+        labels: ["bug"],
+      }),
+    ).toBe("skip");
+  });
+
+  it("gives a draft's slot back when it holds one without asking", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: true,
+        isDraft: true,
+        labels: [],
+      }),
+    ).toBe("teardown");
+  });
+
+  it("deploys drafts wearing the preview label", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: false,
+        hasRecordedLease: false,
+        isDraft: true,
+        labels: ["preview"],
+      }),
+    ).toBe("deploy");
+  });
+
+  it("deploys drafts when the caller explicitly allows it", () => {
+    expect(
+      decideDraftPreviewPolicy({
+        allowDraft: true,
+        hasRecordedLease: false,
+        isDraft: true,
+        labels: [],
+      }),
+    ).toBe("deploy");
+  });
+
+  it("wires the lifecycle events and the dispatch override into the workflow", () => {
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+
+    // Draft/label transitions must re-run the policy so a PR can claim a
+    // slot (ready_for_review, labeled) or give one back (converted_to_draft,
+    // unlabeled).
+    expect(workflow).toContain("- ready_for_review");
+    expect(workflow).toContain("- converted_to_draft");
+    expect(workflow).toContain("- labeled");
+    expect(workflow).toContain("- unlabeled");
+    // A manual dispatch is an explicit ask, so it bypasses the draft policy.
+    expect(workflow).toContain(
+      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}",
+    );
+  });
+});
+
 describe("auth preview root secrets", () => {
   it("seeds from auth/dev when the preview root has no value", () => {
     const reads: string[] = [];
@@ -334,6 +412,9 @@ describe("cloudflare preview state helpers", () => {
       testDurationMs: 678,
       status: "deployed",
       updatedAt: "2026-04-02T10:00:00.000Z",
+      workerSizeKib: 91_000.5,
+      workerGzipKib: 3_500,
+      mainWorkerGzipKib: 3_450,
     });
 
     const state = {
@@ -352,16 +433,16 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("## Summary");
     expect(body).toContain("## Environment Config Lease");
     expect(body).toContain(
-      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
+      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain(
-      "| app | status | commit | preview | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
+      "| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain(
-      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 12.3s | 678ms |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
+      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 3.42 MiB (+50.0 KiB vs main) | 12.3s | 678ms |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
     );
   });
 
@@ -398,7 +479,7 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("Footer");
     expect(body).toContain("<summary>No active environment config lease.</summary>");
     expect(body).toContain(
-      "| OS | tests failed | `1234567` |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
+      "| OS | tests failed | `1234567` |  |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
     );
     expect(body).toContain("<details>");
     expect(body).toContain("<summary>OS failure details</summary>");
@@ -781,6 +862,10 @@ function fakeSemaphore(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Every acquire path must be able to erase a reclaimed slot; tests that
+// never reclaim share this inert eraser.
+const noopEraseSlotData = async () => {};
+
 const previousLease = EnvironmentConfigLease.parse({
   dopplerConfig: "preview_2",
   leasedUntil: 1_700_000_000_000,
@@ -796,6 +881,7 @@ describe("claimEnvironmentConfigLease", () => {
     });
 
     const lease = await claimEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -817,6 +903,7 @@ describe("claimEnvironmentConfigLease", () => {
     });
 
     const lease = await claimEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -854,6 +941,7 @@ describe("claimEnvironmentConfigLease", () => {
     });
 
     const lease = await claimEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -888,6 +976,7 @@ describe("claimEnvironmentConfigLease", () => {
     });
 
     const lease = await claimEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -902,6 +991,43 @@ describe("claimEnvironmentConfigLease", () => {
     expect(semaphore.acquire).not.toHaveBeenCalled();
   });
 
+  it("erases an adopted slot that is not the PR body's recorded one", async () => {
+    // The adopted lease exists precisely because a previous run died before
+    // recording it — possibly mid-erase — so its provenance is unknown.
+    const eraseSlotData = vi.fn(async () => {});
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_three" } }),
+      ),
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_three" },
+          holder: "pr-1600",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-3",
+        },
+      ]),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      eraseSlotData,
+      createPreviewSemaphoreResourceClient: () => semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      previousEnvironmentConfigLease: null,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-3");
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_three",
+      slug: "preview-3",
+    });
+  });
+
   it("propagates unexpected semaphore errors instead of silently switching slots", async () => {
     const semaphore = fakeSemaphore({
       renew: vi.fn(async () => {
@@ -911,6 +1037,7 @@ describe("claimEnvironmentConfigLease", () => {
 
     await expect(
       claimEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
         createPreviewSemaphoreResourceClient: () => semaphore,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -939,6 +1066,7 @@ describe("acquireAnyEnvironmentConfigLease", () => {
     const semaphore = fakeSemaphore({ acquire });
 
     const lease = await acquireAnyEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -969,6 +1097,7 @@ describe("acquireAnyEnvironmentConfigLease", () => {
 
     await expect(
       acquireAnyEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
         semaphore,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -986,6 +1115,7 @@ describe("acquireAnyEnvironmentConfigLease", () => {
 
     await expect(
       acquireAnyEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
         semaphore,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -1169,6 +1299,7 @@ describe("orphaned lease garbage collection during acquire", () => {
     });
 
     const lease = await acquireAnyEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       semaphore,
       fetchPullRequestState: async () => "closed",
       holder: "pr-1600",
@@ -1180,6 +1311,137 @@ describe("orphaned lease garbage collection during acquire", () => {
     expect(acquireSpecific).toHaveBeenCalledWith(
       expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
     );
+  });
+
+  it("erases the reclaimed slot's data before handing it over", async () => {
+    // A reclaim only happens because the dead holder's cleanup — which erases
+    // on the way out — never ran, so the slot is dirty by definition. The
+    // deliberately non-conventional dopplerConfig pins that the erase target
+    // comes from the LEASE's data payload, not derived from the slug.
+    const eraseSlotData = vi.fn(async () => {});
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      acquireSpecific: vi.fn(async (input: { slug: string }) =>
+        fakeLease({ slug: input.slug, data: { dopplerConfig: "preview_two" }, holder: "pr-1600" }),
+      ),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
+    });
+
+    const lease = await acquireAnyEnvironmentConfigLease({
+      eraseSlotData,
+      semaphore,
+      fetchPullRequestState: async () => "closed",
+      holder: "pr-1600",
+      leaseMs: 1000,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_two",
+      slug: "preview-2",
+    });
+  });
+
+  it("a failed erase releases the reclaimed lease instead of handing over a dirty slot", async () => {
+    const eraseSlotData = vi.fn(async () => {
+      throw new Error("doppler exploded");
+    });
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      acquireSpecific: vi.fn(async (input: { slug: string }) =>
+        fakeLease({
+          slug: input.slug,
+          data: { dopplerConfig: "preview_2" },
+          holder: "pr-1600",
+          leaseId: "11111111-2222-3333-4444-555555555555",
+        }),
+      ),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
+      release,
+    });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        eraseSlotData,
+        semaphore,
+        fetchPullRequestState: async () => "closed",
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 0,
+      }),
+    ).rejects.toThrow(/Could not hand pr-1600 a clean slot/);
+
+    expect(eraseSlotData).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "preview-2",
+        leaseId: "11111111-2222-3333-4444-555555555555",
+      }),
+    );
+  });
+
+  it("retries after a failed erase until the slot comes back clean", async () => {
+    // The failure path gives the lease back and loops; the next take of the
+    // same slot re-runs the erase. One transient doppler hiccup must not
+    // wedge the claim — and a dirty slot must never be the thing returned.
+    const eraseSlotData = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(new Error("transient doppler hiccup"));
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      acquireSpecific: vi.fn(async (input: { slug: string }) =>
+        fakeLease({ slug: input.slug, holder: "pr-1600" }),
+      ),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
+      release,
+    });
+
+    const lease = await acquireAnyEnvironmentConfigLease({
+      eraseSlotData,
+      semaphore,
+      fetchPullRequestState: async () => "closed",
+      holder: "pr-1600",
+      leaseMs: 1000,
+      waitTotalMs: 60_000,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(eraseSlotData).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("erases a freshly acquired slot too — cleanliness is an entry invariant", async () => {
+    // Plain acquire (no reclaim involved) must erase as well: exit paths like
+    // lease expiry after a failed cleanup return dirty slots to the pool as
+    // plain "available", and this is what makes them harmless.
+    const eraseSlotData = vi.fn(async () => {});
+    const acquire = vi.fn(async () =>
+      fakeLease({ slug: "preview-7", data: { dopplerConfig: "preview_seven" } }),
+    );
+    const semaphore = fakeSemaphore({ acquire });
+
+    const lease = await acquireAnyEnvironmentConfigLease({
+      eraseSlotData,
+      semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-7");
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_seven",
+      slug: "preview-7",
+    });
   });
 
   it("never touches slots whose holder PR is open or manual", async () => {
@@ -1197,6 +1459,7 @@ describe("orphaned lease garbage collection during acquire", () => {
 
     await expect(
       acquireAnyEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
         semaphore,
         fetchPullRequestState: async () => "open",
         holder: "pr-1600",
@@ -1219,6 +1482,7 @@ describe("orphaned lease garbage collection during acquire", () => {
 
     await expect(
       acquireAnyEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
         semaphore,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -1238,6 +1502,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
       recordedLease: previousLease,
@@ -1257,6 +1522,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
       recordedLease: previousLease,
@@ -1283,6 +1549,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
       recordedLease: previousLease,
@@ -1321,6 +1588,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       force: true,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -1351,6 +1619,7 @@ describe("assignEnvironmentConfigLease", () => {
 
     await expect(
       assignEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,
         recordedLease: null,
@@ -1367,6 +1636,7 @@ describe("assignEnvironmentConfigLease", () => {
     const semaphore = fakeSemaphore({ acquireSpecific });
 
     const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
       force: true,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -1377,5 +1647,60 @@ describe("assignEnvironmentConfigLease", () => {
 
     expect(result.outcome).toBe("assigned");
     expect(acquireSpecific).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+  });
+
+  it("erases the wanted slot on handover — including a --force eviction", async () => {
+    const eraseSlotData = vi.fn(async () => {});
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_five" } }),
+      ),
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      eraseSlotData,
+      force: true,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedLease: null,
+      semaphore,
+      wantedSlug: "preview-5",
+    });
+
+    expect(result.lease.slug).toBe("preview-5");
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_five",
+      slug: "preview-5",
+    });
+  });
+
+  it("a failed erase on the wanted slot gives the lease back and throws", async () => {
+    const eraseSlotData = vi.fn(async () => {
+      throw new Error("doppler exploded");
+    });
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ slug: "preview-5", leaseId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
+      ),
+      release,
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        eraseSlotData,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedLease: null,
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/Erasing preview-5 failed/);
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "preview-5",
+        leaseId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      }),
+    );
   });
 });

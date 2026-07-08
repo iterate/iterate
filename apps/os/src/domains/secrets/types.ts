@@ -1,0 +1,85 @@
+/**
+ * Public secret capability data shapes. A secret's public live state IS its
+ * {@link SecretDescription}: there is deliberately no separate secret processor
+ * state type — the internal fold carries the encrypted material, and the DO's
+ * processor facade projects it away (write-only material) before anything
+ * crosses the RPC boundary.
+ */
+
+export type SecretUpdateInput = {
+  egress?: { urls: string[] };
+  /** Any serializable value (write-only, one JSON blob). A plain string keeps
+   * the whole-material placeholder working; structured material is addressed
+   * by `field` in placeholders (design §2.1). */
+  material?: unknown;
+  /** A named refresh strategy the secret runs in trusted DO code when a
+   * substituted request 401s (or a referenced field is missing), or `null` to
+   * clear it. Omitted leaves any configured strategy unchanged. */
+  refresh?: SecretRefresh | null;
+};
+
+/**
+ * A reference to a deployment-owned platform credential, resolved from typed
+ * AppConfig in trusted platform code — never stored in project material, never
+ * readable. Each known config path carries its own allowed-origin list
+ * (platform-secrets.ts), so a credential can only ever be sent to the hosts it
+ * belongs to, no matter who configured the reference.
+ */
+export type PlatformCredsRef = { platform: string };
+
+/**
+ * A named credential-refresh strategy a secret runs in its own trusted DO
+ * code — one shared implementation per protocol instead of a worker copied
+ * into every secret. Client credentials come from the secret's own material
+ * (`"material"`, the bring-your-own-app case) or a platform config reference
+ * (built-ins). Exchange endpoints must fall within the secret's pinned egress
+ * hosts, so refresh preserves the cell invariant: bytes only ever leave toward
+ * pinned hosts.
+ */
+export type SecretRefresh =
+  | {
+      kind: "oauth-refresh-token";
+      /** RFC 6749 refresh_token grant target (e.g. the provider's /token URL).
+       * Its origin must be within the secret's pinned egress hosts. */
+      tokenEndpoint: string;
+      /** Where the Basic client credential comes from: `"material"` reads
+       * clientId/clientSecret fields of this secret's own material. */
+      clientCreds: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "github-app-installation";
+      /** GitHub API origin (or a stand-in in e2e). Its origin must be within
+       * the secret's pinned egress hosts. */
+      apiBase: string;
+      /** The App id — the JWT issuer (public). */
+      appId: string;
+      /** The installation this connection acts as (public — it is the
+       * connection's external id, not secret material). */
+      installationId: string;
+      /** Where the App's RS256 private key comes from: `"material"` reads the
+       * privateKey field of this secret's own material (bring-your-own-App). */
+      privateKey: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "waitrose-session";
+      /** The Waitrose GraphQL endpoint (or a stand-in in e2e) the `NewSession`
+       * mutation is POSTed to. Its origin must be within the secret's pinned
+       * egress hosts. Waitrose has no token-refresh grant — re-login IS the
+       * refresh — so this strategy re-runs the login with `username`/`password`
+       * from this secret's own material and stores the returned `accessToken`.
+       * Material-only by nature: a Waitrose account is always the user's own. */
+      graphqlUrl: string;
+    };
+
+export type SecretDescription = {
+  audit: {
+    lastUsedAt?: string;
+    lastUsedBy?: string;
+    lastUsedUrl?: string;
+    usedCount: number;
+  };
+  egress: { urls: string[] };
+  hasMaterial: boolean;
+  /** The configured refresh strategy's kind, or null when none is configured. */
+  refresh: SecretRefresh["kind"] | null;
+};

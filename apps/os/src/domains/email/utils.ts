@@ -1,8 +1,9 @@
 // First-party email (the `itx.email` capability): pure helpers only — the
-// env-touching send orchestration lives in rpc-targets.ts's EmailRpcTarget and
-// the inbound door in email-ingress.ts. Inbound mail routes through the
-// "email" processor on `/integrations/email` into one agent stream per email
-// thread (`/agents/email/t<threadId>`); see email-processor-contract.ts.
+// env-touching send orchestration lives in rpc-targets.ts's
+// EmailCapabilityRpcTarget and the inbound door in email-ingress.ts. Inbound
+// mail routes through the "email" processor on `/integrations/email` into one
+// agent stream per email thread (`/agents/email/t<threadId>`); see
+// email-processor-contract.ts.
 
 import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
 
@@ -47,6 +48,30 @@ export type SendEmailBinding = {
     attachments?: OutboundEmailAttachment[];
   }): Promise<unknown>;
 };
+
+/**
+ * One outbound email attachment as the CALLER passes it: either a stored
+ * project file addressed by its `itx.files` path, or inline base64 content
+ * for bytes the caller already holds. Any file type works (PDFs, images,
+ * archives, …) within the Email Service limits: 32 attachments, 5 MiB total
+ * message size.
+ */
+export type EmailAttachmentInput =
+  | {
+      /** Project file path (`itx.files.get(path)`) to attach. */
+      path: string;
+      /** Override the attachment filename; defaults to the path's last segment. */
+      filename?: string;
+      /** Override the MIME type; defaults to the stored file's contentType. */
+      contentType?: string;
+    }
+  | {
+      filename: string;
+      /** Base64-encoded content. */
+      data: string;
+      /** MIME type; defaults to application/octet-stream. */
+      contentType?: string;
+    };
 
 /** One outbound attachment in the Email Service structured send() shape. */
 export type OutboundEmailAttachment = {
@@ -102,6 +127,17 @@ export function emailThreadReplyAddress(input: {
 /** The agent stream path for one email thread. Stable wire shape. */
 export function emailAgentPath(threadId: string): string {
   return `/agents/email/t${threadId}`;
+}
+
+/**
+ * Thread id for an agent-INITIATED email conversation (an agent-scoped
+ * `itx.email.send`): random where inbound thread ids are stream offsets,
+ * because a send happens in an RPC action with no offset to key on. The `a`
+ * prefix marks agent-initiated threads in logs and Reply-To tags; the
+ * alphabet stays inside the `+t<threadId>` tag grammar (`[a-z0-9-]+`).
+ */
+export function mintOutboundEmailThreadId(): string {
+  return `a${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 }
 
 export function isEmailAgentPath(agentPath: string): boolean {
@@ -356,10 +392,11 @@ function isProjectOwnedAddress(address: string, projectAddress: string): boolean
   return normalized.startsWith(`${slug}+`) && normalized.endsWith(domain);
 }
 
-/** What `itx.email.send` accepts — see EmailCapability in types.ts for the
- * contract docs. Attachments arrive already resolved to bytes: the caller
- * shape (`{ path }` project files / `{ data }` inline base64) is resolved by
- * EmailRpcTarget before this pure layer sees it. */
+/** What `itx.email.send` accepts — see EmailCapabilityRpcTarget in
+ * rpc-targets.ts for the contract docs. Attachments arrive already resolved to
+ * bytes: the caller shape (`{ path }` project files / `{ data }` inline
+ * base64) is resolved by EmailCapabilityRpcTarget before this pure layer sees
+ * it. */
 type SendProjectEmailRequest = {
   to: string | string[];
   subject: string;

@@ -13,12 +13,12 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import type { SecretDescription } from "../../../../../domains/secrets/types.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import type { SecretDescription } from "~/types.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({

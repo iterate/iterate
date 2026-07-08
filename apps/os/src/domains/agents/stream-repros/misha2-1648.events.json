@@ -1,0 +1,164 @@
+[
+  {
+    "type": "events.iterate.com/agent/llm-provider-selected",
+    "payload": {
+      "ifUnset": true,
+      "model": "gpt-5.5",
+      "provider": "openai-ws"
+    },
+    "idempotencyKey": "agent/llm-provider-selected:prj_e44b80bc88414d309a5aa5fb808fd962:/agents/1648",
+    "offset": 9,
+    "createdAt": "2026-07-07T15:48:14.981Z"
+  },
+  {
+    "type": "events.iterate.com/agents/user-message-received",
+    "payload": {
+      "content": "Nice. What language is that",
+      "origin": "web"
+    },
+    "offset": 2940,
+    "createdAt": "2026-07-07T16:43:59.892Z"
+  },
+  {
+    "type": "events.iterate.com/agent/input-added",
+    "payload": {
+      "content": "Nice. What language is that",
+      "llmRequestPolicy": {
+        "behaviour": "after-current-request"
+      }
+    },
+    "idempotencyKey": "agent/render-web-message@2940",
+    "offset": 2941,
+    "createdAt": "2026-07-07T16:43:59.909Z"
+  },
+  {
+    "type": "events.iterate.com/agent/llm-request-scheduled",
+    "payload": {
+      "debounceMs": 250,
+      "model": "gpt-5.5",
+      "provider": "openai-ws",
+      "requestId": "llm-request:gen-21"
+    },
+    "idempotencyKey": "agent/llm-request-scheduled@generation:21",
+    "offset": 2942,
+    "createdAt": "2026-07-07T16:43:59.932Z"
+  },
+  {
+    "type": "events.iterate.com/agent/llm-request-requested",
+    "payload": {
+      "model": "gpt-5.5",
+      "provider": "openai-ws",
+      "requestId": "llm-request:gen-21"
+    },
+    "idempotencyKey": "agent/llm-request-requested@2942",
+    "offset": 2943,
+    "createdAt": "2026-07-07T16:44:00.200Z"
+  },
+  {
+    "type": "events.iterate.com/openai-ws/llm-request-started",
+    "payload": {
+      "llmRequestId": 2943,
+      "model": "gpt-5.5"
+    },
+    "idempotencyKey": "openai-ws/llm-request-started@2943",
+    "offset": 2944,
+    "createdAt": "2026-07-07T16:44:00.223Z"
+  },
+  {
+    "type": "events.iterate.com/agent/output-added",
+    "payload": {
+      "content": "```js\nasync (itx) => {\n  await itx.chat.sendMessage({ message: \"`salve` is Latin. It’s a greeting meaning “hello” or “hail,” typically addressed to one person.\" });\n}\n```",
+      "llmRequestId": 2943
+    },
+    "idempotencyKey": "openai-ws/agent-output-added@2943",
+    "offset": 3001,
+    "createdAt": "2026-07-07T16:44:05.645Z"
+  },
+  {
+    "type": "events.iterate.com/openai-ws/llm-request-completed",
+    "payload": {
+      "durationMs": 5315,
+      "llmRequestId": 2943,
+      "result": {
+        "status": "success",
+        "usage": {
+          "input_tokens": 23322,
+          "input_tokens_details": {
+            "cached_tokens": 22784
+          },
+          "output_tokens": 52,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 23374
+        }
+      }
+    },
+    "idempotencyKey": "openai-ws/provider-completed@2943",
+    "offset": 3002,
+    "createdAt": "2026-07-07T16:44:05.665Z"
+  },
+  {
+    "type": "events.iterate.com/agent/llm-request-completed",
+    "payload": {
+      "durationMs": 5315,
+      "llmRequestId": 2943,
+      "provider": "openai-ws",
+      "result": {
+        "status": "success",
+        "usage": {
+          "input_tokens": 23322,
+          "input_tokens_details": {
+            "cached_tokens": 22784
+          },
+          "output_tokens": 52,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 23374
+        }
+      }
+    },
+    "idempotencyKey": "openai-ws/agent-completed@2943",
+    "offset": 3003,
+    "createdAt": "2026-07-07T16:44:05.665Z"
+  },
+  {
+    "type": "events.iterate.com/capability-host/script-execution-requested",
+    "payload": {
+      "code": "async (itx) => {\n  await itx.chat.sendMessage({ message: \"`salve` is Latin. It’s a greeting meaning “hello” or “hail,” typically addressed to one person.\" });\n}",
+      "executionId": "agent-output:3001"
+    },
+    "idempotencyKey": "itx/script-execution-requested@3001",
+    "offset": 3004,
+    "createdAt": "2026-07-07T16:44:05.665Z"
+  },
+  {
+    "type": "events.iterate.com/agents/web-message-sent",
+    "payload": {
+      "message": "`salve` is Latin. It’s a greeting meaning “hello” or “hail,” typically addressed to one person."
+    },
+    "offset": 3005,
+    "createdAt": "2026-07-07T16:44:05.707Z"
+  },
+  {
+    "type": "events.iterate.com/agent/input-added",
+    "payload": {
+      "content": "The assistant sent this visible web-chat message: `salve` is Latin. It’s a greeting meaning “hello” or “hail,” typically addressed to one person.",
+      "llmRequestPolicy": {
+        "behaviour": "dont-trigger-request"
+      }
+    },
+    "idempotencyKey": "agent/render-web-response@3005",
+    "offset": 3006,
+    "createdAt": "2026-07-07T16:44:05.727Z"
+  },
+  {
+    "type": "events.iterate.com/capability-host/script-execution-completed",
+    "payload": {
+      "executionId": "agent-output:3001"
+    },
+    "offset": 3007,
+    "createdAt": "2026-07-07T16:44:05.728Z"
+  }
+]

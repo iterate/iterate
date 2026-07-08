@@ -54,7 +54,7 @@ live in domain files.
 ## `__describe()`: discovery everywhere
 
 Every node in the tree answers `__describe()` with the same envelope
-(`Description` in types.ts): `instructions` (prose for this node), `types`
+(`Description` in `domains/itx/describe.ts`): `instructions` (prose for this node), `types`
 (TypeScript source), `children` (one-line blip per member — the high-level
 map), and `parent` (where the node sits). Nodes add structured extras — a
 project adds `projectId`/`name`/`capabilities`, a session adds `principal`,
@@ -109,7 +109,7 @@ Itx (ProjectRpcTarget) -- "itx" is a convention: capabilityHost.path selects
 |                                                         get("/") mounts project-wide
 |-- provideCapability / revokeCapability               shortcuts -> capabilityHost
 |-- debug()                                            dashboard/debug info (Slack-friendly)
-|-- integrations (IntegrationsRpcTarget)               connections + connection-scoped proxies
+|-- integrations (ProjectIntegrationsRpcTarget)               connections + connection-scoped proxies
 |   |-- getConnection / startOAuthFlow / disconnect
 |   |-- gmail (GmailRpcTarget)                         gmail.request({ path, query })
 |   `-- slack (SlackRpcTarget)                         slack.chat.postMessage({ ... })
@@ -306,7 +306,7 @@ reducing committed history up to that offset, executes the call, and appends
 started/chunk/output/completed events. The agent contract: respond with
 exactly one fenced JavaScript block containing a single
 `async (itx) => { … }`, which the ITX processor executes; replies reach the
-user via `itx.chat.sendMessage({ message })`
+user via `itx.chat.sendMessage(message)`
 (`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
 calls: a returned value (or thrown error) renders back into history as the
 next input and triggers another turn, while a script that returns `undefined`

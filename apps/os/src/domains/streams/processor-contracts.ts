@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StreamEvent, StreamEventInput } from "../../types.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
@@ -89,7 +89,7 @@ type EventDefinitionForType<
 
 // -----------------------------------------------------------------------------
 // Event shapes: the app's non-generic `StreamEvent` / `StreamEventInput` from
-// `src/types.ts`, re-expressed with `<Type, Payload>` generics for inference.
+// `./schemas.ts`, re-expressed with `<Type, Payload>` generics for inference.
 // -----------------------------------------------------------------------------
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
@@ -192,6 +192,17 @@ export type ProcessorState<Contract> = Contract extends {
 }
   ? z.output<State>
   : never;
+
+/**
+ * One committed-event shape from a contract's consumable union, narrowed by
+ * its durable type string: `ProcessorEvent<RepoProcessorContract,
+ * "events.iterate.com/repo/created">`. Contracts export their type under the
+ * same identifier as the value, so no `typeof` at the call site.
+ */
+export type ProcessorEvent<Contract, Type extends ConsumedEvent<Contract>["type"]> = Extract<
+  ConsumedEvent<Contract>,
+  { type: Type }
+>;
 
 // -----------------------------------------------------------------------------
 // Authoring-time validation types for defineProcessorContract.

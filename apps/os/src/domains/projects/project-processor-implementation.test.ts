@@ -170,6 +170,11 @@ describe("ProjectProcessor custom domains", () => {
       ),
     ).resolves.toBe(true);
 
+    expect(harness.customDomains.refresh).toHaveBeenCalledWith({
+      cloudflareHostnameId: "custom-hostname-1",
+      hostname: "garple.com",
+      project,
+    });
     expect(
       reduceCustomDomainEvent({
         event: harness.appended[0]!,

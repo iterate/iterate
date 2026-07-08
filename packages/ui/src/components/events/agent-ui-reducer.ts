@@ -102,11 +102,20 @@ export type AgentUiChildStreamItem = {
   timestampMs: number;
 };
 
+export type AgentUiStreamPauseItem = {
+  kind: "stream-paused" | "stream-resumed";
+  id: string;
+  text: string;
+  reason?: string;
+  timestampMs: number;
+};
+
 export type AgentUiItem =
   | AgentUiMessageItem
   | AgentUiActivity
   | AgentUiStreamWakeItem
-  | AgentUiChildStreamItem;
+  | AgentUiChildStreamItem
+  | AgentUiStreamPauseItem;
 
 export type AgentUiProcessorAnnouncement = {
   slug: string;
@@ -193,6 +202,8 @@ const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connec
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
 const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
+const STREAM_PAUSED = "events.iterate.com/stream/paused";
+const STREAM_RESUMED = "events.iterate.com/stream/resumed";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -528,6 +539,24 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       });
     }
 
+    case STREAM_PAUSED:
+      return emitItem(state, ops, {
+        kind: "stream-paused",
+        id: `stream-paused-${event.offset}`,
+        text: "Agent paused",
+        ...readOptionalReason(event),
+        timestampMs,
+      });
+
+    case STREAM_RESUMED:
+      return emitItem(state, ops, {
+        kind: "stream-resumed",
+        id: `stream-resumed-${event.offset}`,
+        text: "Agent resumed",
+        ...readOptionalReason(event),
+        timestampMs,
+      });
+
     default:
       return state;
   }
@@ -810,6 +839,11 @@ function readFileAttachments(event: Event): AgentUiFileAttachment[] {
 function readString(event: Event, key: string): string | null {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "string" ? value : null;
+}
+
+function readOptionalReason(event: Event): { reason: string } | Record<string, never> {
+  const reason = readString(event, "reason");
+  return reason == null ? {} : { reason };
 }
 
 function readNumber(event: Event, key: string): number | null {

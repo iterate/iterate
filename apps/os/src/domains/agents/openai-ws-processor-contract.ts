@@ -10,8 +10,15 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Runs agent LLM requests through OpenAI Responses WebSocket mode.",
   stateSchema: z.object({
+    /**
+     * Per-request lifecycle fold. "requested" is set from the agent's
+     * llm-request-requested (this provider only) BEFORE any execution work, so
+     * a request the executing incarnation died on — between accepting it and
+     * appending its completion — is visible as an orphan to the next
+     * incarnation's recovery sweep (see recoverOrphanedRequests).
+     */
     requests: z
-      .record(z.string(), z.object({ status: z.enum(["started", "completed"]) }))
+      .record(z.string(), z.object({ status: z.enum(["requested", "started", "completed"]) }))
       .default({}),
   }),
   events: {
@@ -64,3 +71,10 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-completed",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<OpenAiWsProcessorContract>`,
+ * `ConsumedEvent<OpenAiWsProcessorContract>`, `ProcessorEvent<OpenAiWsProcessorContract, T>`.
+ */
+export type OpenAiWsProcessorContract = typeof OpenAiWsProcessorContract;

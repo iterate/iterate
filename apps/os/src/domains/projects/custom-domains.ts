@@ -65,6 +65,7 @@ export type ProjectCustomDomainProvisioner = {
     project: ProjectDirectoryRecord;
   }): Promise<ProjectCustomDomainCloudflareSnapshot>;
   refresh(input: {
+    cloudflareHostnameId?: string | null;
     hostname: string;
     project: ProjectDirectoryRecord;
   }): Promise<ProjectCustomDomainCloudflareSnapshot>;
@@ -150,17 +151,28 @@ export function createCloudflareCustomDomainProvisioner(options: {
       return snapshot;
     },
 
-    async refresh({ hostname, project }) {
+    async refresh({ cloudflareHostnameId, hostname, project }) {
       const normalized = normalizeProjectCustomDomain({
         hostname,
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const customHostname = await client.findCustomHostname(normalized);
+      const customHostname =
+        (cloudflareHostnameId
+          ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
+              if (error instanceof CloudflareApiError && error.status === 404) return null;
+              throw error;
+            })
+          : null) ?? (await client.findCustomHostname(normalized));
       if (!customHostname) {
         throw new Error(`Cloudflare custom hostname "${normalized}" was not found.`);
       }
-      assertCloudflareHostnameBelongsToProject(customHostname, project);
+      if (cloudflareHostnameId) {
+        assertCloudflareHostnameMatches(customHostname, normalized);
+        assertCloudflareHostnameNotOwnedByAnotherProject(customHostname, project);
+      } else {
+        assertCloudflareHostnameBelongsToProject(customHostname, project);
+      }
       const snapshot = await snapshotCustomHostname({
         client,
         customHostname,
@@ -181,11 +193,24 @@ export function createCloudflareCustomDomainProvisioner(options: {
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const customHostname = await client.findCustomHostname(normalized);
-      if (customHostname) assertCloudflareHostnameBelongsToProject(customHostname, project);
-      const id = customHostname
-        ? (stringValue(customHostname.id) ?? cloudflareHostnameId)
-        : cloudflareHostnameId;
+      const customHostname = cloudflareHostnameId
+        ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
+            if (error instanceof CloudflareApiError && error.status === 404) {
+              return client.findCustomHostname(normalized);
+            }
+            throw error;
+          })
+        : await client.findCustomHostname(normalized);
+      let id = cloudflareHostnameId;
+      if (customHostname) {
+        if (cloudflareHostnameId) {
+          assertCloudflareHostnameMatches(customHostname, normalized);
+          assertCloudflareHostnameNotOwnedByAnotherProject(customHostname, project);
+          id = stringValue(customHostname.id) ?? cloudflareHostnameId;
+        } else if (stringValue(customHostname.custom_metadata?.projectId) === project.id) {
+          id = stringValue(customHostname.id);
+        }
+      }
       if (id) await client.deleteCustomHostname(id);
       const registeredProject = await readProjectHostnameRegistration(
         options.directory,
@@ -303,6 +328,27 @@ function assertCloudflareHostnameBelongsToProject(
   throw new Error(`Cloudflare custom hostname "${hostname}" is already owned by another project.`);
 }
 
+function assertCloudflareHostnameNotOwnedByAnotherProject(
+  customHostname: CloudflareCustomHostname,
+  project: ProjectDirectoryRecord,
+): void {
+  const ownerProjectId = stringValue(customHostname.custom_metadata?.projectId);
+  if (!ownerProjectId || ownerProjectId === project.id) return;
+  const hostname = customHostname.hostname ?? "custom hostname";
+  throw new Error(`Cloudflare custom hostname "${hostname}" is already owned by another project.`);
+}
+
+function assertCloudflareHostnameMatches(
+  customHostname: CloudflareCustomHostname,
+  expectedHostname: string,
+): void {
+  const actualHostname = stringValue(customHostname.hostname);
+  if (actualHostname === expectedHostname) return;
+  throw new Error(
+    `Cloudflare custom hostname "${actualHostname ?? "unknown"}" does not match "${expectedHostname}".`,
+  );
+}
+
 async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
   const token = input.config.cloudflare.apiToken?.exposeSecret();
   if (!token) throw new Error("Cloudflare API token is not configured.");
@@ -310,8 +356,9 @@ async function cloudflareClient(input: { config: AppConfig; fetch: Fetch }) {
   if (!accountId) throw new Error("Cloudflare account id is not configured.");
 
   const zoneName = projectHostnameZoneName(input.config);
+  const fetcher = input.fetch;
   const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await input.fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    const response = await fetcher(`https://api.cloudflare.com/client/v4${path}`, {
       ...init,
       headers: {
         authorization: `Bearer ${token}`,

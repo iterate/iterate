@@ -104,7 +104,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
         },
       });
       await waitForCondition(
-        async () => (await connectionSecret.describe()).refresh === "oauth-refresh-token",
+        async () => (await connectionSecret.__describe()).refresh === "oauth-refresh-token",
         { description: `${instance.slug}/${instance.connection} refresh strategy to fold` },
       );
 
@@ -121,13 +121,16 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
       expect(afterExpiry.body).toMatchObject({ clientId: instance.clientId });
 
       // Confinement: describe() leaks no token; the use is audited.
-      const described = await connectionSecret.describe();
+      const described = await connectionSecret.__describe();
       expect(JSON.stringify(described)).not.toContain(tokens.access_token);
       expect(JSON.stringify(described)).not.toContain(instance.clientSecret);
       expect(described.hasMaterial).toBe(true);
-      await waitForCondition(async () => (await connectionSecret.describe()).audit.usedCount >= 1, {
-        description: `${instance.slug}/${instance.connection} usage audit to fold`,
-      });
+      await waitForCondition(
+        async () => (await connectionSecret.__describe()).audit.usedCount >= 1,
+        {
+          description: `${instance.slug}/${instance.connection} usage audit to fold`,
+        },
+      );
     }
   });
 
@@ -166,7 +169,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
       },
     });
     await waitForCondition(
-      async () => (await connectionSecret.describe()).refresh === "oauth-refresh-token",
+      async () => (await connectionSecret.__describe()).refresh === "oauth-refresh-token",
       { description: "first-party connection refresh strategy to fold" },
     );
 

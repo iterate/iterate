@@ -1,17 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
+import jsonata from "@mmkal/jsonata/sync";
 import { z } from "zod";
 import type { Env } from "../../env.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import type {
-  ProcessorRuntimeState,
-  Stream,
-  StreamEvent,
-  StreamEventInput,
-  StreamSubscriptionHandle,
-  DynamicWorkerRef,
-} from "../../types.ts";
+import type { DynamicWorkerRef } from "../workers/schemas.ts";
+import type { ProcessorRuntimeState, StreamSubscriptionHandle } from "./rpc-types.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest } from "./stream-processor-host.ts";
 import { StreamEventLog } from "./stream-storage.ts";
@@ -29,6 +26,32 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+
+/**
+ * Backstop cap on a cross-post provenance chain. The structural cycle guard
+ * (never post into a stream already on the chain) is the real protection; the
+ * cap only bounds acyclic rule graphs nobody should build (a 5-hop relay is a
+ * design smell, not a use case).
+ */
+const MAX_CROSS_POST_HOPS = 5;
+
+// Compiled-condition cache: rules re-evaluate on every matching append, and a
+// stream's rule set is small and stable, so compile-once is the sensible
+// steady state. Bounded so a pathological churn of rule expressions cannot
+// grow the map without limit (clearing wholesale is fine — recompiling is
+// cheap, correctness never depends on the cache).
+const compiledConditions = new Map<string, jsonata.Expression>();
+const MAX_COMPILED_CONDITIONS = 200;
+
+/** Parse a JSONata cross-post condition, throwing on invalid expressions. */
+function compileCrossPostCondition(condition: string): jsonata.Expression {
+  const cached = compiledConditions.get(condition);
+  if (cached !== undefined) return cached;
+  const compiled = jsonata(condition);
+  if (compiledConditions.size >= MAX_COMPILED_CONDITIONS) compiledConditions.clear();
+  compiledConditions.set(condition, compiled);
+  return compiled;
+}
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -316,6 +339,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         args.event,
       );
       this.#validateStreamRuleTarget(event.payload);
+      // A rule condition is durable desired state the cross-post path evaluates
+      // on every future matching append, so an unparseable expression must be
+      // rejected here — before it commits — not discovered as a per-event
+      // error forever after.
+      if (event.payload.condition !== undefined) {
+        compileCrossPostCondition(event.payload.condition);
+      }
     }
 
     if (!args.state.paused) return;
@@ -360,12 +390,15 @@ export class StreamDurableObject extends DurableObject<Env> {
             "events.iterate.com/stream/created must be the first event and have offset 1",
           );
         }
-        return {
-          ...next,
-          projectId: event.payload.projectId,
-          path: event.payload.path,
-          createdAt: event.createdAt,
-        };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            projectId: event.payload.projectId,
+            path: event.payload.path,
+            createdAt: event.createdAt,
+          },
+        });
       }
 
       case "events.iterate.com/stream/woken": {
@@ -379,16 +412,46 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       case "events.iterate.com/stream/paused": {
         const event = parse("events.iterate.com/stream/paused", args.event);
-        return { ...next, paused: true, pauseReason: event.payload.reason ?? null };
+        return {
+          ...next,
+          paused: true,
+          pauseReason: event.payload.reason ?? null,
+          circuitBreaker: resetCircuitBreaker(next.circuitBreaker, event.createdAt),
+        };
       }
 
-      case "events.iterate.com/stream/resumed":
-        parse("events.iterate.com/stream/resumed", args.event);
-        return { ...next, paused: false, pauseReason: null };
+      case "events.iterate.com/stream/resumed": {
+        const event = parse("events.iterate.com/stream/resumed", args.event);
+        return {
+          ...next,
+          paused: false,
+          pauseReason: null,
+          circuitBreaker: resetCircuitBreaker(next.circuitBreaker, event.createdAt),
+        };
+      }
 
       case "events.iterate.com/stream/metadata-updated": {
         const event = parse("events.iterate.com/stream/metadata-updated", args.event);
-        return { ...next, metadata: event.payload.metadata };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, metadata: event.payload.metadata },
+        });
+      }
+
+      case "events.iterate.com/stream/configured": {
+        const event = parse("events.iterate.com/stream/configured", args.event);
+        const circuitBreaker = event.payload.config.circuitBreaker;
+        if (circuitBreaker === undefined) return next;
+        return {
+          ...next,
+          circuitBreaker: {
+            availableTokens: circuitBreaker.burstCapacity,
+            lastRefillAtMs: Date.parse(event.createdAt),
+            burstCapacity: circuitBreaker.burstCapacity,
+            refillRatePerMinute: circuitBreaker.refillRatePerMinute,
+            trippedAtOffset: null,
+          },
+        };
       }
 
       case "events.iterate.com/stream/subscriber-connected": {
@@ -417,59 +480,87 @@ export class StreamDurableObject extends DurableObject<Env> {
             },
           };
         }
-        return next;
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
       }
 
       case "events.iterate.com/stream/subscriber-disconnected": {
         const event = parse("events.iterate.com/stream/subscriber-disconnected", args.event);
         const { [event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
           next.connectionsByKey;
-        return { ...next, connectionsByKey };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, connectionsByKey },
+        });
       }
 
       case "events.iterate.com/stream/subscription-configured": {
         const event = parse("events.iterate.com/stream/subscription-configured", args.event);
-        return {
-          ...next,
-          configuredSubscribersByKey: {
-            ...next.configuredSubscribersByKey,
-            [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            configuredSubscribersByKey: {
+              ...next.configuredSubscribersByKey,
+              [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+            },
           },
-        };
+        });
       }
 
       case "events.iterate.com/stream/subscription-removed": {
         const event = parse("events.iterate.com/stream/subscription-removed", args.event);
         const { [event.payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
           next.configuredSubscribersByKey;
-        return { ...next, configuredSubscribersByKey };
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, configuredSubscribersByKey },
+        });
       }
 
       case "events.iterate.com/stream/rule-configured": {
         const event = parse("events.iterate.com/stream/rule-configured", args.event);
-        return {
-          ...next,
-          rulesById: {
-            ...next.rulesById,
-            [event.payload.ruleId]: latestConfiguredEvent(event),
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            rulesById: {
+              ...next.rulesById,
+              [event.payload.ruleId]: latestConfiguredEvent(event),
+            },
           },
-        };
+        });
+      }
+
+      case "events.iterate.com/stream/rule-removed": {
+        const event = parse("events.iterate.com/stream/rule-removed", args.event);
+        const { [event.payload.ruleId]: _removed, ...rulesById } = next.rulesById;
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, rulesById },
+        });
       }
 
       case "events.iterate.com/stream/child-stream-created": {
         const event = parse("events.iterate.com/stream/child-stream-created", args.event);
-        if (next.path === undefined) return next;
+        if (next.path === undefined) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
         const childPath = immediateChildPath(next.path, event.payload.childPath);
-        if (childPath === null || next.childPaths.includes(childPath)) return next;
-        return { ...next, childPaths: [...next.childPaths, childPath] };
+        if (childPath === null || next.childPaths.includes(childPath)) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, childPaths: [...next.childPaths, childPath] },
+        });
       }
 
       case "events.iterate.com/stream/error-occurred":
         parse("events.iterate.com/stream/error-occurred", args.event);
-        return next;
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       default:
-        return next;
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
     }
   }
 
@@ -479,6 +570,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `#runInBackground`, so nothing here can fail the append that triggered it.
    */
   #processEvent(args: ReducedCoreEvent): void {
+    this.#pauseIfCircuitBreakerTripped(args);
+
     switch (args.event.type) {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/subscription-configured":
@@ -486,6 +579,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#reconcileConnections();
         return;
       case "events.iterate.com/stream/rule-configured":
+      case "events.iterate.com/stream/rule-removed":
         return;
       case "events.iterate.com/stream/created":
         this.#announceToAncestors(args);
@@ -494,6 +588,52 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#crossPostMatchingRules(args);
         return;
     }
+  }
+
+  #reduceCircuitBreaker(args: {
+    event: StreamEvent;
+    state: CoreProcessorState;
+  }): CoreProcessorState {
+    if (args.event.type === "events.iterate.com/stream/woken") return args.state;
+
+    const timestampMs = Date.parse(args.event.createdAt);
+    if (!Number.isFinite(timestampMs)) return args.state;
+    const elapsedMs =
+      args.state.circuitBreaker.lastRefillAtMs === null
+        ? 0
+        : Math.max(0, timestampMs - args.state.circuitBreaker.lastRefillAtMs);
+    const tokens =
+      Math.min(
+        args.state.circuitBreaker.burstCapacity,
+        args.state.circuitBreaker.availableTokens +
+          elapsedMs * (args.state.circuitBreaker.refillRatePerMinute / 60_000),
+      ) - 1;
+
+    return {
+      ...args.state,
+      circuitBreaker: {
+        ...args.state.circuitBreaker,
+        availableTokens: tokens,
+        lastRefillAtMs: timestampMs,
+        trippedAtOffset:
+          tokens < 0 && !args.state.paused && args.state.circuitBreaker.trippedAtOffset === null
+            ? args.event.offset
+            : args.state.circuitBreaker.trippedAtOffset,
+      },
+    };
+  }
+
+  #pauseIfCircuitBreakerTripped(args: ReducedCoreEvent): void {
+    if (args.state.circuitBreaker.trippedAtOffset !== args.event.offset) return;
+    if (args.previousState.circuitBreaker.trippedAtOffset === args.event.offset) return;
+    if (args.event.type === "events.iterate.com/stream/paused") return;
+    this.append({
+      type: "events.iterate.com/stream/paused",
+      idempotencyKey: `stream-paused:${args.event.offset}`,
+      payload: {
+        reason: "circuit breaker tripped: burst rate limit exceeded",
+      },
+    });
   }
 
   /** Tell every ancestor stream (up to the root) that this stream exists. */
@@ -520,46 +660,74 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Copy an event into every stream a matching cross-post rule targets. */
+  /**
+   * Copy an event into every stream a matching cross-post rule targets.
+   *
+   * Every hop appends itself to the event's `source.crossPostedFrom` chain, so
+   * a multi-hop route stays legible end to end. Loop protection is structural:
+   * a copy is never posted into a stream that is already on the chain (which
+   * includes this stream, the newest hop), and the chain length is capped as a
+   * backstop against pathological rule graphs.
+   */
   #crossPostMatchingRules(args: ReducedCoreEvent): void {
-    if (args.event.source?.crossPost !== undefined) return;
+    const chain = args.event.source?.crossPostedFrom ?? [];
+    if (chain.length >= MAX_CROSS_POST_HOPS) return;
 
-    const matchingRules = Object.values(args.state.rulesById).filter(({ latestConfiguredEvent }) =>
-      latestConfiguredEvent.payload.eventTypes.includes(args.event.type),
-    );
-    if (matchingRules.length === 0) return;
+    const candidateRules = Object.values(args.state.rulesById)
+      .map(({ latestConfiguredEvent }) => latestConfiguredEvent.payload)
+      .filter((rule) => rule.eventTypes.includes(args.event.type));
+    if (candidateRules.length === 0) return;
 
     const sourceProjectId = args.state.projectId ?? this.name.projectId;
     const sourcePath = args.state.path ?? this.name.path;
+    const { createdAt, offset, ...copy } = args.event;
 
     this.#runInBackground(async () => {
       await Promise.all(
-        matchingRules.map(({ latestConfiguredEvent }) => {
-          const rule = latestConfiguredEvent.payload;
-          const { createdAt, offset, ...copy } = args.event;
-          return this.#appendToStreamCoordinate(
-            {
-              path: rule.path,
-              projectId: rule.projectId === undefined ? this.name.projectId : rule.projectId,
-            },
-            {
-              ...copy,
-              source: {
-                ...copy.source,
-                crossPost: {
-                  ruleId: rule.ruleId,
-                  from: {
-                    createdAt,
-                    offset,
-                    path: sourcePath,
-                    projectId: sourceProjectId,
-                    type: args.event.type,
-                  },
-                },
-              },
-              idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
-            },
+        candidateRules.map(async (rule) => {
+          const target = {
+            path: rule.path,
+            projectId: rule.projectId === undefined ? this.name.projectId : rule.projectId,
+          };
+          const hop = {
+            ruleId: rule.ruleId,
+            createdAt,
+            offset,
+            path: sourcePath,
+            projectId: sourceProjectId,
+            type: args.event.type,
+          };
+          const crossPostedFrom = [...chain, hop];
+          const targetOnChain = crossPostedFrom.some(
+            (entry) => entry.projectId === target.projectId && entry.path === target.path,
           );
+          if (targetOnChain) return;
+
+          if (rule.condition !== undefined) {
+            let matched: unknown;
+            try {
+              matched = compileCrossPostCondition(rule.condition).evaluate(args.event);
+            } catch (error) {
+              // The raw event stays authoritative; the durable error record
+              // just makes the skipped rule observable. Idempotent per
+              // (rule, offset) so redeliveries cannot spam it.
+              this.append({
+                type: "events.iterate.com/stream/error-occurred",
+                idempotencyKey: `cross-post-condition-failed:${rule.ruleId}:${offset}`,
+                payload: {
+                  message: `cross-post rule "${rule.ruleId}" condition failed on offset ${offset}: ${String(error)}`,
+                },
+              });
+              return;
+            }
+            if (matched !== true) return;
+          }
+
+          await this.#appendToStreamCoordinate(target, {
+            ...copy,
+            source: { ...copy.source, crossPostedFrom },
+            idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
+          });
         }),
       );
     });
@@ -1113,6 +1281,19 @@ function latestConfiguredEvent<
       payload: event.payload,
       createdAt: event.createdAt,
     } as Pick<Event, "offset" | "type" | "payload" | "createdAt">,
+  };
+}
+
+function resetCircuitBreaker(
+  circuitBreaker: CoreProcessorState["circuitBreaker"],
+  createdAt: string,
+): CoreProcessorState["circuitBreaker"] {
+  const createdAtMs = Date.parse(createdAt);
+  return {
+    ...circuitBreaker,
+    availableTokens: circuitBreaker.burstCapacity,
+    lastRefillAtMs: Number.isFinite(createdAtMs) ? createdAtMs : circuitBreaker.lastRefillAtMs,
+    trippedAtOffset: null,
   };
 }
 

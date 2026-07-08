@@ -17,18 +17,17 @@
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
 import { withEvlog } from "@iterate-com/shared/evlog";
-import { trustedInternalAuthContext } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { resolveProjectIdBySlug } from "./project-directory.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import {
-  defaultProjectWorkerRef,
-  ProjectCollectionRpcTarget,
-  UnauthenticatedOsRpcTarget,
-} from "./rpc-targets.ts";
-import type { ProjectWorker } from "./types.ts";
+  WORKER_FETCH_DISPATCH_HEADER,
+  workerBuildingResponse,
+} from "./domains/workers/worker-fetch-dispatch.ts";
+import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import { defaultProjectWorkerRef, UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { handleEmailInjectApiRequest } from "./domains/email/email-inject-api.ts";
@@ -45,27 +44,6 @@ import {
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
 
-function workerBuildingResponse(): Response {
-  return new Response(
-    `<!doctype html>
-      <html>
-        <head>
-          <meta http-equiv="refresh" content="3" />
-          <title>Building…</title>
-        </head>
-        <body>
-          <main>
-            <p>Your worker is building — this page retries automatically.</p>
-          </main>
-        </body>
-      </html>`,
-    {
-      status: 503,
-      headers: { "content-type": "text/html; charset=utf-8", "retry-after": "3" },
-    },
-  );
-}
-
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
@@ -77,6 +55,7 @@ export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-ob
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
+export { WorkspaceDurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
@@ -196,10 +175,6 @@ async function apiFetch(
         }),
       });
     }
-    const project = await new ProjectCollectionRpcTarget({
-      auth: trustedInternalAuthContext(),
-      ctx,
-    }).get(route.resolved.projectId);
     const init: RequestInit = {
       body: request.body,
       headers: route.fetch.headers,
@@ -209,17 +184,28 @@ async function apiFetch(
     if (request.body !== null) {
       (init as RequestInit & { duplex: "half" }).duplex = "half";
     }
-    // Browser-facing lane: a cold build (first use after a commit) should
-    // show a refreshing "building" page rather than hang the request. The
-    // budgeted worker stub throws a named error past the budget while the
-    // build finishes into the artifact cache; refreshes then hit it.
-    const worker = project.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
-      buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
-      flattenNestedPaths: true,
+    // Project-app HTTP is ONE transport: the fetch-native worker lane. Pages,
+    // APIs, streaming bodies, and WebSocket upgrades all ride real fetch()
+    // hops into the root project worker (and onward — its router re-dispatches
+    // per app through `env.ITX.fetch`). Method-shaped access to the same
+    // worker (`itx.worker.*`) stays on RPC dispatch; HTTP never does.
+    const ref = defaultProjectWorkerRef();
+    const runner = new DynamicWorkerRunner({
+      exports: ctx.exports,
+      projectId: route.resolved.projectId,
+      scopePath: ref.path,
+      waitUntil: (promise) => ctx.waitUntil(promise),
     });
     try {
-      return await worker.fetch(new Request(route.fetch.url, init));
+      return await runner.fetch({
+        buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
+        ref,
+        request: new Request(route.fetch.url, init),
+      });
     } catch (error) {
+      // A cold build (first use after a commit) shows a refreshing "building"
+      // page rather than hanging the request; the build keeps running in the
+      // builder worker and refreshes hit the artifact cache.
       if (!isWorkerBuildInProgressError(error)) throw error;
       return workerBuildingResponse();
     }
@@ -271,8 +257,10 @@ function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
 function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
   headers.delete("x-iterate-app");
+  headers.delete("x-iterate-host-kind");
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
+  headers.delete(WORKER_FETCH_DISPATCH_HEADER);
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   return new Request(request, { headers });

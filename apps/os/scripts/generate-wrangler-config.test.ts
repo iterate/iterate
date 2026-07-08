@@ -59,7 +59,7 @@ it("does not add SaaS catch-all routes to preview zones without SSL-for-SaaS quo
   });
 });
 
-it("keeps preview sandbox capacity above sustained e2e churn", () => {
+it("keeps deployed sandbox capacity within account quota", () => {
   expect(config.env.prd.containers?.[0]?.max_instances).toBe(50);
-  expect(config.env.preview_6.containers?.[0]?.max_instances).toBe(150);
+  expect(config.env.preview_6.containers?.[0]?.max_instances).toBe(31);
 });

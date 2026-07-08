@@ -4,7 +4,8 @@
 // silently dead subscriptions (DO restarts, replaced connections).
 
 import { expect, test } from "vitest";
-import type { ProcessorSnapshot, ProjectProcessorState } from "../../src/types.ts";
+import type { ProjectProcessorState } from "../../src/domains/projects/project-processor-contract.ts";
+import type { ProcessorSnapshot } from "../../src/domains/streams/rpc-types.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 

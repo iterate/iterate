@@ -159,7 +159,7 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   // `ask` is the server-side send-and-wait: append the user message, resolve
   // on the agent's web reply. Waiting is bounded client-side as well.
   const responseEvent = await Promise.race([
-    agent.ask({ message }),
+    agent.ask({ message, timeoutMs }),
     new Promise<never>((_resolve, reject) =>
       setTimeout(() => reject(new Error(`No assistant response within ${timeoutMs}ms`)), timeoutMs),
     ),

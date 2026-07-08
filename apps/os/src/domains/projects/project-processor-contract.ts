@@ -1,13 +1,9 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-
-const StreamListItem = z.object({
-  createdAt: z.string(),
-  path: z.string(),
-});
+import { StreamListItem } from "../streams/schemas.ts";
 
 const ProjectCustomDomainStatus = z.enum([
   "requested",
@@ -50,6 +46,9 @@ const ProjectCustomDomain = ProjectCustomDomainCloudflareSnapshot.extend({
 export type ProjectCustomDomainCloudflareSnapshot = z.output<
   typeof ProjectCustomDomainCloudflareSnapshot
 >;
+
+/** One custom domain as reduced onto project processor state. */
+export type ProjectCustomDomain = z.output<typeof ProjectCustomDomain>;
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -162,3 +161,18 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-configured",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<ProjectProcessorContract>`,
+ * `ConsumedEvent<ProjectProcessorContract>`, `ProcessorEvent<ProjectProcessorContract, T>`.
+ */
+export type ProjectProcessorContract = typeof ProjectProcessorContract;
+
+/**
+ * The project processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape. `created` flips when the
+ * bootstrap saga lands; the list fields are what the collection `list()`
+ * methods read.
+ */
+export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;

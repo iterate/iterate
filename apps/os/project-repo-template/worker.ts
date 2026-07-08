@@ -1,11 +1,14 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, ProjectRpcTarget, StreamEvent } from "./sdk.ts";
+import type { DynamicWorkerRef, ItxBinding, StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
+import { waitroseClient } from "./integrations/waitrose/client.ts";
 
-/** Bindings the platform supplies to every project worker. */
+/** Bindings the platform supplies to every project worker. `ItxBinding`
+ * (sdk.ts) documents the two channels: `get()` for capability method calls,
+ * `fetch()` for HTTP into sibling workers. */
 type ProjectWorkerEnv = {
-  ITX: { get(): Promise<ProjectRpcTarget> };
+  ITX: ItxBinding;
 };
 
 // The root project worker is a small ROUTER over the project's apps. Each app
@@ -33,6 +36,16 @@ const APPS = {
       options: { entryPoint: "apps/counter/worker.ts" },
     },
   },
+  websocket: {
+    type: "stateful",
+    path: "/",
+    className: "WebsocketEchoApp",
+    durableWorkerKey: "app-websocket",
+    source: {
+      files: { type: "repo", repoPath: "/", include: ["apps/websocket/**"] },
+      options: { entryPoint: "apps/websocket/worker.ts" },
+    },
+  },
 } satisfies Record<string, DynamicWorkerRef>;
 
 export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
@@ -41,33 +54,31 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     if (appSlug) {
       const ref = Object.hasOwn(APPS, appSlug) ? APPS[appSlug as keyof typeof APPS] : undefined;
       if (!ref) return new Response(`unknown app: ${appSlug}`, { status: 404 });
-      const project = await this.env.ITX.get();
-      try {
-        // Workers RPC: await the capability before calling through it.
-        const app = await project.workers.get<{ fetch(req: Request): Promise<Response> }>(ref, {
-          buildBudgetMs: 15_000,
-        });
-        return await app.fetch(req);
-      } catch (error) {
-        // Each app is its own build (distinct include mask), so its first use
-        // after a commit can be a cold build. Past the budget the platform
-        // throws this named error (name survives Workers RPC) while the build
-        // finishes into the cache; refreshes then hit it.
-        if ((error as { name?: string } | null)?.name !== "WorkerBuildInProgressError") throw error;
-        return new Response(
-          `<!doctype html><html><body><main><p>Building ${appSlug}… this page refreshes automatically.</p></main></body></html>`,
-          { headers: { "content-type": "text/html; charset=utf-8", refresh: "3" }, status: 503 },
-        );
-      }
+
+      // Every app request — pages, APIs, streaming bodies, WebSocket upgrades
+      // — dispatches over the platform's fetch-native worker lane:
+      // `env.ITX.fetch` with the target ref in the x-iterate-worker-dispatch
+      // header (JSON { ref, buildBudgetMs? } — same ref shape as
+      // project.workers.get). Real fetch hops are what let a 101 upgrade
+      // tunnel through; an `app.fetch(req)` RPC method call cannot carry one.
+      // A cold build answers a 503 building page that refreshes itself
+      // (marked with x-iterate-worker-building — intercept it here to render
+      // your own). Method calls on apps still go through
+      // `project.workers.get(ref)` RPC dispatch; HTTP never does.
+      const headers = new Headers(req.headers);
+      headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
+      return await this.env.ITX.fetch(new Request(req, { headers }));
     }
 
-    // The seeded homepage is a static page linking to the apps. Apps live
-    // on their own hosts: the current host prefixed with "<app>--" (e.g.
-    // counter--<slug>.<base>), so the links derive from the request URL.
+    // The seeded homepage is a static page linking to the apps. Platform
+    // hosts use "<app>--<project>.<base>"; custom domains use
+    // "<app>.<custom-hostname>".
     const url = new URL(req.url);
+    const hostKind = req.headers.get("x-iterate-host-kind");
     const appLinks = Object.entries(APPS)
       .map(([slug, ref]) => {
-        const href = `${url.protocol}//${slug}--${url.host}/`;
+        const appHost = hostKind === "custom" ? `${slug}.${url.host}` : `${slug}--${url.host}`;
+        const href = `${url.protocol}//${appHost}/`;
         return `<li><a href="${href}">${slug}</a> (${ref.type})</li>`;
       })
       .join("\n");
@@ -128,5 +139,28 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
       "fetch";
     return client;
+  }
+
+  /**
+   * Waitrose surface (the reference userspace integration): the vendored
+   * client from integrations/waitrose/client.ts, one per connection —
+   * `itx.worker.waitrose.<connection>.<method>(...)`. Durable by
+   * construction: this worker always exists and is late-bound to the repo,
+   * so there is no mount step and nothing session-owned to expire. The
+   * bearer is a `getSecret(...)` placeholder substituted at project egress;
+   * this code never sees a session token (the secret's own Durable Object
+   * logs in on first use and re-logins on 401 — see the README there).
+   */
+  get waitrose(): Record<string, ReturnType<typeof waitroseClient>> {
+    return new Proxy({} as Record<string, ReturnType<typeof waitroseClient>>, {
+      get: (_target, connection) =>
+        // "then" guard: the dispatch walk awaits each segment, and awaiting
+        // the proxy itself must not conjure a client named "then".
+        typeof connection !== "string" || connection === "then"
+          ? undefined
+          : waitroseClient({
+              authorization: `Bearer getSecret({ path: "/secrets/integrations/waitrose/${connection}/session", field: "accessToken" })`,
+            }),
+    });
   }
 }

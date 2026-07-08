@@ -14,6 +14,13 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import {
+  parseWorkerSizeFromDeployOutput,
+  parseWorkerSizeStatusDescription,
+  renderWorkerSizeCell,
+  workerSizeStatusContext,
+  type WorkerSizeInfo,
+} from "./worker-size.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -23,6 +30,35 @@ type PullRequestCommandOptions = {
   /** Pull request number. Defaults to GITHUB_PR_NUMBER. */
   pullRequestNumber?: number;
 };
+
+/** Label a draft PR can wear to get previews despite the draft policy below. */
+const previewOptInLabel = "preview";
+
+const draftPreviewNotice = [
+  "This PR is a draft, so it doesn't claim a preview slot.",
+  `To get previews: add the \`${previewOptInLabel}\` label, mark the PR ready for review, or dispatch the Cloudflare Previews workflow for a one-off run.`,
+].join(" ");
+
+/**
+ * Draft PRs don't hold preview slots unless they ask: there are only nine
+ * slots and drafts are the default for agent-opened PRs, so a busy night of
+ * drafts was exhausting the fleet before any human asked for a preview.
+ * "Asking" = the `preview` label, marking ready for review, or an explicit
+ * `--allow-draft` run (the workflow_dispatch path). A draft that still holds
+ * a lease (it was ready once, or opted out again) gives its slot back.
+ */
+function decideDraftPreviewPolicy(input: {
+  allowDraft: boolean;
+  hasRecordedLease: boolean;
+  isDraft: boolean;
+  labels: string[];
+}): "deploy" | "skip" | "teardown" {
+  if (!input.isDraft || input.allowDraft || input.labels.includes(previewOptInLabel)) {
+    return "deploy";
+  }
+
+  return input.hasRecordedLease ? "teardown" : "skip";
+}
 
 /**
  * Deploy affected preview apps for a pull request without running preview e2e.
@@ -39,6 +75,13 @@ export async function deploy(
      * of relying on the commit happening to touch a fleet-shared path.
      */
     allApps?: boolean;
+    /**
+     * Deploy even when the PR is a draft without the `preview` label. Draft
+     * PRs otherwise skip previews (or give their slot back); an explicit
+     * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
+     * terminal — is an ask, so those callers pass this.
+     */
+    allowDraft?: boolean;
   } = {},
 ) {
   const runtime = createPreviewRuntime();
@@ -57,6 +100,54 @@ export async function deploy(
       ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
       : "PR body records no lease — this PR has no slot yet",
   );
+
+  const draftPolicy = decideDraftPreviewPolicy({
+    allowDraft: options.allowDraft === true,
+    hasRecordedLease: current.state.environmentConfigLease != null,
+    isDraft: context.pullRequestIsDraft,
+    labels: context.pullRequestLabels,
+  });
+  if (draftPolicy === "skip") {
+    logPreview(
+      `draft PR without the ${previewOptInLabel} label — not claiming a preview slot (mark ready, add the label, or pass --allow-draft)`,
+    );
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      notice: draftPreviewNotice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "draft",
+      state: update.state,
+    };
+  }
+  if (draftPolicy === "teardown") {
+    logPreview(
+      `draft PR without the ${previewOptInLabel} label holds ${current.state.environmentConfigLease?.slug} — tearing down and releasing the slot (mark ready, add the label, or pass --allow-draft to keep previews)`,
+    );
+    const cleanupResult = await cleanupPreviewForPullRequest({ ...runtime, context });
+    if (!cleanupResult.ok) {
+      throw new Error("Failed to tear down previews for a draft PR.");
+    }
+    // Pin the post-teardown state in this write: the GitHub read inside
+    // updatePreviewState can be stale (read-after-write lag) and would
+    // otherwise resurrect the released lease and app rows — and this run's
+    // test step would then re-acquire the slot the draft just gave up.
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      ...cleanupResult.state,
+      notice: draftPreviewNotice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "draft",
+      releasedLease: cleanupResult.released,
+      state: update.state,
+    };
+  }
+
   const selectedApps = options.allApps
     ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
       Object.values(cloudflarePreviewApps))
@@ -85,6 +176,7 @@ export async function deploy(
   try {
     environmentConfigLease = await claimEnvironmentConfigLease({
       createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
+      eraseSlotData: makePreviewSlotDataEraser(runtime),
       fetchPullRequestState: makePullRequestStateFetcher(
         context.githubToken,
         context.repositoryFullName,
@@ -145,6 +237,15 @@ export async function deploy(
     notice: claimNotice,
   }));
 
+  // Best-effort: a missing or unreadable baseline only costs the "vs main"
+  // delta in the size column, never the deploy.
+  const workerSizeBaselines = await fetchMainWorkerSizeBaselines(context).catch(
+    (error): Record<string, WorkerSizeInfo> => {
+      logPreview(`worker-size baselines unavailable: ${formatPreviewErrorMessage(error)}`);
+      return {};
+    },
+  );
+
   let ok = true;
   let latestState = leaseUpdate.state;
   // Pin the lease, notice, and every batch's entries in each write: the
@@ -161,6 +262,7 @@ export async function deploy(
           app,
           commandEnvironment: runtime.commandEnvironment,
           dopplerConfig: environmentConfigLease.dopplerConfig,
+          mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
           pullRequestHeadSha: context.pullRequestHeadSha,
           repositoryRoot: runtime.repositoryRoot,
           runUrl: context.workflowRunUrl,
@@ -472,6 +574,7 @@ export async function assign(options: AssignOptions = {}) {
 
   const current = await readCloudflarePreviewState(context);
   const result = await assignEnvironmentConfigLease({
+    eraseSlotData: makePreviewSlotDataEraser(runtime),
     fetchPullRequestState: makePullRequestStateFetcher(
       context.githubToken,
       context.repositoryFullName,
@@ -646,6 +749,8 @@ export async function acquire(options: AcquireOptions) {
 
 /**
  * Release a preview slot lease. Pass the lease id from `preview acquire`, or --force to release someone else's (stale) lease.
+ * Does NOT erase the slot's data — that's safe, because every acquire erases
+ * on entry. Use `preview reclaim --slot N` to take back AND wipe in one step.
  */
 type ReleaseOptions = {
   /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
@@ -737,7 +842,7 @@ export async function reclaim(options: ReclaimOptions = {}) {
       reclaimable: report
         .filter((slot) => slot.verdict === "orphaned" || slot.verdict === "idle")
         .map((slot) => `pnpm preview reclaim --slot ${slot.slug}`),
-      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; taking an active slot needs --force and clobbers live work",
+      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; reclaiming ERASES the slot's data before returning it to the pool; taking an active slot needs --force",
     };
   }
 
@@ -754,21 +859,41 @@ export async function reclaim(options: ReclaimOptions = {}) {
       [
         `${slug} is actively held by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
         `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
-        "Taking it would clobber live work. Re-run with --force only after checking with the holder.",
+        "Taking it would ERASE their slot's data and clobber live work.",
+        "Re-run with --force only after checking with the holder.",
       ].join("\n"),
     );
   }
 
   logPreview(
-    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""})`,
+    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""}) — erasing its data before returning it to the pool`,
   );
+  // Take the slot under OUR OWN fresh lease before erasing. The old holder's
+  // lease could expire mid-erase (the verdict is a snapshot), and destroying
+  // data on a slot another PR just acquired would wreck an innocent tenant —
+  // a fresh lease parks the slot for the whole wipe. An erase failure leaves
+  // that lease in place (parked and visible in this report) and throws
+  // rather than returning a dirty slot to the pool.
+  const holder = `reclaim-${userInfo().username}`;
+  const taken = await semaphore.acquireSpecific({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    slug,
+    leaseMs: 30 * 60_000,
+    holder,
+    force: true,
+  });
+  if (!taken) {
+    throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
+  }
+  await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    force: true,
+    leaseId: taken.leaseId,
   });
   return {
     released: result.released,
+    erased: true,
     slug,
     reclaimedFrom: slot.holder,
     verdict: slot.verdict,
@@ -1286,6 +1411,17 @@ export const CloudflarePreviewAppEntry = z.object({
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
   /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
   testRetries: z.string().trim().min(1).nullable().optional(),
+  /** Wrangler-reported "Total Upload" of the deployed worker, in KiB. */
+  workerSizeKib: z.number().nonnegative().finite().nullable().optional(),
+  /** Wrangler-reported gzip size of the deployed worker, in KiB. */
+  workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
+  /**
+   * Main's deployed gzip size in KiB at deploy time, read from the
+   * `worker-size/<app>` commit status main deploys publish — the baseline for
+   * the table's "vs main" delta. Absent until the first post-merge main
+   * deploy publishes one.
+   */
+  mainWorkerGzipKib: z.number().nonnegative().finite().nullable().optional(),
 });
 export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 
@@ -1412,6 +1548,8 @@ type PullRequestPreviewContext = {
   githubToken: string;
   pullRequestBaseSha: string;
   pullRequestHeadSha: string;
+  pullRequestIsDraft: boolean;
+  pullRequestLabels: string[];
   pullRequestNumber: number;
   repositoryFullName: string;
   workflowRunUrl: string | null;
@@ -1664,6 +1802,7 @@ function renderPreviewAppTable(entries: z.infer<typeof CloudflarePreviewAppEntry
     "status",
     "commit",
     "preview",
+    "size (gzip)",
     "deploy duration",
     "test duration",
     "retries",
@@ -1687,6 +1826,7 @@ function renderPreviewAppTableRow(entry: z.infer<typeof CloudflarePreviewAppEntr
     renderStatusLabel(entry.status),
     entry.shortSha ? `\`${entry.shortSha}\`` : "",
     entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
+    renderWorkerSizeCell(entry.workerGzipKib, entry.mainWorkerGzipKib),
     entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
     entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
     entry.testRetries ?? "",
@@ -1853,6 +1993,60 @@ async function writePullRequestBody(params: {
       pull_number: params.pullRequestNumber,
     }),
   );
+}
+
+/**
+ * Newest `worker-size/<app>` commit status per preview app on main — the
+ * baseline for the PR table's "vs main" size delta, published by the main
+ * deploy workflows (scripts/ci/report-worker-size.ts). Apps deploy
+ * independently (path-filtered workflows), so no single main commit carries a
+ * status for every app: walk recent main commits and take each app's newest.
+ */
+async function fetchMainWorkerSizeBaselines(params: {
+  githubToken: string;
+  repositoryFullName: string;
+}): Promise<Record<string, WorkerSizeInfo>> {
+  const octokit = new Octokit({ auth: params.githubToken });
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const commits = await withGithubRetry("repos.listCommits (main)", () =>
+    octokit.rest.repos.listCommits({ owner, repo, sha: "main", per_page: 30 }),
+  );
+  // All-or-nothing: swallowing one commit's failed status read could
+  // silently promote an OLDER commit's baseline and render a misleading
+  // "vs main" delta — a blank delta beats a wrong one. Any rejection here
+  // propagates to the caller's catch, which drops deltas for this run.
+  const combinedStatuses = await Promise.all(
+    commits.data.map((commit) =>
+      octokit.rest.repos
+        .getCombinedStatusForRef({ owner, repo, ref: commit.sha })
+        .then((response) => ({ sha: commit.sha, statuses: response.data.statuses })),
+    ),
+  );
+
+  const baselines: Record<string, WorkerSizeInfo> = {};
+  // Newest commit first, first hit per app wins.
+  for (const { sha, statuses } of combinedStatuses) {
+    for (const slug of Object.keys(cloudflarePreviewApps)) {
+      if (baselines[slug]) {
+        continue;
+      }
+      const status = statuses.find((entry) => entry.context === workerSizeStatusContext(slug));
+      const parsed = parseWorkerSizeStatusDescription(status?.description);
+      if (parsed) {
+        baselines[slug] = parsed;
+        logPreview(
+          `worker-size baseline for ${slug}: gzip ${parsed.gzipKib} KiB (main@${sha.slice(0, 7)})`,
+        );
+      }
+    }
+  }
+  if (Object.keys(baselines).length === 0) {
+    logPreview(
+      "no worker-size baselines found on recent main commits — size deltas will be blank until a main deploy publishes one",
+    );
+  }
+
+  return baselines;
 }
 
 type EnvironmentConfigLeaseReconcileResult = {
@@ -2617,6 +2811,8 @@ async function deployPreviewAppWithStatus(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  /** Main's published size baseline for this app, when one exists. */
+  mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
   runUrl: string | null;
@@ -2662,6 +2858,7 @@ async function deployPreviewApp(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
   runUrl: string | null;
@@ -2692,9 +2889,20 @@ async function deployPreviewApp(input: {
     repositoryRoot: input.repositoryRoot,
     signal: input.signal,
   });
+  // Wrangler prints "Total Upload: … KiB / gzip: … KiB" on every upload —
+  // lift it out of the captured deploy output for the PR table's size column.
+  const workerSize = parseWorkerSizeFromDeployOutput(
+    `${deployResult.stdout}\n${deployResult.stderr}`,
+  );
+  const sizeFields = {
+    workerSizeKib: workerSize?.totalKib ?? null,
+    workerGzipKib: workerSize?.gzipKib ?? null,
+    mainWorkerGzipKib: workerSize ? (input.mainWorkerSize?.gzipKib ?? null) : null,
+  };
   if (deployResult.exitCode !== 0) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
+      ...sizeFields,
       message: commandFailureMessage(deployResult, "Preview deployment failed."),
       status: "deploy-failed",
     });
@@ -2709,6 +2917,7 @@ async function deployPreviewApp(input: {
   if (!readiness.ok) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
+      ...sizeFields,
       message: readiness.message,
       status: "deploy-failed",
     });
@@ -2716,6 +2925,7 @@ async function deployPreviewApp(input: {
 
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
+    ...sizeFields,
     status: "awaiting-tests",
   });
 }
@@ -2808,6 +3018,46 @@ async function runPreviewDeployCommand(input: {
     signal: input.signal,
     workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
+}
+
+/**
+ * Erase a preview slot's user data before handing the slot to a new holder.
+ * Reclaim paths MUST run this: a reclaim only ever happens because the
+ * previous holder's cleanup — which normally erases on the way out — failed
+ * or never ran, so a reclaimed slot is dirty by definition. Deploying over
+ * stale identity data breaks the next tenant (observed 2026-07-07 on
+ * preview-5: 208 orphaned project-directory KV keys against an empty auth D1
+ * → every itx project lookup answered "KV GET failed: 500").
+ */
+type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
+
+/**
+ * The real {@link EraseSlotData}: the os app's destroy command, which is the
+ * erase-data script — it wipes the slot's auth D1 and project-directory KV
+ * (the data plane every preview app shares) and leaves infrastructure alone.
+ * The deploy that follows the reclaim re-seeds auth's OAuth client.
+ */
+function makePreviewSlotDataEraser(runtime: {
+  commandEnvironment: NodeJS.ProcessEnv;
+  repositoryRoot: string;
+  signal?: AbortSignal;
+}): EraseSlotData {
+  return async ({ dopplerConfig, slug }) => {
+    const startedAt = Date.now();
+    logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
+    const result = await runPreviewDeployCommand({
+      app: cloudflarePreviewApps.os,
+      commandEnvironment: runtime.commandEnvironment,
+      dopplerConfig,
+      operation: "down",
+      repositoryRoot: runtime.repositoryRoot,
+      signal: runtime.signal,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(commandFailureMessage(result, `Erasing ${slug} data failed.`));
+    }
+    logPreview(`erased ${slug} data (${formatDurationMs(Date.now() - startedAt)})`);
+  };
 }
 
 function logPreview(message: string) {
@@ -2974,6 +3224,13 @@ async function classifyEnvironmentConfigLeases(input: {
       return {
         slug: resource.slug,
         verdict,
+        // What `eraseSlotData` needs to wipe the slot. Falls back to the
+        // slug-derived config (preview-3 → preview_3) for slots that have
+        // never been leased and so carry no data payload yet.
+        dopplerConfig:
+          typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
+            ? resource.data.dopplerConfig.trim()
+            : resource.slug.replaceAll("-", "_"),
         holder,
         pullRequestUrl: holderPullRequestUrl(holder),
         pullRequestState: holderPullRequestState,
@@ -3039,13 +3296,55 @@ async function tryReclaimOrphanedEnvironmentConfigLease(input: {
 }
 
 /**
+ * Erase a just-acquired slot before it is handed to the caller, giving the
+ * lease back on failure. Returns true when the slot is clean and ours.
+ *
+ * This runs on EVERY handover — plain acquire included, not just reclaims —
+ * so slot cleanliness is an invariant of entry rather than an assumption
+ * about how the previous tenant exited. Every exit path that skips the
+ * cleanup erase (failed cleanup + 24h lease expiry, `release --force`, a run
+ * cancelled mid-claim) becomes harmless: whoever picks the slot up next
+ * wipes it first. A failed erase releases the lease rather than handing out
+ * a dirty slot, and the released slot is safe back in the pool because its
+ * next taker runs this same erase.
+ */
+async function eraseAcquiredSlotOrGiveItBack(input: {
+  eraseSlotData: EraseSlotData;
+  lease: { data: Record<string, unknown>; leaseId: string; slug: string; type: string };
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  try {
+    await input.eraseSlotData({
+      dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
+      slug: input.lease.slug,
+    });
+    return true;
+  } catch (error) {
+    logPreview(
+      `erase failed on just-acquired ${input.lease.slug} — giving the lease back (the next taker erases before use): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    await input.semaphore
+      .release({ type: input.lease.type, slug: input.lease.slug, leaseId: input.lease.leaseId })
+      .catch((releaseError: unknown) => {
+        logPreview(
+          `failed to release ${input.lease.slug} after the failed erase (it will expire on its own, and its next taker still erases first): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+        );
+      });
+    return false;
+  }
+}
+
+/**
  * Acquire any free slot, queueing (via semaphore long-poll) while all slots
  * are leased. Orphaned leases (holder PR closed but cleanup failed) are
- * garbage-collected before waiting. Fails with the full holder table and
+ * garbage-collected before waiting. Every handed-out slot is erased first
+ * (see eraseAcquiredSlotOrGiveItBack). Fails with the full holder table and
  * remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
+  /** Required so no acquire path can hand out a slot without wiping it. */
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
@@ -3063,12 +3362,29 @@ async function acquireAnyEnvironmentConfigLease(input: {
     // polls, re-checking for freshly orphaned slots between polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
-      return await input.semaphore.acquire({
+      const acquired = await input.semaphore.acquire({
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
         holder: input.holder,
       });
+      if (
+        await eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease: acquired,
+          semaphore: input.semaphore,
+        })
+      ) {
+        return acquired;
+      }
+      // Bound the acquire→failed-erase→release cycle: without this check the
+      // loop would spin on a free-but-unerasable slot past the wait budget.
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Could not hand ${input.holder} a clean slot: erasing ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+        );
+      }
+      continue;
     } catch (error) {
       if (!isNoSlotAvailableError(error)) {
         throw error;
@@ -3081,7 +3397,21 @@ async function acquireAnyEnvironmentConfigLease(input: {
         semaphore: input.semaphore,
       });
       if (reclaimed) {
-        return reclaimed;
+        if (
+          await eraseAcquiredSlotOrGiveItBack({
+            eraseSlotData: input.eraseSlotData,
+            lease: reclaimed,
+            semaphore: input.semaphore,
+          })
+        ) {
+          return reclaimed;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Could not hand ${input.holder} a clean slot: erasing ${reclaimed.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+          );
+        }
+        continue;
       }
       if (attempt === 1 && input.fetchPullRequestState) {
         logPreview(
@@ -3127,6 +3457,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
  */
 async function claimEnvironmentConfigLease(input: {
   createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
@@ -3159,8 +3490,10 @@ async function claimEnvironmentConfigLease(input: {
   // held two slots and every deploy queued for 20 minutes). Adopt any lease the
   // semaphore already attributes to this holder before acquiring a fresh one.
   const adopted = await adoptExistingHolderLease({
+    eraseSlotData: input.eraseSlotData,
     holder: input.holder,
     leaseMs: input.leaseMs,
+    recordedSlug: previousLease?.slug ?? null,
     semaphore,
   });
   if (adopted) {
@@ -3169,6 +3502,7 @@ async function claimEnvironmentConfigLease(input: {
 
   const lease = await acquireAnyEnvironmentConfigLease({
     semaphore,
+    eraseSlotData: input.eraseSlotData,
     fetchPullRequestState: input.fetchPullRequestState,
     holder: input.holder,
     leaseMs: input.leaseMs,
@@ -3188,6 +3522,7 @@ async function claimEnvironmentConfigLease(input: {
  * no longer records.
  */
 async function assignEnvironmentConfigLease(input: {
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   force?: boolean;
   holder: string;
@@ -3268,6 +3603,18 @@ async function assignEnvironmentConfigLease(input: {
         ].join("\n"),
       );
     }
+    // Same entry invariant as every other handover — this also covers a
+    // --force eviction, where the acquired slot holds the evicted PR's data.
+    const clean = await eraseAcquiredSlotOrGiveItBack({
+      eraseSlotData: input.eraseSlotData,
+      lease: acquired,
+      semaphore: input.semaphore,
+    });
+    if (!clean) {
+      throw new Error(
+        `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
+      );
+    }
     lease = toEnvironmentConfigLease(acquired);
   } else {
     // A human is asking right now — fail fast with the holder table instead
@@ -3275,6 +3622,7 @@ async function assignEnvironmentConfigLease(input: {
     lease = toEnvironmentConfigLease(
       await acquireAnyEnvironmentConfigLease({
         semaphore: input.semaphore,
+        eraseSlotData: input.eraseSlotData,
         fetchPullRequestState: input.fetchPullRequestState,
         holder: input.holder,
         leaseMs: input.leaseMs,
@@ -3335,10 +3683,17 @@ function toEnvironmentConfigLease(lease: {
  * recorded-but-unrenewable slug is deliberately NOT excluded: if the list
  * still attributes it to this holder, re-issuing our own lease is idempotent
  * and adopting beats leasing a second slot.
+ *
+ * An adopted slug that is NOT the PR body's recorded slug has unknown
+ * provenance by construction (the run that acquired it died before recording
+ * — possibly mid-erase), so it is erased before it is handed over. The
+ * recorded slug is this PR's own live deployment and is never wiped here.
  */
 async function adoptExistingHolderLease(input: {
+  eraseSlotData: EraseSlotData;
   holder: string;
   leaseMs: number;
+  recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
   const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
@@ -3358,6 +3713,16 @@ async function adoptExistingHolderLease(input: {
         `lease adopted: the semaphore already had ${repaired.slug} leased to ${input.holder} ` +
           `(a previous run was cancelled before recording it); re-issued until ${formatUntil(repaired.expiresAt)}`,
       );
+      if (repaired.slug !== input.recordedSlug) {
+        const clean = await eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease: repaired,
+          semaphore: input.semaphore,
+        });
+        if (!clean) {
+          continue;
+        }
+      }
       return toEnvironmentConfigLease(repaired);
     }
   }
@@ -3732,6 +4097,8 @@ async function resolvePullRequestPreviewContext(params: {
     githubToken: params.githubToken,
     pullRequestBaseSha: pullRequest.data.base.sha,
     pullRequestHeadSha: pullRequest.data.head.sha,
+    pullRequestIsDraft: pullRequest.data.draft === true,
+    pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName,
     workflowRunUrl:
@@ -3756,6 +4123,7 @@ export const previewInternals = {
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
+  decideDraftPreviewPolicy,
   describeEnvironmentConfigLeases,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,

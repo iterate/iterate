@@ -11,7 +11,7 @@
 // message (see incident_agent_anchor_skips_first_input).
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../src/types.ts";
+import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
@@ -108,7 +108,7 @@ test.skipIf(signingSecret === null)(
       material: `xoxb-e2e-fake-${RUN_SUFFIX}`,
     });
     await waitFor(
-      () => secret.describe(),
+      () => secret.__describe(),
       (description) => description.hasMaterial,
       () => "bot token secret material to fold",
     );
@@ -230,7 +230,7 @@ test.skipIf(signingSecret === null)(
     // the bot token secret — its audit trail records the slack.com attempt.
     // We assert up to this outbound attempt; the fake token cannot go further.
     await waitFor(
-      () => secret.describe(),
+      () => secret.__describe(),
       (description) =>
         description.audit.usedCount >= 1 &&
         (description.audit.lastUsedUrl ?? "").startsWith("https://slack.com/api/"),

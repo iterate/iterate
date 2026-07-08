@@ -171,14 +171,14 @@ describe("agent-ui reducer", () => {
         payload: {
           llmRequestId: 10,
           content:
-            "```js\nasync (itx) => {\n  await itx.chat.sendMessage({ message: '20' });\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
+            "```js\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
         },
       },
       {
         type: "events.iterate.com/capability-host/script-execution-requested",
         payload: {
           executionId: "agent-output:11",
-          code: "async (itx) => {\n  await itx.chat.sendMessage({ message: '20' });\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
+          code: "async (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
         },
       },
       {
@@ -385,6 +385,36 @@ describe("agent-ui reducer", () => {
         id: "child-stream-created-1",
         childPath: "/agents/test/child",
         timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
+      },
+    ]);
+  });
+
+  it("shows stream pause and resume events in the agent feed", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/stream/paused",
+        payload: { reason: "Agent circuit breaker tripped." },
+      },
+      {
+        type: "events.iterate.com/stream/resumed",
+        payload: { reason: "Operator resumed the agent." },
+      },
+    ]);
+
+    expect(state.items).toEqual([
+      {
+        kind: "stream-paused",
+        id: "stream-paused-1",
+        text: "Agent paused",
+        reason: "Agent circuit breaker tripped.",
+        timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
+      },
+      {
+        kind: "stream-resumed",
+        id: "stream-resumed-2",
+        text: "Agent resumed",
+        reason: "Operator resumed the agent.",
+        timestampMs: Date.parse("2026-06-11T00:00:02.000Z"),
       },
     ]);
   });
