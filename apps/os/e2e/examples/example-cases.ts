@@ -88,12 +88,30 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   // GitHub/Google/Slack account, which e2e fixture projects never hold.
   "github-list-repos",
   "github-read-file",
+  "github-backed-repo",
   "gmail-search-inbox",
   "slack-post-message",
   "email-send",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
+  "stream-cross-post-rule": {
+    // Matrix runtimes share a project; per-runtime paths keep the rule and
+    // its copies from colliding with a sibling runtime's.
+    vars: ({ marker }) => ({
+      source: `/examples/cross-post/source-${marker}`,
+      target: `/examples/cross-post/target-${marker}`,
+    }),
+    assert: (result, _ctx, expect) => {
+      const shaped = result as {
+        copied: { importance: string; text: string };
+        provenance: Array<{ ruleId: string }>;
+      };
+      expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
+      expect(shaped.provenance).toHaveLength(1);
+      expect(shaped.provenance[0]).toMatchObject({ ruleId: "copy-important" });
+    },
+  },
   "scheduler-basics": {
     // Matrix runtimes can share a project; a per-runtime key keeps the
     // set/list/cancel dance from racing a sibling runtime's copy.

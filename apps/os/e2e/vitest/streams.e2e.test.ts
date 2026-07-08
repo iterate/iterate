@@ -270,19 +270,161 @@ test("stream rules cross-post matching events with source provenance", async () 
     idempotencyKey: `cross-post:${ruleId}:${projectDescription.projectId}:${sourcePath}:${sourceEvent!.offset}`,
     payload: { marker },
     source: {
-      crossPost: {
-        ruleId,
-        from: {
+      crossPostedFrom: [
+        {
+          ruleId,
           createdAt: sourceEvent!.createdAt,
           offset: sourceEvent!.offset,
           path: sourcePath,
           projectId: projectDescription.projectId,
           type: CROSS_POST_EVENT_TYPE,
         },
-      },
+      ],
     },
     type: CROSS_POST_EVENT_TYPE,
   });
+});
+
+test("stream rule conditions gate cross-posting on event content", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post-condition/source/${marker}`;
+  const targetPath = `/e2e/os-port/cross-post-condition/target/${marker}`;
+  const ruleId = `condition-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-cond-${RUN_SUFFIX}-${marker}`,
+  });
+  using source = project.streams.get(sourcePath);
+  using target = project.streams.get(targetPath);
+
+  // The GitHub-backed-repo shape: one connection stream carries webhooks for
+  // every repository of an installation; a condition narrows a rule to one.
+  await source.append({
+    type: "events.iterate.com/stream/rule-configured",
+    payload: {
+      condition: `payload.repository = "acme/widgets"`,
+      eventTypes: [CROSS_POST_EVENT_TYPE],
+      path: targetPath,
+      ruleId,
+      type: "cross-post",
+    },
+  });
+
+  const copied = target.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    timeoutMs: 10_000,
+  });
+  await source.append(
+    { type: CROSS_POST_EVENT_TYPE, payload: { marker, repository: "acme/other" } },
+    { type: CROSS_POST_EVENT_TYPE, payload: { marker, repository: "acme/widgets" } },
+  );
+  const copiedEvent = await copied;
+  expect(copiedEvent.payload).toMatchObject({ repository: "acme/widgets" });
+
+  // The non-matching event must never arrive, in any order relative to the
+  // matching one — give in-flight deliveries a beat, then read the whole log.
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const targetEvents = await target.getEvents({ afterOffset: 0 });
+  const copies = targetEvents.filter((event) => event.type === CROSS_POST_EVENT_TYPE);
+  expect(copies.map((event) => event.payload?.repository)).toEqual(["acme/widgets"]);
+});
+
+test("stream rules reject unparseable conditions before they commit", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post-bad-condition/source/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-bad-${RUN_SUFFIX}-${marker}`,
+  });
+  using source = project.streams.get(sourcePath);
+
+  await expect(
+    source.append({
+      type: "events.iterate.com/stream/rule-configured",
+      payload: {
+        condition: "payload.((((",
+        eventTypes: [CROSS_POST_EVENT_TYPE],
+        path: `/e2e/os-port/cross-post-bad-condition/target/${marker}`,
+        ruleId: `bad-${marker}`,
+        type: "cross-post",
+      },
+    }),
+  ).rejects.toThrow();
+});
+
+test("cross-post chains accumulate provenance hops and rule removal stops forwarding", async () => {
+  const marker = crypto.randomUUID();
+  const pathA = `/e2e/os-port/cross-post-chain/a/${marker}`;
+  const pathB = `/e2e/os-port/cross-post-chain/b/${marker}`;
+  const pathC = `/e2e/os-port/cross-post-chain/c/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-chain-${RUN_SUFFIX}-${marker}`,
+  });
+  using streamA = project.streams.get(pathA);
+  using streamB = project.streams.get(pathB);
+  using streamC = project.streams.get(pathC);
+
+  await streamA.append({
+    type: "events.iterate.com/stream/rule-configured",
+    payload: {
+      eventTypes: [CROSS_POST_EVENT_TYPE],
+      path: pathB,
+      ruleId: `a-to-b-${marker}`,
+      type: "cross-post",
+    },
+  });
+  await streamB.append({
+    type: "events.iterate.com/stream/rule-configured",
+    payload: {
+      eventTypes: [CROSS_POST_EVENT_TYPE],
+      path: pathC,
+      ruleId: `b-to-c-${marker}`,
+      type: "cross-post",
+    },
+  });
+
+  const arrived = streamC.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    timeoutMs: 10_000,
+  });
+  await streamA.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
+  const chained = await arrived;
+
+  // Two hops, oldest first: A's rule copied A→B, then B's rule copied B→C.
+  expect(chained.source?.crossPostedFrom?.map((hop) => hop.path)).toEqual([pathA, pathB]);
+  expect(chained.source?.crossPostedFrom?.map((hop) => hop.ruleId)).toEqual([
+    `a-to-b-${marker}`,
+    `b-to-c-${marker}`,
+  ]);
+
+  // Removing A's rule stops the chain at its first hop.
+  await streamA.append({
+    type: "events.iterate.com/stream/rule-removed",
+    payload: { ruleId: `a-to-b-${marker}` },
+  });
+  await streamA.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker: `${marker}-after` } });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const bEvents = await streamB.getEvents({ afterOffset: 0 });
+  const bCopies = bEvents.filter((event) => event.type === CROSS_POST_EVENT_TYPE);
+  expect(bCopies.map((event) => event.payload?.marker)).toEqual([marker]);
 });
 
 test("stream rules do not recursively cross-post events that are already cross-posted", async () => {
@@ -336,7 +478,7 @@ test("stream rules do not recursively cross-post events that are already cross-p
   await new Promise((resolve) => setTimeout(resolve, 750));
   const sourceEvents = await source.getEvents({ afterOffset: 0 });
   const sourceCopies = sourceEvents.filter(
-    (event) => event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPost !== undefined,
+    (event) => event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPostedFrom !== undefined,
   );
   expect(sourceCopies).toEqual([]);
 });

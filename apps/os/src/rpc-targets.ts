@@ -35,6 +35,7 @@ import {
   PROJECT_WORKER_ENTRY_POINT,
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
+import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
 import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
@@ -476,13 +477,20 @@ async function requestRepoCreate(input: {
 class RepoRpcTarget extends RpcTarget implements Repo {
   async __describe() {
     return describeNode({
-      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes.`,
+      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
         commitFiles: "Commit a batch of file changes ({ message, changes }).",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
+        linkGithub:
+          "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
+        pushToGithub:
+          "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile: "Read one file ({ path }).",
+        syncFromGithub:
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
+        unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
       parent: "repos.get(path); the project repo is itx.repo",
@@ -536,6 +544,40 @@ class RepoRpcTarget extends RpcTarget implements Repo {
 
   readFile(input: Parameters<Repo["readFile"]>[0]) {
     return this.#durableObjectStub.readFile(input);
+  }
+
+  linkGithub(input: Parameters<Repo["linkGithub"]>[0]) {
+    return linkRepoToGithub({
+      connection: input.connection,
+      owner: input.owner,
+      projectId: this.#requireProjectId(),
+      repo: input.repo,
+      repoPath: this.props.path,
+    });
+  }
+
+  unlinkGithub() {
+    return unlinkRepoFromGithub({
+      projectId: this.#requireProjectId(),
+      repoPath: this.props.path,
+    });
+  }
+
+  pushToGithub(input: Parameters<Repo["pushToGithub"]>[0] = {}) {
+    return this.#durableObjectStub.pushToGithub(input ?? {});
+  }
+
+  syncFromGithub(input: Parameters<Repo["syncFromGithub"]>[0] = {}) {
+    return this.#durableObjectStub.syncFromGithub(input ?? {});
+  }
+
+  // GitHub connections are project-scoped (their secrets and streams live in
+  // a project), so a global repo has nothing to link through.
+  #requireProjectId(): string {
+    if (this.props.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
+    return this.props.projectId;
   }
 
   get processor() {
