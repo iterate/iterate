@@ -748,11 +748,10 @@ export interface Repo {
    * unless \`force: true\` discards them. The synced head is immediately live
    * for worker builds.
    *
-   * \`depth\` prunes: only the newest N commits of history are adopted (GitHub
-   * retains the full history — a later full sync can always deepen). This is
-   * what makes syncing big repositories possible at all: a full history must
-   * be inflated in memory during transfer (this monorepo: a 21MB pack
-   * inflates to ~290MB), while \`depth: 1\` moves only the head snapshot.
+   * The transfer is server-side (the Artifacts service imports straight from
+   * GitHub), so any history size syncs. \`depth\` optionally prunes to the
+   * newest N commits — GitHub retains the full history, and a later deeper
+   * sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */

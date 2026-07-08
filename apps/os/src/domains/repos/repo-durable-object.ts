@@ -487,12 +487,11 @@ export class RepoDurableObject extends DurableObject<Env> {
    * store, unreferenced). The adopted head is live for worker builds the
    * moment this returns — same read-your-write boundary as commitFiles.
    *
-   * `depth` prunes the adopted history to the newest N commits (a shallow
-   * fetch) — GitHub retains the full history, so nothing is lost, and a later
-   * deeper sync can always widen the window. This is what makes syncing big
-   * repositories possible at all: transferring a full history inflates every
-   * object in memory (this monorepo: a 21MB pack inflates to ~290MB, past the
-   * 128MB isolate limit), while `depth: 1` moves only the head snapshot.
+   * The transfer itself is server-side (Artifacts imports straight from
+   * GitHub), so history size does not touch this isolate. `depth` optionally
+   * prunes the adopted history to the newest N commits — GitHub retains the
+   * full history, so nothing is lost and a later deeper sync can widen the
+   * window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#serializeWrite(() => this.#syncFromGithub(input));
@@ -501,75 +500,70 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
-    const repo = await this.gitAccess();
-    const token = await this.#mintGithubToken(link);
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
     if (input.depth !== undefined && (!Number.isInteger(input.depth) || input.depth <= 0)) {
       throw new Error("syncFromGithub depth must be a positive integer.");
     }
+    const token = await this.#mintGithubToken(link);
 
-    // `noCheckout`: the sync only moves OBJECTS from GitHub to Artifacts; the
-    // working tree would double peak memory (and the content hash that used
-    // to need it is repaired via getHead below). Scoped in its own closure so
-    // the clone's in-memory fs is unreachable — collectable — before the
-    // head-cache rebuild clones again. Both together are what let a
-    // monorepo-sized history fit the 128MB isolate.
-    const headOid = await (async () => {
-      const filesystem = new InMemoryFs();
-      const git = createGit(filesystem, REPO_DIR);
-      try {
-        await git.clone({
+    // Fast-forward gate via the GitHub compare API: the transfer below is a
+    // server-side re-import (no local history to walk), so ancestry is
+    // GitHub's to answer. "identical" is the no-op; "ahead" (GitHub strictly
+    // ahead of our recorded head) is the fast-forward; anything else —
+    // "behind", "diverged", or a previous head GitHub has never seen —
+    // requires `force`.
+    const headOid = await this.#githubBranchHead({ branch, link, token });
+    if (headOid === previousCommitOid) {
+      return { branch, changed: false, commitOid: headOid, forced: false, previousCommitOid };
+    }
+    if (input.force !== true) {
+      const status =
+        previousCommitOid === null
+          ? "unrelated"
+          : await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token });
+      if (status !== "ahead") {
+        throw new Error(
+          `syncFromGithub is not a fast-forward (GitHub says "${status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
+        );
+      }
+    }
+
+    // The transfer is SERVER-SIDE: the Artifacts service imports straight
+    // from GitHub (delete + import under the same name — the remote URL is
+    // name-derived, so nothing else moves). No repo bytes ever enter this
+    // isolate, which is what makes syncing arbitrarily large histories
+    // possible — an in-DO git transfer must inflate every object in memory
+    // (this monorepo: a 21MB pack inflates to ~290MB, past the 128MB limit).
+    // Reads hitting the brief delete->import window fail like any mid-force
+    // clone would and succeed on retry. Deleting the repo revokes its access
+    // tokens, including this isolate's cached one — drop it so gitAccess
+    // re-mints against the imported repo.
+    const artifacts = this.requireArtifacts();
+    const artifactName = this.artifactName();
+    await artifacts.delete(artifactName);
+    this.#artifactTokenPromise = undefined;
+    try {
+      await artifacts.import({
+        source: {
+          url: `https://x-access-token:${token}@github.com/${link.owner}/${link.repo}.git`,
           branch,
           ...(input.depth === undefined ? {} : { depth: input.depth }),
-          noCheckout: true,
-          singleBranch: true,
-          url: githubRemoteUrl(link),
-          username: "x-access-token",
-          password: token,
-        });
-      } catch (error) {
-        throw new Error(
-          `Could not clone ${link.owner}/${link.repo}#${branch} from GitHub (missing branch or empty repository?): ${String(error)}`,
-        );
-      }
-      const [head] = await git.log({ depth: 1 });
-      if (!head) throw new Error(`GitHub ${link.owner}/${link.repo}#${branch} has no commits.`);
-      if (head.oid === previousCommitOid) return null;
-
-      await git.remote({ add: { name: "artifacts", url: repo.remote } });
-      const pushed = await git.push({
-        force: input.force === true,
-        ref: branch,
-        remote: "artifacts",
-        username: "x",
-        password: repo.token,
+        },
+        target: { name: artifactName },
       });
-      if (!pushed.ok) {
-        throw new Error(
-          `syncFromGithub is not a fast-forward: this repo has commits GitHub does not. Pass force: true to discard them and adopt GitHub's head. (${JSON.stringify(pushed.refs)})`,
-        );
-      }
-      return head.oid;
-    })();
-
-    if (headOid === null) {
-      return {
-        branch,
-        changed: false,
-        commitOid: previousCommitOid!,
-        forced: false,
-        previousCommitOid,
-      };
+    } catch (error) {
+      throw new Error(
+        `Artifacts import of ${link.owner}/${link.repo}#${branch} failed (the repo is deleted until a retried sync succeeds): ${String(error)}`,
+      );
     }
 
     // The adopted head is recorded for read-your-write, then the head cache
-    // is invalidated and rebuilt through getHead's own cold-miss path rather
-    // than recomputed inline (the inline contentHash needed a full checkout —
-    // the memory hog this sync deliberately avoids). Ordering matters: with
-    // the pushed head recorded first, getHead's lags-the-push guard keeps any
-    // concurrently in-flight pre-sync checkout from repopulating the cache
-    // with the old head.
+    // is invalidated and rebuilt through getHead's own cold-miss path (a
+    // shallow depth-1 clone — head-snapshot-sized even for big repos).
+    // Ordering matters: with the pushed head recorded first, getHead's
+    // lags-the-push guard keeps any concurrently in-flight pre-sync checkout
+    // from repopulating the cache with the old head.
     this.#recordPushedHead({ branch, commitOid: headOid });
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     await this.getHead({ branch });
@@ -620,6 +614,65 @@ export class RepoDurableObject extends DurableObject<Env> {
       appId: github.appId,
       installationId: link.installationId,
       privateKeyPem: github.privateKey.exposeSecret(),
+    });
+  }
+
+  /** The linked repository's current branch head sha, from the GitHub API. */
+  async #githubBranchHead(args: {
+    branch: string;
+    link: GithubRepoLink;
+    token: string;
+  }): Promise<string> {
+    const response = await this.#githubApi(
+      `/repos/${args.link.owner}/${args.link.repo}/branches/${encodeURIComponent(args.branch)}`,
+      args.token,
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Could not read ${args.link.owner}/${args.link.repo}#${args.branch} from GitHub (missing branch or empty repository?): HTTP ${response.status}`,
+      );
+    }
+    const data = (await response.json()) as { commit?: { sha?: string } };
+    if (typeof data.commit?.sha !== "string") {
+      throw new Error(
+        `GitHub returned no head sha for ${args.link.owner}/${args.link.repo}#${args.branch}.`,
+      );
+    }
+    return data.commit.sha;
+  }
+
+  /**
+   * GitHub's ancestry verdict between our recorded head and the branch tip:
+   * "ahead" | "identical" | "behind" | "diverged", or "unrelated" when GitHub
+   * does not know the base commit (a 404 — e.g. the seeded pre-link history).
+   */
+  async #githubCompareStatus(args: {
+    base: string;
+    branch: string;
+    link: GithubRepoLink;
+    token: string;
+  }): Promise<string> {
+    const response = await this.#githubApi(
+      `/repos/${args.link.owner}/${args.link.repo}/compare/${args.base}...${encodeURIComponent(args.branch)}`,
+      args.token,
+    );
+    if (response.status === 404) return "unrelated";
+    if (!response.ok) {
+      throw new Error(
+        `GitHub compare for ${args.link.owner}/${args.link.repo} failed: HTTP ${response.status}`,
+      );
+    }
+    const data = (await response.json()) as { status?: string };
+    return typeof data.status === "string" ? data.status : "unknown";
+  }
+
+  #githubApi(path: string, token: string): Promise<Response> {
+    return fetch(`https://api.github.com${path}`, {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${token}`,
+        "user-agent": "iterate-os",
+      },
     });
   }
 
