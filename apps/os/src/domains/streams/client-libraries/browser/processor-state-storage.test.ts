@@ -52,7 +52,13 @@ function wrap(db: DatabaseSync): SqlClient {
 const stream = () => ({ append() {} }) as unknown as Stream;
 
 function rawEvent(offset: number): StreamEvent {
-  return { type: "test/raw", payload: { offset }, offset, createdAt: new Date(0).toISOString() };
+  return {
+    type: "test/raw",
+    payload: { offset },
+    offset,
+    createdAt: new Date(0).toISOString(),
+    path: "/tests/raw",
+  };
 }
 
 function createRawEventsProcessor(sql: SqlClient) {

@@ -40,6 +40,7 @@ export const StreamEventInput = z.object({
 export const StreamEvent = StreamEventInput.extend({
   offset: z.number().int().nonnegative(),
   createdAt: z.string(),
+  path: z.string().trim().min(1),
 });
 
 /**

@@ -32,7 +32,7 @@ Cloudflare's primitives like this:
 | ------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | DO namespace bindings          | `SANDBOX_LITE` … `SANDBOX_STANDARD_4`                        | one per instance type (Cloudflare fixes `instance_type` per container class); table in `src/domains/sandboxes/instance-types.ts` |
 | DO classes (container classes) | `SandboxLiteDurableObject` … `SandboxStandard4DurableObject` | all extend one abstract `SandboxDurableObject`; one `containers` entry each                                                      |
-| DO name → identity             | `{projectId}.iterate{path}`                                  | `DurableObjectNameCodec`; the path IS the sandbox address, always `/sandboxes/<instanceType>/<name>`                             |
+| DO name → identity             | `{projectId}.iterate{path}`                                  | `DurableObjectNameCodec`; the path IS the sandbox address, always `/sandboxes/<name>` (flat — single-segment names)              |
 | Container image                | `sandbox/Dockerfile` → stock `cloudflare/sandbox:0.12.3`     | a one-line FROM; one image shared by every class                                                                                 |
 | Cloudflare "applications"      | `os-<env>-sandbox<type>durableobject-<config>`               | one container app per class — the id you pass to `wrangler containers instances`                                                 |
 | Instances                      | one per live sandbox (per DO id)                             | torn down (with a `/workspace` snapshot) on `sleep()` or `sleepAfter` idle                                                       |
@@ -40,10 +40,15 @@ Cloudflare's primitives like this:
 
 Key consequences:
 
-- **The path is the identity, and it routes.** `itx.sandboxes.get(path)` mints
-  the DO stub from `{projectId}:{path}` in the namespace named by the path's
-  instance-type segment. Same path → same sandbox (and its snapshot lineage).
-  There is no separate registry — the DO namespaces _are_ the directory.
+- **The path is the identity; the journal routes.** The instance type is
+  configuration, not a path segment (a type segment would materialize
+  meaningless intermediate folder streams like `/sandboxes/lite`).
+  `itx.sandboxes.create` claims the name by appending `create-requested` to
+  the `/sandboxes` catalogue stream (idempotency-keyed by path — atomic), and
+  `itx.sandboxes.get(path)` reads the claim back to pick the namespace, then
+  mints the DO stub from `{projectId}:{path}`. Same path → same sandbox (and
+  its snapshot lineage). The catalogue stream _is_ the directory — no separate
+  registry, and lookups never materialize per-path streams.
 - **Existence is explicit.** A stub only answers once `itx.sandboxes.create`
   recorded the sandbox; addressing never creates (unlike stock `getSandbox`).
 - Per-class settings (`instance_type`, `max_instances`, `ssh`,
@@ -198,7 +203,7 @@ Logs** pipeline, so:
   so instances are filterable in Containers analytics.
 - **Lifecycle as stream events** — our own addition, not Cloudflare's: every
   sandbox appends its whole saga to the stream at its own path —
-  `create-requested` → `created` → `started` → … → `sleep-requested` →
+  `created` → `started` → … → `sleep-requested` →
   `backup-created` → `stopped` → `destroy-requested` → `destroyed` (see
   [Sandboxes → Lifecycle](./sandboxes.md#lifecycle-imperative-commands-evented-completions)).
 

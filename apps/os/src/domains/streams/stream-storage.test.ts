@@ -25,11 +25,12 @@ function event(offset: number, type: string): StreamEvent {
     payload: { offset },
     createdAt: new Date(offset).toISOString(),
     offset,
+    path: "/tests/stream",
   };
 }
 
 function createLog() {
-  const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")));
+  const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
   log.insert([
     event(1, "events.iterate.com/test/selected"),
     event(2, "events.iterate.com/test/other"),
@@ -88,6 +89,32 @@ describe("StreamEventLog.getRange", () => {
 
     expect(offsets(read(log, { afterOffset: 0, eventTypes: ["*"], limit: 3 }))).toEqual([1, 2, 3]);
     expect(read(log, { afterOffset: 0, eventTypes: [], limit: 3 })).toEqual([]);
+  });
+
+  it("adds the stream path when reading legacy stored events", () => {
+    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
+    const log = new StreamEventLog(sql, "/legacy/stream");
+
+    const legacyEvent = {
+      type: "events.iterate.com/test/legacy",
+      createdAt: new Date(1).toISOString(),
+      offset: 1,
+    };
+    sql.exec(
+      "insert into events (offset, type, created_at, idempotency_key) values (?, ?, ?, ?)",
+      legacyEvent.offset,
+      legacyEvent.type,
+      legacyEvent.createdAt,
+      null,
+    );
+    sql.exec(
+      "insert into event_chunks (offset, chunk_index, chunk_bytes) values (?, ?, ?)",
+      legacyEvent.offset,
+      0,
+      new TextEncoder().encode(JSON.stringify(legacyEvent)).buffer,
+    );
+
+    expect(log.getByOffset(1)).toEqual({ ...legacyEvent, path: "/legacy/stream" });
   });
 });
 

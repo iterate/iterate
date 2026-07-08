@@ -54,6 +54,7 @@ class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(this.events.length + 1).toISOString(),
         offset: this.events.length + 1,
+        path: this.path,
       };
       this.events.push(event);
       return event;

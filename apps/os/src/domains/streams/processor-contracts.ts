@@ -311,6 +311,7 @@ export function getEventSchema<
     idempotencyKey: StreamEventSchema.shape.idempotencyKey,
     offset: StreamEventSchema.shape.offset,
     createdAt: StreamEventSchema.shape.createdAt,
+    path: StreamEventSchema.shape.path,
   }) as unknown as z.ZodType<
     TypedStreamEvent<Type, z.output<PayloadSchema>>,
     TypedStreamEvent<Type, z.input<PayloadSchema>>
