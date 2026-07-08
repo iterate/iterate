@@ -229,3 +229,16 @@ simple. It must be visually honest that it's in-progress.
   also note the standalone gif_creator tool schema strips `coordinate`, it
   only goes through via browser_batch). Left the original GIF in the PR
   body with an explicit note that it predates this change.
+- Demo re-record, resolved: the mobile-viewport GIF is now in the PR body
+  ("tell me a 200 word story", ~450px window, story bubble streams alone,
+  message-only turn so no code block ever appears; asset 426f0b78). What
+  finally worked, for next time: resize the OS _window_ via AppleScript
+  (`osascript` bounds on the Chrome window — the extension resize_window
+  reported success but page zoom/window state made it a no-op), record in a
+  tab that is ACTIVE in that window (background tabs keep a stale wide
+  viewport), then in one browser_batch do stop_recording + export with
+  `coordinate` (via browser_batch only — the plain tool schema strips the
+  coordinate param) aimed at a point inside the PR-body edit textarea in
+  both CSS and screenshot coordinate spaces; the drop uploads and the body
+  is then rewritten cleanly via gh. `download: true` exports do land, but
+  as unconfirmed `~/Downloads/.com.google.Chrome.*` temp files.
