@@ -306,6 +306,15 @@ describe("linkRepoToGithub", () => {
       },
     });
 
+    // A failed old-rule removal aborts the re-link BEFORE anything changes:
+    // the link still names the old connection and a retry starts clean.
+    network.state.ruleRemoveAppendShouldFail = true;
+    await expect(linkRepoToGithub({ ...linkInput(), connection: otherConnection })).rejects.toThrow(
+      /rule-removed append exploded/,
+    );
+    expect(network.state.githubLink).toMatchObject({ connection: CONNECTION });
+    network.state.ruleRemoveAppendShouldFail = false;
+
     await linkRepoToGithub({ ...linkInput(), connection: otherConnection });
 
     // The new connection stream holds the rule; the old one got the removal.
