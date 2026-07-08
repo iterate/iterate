@@ -488,11 +488,12 @@ export class RepoDurableObject extends DurableObject<Env> {
    * store, unreferenced). The adopted head is live for worker builds the
    * moment this returns — same read-your-write boundary as commitFiles.
    *
-   * The transfer itself is server-side (Artifacts imports straight from
-   * GitHub), so history size does not touch this isolate. `depth` optionally
-   * prunes the adopted history to the newest N commits — GitHub retains the
-   * full history, so nothing is lost and a later deeper sync can widen the
-   * window.
+   * PUBLIC repositories transfer server-side (Artifacts imports straight
+   * from GitHub — any history size). PRIVATE repositories transfer in-process
+   * (the import service supports public sources only), where big histories
+   * need `depth`. `depth` prunes the adopted history to the newest N commits
+   * either way — GitHub retains the full history, so nothing is lost and a
+   * later deeper sync can widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#serializeWrite(() => this.#syncFromGithub(input));
@@ -530,33 +531,54 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
     }
 
-    // The transfer is SERVER-SIDE: the Artifacts service imports straight
-    // from GitHub (delete + import under the same name — the remote URL is
-    // name-derived, so nothing else moves). No repo bytes ever enter this
-    // isolate, which is what makes syncing arbitrarily large histories
-    // possible — an in-DO git transfer must inflate every object in memory
-    // (this monorepo: a 21MB pack inflates to ~290MB, past the 128MB limit).
-    // Reads hitting the brief delete->import window fail like any mid-force
-    // clone would and succeed on retry. Deleting the repo revokes its access
-    // tokens, including this isolate's cached one — drop it so gitAccess
-    // re-mints against the imported repo.
-    const artifacts = this.requireArtifacts();
-    const artifactName = this.artifactName();
-    await artifacts.delete(artifactName);
-    this.#artifactTokenPromise = undefined;
-    try {
-      await artifacts.import({
-        source: {
-          url: `https://x-access-token:${token}@github.com/${link.owner}/${link.repo}.git`,
-          branch,
-          ...(input.depth === undefined ? {} : { depth: input.depth }),
-        },
-        target: { name: artifactName },
-      });
-    } catch (error) {
-      throw new Error(
-        `Artifacts import of ${link.owner}/${link.repo}#${branch} failed (the repo is deleted until a retried sync succeeds): ${String(error)}`,
-      );
+    // Two transfer lanes, picked by source visibility (probed BEFORE anything
+    // destructive happens):
+    //
+    // - PUBLIC source: server-side Artifacts import (delete + import under the
+    //   same name — the remote URL is name-derived, so nothing else moves). No
+    //   repo bytes enter this isolate, so arbitrarily large histories sync.
+    //   The service supports public HTTPS remotes only (proven live: private
+    //   URLs answer REMOTE_AUTH_REQUIRED "Only public repositories" even with
+    //   embedded credentials).
+    // - PRIVATE source: in-DO git transfer (checkout-free clone + push). Every
+    //   object inflates in memory here, so big private histories need `depth`
+    //   (this monorepo: a 21MB pack inflates to ~290MB, past the 128MB limit);
+    //   small ones sync whole.
+    if (await githubRepoIsPublic(link)) {
+      // Reads hitting the brief delete->import window fail like any mid-force
+      // clone would and succeed on retry. Deleting the repo revokes its
+      // tokens, including this isolate's cached one — drop it so gitAccess
+      // re-mints against the imported repo.
+      const artifacts = this.requireArtifacts();
+      const artifactName = this.artifactName();
+      await artifacts.delete(artifactName);
+      this.#artifactTokenPromise = undefined;
+      // The delete is eventually consistent: an immediate import can still see
+      // the old name (observed live as ALREADY_EXISTS) — retry with backoff.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await artifacts.import({
+            source: {
+              url: `https://github.com/${link.owner}/${link.repo}.git`,
+              branch,
+              ...(input.depth === undefined ? {} : { depth: input.depth }),
+            },
+            target: { name: artifactName },
+          });
+          break;
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          if (code === "ALREADY_EXISTS" && attempt <= 5) {
+            await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+            continue;
+          }
+          throw new Error(
+            `Artifacts import of ${link.owner}/${link.repo}#${branch} failed (the repo is deleted until a retried sync succeeds): ${redactGitCredentials(String(error))}`,
+          );
+        }
+      }
+    } else {
+      await this.#transferGithubHistoryInProcess({ branch, depth: input.depth, link, token });
     }
 
     // The adopted head is recorded for read-your-write, then the head cache
@@ -588,6 +610,54 @@ export class RepoDurableObject extends DurableObject<Env> {
       forced: input.force === true,
       previousCommitOid,
     };
+  }
+
+  /**
+   * The private-source transfer lane: clone GitHub into an in-memory fs
+   * (checkout-free — a transfer only moves objects) and push to the Artifacts
+   * remote. Scoped so the clone is collectable before the head-cache rebuild
+   * clones again. `depth` bounds how much history inflates in this isolate.
+   */
+  async #transferGithubHistoryInProcess(args: {
+    branch: string;
+    depth?: number;
+    link: GithubRepoLink;
+    token: string;
+  }): Promise<void> {
+    const repo = await this.gitAccess();
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, REPO_DIR);
+    try {
+      await git.clone({
+        branch: args.branch,
+        ...(args.depth === undefined ? {} : { depth: args.depth }),
+        noCheckout: true,
+        singleBranch: true,
+        url: githubRemoteUrl(args.link),
+        username: "x-access-token",
+        password: args.token,
+      });
+    } catch (error) {
+      throw new Error(
+        `Could not clone ${args.link.owner}/${args.link.repo}#${args.branch} from GitHub (missing branch or empty repository?): ${redactGitCredentials(String(error))}`,
+      );
+    }
+    // Always forced: the fast-forward decision was already made against
+    // GitHub's compare API before the transfer started, and with `depth` the
+    // local clone cannot prove ancestry the remote would accept anyway.
+    await git.remote({ add: { name: "artifacts", url: repo.remote } });
+    const pushed = await git.push({
+      force: true,
+      ref: args.branch,
+      remote: "artifacts",
+      username: "x",
+      password: repo.token,
+    });
+    if (!pushed.ok) {
+      throw new Error(
+        `Pushing the adopted GitHub history to the Artifacts remote failed: ${redactGitCredentials(JSON.stringify(pushed.refs))}`,
+      );
+    }
   }
 
   #requireGithubLink(): GithubRepoLink {
@@ -759,7 +829,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       return await this.requireArtifacts().create(name, {
         setDefaultBranch: REPO_DEFAULT_BRANCH,
       });
-    } catch {
+    } catch (error) {
+      // Only the race we mean to tolerate. The old blind catch masked real
+      // failures (an INTERNAL_ERROR here fell through to get(), which then
+      // reported a misleading NOT_FOUND).
+      if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
       return await this.requireArtifacts().get(name);
     }
   }
@@ -1008,6 +1082,34 @@ function repoHeadStorageKey(branch: string) {
 /** The git-over-HTTPS remote of a linked GitHub repository. */
 function githubRemoteUrl(link: { owner: string; repo: string }): string {
   return `https://github.com/${link.owner}/${link.repo}.git`;
+}
+
+/**
+ * Whether a GitHub repository is publicly clonable, probed with an
+ * UNAUTHENTICATED smart-HTTP ref advertisement: 200 = public, 401/404 =
+ * private (GitHub answers 404 for hidden private repos). Decides the sync
+ * transfer lane BEFORE anything destructive happens — the Artifacts import
+ * service supports public sources only.
+ */
+async function githubRepoIsPublic(link: { owner: string; repo: string }): Promise<boolean> {
+  const response = await fetch(`${githubRemoteUrl(link)}/info/refs?service=git-upload-pack`, {
+    headers: { "user-agent": "iterate-os" },
+  });
+  await response.body?.cancel();
+  return response.ok;
+}
+
+/**
+ * Strip git credentials from strings surfaced to callers. Both git-over-HTTPS
+ * URLs (`x-access-token:<token>@`) and bare installation tokens can leak
+ * through third-party error messages — the Artifacts service has been
+ * observed echoing a credentialed source URL verbatim in import errors.
+ */
+function redactGitCredentials(text: string): string {
+  return text
+    .replace(/\/\/[^/@\s]+@/g, "//***@")
+    .replace(/gh[a-z]_[A-Za-z0-9_]+/g, "gh*_***")
+    .replace(/art_v1_[A-Za-z0-9?=]+/g, "art_v1_***");
 }
 
 function isGithubLinkRecord(value: unknown): value is GithubRepoLink {

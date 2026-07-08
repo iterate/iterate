@@ -17,6 +17,8 @@ import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
+import { PrAgentProcessorContract } from "../repos/pr-agent-processor-contract.ts";
+import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
@@ -198,6 +200,7 @@ export class ProjectProcessor extends StreamProcessor<
               ...agentSubscriptionEvents({
                 childPath,
                 email: isEmailAgentPath(childPath),
+                githubPr: isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
               }),
@@ -288,6 +291,7 @@ function onboardingAgentStartEvents(deps: { itx: Pick<ProjectRpcTarget, "project
 function agentSubscriptionEvents(input: {
   childPath: string;
   email?: boolean;
+  githubPr?: boolean;
   projectId: string;
   slack?: boolean;
 }) {
@@ -311,6 +315,7 @@ function agentSubscriptionEvents(input: {
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
+    ...(input.githubPr ? [subscription(PrAgentProcessorContract.slug, "agent")] : []),
   ];
 }
 
