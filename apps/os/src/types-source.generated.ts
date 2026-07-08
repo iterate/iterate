@@ -961,6 +961,12 @@ export interface WorkspaceCollection extends Describable {
  * returns proves the checkout exists. Read, write, and edit files freely;
  * nothing is shared until pushed. \`git\` publishes commits to the workspace's
  * own branch in the project repo (\`workspaces/<path>\`), never to main.
+ *
+ * Constraints: individual files are capped at ~1.5MB (store large blobs with
+ * \`itx.files\`), and the \`.git\` directory is platform-managed — read it if you
+ * like, but writes there are rejected (use the \`git\` methods). Workspace
+ * branches are for durability and handoff, not worker builds: point worker
+ * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
  */
 export interface Workspace extends Describable {
   appendFile(path: string, content: string): Promise<void>;
@@ -981,11 +987,20 @@ export interface Workspace extends Describable {
   readDir(dir?: string): Promise<WorkspaceFileInfo[]>;
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null>;
+  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
+  readFileBytes(path: string): Promise<Uint8Array | null>;
+  /**
+   * Wipe the checkout and re-clone the project repo on the next call — the
+   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
+   * commits survive on the workspace branch).
+   */
+  reset(): Promise<void>;
   rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;
   /** File metadata, or null when the path does not exist. */
   stat(path: string): Promise<WorkspaceFileInfo | null>;
   whoami(): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
+  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
 }
 
 /**

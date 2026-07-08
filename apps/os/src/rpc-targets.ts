@@ -712,10 +712,13 @@ class WorkspaceRpcTarget extends RpcTarget implements Workspace {
         mv: "Move/rename a file or directory.",
         readDir: "List a directory (defaults to the root).",
         readFile: "One file's contents ({ path }); null when missing.",
+        readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
+        reset: "Wipe the checkout; the next call re-clones. Unpushed work is LOST.",
         rm: "Remove a path ({ recursive, force }).",
         stat: "Metadata for one path; null when missing.",
         whoami: "Workspace identity string (debug).",
         writeFile: "Write one file (creates parent directories).",
+        writeFileBytes: "Write raw bytes to one file.",
       },
       parent: "workspaces.get(path); an agent's own workspace is itx.workspace",
     });
@@ -743,8 +746,20 @@ class WorkspaceRpcTarget extends RpcTarget implements Workspace {
     return this.#durableObjectStub.readFile(path);
   }
 
+  readFileBytes(path: string) {
+    return this.#durableObjectStub.readFileBytes(path);
+  }
+
+  reset() {
+    return this.#durableObjectStub.reset();
+  }
+
   writeFile(...[path, content]: Parameters<Workspace["writeFile"]>) {
     return this.#durableObjectStub.writeFile(path, content);
+  }
+
+  writeFileBytes(...[path, data]: Parameters<Workspace["writeFileBytes"]>) {
+    return this.#durableObjectStub.writeFileBytes(path, data);
   }
 
   appendFile(...[path, content]: Parameters<Workspace["appendFile"]>) {

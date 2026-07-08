@@ -36,13 +36,20 @@ describe("workspaceBranchName", () => {
     );
   });
 
-  test("sanitizes git-refname-illegal sequences", () => {
+  test("sanitizes git-refname-illegal sequences, with a disambiguating suffix", () => {
     // ~ : * [ survive the URL-based name codec but git refuses them in
     // refnames. (^ is deliberately absent: some Node versions percent-encode
     // it in URL paths, so it cannot round-trip the codec everywhere.)
-    expect(workspaceBranchName("/workspaces/agents/a~b:c*d[e")).toBe("workspaces/agents/a-b-c-d-e");
-    expect(workspaceBranchName("/workspaces/agents/ends.lock")).toBe("workspaces/agents/ends-lock");
-    // A trailing dot is illegal in a ref component.
-    expect(workspaceBranchName("/workspaces/agents/v1.")).toBe("workspaces/agents/v1-");
+    expect(workspaceBranchName("/workspaces/agents/a~b:c*d[e")).toMatch(
+      /^workspaces\/agents\/a-b-c-d-e-[0-9a-f]{8}$/,
+    );
+    expect(workspaceBranchName("/workspaces/agents/ends.lock")).toMatch(
+      /^workspaces\/agents\/ends-lock-[0-9a-f]{8}$/,
+    );
+    // Sanitized names carry a hash of the RAW path, so near-miss paths that
+    // sanitize identically still get distinct branches.
+    expect(workspaceBranchName("/workspaces/agents/a~b")).not.toBe(
+      workspaceBranchName("/workspaces/agents/a:b"),
+    );
   });
 });

@@ -59,11 +59,13 @@ export function normalizeWorkspacePath(path: string): string {
  * Workspace paths are already codec-safe (no spaces or control characters),
  * so the sanitization is belt and braces for the remaining characters git
  * refuses in refnames (`~ ^ : ? * [ \`, `..`, `@{`, leading/trailing dots,
- * `.lock` suffixes).
+ * `.lock` suffixes). When sanitization changes anything, a short hash of the
+ * raw path is appended so two distinct workspaces can never collapse onto one
+ * branch (`a~b` and `a:b` both sanitize to `a-b`).
  */
 export function workspaceBranchName(workspacePath: string): string {
-  return normalizeWorkspacePath(workspacePath)
-    .slice(1)
+  const relative = normalizeWorkspacePath(workspacePath).slice(1);
+  const sanitized = relative
     .split("/")
     .map((segment) =>
       segment
@@ -75,4 +77,15 @@ export function workspaceBranchName(workspacePath: string): string {
         .replace(/\.lock$/, "-lock"),
     )
     .join("/");
+  return sanitized === relative ? sanitized : `${sanitized}-${fnv1aHex(relative)}`;
+}
+
+/** FNV-1a 32-bit hex — a tiny sync disambiguator, not a security boundary. */
+function fnv1aHex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }

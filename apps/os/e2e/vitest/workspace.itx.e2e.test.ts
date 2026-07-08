@@ -46,6 +46,11 @@ describe("itx workspaces", () => {
     // The seeded repo is untouched by workspace writes until a push.
     expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();
 
+    // .git is readable but platform-managed: writes are rejected (this is
+    // also what keeps push credentials pinned to the clone-time remote).
+    await expect(workspace.writeFile("/.git/config", "[remote]")).rejects.toThrow(/not writable/);
+    await expect(workspace.rm("/", { recursive: true })).rejects.toThrow(/not writable/);
+
     // Ordinary git flow publishes to the workspace's own branch.
     const status = await workspace.git.status();
     expect(status.map((entry) => entry.filepath)).toContain("notes/e2e.md");
