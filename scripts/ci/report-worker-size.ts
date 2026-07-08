@@ -7,7 +7,9 @@
  * preview runs (scripts/preview/preview.ts) read the newest status back off
  * main to render the "vs main" size delta in the PR-body preview table.
  *
- * Env: APP_SLUG, DEPLOY_LOG_FILE, GITHUB_SHA, GITHUB_REPOSITORY, and
+ * Env: APP_SLUG, DEPLOY_LOG_FILE, DEPLOY_SHA (the checked-out sha that was
+ * actually deployed — NOT the workflow trigger's GITHUB_SHA, which diverges
+ * on a workflow_dispatch with a custom ref), GITHUB_REPOSITORY, and
  * GITHUB_TOKEN / ITERATE_BOT_GITHUB_TOKEN.
  */
 import { readFileSync } from "node:fs";
@@ -56,7 +58,7 @@ async function main() {
   await reportWorkerSize({
     appSlug: readOption("APP_SLUG"),
     deployLogFile: readOption("DEPLOY_LOG_FILE"),
-    sha: readOption("GITHUB_SHA"),
+    sha: readOption("DEPLOY_SHA"),
   });
 }
 

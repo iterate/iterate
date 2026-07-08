@@ -68,7 +68,10 @@ jobs:
           doppler run -- pnpm run-script deploy 2>&1 | tee /tmp/deploy-os.log
       # Publishes the deployed bundle size as a worker-size/os commit status;
       # PR preview tables read it back as the "vs main" baseline
-      # (scripts/preview/preview.ts). Never fails the deploy.
+      # (scripts/preview/preview.ts). Never fails the deploy. DEPLOY_SHA is
+      # rev-parsed from the workspace so the status lands on the commit that
+      # was actually deployed — checkout honors inputs.ref on dispatch, so
+      # the trigger's GITHUB_SHA can be a different commit.
       - name: Report worker size
         if: github.ref == 'refs/heads/main'
         continue-on-error: true
@@ -76,7 +79,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           APP_SLUG: os
           DEPLOY_LOG_FILE: /tmp/deploy-os.log
-        run: pnpm tsx scripts/ci/report-worker-size.ts
+        run: |-
+          set -euo pipefail
+          DEPLOY_SHA="$(git rev-parse HEAD)" pnpm tsx scripts/ci/report-worker-size.ts
   notify:
     needs:
       - deploy

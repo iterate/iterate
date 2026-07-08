@@ -2011,12 +2011,15 @@ async function fetchMainWorkerSizeBaselines(params: {
   const commits = await withGithubRetry("repos.listCommits (main)", () =>
     octokit.rest.repos.listCommits({ owner, repo, sha: "main", per_page: 30 }),
   );
+  // All-or-nothing: swallowing one commit's failed status read could
+  // silently promote an OLDER commit's baseline and render a misleading
+  // "vs main" delta — a blank delta beats a wrong one. Any rejection here
+  // propagates to the caller's catch, which drops deltas for this run.
   const combinedStatuses = await Promise.all(
     commits.data.map((commit) =>
       octokit.rest.repos
         .getCombinedStatusForRef({ owner, repo, ref: commit.sha })
-        .then((response) => ({ sha: commit.sha, statuses: response.data.statuses }))
-        .catch(() => ({ sha: commit.sha, statuses: [] })),
+        .then((response) => ({ sha: commit.sha, statuses: response.data.statuses })),
     ),
   );
 
