@@ -11,11 +11,11 @@ export const StreamEventInput = z.object({
   source: z
     .object({
       processor: z.object({ slug: z.string(), version: z.string() }).strict().optional(),
-      crossPost: z
-        .object({
-          ruleId: z.string().trim().min(1),
-          from: z
+      crossPostedFrom: z
+        .array(
+          z
             .object({
+              ruleId: z.string().trim().min(1),
               createdAt: z.string(),
               offset: z.number().int().nonnegative(),
               path: z.string().trim().min(1),
@@ -23,8 +23,8 @@ export const StreamEventInput = z.object({
               type: z.string().trim().min(1),
             })
             .strict(),
-        })
-        .strict()
+        )
+        .min(1)
         .optional(),
     })
     .strict()

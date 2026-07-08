@@ -880,17 +880,73 @@ export interface Repo extends Describable {
    * `oldString` must match exactly once unless `replaceAll` is true.
    */
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
+  /**
+   * Back this repo with a real GitHub repository through a named GitHub
+   * connection. From then on every default-branch commit is mirrored to
+   * GitHub best-effort (failures journal on the repo stream and self-heal on
+   * the next commit), and every GitHub webhook about that repository is
+   * cross-posted onto this repo's stream. If the GitHub repository does not
+   * exist and the installation can create org repositories, it is created
+   * private. Re-linking replaces the previous link.
+   */
+  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   processor: StreamProcessorRpc<RepoProcessorState>;
+  /**
+   * Push the default branch head to the linked GitHub repository now — the
+   * repair verb for a failed mirror push. Never forced by default; `force:
+   * true` makes this repo win over commits made directly on GitHub.
+   */
+  pushToGithub(input?: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;
   /** Committed file contents at HEAD; null when the path does not exist. */
   readFile(input: { path: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
   } | null>;
+  /**
+   * Adopt the linked GitHub repository's default-branch head into this repo.
+   * Fast-forward only: fails when this repo has commits GitHub does not,
+   * unless `force: true` discards them. The synced head is immediately live
+   * for worker builds.
+   */
+  syncFromGithub(input?: { force?: boolean }): Promise<GithubSyncResult>;
+  /** Remove the GitHub link and its webhook cross-post rule. */
+  unlinkGithub(): Promise<{ unlinked: boolean }>;
   whoami(): Promise<string>;
 }
+
+/**
+ * The GitHub repository a repo is linked to: the named GitHub connection (an
+ * App installation) whose token authenticates mirror pushes, its installation
+ * id, and the owner/repo coordinates on GitHub.
+ */
+export type GithubRepoLink = {
+  connection: string;
+  installationId: string;
+  owner: string;
+  repo: string;
+};
+
+/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
+ * repository was created by this call, and the initial mirror push's outcome
+ * (a failed initial push does not fail the link — it is journaled on the repo
+ * stream and repaired by `pushToGithub()` or the next commit). */
+export type LinkGithubResult = GithubRepoLink & {
+  created: boolean;
+  initialPush: { ok: boolean; commitOid?: string; error?: string };
+};
+
+/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
+ * commit, and the head it replaced (null when the branch had no cached head). */
+export type GithubSyncResult = {
+  branch: string;
+  changed: boolean;
+  commitOid: string;
+  forced: boolean;
+  previousCommitOid: string | null;
+};
 
 /**
  * Catalog of sandboxes within one project.
@@ -1085,7 +1141,19 @@ export type RepoProcessorState = {
   artifactName: string | null;
   created: boolean;
   defaultBranch: string | null;
+  /** The linked GitHub repository, or null when the repo is not linked. */
+  github: GithubRepoLink | null;
   initialized: boolean;
+  /** Outcome of the most recent GitHub mirror push (or sync), or null before
+   * the first one. `ok: false` means the mirror is stale until the next
+   * commit's push or an explicit `pushToGithub()` repairs it. */
+  lastGithubPush: {
+    at: string;
+    branch: string;
+    commitOid: string | null;
+    error: string | null;
+    ok: boolean;
+  } | null;
   remote: string | null;
 };
 
@@ -1303,16 +1371,21 @@ export type StreamEventSource = {
     slug: string;
     version: string;
   };
-  crossPost?: {
+  /**
+   * Cross-post provenance chain, oldest hop first. Every cross-post rule hop
+   * appends one entry naming the stream (and event) it copied from, so a
+   * multi-hop chain reads as the event's full routing history. The stream
+   * refuses to cross-post an event into any stream already on its chain,
+   * which is what makes rule cycles safe to configure.
+   */
+  crossPostedFrom?: {
     ruleId: string;
-    from: {
-      createdAt: string;
-      offset: number;
-      path: string;
-      projectId: string | null;
-      type: string;
-    };
-  };
+    createdAt: string;
+    offset: number;
+    path: string;
+    projectId: string | null;
+    type: string;
+  }[];
 };
 
 export type StreamEventInput = {
