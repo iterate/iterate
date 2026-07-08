@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 branch: repo-ide-git-history
 ---
@@ -8,7 +8,10 @@ branch: repo-ide-git-history
 
 ## Status summary
 
-Implementation complete and verified live (PR #1769, draft). Backend: `log`,
+Done (PR #1769). Review round handled: history invalidation on commit,
+pinned-read retry, honest numstat docs, depth-limited clones; merged main
+twice (IDE GitHub panel #1763 landed alongside — both activity-strip features
+coexist). Backend: `log`,
 `commitDetails` (+/- stats via a dependency-free Myers line diff) and
 `readFile({ commitOid })` on the repo DO + itx surface, with unit + e2e tests
 and all three generated artifacts refreshed. UI: History activity entry in the
@@ -121,6 +124,18 @@ the bottom.
   identity recipe, commits seeded through the itx CLI (also live-verified
   `log`/`commitDetails` JSON on the way), Playwright for the UI walkthrough
   since the Chrome extension was not connected.
+- Review round (all four threads resolved with 🤖 replies): commit now
+  invalidates the repo-log query; the pinned-oid `#checkout` path shares the
+  read-your-write retry (retryable only while the clone is behind the
+  recorded push); line-diff docs state the deliberate trailing-newline
+  divergence from git instead of claiming numstat parity; `log` clones
+  depth-limited (isomorphic-git stops its walk at `.git/shallow` — verified
+  in the vendored 1.37.6 source) and `commitDetails` resolves its oid as a
+  ref instead of walking the whole history.
+- Merged origin/main twice (IDE GitHub panel #1763 + stream-event path
+  change) — `gh` and `history`/`commit` params coexist; generated artifacts
+  regenerated on the merged sources each time; post-merge Playwright smoke
+  confirmed all four activity views work side by side.
 
 ## Follow-ups deliberately out of scope
 
@@ -129,3 +144,6 @@ the bottom.
   (à la GitHub's merge view) would need a design decision.
 - No commit operations (revert / checkout / reset) from the history view.
 - Rename detection (git-style similarity) — renames read as delete + add.
+- A controllable fake git remote seam for the repo DO, so the
+  eventual-consistency retry paths (branch-head AND pinned-oid) become unit
+  testable — both currently rely on the live Artifacts remote.
