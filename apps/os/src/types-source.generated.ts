@@ -914,9 +914,10 @@ export type SandboxCreateInput = {
   name: string;
   /** Cloudflare instance type; defaults to \`basic\`. Cannot be changed later. */
   instanceType?: SandboxInstanceType;
-  /** Idle time before the container is snapshotted and torn down (e.g.
-   * \`"5m"\`, \`"1h"\`, or seconds). Defaults to the SDK's 10 minutes. The
-   * workspace survives — see {@link CloudflareSandbox}. */
+  /** Idle time before the container is snapshotted and torn down: a positive
+   * number of SECONDS, or \`"<n>s"\`/\`"<n>m"\`/\`"<n>h"\` (e.g. \`"30s"\`, \`"5m"\`,
+   * \`"1h"\` — no other units). Defaults to the SDK's 10 minutes. The workspace
+   * survives — see {@link CloudflareSandbox}. */
   sleepAfter?: string | number;
   /** Keep the container alive indefinitely (the SDK's \`keepAlive\`); you must
    * \`sleep()\` or \`destroy()\` explicitly. */
@@ -974,8 +975,8 @@ export interface SandboxCollection extends Describable {
  * - \`start()\` boots the container now instead of lazily; \`sleep()\` snapshots
  *   and tears down now instead of waiting for \`sleepAfter\` (the SDK's
  *   \`stop()\` forwards to it); \`destroy()\` is permanent — the name is retired.
- * - \`describe()\` — the durable record ({ path, instanceType, createdAt,
- *   sleepAfter }).
+ * - \`__describe()\` (the capability-tree convention) carries the durable
+ *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - \`setEnvVars(vars)\` is DURABLE here (persisted, re-applied every start,
  *   journaled as a \`configured\` event); values are conventionally
  *   \`getSecret({ path })\` placeholders substituted only at egress — real

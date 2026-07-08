@@ -146,7 +146,10 @@ function SandboxOperationsPanel({ routeConfig }: { routeConfig: PublicRouteConfi
 
       <dl className="grid gap-2 text-xs">
         <MetadataLine label="Worker" value={workerName} />
-        <MetadataLine label="Container classes" value="Sandbox<Size>DurableObject (one per size)" />
+        <MetadataLine
+          label="Container classes"
+          value="Sandbox<Type>DurableObject (one per instance type)"
+        />
         <MetadataLine label="Doppler config" value={dopplerConfig} />
       </dl>
 

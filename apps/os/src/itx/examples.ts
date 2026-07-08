@@ -380,7 +380,7 @@ return { current: await counter.current() }; // 2, and it persists under the key
 // and it carries the instance type as its second segment, so derive both
 // create inputs from it. create is strict, so a concurrent creator can win
 // the race — swallow the create error and let the second get() be the arbiter.
-const path = vars.sandboxPath ?? "/sandboxes/basic/example";
+const path = (vars.sandboxPath ?? "/sandboxes/basic/example").replace(/^/*/, "/");
 const [, , instanceType, ...nameSegments] = path.split("/");
 const sandbox = await itx.sandboxes.get(path).catch(async () => {
   await itx.sandboxes.create({ name: nameSegments.join("/"), instanceType }).catch(() => {});

@@ -67,6 +67,26 @@ type SandboxRecord = {
 const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as const;
 
 /**
+ * Validate a `sleepAfter` value BEFORE it can reach the SDK. The SDK's
+ * `setSleepAfter` persists the raw value to Durable Object storage before
+ * parsing it, and its constructor re-parses the stored value inside
+ * `blockConcurrencyWhile` — so an unparseable value ("1d", "30min") doesn't
+ * just fail the call, it permanently crash-loops the DO on every later
+ * instantiation (even `destroy()` becomes unreachable; only manual storage
+ * surgery recovers). Accepted forms mirror the SDK's parser exactly:
+ * a positive number of seconds, or `<digits><s|m|h>`.
+ */
+function assertValidSleepAfter(value: string | number): void {
+  const valid =
+    typeof value === "number" ? Number.isFinite(value) && value > 0 : /^\d+[smh]$/.test(value);
+  if (!valid) {
+    throw new Error(
+      `invalid sleepAfter "${value}": pass a positive number of seconds or "<n>s"/"<n>m"/"<n>h" (e.g. "30s", "5m", "1h")`,
+    );
+  }
+}
+
+/**
  * The durable sandbox env-var map, as stored. The SDK's `setEnvVars` input
  * shape (`Record<string, string | undefined>`, undefined unsets) is the write
  * surface; storage only ever holds the defined entries.
@@ -300,6 +320,10 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
         `sandbox instance-type mismatch: this namespace hosts "${this.#instanceType()}" sandboxes, got "${input.instanceType}"`,
       );
     }
+    // Validate BEFORE any durable write: a bad sleepAfter must reject the
+    // create outright, not burn the name (record written) or wedge the DO
+    // (see assertValidSleepAfter).
+    if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
     this.#ensureIdentity({ path: input.path, projectId: input.projectId });
     const existing = this.#record();
     if (existing !== undefined) {
@@ -346,8 +370,23 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * {@link #ensureIdentity}.
    */
   async assertCreated(identity: SandboxIdentity): Promise<void> {
-    this.#ensureIdentity(identity);
+    // Usability FIRST: get() on a never-created path must not leave identity
+    // storage behind (addressing never creates, not even at the storage
+    // level). #ensureIdentity then only verifies-or-records for a sandbox
+    // that provably exists.
     this.#assertUsable();
+    this.#ensureIdentity(identity);
+  }
+
+  /**
+   * The SDK's `setSleepAfter`, guarded: validate before the SDK persists the
+   * raw value (see {@link assertValidSleepAfter} — an unparseable stored
+   * value crash-loops the DO constructor forever). Callers hold the bare
+   * stub, so the fence must live here, not just in `create`.
+   */
+  override async setSleepAfter(sleepAfter: string | number): Promise<void> {
+    assertValidSleepAfter(sleepAfter);
+    return super.setSleepAfter(sleepAfter);
   }
 
   /**
@@ -382,11 +421,10 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * `/workspace` from the newest snapshot and applies the env-var map, so a
    * follow-up command sees a warm, provisioned sandbox. Idempotent while
    * running. Emits `start-requested`; the boot itself lands as `started` (the
-   * onStart hook — which also fires for implicit wakes).
-   *
-   * The no-op exec is what forces the boot: on a FRESH sandbox there is no
-   * snapshot to restore and env application alone never starts a container,
-   * so without it `start()` would resolve with nothing running.
+   * onStart hook — which also fires for implicit wakes). The boot is forced
+   * by `#ensureWorkspaceCurrent`'s cold-path no-op exec — on a fresh sandbox
+   * there is no snapshot to restore and env application alone never starts a
+   * container.
    */
   async start(): Promise<void> {
     this.#assertUsable();
@@ -394,7 +432,6 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       type: "events.iterate.com/sandbox/start-requested",
       payload: {},
     });
-    await this.#redialOnInterruptedSessionSetup(() => super.exec(":"));
     await this.#ensureWorkspaceCurrent();
   }
 
@@ -429,6 +466,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       });
     }
     await super.destroy(); // container-level: the onStop hook appends `stopped`
+    this.#invalidateWorkspaceMemo();
   }
 
   /**
@@ -467,6 +505,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // between teardown and tombstone at worst boots a container that the next
     // idle expiry reclaims.
     await super.destroy();
+    this.#invalidateWorkspaceMemo();
     this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, {
       ...record,
       destroyedAt: new Date().toISOString(),
@@ -517,6 +556,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
     if (busy()) return;
     await super.destroy();
+    this.#invalidateWorkspaceMemo();
   }
 
   /**
@@ -583,7 +623,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const record = this.#record();
     if (record === undefined) {
       throw new Error(
-        "sandbox does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, size })",
+        "sandbox does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, instanceType })",
       );
     }
     if (record.destroyedAt !== undefined) {
@@ -632,11 +672,30 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   override async onStop(): Promise<void> {
     await super.onStop();
     // May fire late: if the Durable Object was hibernated when the container
-    // exited, the SDK delivers this on the next wake.
+    // exited, the SDK delivers this on the next wake — BEFORE the next boot's
+    // onStart, so invalidating here can't clobber a newer container's memo.
+    // This covers container crashes while the DO stays resident: without it
+    // the memo would keep describing a container that no longer exists.
+    this.#invalidateWorkspaceMemo();
     this.#emitLifecycleEvent({
       type: "events.iterate.com/sandbox/stopped",
       payload: {},
     });
+  }
+
+  /**
+   * Forget the current container's provisioning. MUST run after every
+   * teardown this class performs (sleep, idle expiry, destroy) and on
+   * onStop: the DO instance survives a container destroy, and a memo left
+   * behind would satisfy the next command's guard against a container that
+   * no longer exists — the command would then run on a fresh UNRESTORED
+   * disk (reads see nothing; its writes get clobbered by the eventual
+   * restore, or worse, an explicit sleep() would snapshot the empty
+   * /workspace over the last good backup).
+   */
+  #invalidateWorkspaceMemo(): void {
+    this.#workspaceReady = undefined;
+    this.#workspaceProvisioned = false;
   }
 
   /**
@@ -657,6 +716,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    */
   async #backupWorkspace(): Promise<void> {
     if (!this.#workspaceProvisioned) return;
+    // Belt and braces over the memo: never snapshot when no container is
+    // running — the SDK's createBackup would boot a FRESH (empty, unrestored)
+    // container on demand and archive its empty /workspace over the last good
+    // backup. Nothing ran since the last snapshot, so there is nothing new to
+    // save anyway.
+    if (this.ctx.container?.running !== true) return;
     const { projectId, path } = this.#identity();
     const backup = await this.createBackup({
       dir: SANDBOX_WORKSPACE_DIR,
@@ -711,9 +776,20 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * durable env-var map applied. Loops because a container restart mid-await
    * resets `#workspaceReady` (fresh disk): a promise that completed against
    * the PREVIOUS container must not satisfy this call.
+   *
+   * On a COLD ensure (no memo), the container is booted with a no-op exec
+   * BEFORE the provisioning run is registered. Booting inside the run would
+   * fire `onStart` mid-run, which resets the memo and marks the run stale —
+   * so every cold boot with a backup would restore twice (once discarded).
+   * Pre-booting means the run's own restore lands on an already-running
+   * container and only a REAL mid-run crash invalidates it. The warm path
+   * (memo present) skips the exec entirely.
    */
   async #ensureWorkspaceCurrent(): Promise<void> {
     while (true) {
+      if (this.#workspaceReady === undefined) {
+        await this.#redialOnInterruptedSessionSetup(() => super.exec(":"));
+      }
       const run = this.#ensureWorkspace();
       await run;
       if (this.#workspaceReady === run) return;
