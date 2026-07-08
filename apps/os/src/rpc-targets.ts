@@ -644,7 +644,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         readFile:
           'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
         syncFromGithub:
-          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
@@ -762,8 +762,14 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * `depth` prunes: only the newest N commits of history are adopted (GitHub
+   * retains the full history — a later full sync can always deepen). This is
+   * what makes syncing big repositories possible at all: a full history must
+   * be inflated in memory during transfer (this monorepo: a 21MB pack
+   * inflates to ~290MB), while `depth: 1` moves only the head snapshot.
    */
-  syncFromGithub(input: { force?: boolean } = {}): Promise<GithubSyncResult> {
+  syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);
   }
 

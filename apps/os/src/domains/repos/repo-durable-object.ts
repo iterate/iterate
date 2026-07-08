@@ -486,18 +486,28 @@ export class RepoDurableObject extends DurableObject<Env> {
    * `force: true`, which discards them (they stay in the Artifacts object
    * store, unreferenced). The adopted head is live for worker builds the
    * moment this returns — same read-your-write boundary as commitFiles.
+   *
+   * `depth` prunes the adopted history to the newest N commits (a shallow
+   * fetch) — GitHub retains the full history, so nothing is lost, and a later
+   * deeper sync can always widen the window. This is what makes syncing big
+   * repositories possible at all: transferring a full history inflates every
+   * object in memory (this monorepo: a 21MB pack inflates to ~290MB, past the
+   * 128MB isolate limit), while `depth: 1` moves only the head snapshot.
    */
-  syncFromGithub(input: { force?: boolean } = {}): Promise<GithubSyncResult> {
+  syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#serializeWrite(() => this.#syncFromGithub(input));
   }
 
-  async #syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult> {
+  async #syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     const repo = await this.gitAccess();
     const token = await this.#mintGithubToken(link);
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+    if (input.depth !== undefined && (!Number.isInteger(input.depth) || input.depth <= 0)) {
+      throw new Error("syncFromGithub depth must be a positive integer.");
+    }
 
     // `noCheckout`: the sync only moves OBJECTS from GitHub to Artifacts; the
     // working tree would double peak memory (and the content hash that used
@@ -511,6 +521,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       try {
         await git.clone({
           branch,
+          ...(input.depth === undefined ? {} : { depth: input.depth }),
           noCheckout: true,
           singleBranch: true,
           url: githubRemoteUrl(link),

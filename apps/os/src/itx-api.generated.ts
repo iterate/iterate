@@ -742,8 +742,14 @@ export interface Repo {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * `depth` prunes: only the newest N commits of history are adopted (GitHub
+   * retains the full history — a later full sync can always deepen). This is
+   * what makes syncing big repositories possible at all: a full history must
+   * be inflated in memory during transfer (this monorepo: a 21MB pack
+   * inflates to ~290MB), while `depth: 1` moves only the head snapshot.
    */
-  syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult>;
+  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: StreamProcessorRpc<RepoProcessorState>;
 }
