@@ -193,10 +193,11 @@ export default class ItxExampleRunner extends WorkerEntrypoint {
     return await Reflect.apply(handler, receiver, args);
   }
 
-  processEvent(input) {
-    // The default project worker receives every committed project event; the
-    // example runner has nothing to do with them.
-    void input;
+  processEventBatch(batch) {
+    // Every project stream delivers its committed events here; the example
+    // runner has nothing to do with them, but must accept the batch so the
+    // streams' delivery checkpoints keep advancing.
+    void batch;
   }
 
   async runItxExample({ id, vars }) {

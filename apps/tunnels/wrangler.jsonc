@@ -6,7 +6,9 @@
   "main": "./src/worker.ts",
   "compatibility_date": "2026-06-17",
   "compatibility_flags": ["nodejs_compat"],
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CaptunServerShard"] }],
+  // Declarative DO lifecycle — the server reconciles this against live
+  // namespaces per deploy, no tag history (see apps/os DO_EXPORTS).
+  "exports": { "CaptunServerShard": { "type": "durable-object", "storage": "sqlite" } },
   "durable_objects": {
     "bindings": [{ "name": "CaptunServerShard", "class_name": "CaptunServerShard" }],
   },

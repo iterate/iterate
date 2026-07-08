@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { telegramAgentSystemPrompt } from "../projects/project-processor-implementation.ts";
+import { telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
 import { TelegramAgentProcessor } from "./telegram-agent-processor-implementation.ts";
 
@@ -465,7 +465,7 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
+    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
   }
 
   async subscribe(): Promise<never> {
