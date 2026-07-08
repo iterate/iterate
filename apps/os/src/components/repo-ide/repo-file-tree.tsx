@@ -1,8 +1,17 @@
 import { useEffect, useRef } from "react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
-import type { ContextMenuItem, ContextMenuOpenContext } from "@pierre/trees";
+import type {
+  ContextMenuItem as TreeContextMenuItem,
+  ContextMenuOpenContext as TreeContextMenuOpenContext,
+} from "@pierre/trees";
 import { FilePlusIcon, UploadIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@iterate-com/ui/components/context-menu";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { stagedGitStatus, type StagedChanges } from "./staged-changes.ts";
 
@@ -134,24 +143,47 @@ export function RepoFileTree({
           <UploadIcon className="size-3.5" />
         </Button>
       </div>
-      <FileTree
-        model={model}
-        className="min-h-0 flex-1 overflow-y-auto"
-        // Pierre themes itself with CSS light-dark(); pin the tree to light
-        // for now — the CodeMirror pane beside it is light-only too (vsCodeLight),
-        // so following the app's dark mode would clash anyway.
-        style={{ colorScheme: "light" } as React.CSSProperties}
-        renderContextMenu={(item, context) => (
-          <RepoTreeContextMenu
-            item={item}
-            context={context}
-            dirty={changes.has(item.path)}
-            onNewFile={(directoryPath) => startNewFile(directoryPath)}
-            onStartRename={(path) => model.startRenaming(path)}
-            actions={actionsRef.current}
+      {/* The empty area below the rows is part of the tree too: right-click
+          there gets a root-level menu. Pierre owns row context menus, so this
+          one cancels itself when the click landed on a row (visible through
+          the open shadow root via composedPath). */}
+      <ContextMenu
+        onOpenChange={(open, details) => {
+          const onRow = details.event
+            .composedPath()
+            .some(
+              (node) => node instanceof HTMLElement && node.getAttribute("role") === "treeitem",
+            );
+          if (open && onRow) details.cancel();
+        }}
+      >
+        <ContextMenuTrigger className="flex min-h-0 flex-1 flex-col">
+          <FileTree
+            model={model}
+            className="min-h-0 flex-1 overflow-y-auto"
+            // Pierre themes itself with CSS light-dark(); pin the tree to light
+            // for now — the CodeMirror pane beside it is light-only too (vsCodeLight),
+            // so following the app's dark mode would clash anyway.
+            style={{ colorScheme: "light" } as React.CSSProperties}
+            renderContextMenu={(item, context) => (
+              <RepoTreeContextMenu
+                item={item}
+                context={context}
+                dirty={changes.has(item.path)}
+                onNewFile={(directoryPath) => startNewFile(directoryPath)}
+                onStartRename={(path) => model.startRenaming(path)}
+                actions={actionsRef.current}
+              />
+            )}
           />
-        )}
-      />
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => startNewFile(null)}>New file</ContextMenuItem>
+          <ContextMenuItem onClick={() => actionsRef.current.upload("")}>
+            Upload file…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 }
@@ -164,8 +196,8 @@ function RepoTreeContextMenu({
   onStartRename,
   actions,
 }: {
-  item: ContextMenuItem;
-  context: ContextMenuOpenContext;
+  item: TreeContextMenuItem;
+  context: TreeContextMenuOpenContext;
   dirty: boolean;
   onNewFile: (directoryPath: string) => void;
   onStartRename: (path: string) => void;

@@ -9,10 +9,12 @@ import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 
-/** The stream-view params plus the IDE's own view state (open file, diff). */
+/** The stream-view params plus the IDE's own view state (open file, diff,
+ * source-control sidebar). */
 const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
   diff: z.boolean().optional().catch(undefined),
+  scm: z.boolean().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({

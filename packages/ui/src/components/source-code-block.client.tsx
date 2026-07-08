@@ -257,7 +257,9 @@ export function SourceCodeBlock({
       keymap.of(searchKeymap),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
-      !showLineNumbers || plainChrome
+      // Orthogonal on purpose: plainChrome strips the visual chrome (border,
+      // highlights), showLineNumbers alone decides the gutter.
+      !showLineNumbers
         ? EditorView.theme({
             ".cm-gutters": {
               display: "none",

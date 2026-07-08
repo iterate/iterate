@@ -4,6 +4,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { CodeDiffBlock } from "@iterate-com/ui/components/code-diff-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { changedLinesGutter } from "./change-gutter.ts";
 import { repoFileKind } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import type { StagedEntry } from "./staged-changes.ts";
@@ -48,6 +49,16 @@ export function RepoEditorPane({
       headHasPath ? await itx.repos.get(repoPath).readFile({ path, encoding: lane }) : null,
   });
   const headContent = headRead?.content;
+
+  // vscode-style gutter bars marking lines that differ from HEAD, shown even
+  // outside the diff view. Memoized so the editor view survives re-renders.
+  const changeGutter = useMemo(
+    () =>
+      kind.kind === "text" && headContent !== undefined && headContent !== null
+        ? [changedLinesGutter(headContent)]
+        : [],
+    [kind.kind, headContent],
+  );
 
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
@@ -124,6 +135,7 @@ export function RepoEditorPane({
             wrapLongLines={false}
             code={value}
             language={kind.language}
+            codeMirrorExtensions={changeGutter}
             onChange={stageText}
           />
         )}

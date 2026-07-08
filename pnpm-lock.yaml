@@ -500,6 +500,9 @@ importers:
       '@codemirror/lint':
         specifier: ^6.9.5
         version: 6.9.5
+      '@codemirror/merge':
+        specifier: ^6.12.2
+        version: 6.12.2
       '@codemirror/state':
         specifier: ^6.5.4
         version: 6.5.4
