@@ -231,7 +231,18 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
           {gh ? (
-            <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+            // Own Suspense (like RepoEditorPane's): the panel's first
+            // connections read suspends, and without a local boundary that
+            // would bubble to the route's ItxBoundary and blank the whole IDE.
+            <Suspense
+              fallback={
+                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                  Loading…
+                </div>
+              }
+            >
+              <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+            </Suspense>
           ) : scm ? (
             <GitPanel
               changes={changes}

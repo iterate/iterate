@@ -31,6 +31,27 @@ function githubCrossPostRuleId(repoPath: string): string {
   return `github-repo:${repoPath}`;
 }
 
+/** The cross-post rule copying one repository's GitHub webhooks from a
+ * connection stream onto the repo's own stream — built in one place so the
+ * install and the re-link compensation (restore) can never drift. */
+function githubCrossPostRuleEvent(input: {
+  owner: string;
+  repo: string;
+  repoPath: string;
+  ruleId: string;
+}) {
+  return {
+    type: "events.iterate.com/stream/rule-configured",
+    payload: {
+      condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
+      eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
+      path: input.repoPath,
+      ruleId: input.ruleId,
+      type: "cross-post",
+    },
+  };
+}
+
 export async function linkRepoToGithub(input: {
   connection: string;
   owner: string;
@@ -100,7 +121,10 @@ export async function linkRepoToGithub(input: {
   // moved and a retry starts clean, whereas removing it later would let a
   // failure strand a live duplicate rule that a retried linkGithub (whose
   // stored link already names the new connection) could never find again.
-  // Same connection needs nothing: the rule-configured below replaces by id.
+  // If a LATER step fails, the compensation below reinstalls this exact rule
+  // (the previous link carries everything needed to rebuild it), so the old
+  // link never sits ruleless. Same connection needs nothing: the
+  // rule-configured below replaces by id.
   if (previous !== null && previous.connection !== input.connection) {
     await integrationStreamStub(
       input.projectId,
@@ -113,43 +137,56 @@ export async function linkRepoToGithub(input: {
   // the ones about the linked repository onto the repo's own stream. The rule
   // goes in BEFORE the link is recorded — "linked" must always imply
   // "webhooks route" — and the link write is the commit point: if it fails,
-  // the just-installed rule is rolled back.
+  // the just-installed rule is rolled back and the previous connection's rule
+  // (removed above) is reinstalled.
   const connectionStream = integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("github", input.connection),
   );
-  await connectionStream.append({
-    type: "events.iterate.com/stream/rule-configured",
-    payload: {
-      condition: `payload.body.repository.full_name = ${JSON.stringify(`${owner}/${repo}`)}`,
-      eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-      path: repoPath,
-      ruleId,
-      type: "cross-post",
-    },
-  });
   try {
+    await connectionStream.append(githubCrossPostRuleEvent({ owner, repo, repoPath, ruleId }));
     await repoStub.configureGithubLink(link);
   } catch (error) {
+    const compensations: string[] = [];
+    // Roll back the new rule (a no-op fold if the failure happened before it
+    // committed) and restore the previous connection's rule so the still-
+    // recorded old link keeps its webhook lane. Both best-effort: compensation
+    // failures are named in the surfaced error, and a re-run of linkGithub
+    // repairs everything (rules replace by id).
     try {
       await connectionStream.append({
         type: "events.iterate.com/stream/rule-removed",
         payload: { ruleId },
       });
     } catch (rollbackError) {
-      // A failed rollback leaves a live rule with no recorded link. Say so
-      // loudly in the surfaced error: re-running linkGithub replaces the rule
-      // by id, so the repair is one retry away — but only if the caller knows.
-      console.error("github link rollback failed; cross-post rule is orphaned", {
-        repoPath,
-        ruleId,
-        rollbackError,
-      });
-      throw new Error(
-        `${String(error)} (additionally, rolling back the webhook cross-post rule "${ruleId}" on the connection stream failed — re-run linkGithub to replace it, or unlink after a successful link: ${String(rollbackError)})`,
+      compensations.push(
+        `rolling back the webhook rule "${ruleId}" on connection "${input.connection}" failed (${String(rollbackError)})`,
       );
     }
-    throw error;
+    if (previous !== null && previous.connection !== input.connection) {
+      try {
+        await integrationStreamStub(
+          input.projectId,
+          integrationConnectionStreamPath("github", previous.connection),
+        ).append(
+          githubCrossPostRuleEvent({
+            owner: previous.owner,
+            repo: previous.repo,
+            repoPath,
+            ruleId,
+          }),
+        );
+      } catch (restoreError) {
+        compensations.push(
+          `restoring the previous webhook rule on connection "${previous.connection}" failed (${String(restoreError)})`,
+        );
+      }
+    }
+    if (compensations.length === 0) throw error;
+    console.error("github link compensation failed", { repoPath, ruleId, compensations });
+    throw new Error(
+      `${String(error)} (additionally: ${compensations.join("; ")} — re-run linkGithub to repair, rules replace by id)`,
+    );
   }
 
   // Seed the mirror right away so "linked" means "visible on GitHub", not
