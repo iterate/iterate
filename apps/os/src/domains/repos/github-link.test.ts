@@ -26,6 +26,7 @@ const network = vi.hoisted(() => {
     githubRepoExists: true,
     githubCreateStatus: 201,
     pushShouldFail: false,
+    configureLinkShouldFail: false,
   };
 
   function streamEvents(name: string): StoredEvent[] {
@@ -46,6 +47,7 @@ const network = vi.hoisted(() => {
       state.githubRepoExists = true;
       state.githubCreateStatus = 201;
       state.pushShouldFail = false;
+      state.configureLinkShouldFail = false;
     },
     seedStream(name: string, ...events: Array<{ payload: Record<string, unknown>; type: string }>) {
       const stored = streamEvents(name);
@@ -113,7 +115,13 @@ const network = vi.hoisted(() => {
     REPO: {
       getByName(name: string) {
         return {
+          // Read-only probe, deliberately not recorded in repoCalls: the
+          // ordering assertions track the mutating verbs.
+          async getGithubLink() {
+            return network.state.githubLink;
+          },
           async configureGithubLink(link: Record<string, unknown>) {
+            if (network.state.configureLinkShouldFail) throw new Error("link write exploded");
             network.state.githubLink = link;
             network.repoCalls.push({ args: [link], method: "configureGithubLink", name });
             return link;
@@ -250,6 +258,58 @@ describe("linkRepoToGithub", () => {
 
   test("refuses when the connection is not connected", async () => {
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(/is not connected/);
+  });
+
+  test("rolls the webhook rule back when recording the link fails", async () => {
+    seedConnectedFact();
+    network.state.configureLinkShouldFail = true;
+
+    await expect(linkRepoToGithub(linkInput())).rejects.toThrow(/link write exploded/);
+
+    // The rule that went in ahead of the link write was compensated away, so
+    // a failed link leaves neither a link nor a live rule behind.
+    const connectionEvents = network.streams.get(CONNECTION_STREAM) ?? [];
+    expect(
+      connectionEvents.filter((e) => e.type === "events.iterate.com/stream/rule-configured"),
+    ).toHaveLength(1);
+    const removed = connectionEvents.find(
+      (e) => e.type === "events.iterate.com/stream/rule-removed",
+    );
+    expect(removed?.payload).toEqual({ ruleId: "github-repo:/repos/project" });
+    expect(network.state.githubLink).toBeNull();
+  });
+
+  test("re-linking through a different connection removes the old connection's rule", async () => {
+    seedConnectedFact();
+    await linkRepoToGithub(linkInput());
+
+    const otherConnection = "install-456";
+    const otherConnectionStream = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: `/integrations/github/${otherConnection}`,
+    });
+    network.seedStream(otherConnectionStream, {
+      type: GITHUB_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection: otherConnection,
+        externalId: "456",
+        installationId: "456",
+        projectId: PROJECT_ID,
+      },
+    });
+
+    await linkRepoToGithub({ ...linkInput(), connection: otherConnection });
+
+    // The new connection stream holds the rule; the old one got the removal.
+    const newRule = network.streams
+      .get(otherConnectionStream)
+      ?.find((e) => e.type === "events.iterate.com/stream/rule-configured");
+    expect(newRule?.payload).toMatchObject({ ruleId: "github-repo:/repos/project" });
+    const oldRemoved = network.streams
+      .get(CONNECTION_STREAM)
+      ?.find((e) => e.type === "events.iterate.com/stream/rule-removed");
+    expect(oldRemoved?.payload).toEqual({ ruleId: "github-repo:/repos/project" });
+    expect(network.state.githubLink).toMatchObject({ connection: otherConnection });
   });
 });
 

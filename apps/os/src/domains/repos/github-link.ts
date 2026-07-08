@@ -16,7 +16,7 @@
 
 import { itxEnv } from "../../env.ts";
 import type { GithubRepoLink, LinkGithubResult } from "../../types.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { getConnectionStatus } from "../integrations/connect-flows.ts";
 import { connectionOctokit, normalizeGithubError } from "../integrations/github-api.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
@@ -24,7 +24,6 @@ import {
   GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
   integrationConnectionStreamPath,
 } from "../integrations/utils.ts";
-import { normalizePath } from "../durable-object-names.ts";
 
 /** The one rule id a repo's GitHub webhook cross-post rule lives under, so
  * re-linking replaces it and unlinking knows what to remove. */
@@ -84,24 +83,48 @@ export async function linkRepoToGithub(input: {
     repo: input.repo,
   };
   const repoStub = repoDurableObjectStub(input.projectId, repoPath);
-  await repoStub.configureGithubLink(link);
+  const previous = await repoStub.getGithubLink();
+  const ruleId = githubCrossPostRuleId(repoPath);
 
   // The webhook lane: GitHub App webhooks already land verbatim on the
   // connection stream (`/integrations/github/<connection>`); this rule copies
-  // the ones about the linked repository onto the repo's own stream.
-  await integrationStreamStub(
+  // the ones about the linked repository onto the repo's own stream. The rule
+  // goes in BEFORE the link is recorded — "linked" must always imply
+  // "webhooks route" — and the link write is the commit point: if it fails,
+  // the just-installed rule is rolled back.
+  const connectionStream = integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("github", input.connection),
-  ).append({
+  );
+  await connectionStream.append({
     type: "events.iterate.com/stream/rule-configured",
     payload: {
       condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
       eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
       path: repoPath,
-      ruleId: githubCrossPostRuleId(repoPath),
+      ruleId,
       type: "cross-post",
     },
   });
+  try {
+    await repoStub.configureGithubLink(link);
+  } catch (error) {
+    await connectionStream
+      .append({ type: "events.iterate.com/stream/rule-removed", payload: { ruleId } })
+      .catch(() => {});
+    throw error;
+  }
+
+  // Re-linking through a DIFFERENT connection: the previous connection's
+  // stream still holds this repo's rule (same ruleId, other stream) — remove
+  // it so the old installation's webhooks stop cross-posting here. Same
+  // connection needs nothing: the rule-configured above replaced it by id.
+  if (previous !== null && previous.connection !== input.connection) {
+    await integrationStreamStub(
+      input.projectId,
+      integrationConnectionStreamPath("github", previous.connection),
+    ).append({ type: "events.iterate.com/stream/rule-removed", payload: { ruleId } });
+  }
 
   // Seed the mirror right away so "linked" means "visible on GitHub", not
   // "visible after the next commit". Failure is journaled, not fatal (a
