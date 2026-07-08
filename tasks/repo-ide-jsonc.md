@@ -8,7 +8,7 @@ branch: repo-ide-jsonc
 
 ## Status summary
 
-Not started (spec committed first). Stacked on `repo-ide-json-schema` (#1770), which added json-schema squigglies/hover/autocomplete to the repo mini-IDE but runs every `.json`-family file through the strict JSON parse linter — so a perfectly valid commented tsconfig.json shows spurious parse errors.
+Done. Stacked on `repo-ide-json-schema` (#1770). jsonc-by-convention files (_.jsonc, tsconfig/jsconfig families, .vscode/_.json) now open with a json5-backed jsonc language: comments/trailing commas don't squiggle, schema validation + hover + autocomplete still work, plain .json stays strict. Unit-tested (7 new egress-free specs) and verified live in local dev via playwright with screenshots in PR #1774. Notable: the parent PR's colon-position fix is confirmed unnecessary for this lane (lezer-json5 has an explicit PropertyColon node upstream already skips).
 
 ## Ask (follow-up scoped out of #1770)
 
@@ -30,15 +30,18 @@ Concretely:
 
 ## Checklist
 
-- [ ] packages/ui: `"jsonc"` in `SourceCodeLanguage` → `json5()` language support; add `codemirror-json5` dep
-- [ ] apps/os `repo-file-kinds.ts`: jsonc-by-convention detection (`*.jsonc`, `tsconfig*.json`, `jsconfig*.json`, `.vscode/*.json`) with the list documented there
-- [ ] apps/os `repo-json-schema.ts`: `jsonc` lane — `json5ParseLinter` + `json5SchemaLinter` + `json5Completion` + `json5SchemaHover` + `stateExtensions`; `$schema` via `json5.parse`; no colon fix (documented why)
-- [ ] apps/os `repo-editor-pane.tsx`: pass `"jsonc"` through to the schema hook
-- [ ] Unit tests (same egress-free file/patterns): valid commented+trailing-comma tsconfig → no diagnostics; schema violation in a commented tsconfig → squiggle positioned on the value (not the colon); comment in plain package.json → parse diagnostic; `$schema` extraction from commented jsonc
-- [ ] `pnpm typecheck && pnpm lint && pnpm format` + the touched unit specs
-- [ ] Live verification in local dev: commented tsconfig.json with no parse squigglies but a real schema violation squiggling; screenshot in the PR
+- [x] packages/ui: `"jsonc"` in `SourceCodeLanguage` → `json5()` language support; add `codemirror-json5` dep — _switch arm in `sourceCodeLanguageExtension`, `source-code-block.client.tsx`_
+- [x] apps/os `repo-file-kinds.ts`: jsonc-by-convention detection (`*.jsonc`, `tsconfig*.json`, `jsconfig*.json`, `.vscode/*.json`) with the list documented there — _`isJsoncByConvention` + the `jsonc` TEXT_LANGUAGES entry_
+- [x] apps/os `repo-json-schema.ts`: `jsonc` lane — `json5ParseLinter` + `json5SchemaLinter` + `json5Completion` + `json5SchemaHover` + `stateExtensions`; `$schema` via `json5.parse`; no colon fix (documented why) — _`JsonSchemaLanguage` is now `"json" | "jsonc" | "yaml"`; `jsonDollarSchemaUrl` takes the parse fn explicitly_
+- [x] apps/os `repo-editor-pane.tsx`: pass `"jsonc"` through to the schema hook — _language guard extended_
+- [x] Unit tests (same egress-free file/patterns): valid commented+trailing-comma tsconfig → no diagnostics; schema violation in a commented tsconfig → squiggle positioned on the value (not the colon); comment in plain package.json → parse diagnostic; `$schema` extraction from commented jsonc — _7 new specs in `repo-json-schema.test.ts` (19 total), incl. `repoFileKind` mapping_
+- [x] `pnpm typecheck && pnpm lint && pnpm format` + the touched unit specs — _all green at repo root; two custom lint rules (colocate-single-use-types, no-single-use-helpers) caught and fixed layout nits_
+- [x] Live verification in local dev: commented tsconfig.json with no parse squigglies but a real schema violation squiggling; screenshot in the PR — _headless playwright over local dev, project `test`, repo `/` (ROOT); 3 screenshots in the PR body via gh-attach-assets_
 
 ## Implementation log
 
 - Pre-spec research: `codemirror-json-schema/json5` needs `codemirror-json5` + `json5` (optionalDependencies upstream, so they must be direct deps where imported); lezer-json5 nodeNames include `PropertyColon`, and upstream's `getJsonPointers(MODES.JSON5)` skips it (`nextSibling.nextSibling`) — colon fix not needed for this lane.
-- `codemirror-json5` ships a proper exports map (unlike codemirror-json-schema), so no new vitest `server.deps.inline` entry should be needed.
+- `codemirror-json5` ships a proper exports map (unlike codemirror-json-schema), so no new vitest `server.deps.inline` entry was needed — all 19 specs passed first run.
+- `codemirror-json5@^1.0.3` resolves to a single pnpm instance shared with codemirror-json-schema's optional dep, so `json5Language.data.of({ autocomplete })` registers against the same language singleton the editor uses (same dedupe concern the parent PR handled for `jsonLanguage`).
+- Zero-width parse diagnostics (strict `jsonParseLinter` at a comment) render as a `.cm-lintPoint-error` point marker, not a `.cm-lintRange-error` span — worth knowing when counting squigglies in browser verification.
+- Live verification (local dev, project `test`, repo `/`): seeded `tsconfig.json` (comments + trailing comma + `"strict": 1`), commented `package.json`, and commented `.vscode/settings.json` via `itx.repos.get("/").commitFiles`. Confirmed: tsconfig shows exactly one squiggle on the `1` with schema hover docs and the `tsconfig.json` header note; package.json shows exactly one parse diagnostic at the comment; .vscode/settings.json shows zero diagnostics.
