@@ -244,6 +244,7 @@ const loadExtensionModules = import.meta.env.SSR
         import("@codemirror/autocomplete"),
         import("@codemirror/view"),
         import("@codemirror/lint"),
+        import("@codemirror/state"),
       ]);
 
 /**
@@ -268,7 +269,8 @@ export function useRepoTypeScriptExtensions(input: {
     queryKey: ["repo-typescript", input.projectId, input.repoPath, input.commitOid],
     queryFn: async () => {
       try {
-        const [comlink, codemirrorTs, autocomplete, view, lint] = await loadExtensionModules!();
+        const [comlink, codemirrorTs, autocomplete, view, lint, state] =
+          await loadExtensionModules!();
         const session = repoTypeScriptSession(
           { projectId: input.projectId, repoPath: input.repoPath },
           comlink,
@@ -284,6 +286,7 @@ export function useRepoTypeScriptExtensions(input: {
           autocomplete,
           view,
           lint,
+          state,
         };
       } catch (error) {
         // The editor works fine without the language service, so failures
@@ -320,11 +323,29 @@ export function useRepoTypeScriptExtensions(input: {
   const autocomplete = query.data?.autocomplete;
   const view = query.data?.view;
   const lint = query.data?.lint;
+  const state = query.data?.state;
   const path = input.path;
   return useMemo(() => {
-    if (!worker || !onTypesAcquired || !codemirrorTs || !autocomplete || !view || !lint || !enabled)
+    if (
+      !worker ||
+      !onTypesAcquired ||
+      !codemirrorTs ||
+      !autocomplete ||
+      !view ||
+      !lint ||
+      !state ||
+      !enabled
+    ) {
       return [];
+    }
     const { tsFacetWorker, tsLinterWorker, tsHoverWorker } = codemirrorTs;
+    // Lints are push-cached per buffer, and forceLinting alone only flushes a
+    // PENDING lint query — untouched since its last pass, a buffer has none,
+    // so freshly-acquired types would never repaint its squigglies (verified
+    // live: the type error only appeared after a keystroke). The effect +
+    // needsRefresh pair marks the lint state stale first; forceLinting then
+    // has something to flush and the repaint is immediate.
+    const typesAcquired = state.StateEffect.define<null>();
     return [
       // No tsSyncWorker on purpose — see the module docstring: the working
       // tree store is the single buffer-sync path into the worker.
@@ -339,15 +360,20 @@ export function useRepoTypeScriptExtensions(input: {
         override: [itxReplAutocompleteWorker(tsFacetWorker)],
       }),
       tsHoverWorker(),
-      // Lints are push-cached per buffer: when a typm run lands new types in
-      // the worker (imports going any → real), repaint the squigglies.
+      lint.linter(null, {
+        needsRefresh: (update) =>
+          update.transactions.some((tr) => tr.effects.some((effect) => effect.is(typesAcquired))),
+      }),
       view.ViewPlugin.define((editorView) => {
-        const unsubscribe = onTypesAcquired(() => lint.forceLinting(editorView));
+        const unsubscribe = onTypesAcquired(() => {
+          editorView.dispatch({ effects: typesAcquired.of(null) });
+          lint.forceLinting(editorView);
+        });
         return { destroy: unsubscribe };
       }),
       // The hover tooltip escapes the editor into the file pane's stacking
       // context; keep it above the sticky header/toolbar chrome.
       view.EditorView.theme({ ".cm-tooltip": { zIndex: "30" } }),
     ];
-  }, [worker, onTypesAcquired, codemirrorTs, autocomplete, view, lint, enabled, path]);
+  }, [worker, onTypesAcquired, codemirrorTs, autocomplete, view, lint, state, enabled, path]);
 }

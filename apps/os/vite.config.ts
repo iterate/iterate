@@ -49,6 +49,7 @@ export default defineConfig({
     include: [
       "@codemirror/autocomplete",
       "@codemirror/lint",
+      "@codemirror/state",
       "@codemirror/view",
       "@typescript/vfs",
       "@valtown/codemirror-ts",
