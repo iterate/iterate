@@ -41,7 +41,20 @@ export default defineConfig({
   // (its session/export tables and RpcTarget identity break across copies).
   optimizeDeps: {
     exclude: ["@journeyapps/wa-sqlite", "capnweb"],
-    include: ["@typescript/vfs", "@valtown/codemirror-ts/worker", "typescript"],
+    // The codemirror-family entries keep the repl's and repo IDE's LAZY
+    // imports on the same pre-bundled @codemirror/state instance as the
+    // statically-imported editor: a mid-session dep re-optimization would
+    // otherwise split facet identities (extensions silently read undefined
+    // from a foreign-instance facet).
+    include: [
+      "@codemirror/autocomplete",
+      "@codemirror/view",
+      "@typescript/vfs",
+      "@valtown/codemirror-ts",
+      "@valtown/codemirror-ts/worker",
+      "comlink",
+      "typescript",
+    ],
   },
   build: {
     rollupOptions: {

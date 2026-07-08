@@ -64,7 +64,10 @@ const defaultCompilerOptions: ts.CompilerOptions = {
   allowSyntheticDefaultImports: true,
   esModuleInterop: true,
   jsx: ts.JsxEmit.ReactJSX,
-  lib: ["es2022", "dom", "dom.iterable"],
+  // Full lib FILENAMES, not short names: a dotted short name ("dom.iterable")
+  // parses as a file with extension ".iterable" and env creation throws
+  // TS6054. This is also the form tsconfig option conversion produces.
+  lib: ["lib.es2022.d.ts", "lib.dom.d.ts", "lib.dom.iterable.d.ts"],
   module: ts.ModuleKind.ESNext,
   moduleDetection: ts.ModuleDetectionKind.Force,
   moduleResolution: ts.ModuleResolutionKind.Bundler,
@@ -136,6 +139,16 @@ function nonEmpty(content: string): string {
   return content === "" ? "\n" : content;
 }
 
+/**
+ * TS2347 "Untyped function calls may not accept type arguments": with every
+ * bare npm import typed `any` (see the prelude), type arguments on external
+ * calls — `kv.get<number>(…)` against the repo sdk's runtime types — are
+ * guaranteed noise, not signal. Real acquired types (typm) make the calls
+ * typed and the code stops firing on its own; drop the filter then if it
+ * bothers anyone.
+ */
+const IGNORED_DIAGNOSTIC_CODES = new Set([2347]);
+
 let seed: { files: Record<string, string>; tsconfigText: string | null } | null = null;
 
 const worker = createWorker(async () => {
@@ -145,12 +158,19 @@ const worker = createWorker(async () => {
   fsMap.set(PRELUDE_PATH, prelude);
   for (const [path, content] of Object.entries(input.files)) fsMap.set(path, nonEmpty(content));
   const system = createSystem(fsMap);
-  return createVirtualTypeScriptEnvironment(
+  const env = createVirtualTypeScriptEnvironment(
     system,
     [PRELUDE_PATH, ...Object.keys(input.files)],
     ts,
     options,
   );
+  const languageService = env.languageService;
+  const keepDiagnostic = (diagnostic: ts.Diagnostic) =>
+    !IGNORED_DIAGNOSTIC_CODES.has(diagnostic.code);
+  const getSemanticDiagnostics = languageService.getSemanticDiagnostics.bind(languageService);
+  languageService.getSemanticDiagnostics = (fileName) =>
+    getSemanticDiagnostics(fileName).filter(keepDiagnostic);
+  return env;
 });
 
 /**

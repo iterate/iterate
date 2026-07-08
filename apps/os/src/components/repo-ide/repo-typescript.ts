@@ -57,8 +57,10 @@ const MAX_SEED_FILES = 500;
 
 class RepoTypeScriptSession {
   #worker: Worker;
-  remote: Remote<RepoTypeScriptWorkerApi>;
+  #remote: Remote<RepoTypeScriptWorkerApi>;
   #releaseRemote: () => void;
+  /** What the editor extensions talk to — see {@link workerFacade}. */
+  worker: ReturnType<typeof workerFacade>;
   /** HEAD contents of TypeScript-relevant paths (repo-relative keys). */
   #headContents = new Map<string, string>();
   /** What the vfs currently holds (repo-relative keys) — the diff baseline. */
@@ -78,7 +80,8 @@ class RepoTypeScriptSession {
       type: "module",
     });
     const remote = comlink.wrap<RepoTypeScriptWorkerApi>(this.#worker);
-    this.remote = remote;
+    this.#remote = remote;
+    this.worker = workerFacade(remote);
     this.#releaseRemote = () => remote[comlink.releaseProxy]();
   }
 
@@ -107,7 +110,7 @@ class RepoTypeScriptSession {
       this.#unsubscribe = this.#store.subscribe(() => this.#reconcile());
       if (!this.#initialized) {
         const desired = this.#desired();
-        await this.remote.initializeRepo({
+        await this.#remote.initializeRepo({
           files: Object.fromEntries(
             [...desired].map(([path, content]) => [vfsPath(path), content]),
           ),
@@ -148,8 +151,8 @@ class RepoTypeScriptSession {
       .filter((path) => !desired.has(path))
       .map((path) => vfsPath(path));
     this.#pushed = desired;
-    if (Object.keys(updates).length > 0) void this.remote.setFiles(updates);
-    if (removals.length > 0) void this.remote.deleteFiles(removals);
+    if (Object.keys(updates).length > 0) void this.#remote.setFiles(updates);
+    if (removals.length > 0) void this.#remote.deleteFiles(removals);
   }
 
   terminate(): void {
@@ -157,6 +160,31 @@ class RepoTypeScriptSession {
     this.#releaseRemote();
     this.#worker.terminate();
   }
+}
+
+/**
+ * Plain delegating closures over the comlink remote, one per method the
+ * editor extensions call. NEVER hand the extensions (or anything else
+ * React-visible — the facet value travels through component props) the
+ * comlink proxy itself: React 19's dev-mode component performance logging
+ * stringifies changed props, and String() on a comlink proxy throws
+ * ("Cannot convert object to primitive value"), aborting the whole React
+ * commit and unmounting the editor. Closures keep the proxy reachable only
+ * lexically, invisible to any serializer.
+ */
+function workerFacade(remote: Remote<RepoTypeScriptWorkerApi>) {
+  return {
+    initialize: () => remote.initialize(),
+    updateFile: (input: { path: string; code: string }) => remote.updateFile(input),
+    getLints: (input: { path: string; diagnosticCodesToIgnore: number[] }) =>
+      remote.getLints(input),
+    getAutocompletion: (input: Parameters<RepoTypeScriptWorkerApi["getAutocompletion"]>[0]) =>
+      remote.getAutocompletion(input),
+    getAutocompletionWithDocs: (
+      input: Parameters<RepoTypeScriptWorkerApi["getAutocompletionWithDocs"]>[0],
+    ) => remote.getAutocompletionWithDocs(input),
+    getHover: (input: { path: string; pos: number }) => remote.getHover(input),
+  };
 }
 
 /**
@@ -213,13 +241,22 @@ export function useRepoTypeScriptExtensions(input: {
     // makes a commit re-run ensureSynced (HEAD resync) through the query.
     queryKey: ["repo-typescript", input.projectId, input.repoPath, input.commitOid],
     queryFn: async () => {
-      const [comlink, codemirrorTs, autocomplete, view] = await loadExtensionModules!();
-      const session = repoTypeScriptSession(
-        { projectId: input.projectId, repoPath: input.repoPath },
-        comlink,
-      );
-      await session.ensureSynced(itx, input.commitOid);
-      return { session, codemirrorTs, autocomplete, view };
+      try {
+        const [comlink, codemirrorTs, autocomplete, view] = await loadExtensionModules!();
+        const session = repoTypeScriptSession(
+          { projectId: input.projectId, repoPath: input.repoPath },
+          comlink,
+        );
+        await session.ensureSynced(itx, input.commitOid);
+        // Only the plain facade goes into query data (which React sees) —
+        // never the session/remote; see workerFacade.
+        return { worker: session.worker, codemirrorTs, autocomplete, view };
+      } catch (error) {
+        // The editor works fine without the language service, so failures
+        // here are invisible by design — except in the console.
+        console.error("[repo-ide] TypeScript language service failed to start", error);
+        throw error;
+      }
     },
     enabled,
     staleTime: Infinity,
@@ -242,7 +279,7 @@ export function useRepoTypeScriptExtensions(input: {
       // tree store is the single buffer-sync path into the worker.
       tsFacetWorker.of({
         path: vfsPath(path),
-        worker: data.session.remote as unknown as WorkerShape,
+        worker: data.worker as unknown as WorkerShape,
       }),
       tsLinterWorker(),
       data.autocomplete.autocompletion({
