@@ -8,7 +8,7 @@ branch: repo-ide-json-schema
 
 ## Status summary
 
-Implementation done and unit-tested (12 specs, no egress); live browser verification pending. Notable find along the way: an upstream codemirror-json-schema bug (squigglies land on the `:` with @lezer/json 1.0.3) worked around with a wrapped parser.
+Done. Implemented, unit-tested (12 egress-free specs), and verified live in local dev via playwright: squigglies + hover + schema autocomplete for package.json/tsconfig/$schema/yaml-modeline/workflow files, plus graceful "schema unavailable" degradation with schemastore blocked. Notable find: an upstream codemirror-json-schema bug (squigglies land on the `:` with @lezer/json 1.0.3) worked around with a wrapped parser. Known limitation: json-schema-library doesn't descend into the github-workflow schema's `oneOf` job definitions, so deep workflow errors don't surface (top-level ones do).
 
 ## Ask (verbatim, from Misha — spinoff 4 of the repos mini IDE task)
 
@@ -39,8 +39,8 @@ Implementation done and unit-tested (12 specs, no egress); live browser verifica
 - [x] Wire into `RepoEditorPane` (editable + staged views) with header indicator — _extensions appended to both text branches; muted schema-name note (title = URL) or "schema unavailable"_
 - [x] packages/ui: preserve selection across CodeMirror view rebuilds — _selection + focus carried over when the doc is unchanged, in `source-code-block.client.tsx`_
 - [x] Unit tests, no egress: URL resolution policy + diagnostics produced from an inline fixture schema — _`repo-json-schema.test.ts`, 12 specs; headless EditorState + `ensureSyntaxTree`, no DOM, no network_
-- [ ] Live verification in local dev: package.json squiggly + hover, `$schema` file, screenshots in PR
-- [ ] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` (scoped sensibly)
+- [x] Live verification in local dev: package.json squiggly + hover, `$schema` file, screenshots in PR — _playwright walkthrough over 5 files + live-edit, autocomplete, and blocked-egress passes; screenshots in the PR body_
+- [x] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` (scoped sensibly) — _all green at the repo root (unit lane: apps/os 590 passed)_
 
 ## Implementation log
 
@@ -48,3 +48,12 @@ Implementation done and unit-tested (12 specs, no egress); live browser verifica
 - **Upstream bug found**: @lezer/json 1.0.3 (2024-12-29) added the `":"` token to the parse tree (1.0.2's nodeNames: `… Property PropertyName ] [ Array`; 1.0.3 adds `:`). codemirror-json-schema ≤0.8.1 takes `PropertyName.nextSibling` as the value node in JSON mode, so every diagnostic's from/to covered the colon, not the value. Worked around with `parseJsonDocumentColonFixed` — wraps their parser and shifts colon-shaped pointers one sibling over. YAML mode already skips the colon (they special-case it) and is unaffected. Worth an upstream issue/PR.
 - codemirror-json-schema ships ESM with extensionless relative imports; vite handles it, Node's ESM resolver (vitest deps) doesn't — inlined via `server.deps.inline` in apps/os/vitest.config.ts.
 - `@codemirror/lang-json`, `@codemirror/lang-yaml`, `@codemirror/language` added to apps/os (previously only in packages/ui; same semver ranges so pnpm dedupes to one instance — necessary for the `jsonLanguage.data.of(...)` singleton to match).
+- Live verification (local dev, project `test`, repo `/repos/demo`): seeded schema-violating files via the itx CLI, then a playwright walkthrough. Verified: positioned squigglies + hover docs for package.json / tsconfig / `$schema` / yaml modeline / workflow `name:`; live edits re-lint without cursor loss; schema-driven autocomplete (`"no` → noEmit, noImplicitAny, …) inside tsconfig's compilerOptions; with `**schemastore.org**` requests aborted: zero squigglies, muted "schema unavailable" note, editor fully usable.
+- **Known limitation**: json-schema-library (codemirror-json-schema's validator) doesn't produce positioned errors inside the github-workflow schema's `oneOf`-heavy `jobs` subtree (e.g. `runs-on: 123` is silent; `name: 123` and missing required top-level props do squiggle). Flat schemas (pnpm-workspace, package.json, tsconfig) validate deeply and precisely. Upstream validator quality issue, out of scope.
+
+## Follow-ups deliberately left out
+
+- File an upstream codemirror-json-schema issue/PR for the @lezer/json 1.0.3 colon regression (our `parseJsonDocumentColonFixed` can be deleted once fixed upstream).
+- jsonc/json5 handling: `.jsonc` files (and comment-tolerant tsconfig.json) hit the strict JSON parse linter; codemirror-json-schema has a `/json5` mode that could back a `jsonc` language lane.
+- Schema-aware validation inside the unified **diff** view baselines on the working doc and works, but the merge-view original side is unvalidated (fine — it's HEAD).
+- Consider showing schema `description` hovers on property _names_ in non-error positions more prominently (works today via jsonSchemaHover, but the completion info panel renders raw markdown fences as plain text — upstream rendering nit).
