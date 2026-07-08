@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { getOriginalDoc, unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
-import { MinusIcon, PlusIcon, Undo2Icon } from "lucide-react";
+import { LockIcon, MinusIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -32,6 +32,7 @@ export function RepoEditorPane({
   onSetStaged,
   onStageFile,
   onUnstageFile,
+  onOpenWorking,
   stagedView,
   onRestore,
 }: {
@@ -47,6 +48,8 @@ export function RepoEditorPane({
   onSetStaged: (entry: FileEntry | undefined) => void;
   onStageFile: () => void;
   onUnstageFile: () => void;
+  /** Leave the Index view for the editable working-tree file. */
+  onOpenWorking: () => void;
   /** Opened from Staged Changes: a READONLY diff of HEAD vs the staged
    * snapshot — the non-diff (editable) version is deliberately unreachable. */
   stagedView: boolean;
@@ -191,6 +194,8 @@ export function RepoEditorPane({
     return (
       <FileChrome
         path={path}
+        suffix="(Index)"
+        readonly
         status={status}
         actions={
           <>
@@ -206,6 +211,16 @@ export function RepoEditorPane({
             >
               <MinusIcon className="size-3.5" />
               Unstage
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              title="Open the editable working tree file"
+              onClick={onOpenWorking}
+            >
+              <PencilIcon className="size-3.5" />
+              Open file
             </Button>
           </>
         }
@@ -236,6 +251,7 @@ export function RepoEditorPane({
     return (
       <FileChrome
         path={path}
+        {...(diffOpen ? { suffix: "(Working Tree)" } : {})}
         status={status}
         actions={
           <>
@@ -328,11 +344,16 @@ export function RepoEditorPane({
 
 function FileChrome({
   path,
+  suffix,
+  readonly = false,
   status,
   actions,
   children,
 }: {
   path: string;
+  /** vscode-style pseudo-file name: "(Index)", "(Working Tree)". */
+  suffix?: string;
+  readonly?: boolean;
   status?: "added" | "deleted" | "modified";
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -340,7 +361,11 @@ function FileChrome({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <span className="min-w-0 truncate font-mono text-xs">{path}</span>
+        <span className="min-w-0 truncate font-mono text-xs">
+          {path}
+          {suffix === undefined ? null : <span className="text-muted-foreground"> {suffix}</span>}
+        </span>
+        {readonly ? <LockIcon className="size-3 shrink-0 text-muted-foreground" /> : null}
         {status === undefined ? null : (
           <Badge
             variant={status === "deleted" ? "destructive" : "secondary"}

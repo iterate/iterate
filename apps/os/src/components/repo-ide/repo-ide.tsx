@@ -183,7 +183,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm ? "ghost" : "secondary"}
           size="icon"
           title="Files"
-          onClick={() => patchSearch({ scm: undefined })}
+          // The Files view browses working-tree files; leaving the SCM view
+          // also leaves any Index pseudo-file it had open.
+          onClick={() => patchSearch({ scm: undefined, staged: undefined })}
           className="text-muted-foreground"
         >
           <FilesIcon className="size-4" />
@@ -270,6 +272,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                   store.unstage(selectedPath);
                   patchSearch({ staged: undefined });
                 }}
+                onOpenWorking={() => patchSearch({ staged: undefined, diff: undefined })}
                 stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
                 onRestore={() => dropChange(selectedPath)}
               />
