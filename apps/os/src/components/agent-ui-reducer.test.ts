@@ -171,14 +171,14 @@ describe("agent-ui reducer", () => {
         payload: {
           llmRequestId: 10,
           content:
-            "```js\nasync (itx) => {\n  await itx.chat.sendMessage({ message: '20' });\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
+            "```js\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
         },
       },
       {
         type: "events.iterate.com/capability-host/script-execution-requested",
         payload: {
           executionId: "agent-output:11",
-          code: "async (itx) => {\n  await itx.chat.sendMessage({ message: '20' });\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
+          code: "async (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
         },
       },
       {

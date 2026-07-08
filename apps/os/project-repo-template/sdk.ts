@@ -243,8 +243,22 @@ export interface ProjectRpcTarget {
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat extends Describable {
-  sendMessage(input: { message: string }): Promise<StreamEvent>;
+  /**
+   * Say something to the user — pass the message as a plain string:
+   * `await itx.chat.sendMessage("Here you go!")`. `options.files` attaches
+   * generated files, which render inline in the chat.
+   */
+  sendMessage(message: string, options?: AgentChatSendOptions): Promise<StreamEvent>;
 }
+
+/** Optional second argument to {@link AgentChat.sendMessage}. */
+export type AgentChatSendOptions = {
+  files?: Array<{
+    contentType: string;
+    data: string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+    filename: string;
+  }>;
+};
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
 export interface Ai extends Describable {

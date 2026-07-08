@@ -72,7 +72,7 @@ event. Agent replies are itx JavaScript scripts; for the PING prompt a correct
 reply usually calls:
 
 ```js
-await itx.chat.sendMessage({ message: "PONG" });
+await itx.chat.sendMessage("PONG");
 ```
 
 ### 4. Clean up
