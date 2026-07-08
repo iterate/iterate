@@ -66,14 +66,17 @@ export default async function deploy(
         secrets: ctx.secrets,
       });
 
-      // Preview deploys pass their PR number (scripts/preview/preview.ts) so
-      // projects seeded there install the PR's pkg.pr.new build of `iterate`
-      // instead of the template's @main — e2e tests then exercise the branch
-      // tip's iterate/sdk. Unset everywhere else (prod, local dev, direct
-      // doppler-run deploys), leaving the template untouched.
-      const previewPullRequestNumber = process.env.PREVIEW_PULL_REQUEST_NUMBER;
-      if (previewPullRequestNumber) {
-        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewPullRequestNumber}`;
+      // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
+      // so projects seeded there install that exact commit's pkg.pr.new build
+      // of `iterate` instead of the template's @main — e2e tests then
+      // exercise the branch tip's iterate/sdk, pinned (unlike @<pr>/@main,
+      // which are moving refs). The pkg-pr-new GHA workflow publishes under
+      // the PR HEAD sha on every push, so the URL exists by the time anything
+      // npm-installs a seeded repo. Unset everywhere else (prod, local dev,
+      // direct doppler-run deploys), leaving the template untouched.
+      const previewHeadSha = process.env.PREVIEW_PULL_REQUEST_HEAD_SHA;
+      if (previewHeadSha) {
+        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewHeadSha}`;
       }
 
       // Parse the exact env the worker will see (secrets + generated vars) with

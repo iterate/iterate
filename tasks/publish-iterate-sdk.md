@@ -122,14 +122,18 @@ and the template depends on `https://pkg.pr.new/iterate/iterate/iterate@main`
       seeding re-points the template's `iterate` dep via find/replace
       _(apps/os/src/domains/repos/project-repo-seed.ts, guarded: throws if the
       template no longer contains the @main URL)_
-- [x] preview deploys set it to `https://pkg.pr.new/iterate/iterate/iterate@<pr>`
-      _(scripts/preview/preview.ts passes PREVIEW_PULL_REQUEST_NUMBER; the os
-      deploy prepare hook bakes APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC, mirroring
-      the JWKS bake)_. PR-number refs, not shas: pkg.pr.new publishes under the
-      PR head sha while Depot deploys the merge sha, so `@<sha>` would dangle.
+- [x] preview deploys set it to `https://pkg.pr.new/iterate/iterate/iterate@<pr-head-sha>`
+      _(scripts/preview/preview.ts passes PREVIEW_PULL_REQUEST_HEAD_SHA — the
+      fresh `pulls.get` head sha, which is what pkg.pr.new keys publishes on;
+      the os deploy prepare hook bakes APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+      mirroring the JWKS bake)_. Head-sha refs per Misha: an immutable pin,
+      unlike `@<pr>`/`@main` which are moving refs — a project seeded by an
+      older preview would silently re-resolve to newer builds. Deriving the
+      sha from the CI checkout would NOT work (Depot checks out the merge
+      sha); `context.pullRequestHeadSha` avoids that.
 - [x] pkg-pr-new.yml documents that it must run on every PR (no `paths:`
       filter) — otherwise previews of unrelated PRs would seed dangling
-      `@<pr>` refs
+      `@<sha>` refs
 - [x] unit tests _(project-repo-seed.test.ts)_
 - prod and local dev leave the config unset → template's `@main` (prod can
   later pin a real npm range via the same knob once we publish to npm proper)

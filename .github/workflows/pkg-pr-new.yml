@@ -9,10 +9,10 @@
 #
 # The seeded project-repo-template depends on the @main URL — that's how
 # customer repos get `iterate/sdk` types without a manual npm release.
-# Preview deploys re-point seeded repos at @<pr> (see iterateSdkPackageSpec
-# in apps/os/src/config.ts), so this workflow must run on EVERY pull request
-# — do not add a `paths:` filter, or previews of unrelated PRs would seed
-# repos with a dangling @<pr> ref.
+# Preview deploys re-point seeded repos at @<pr-head-sha> (see
+# iterateSdkPackageSpec in apps/os/src/config.ts), so this workflow must run
+# on EVERY pull request — do not add a `paths:` filter, or previews of
+# unrelated PRs would seed repos with a dangling @<sha> ref.
 #
 # This lives in .github/workflows (real GitHub Actions, like
 # claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend
