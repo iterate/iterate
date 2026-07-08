@@ -47,7 +47,15 @@ const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
-export { CloudflareSandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
+// One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
+export {
+  SandboxBasicDurableObject,
+  SandboxLiteDurableObject,
+  SandboxStandard1DurableObject,
+  SandboxStandard2DurableObject,
+  SandboxStandard3DurableObject,
+  SandboxStandard4DurableObject,
+} from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 export { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
@@ -61,7 +69,7 @@ export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-exec
 // The container-outbound gateway. The container runtime dials it through
 // `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every
 // sandbox container's outbound HTTP(S) reaches it before anything leaves the
-// account (see CloudflareSandboxDurableObject's `outbound` handler). Re-export
+// account (see the sandbox classes' `outbound` handlers). Re-export
 // the `@cloudflare/sandbox` build of it (a subclass of the containers one) so
 // the DO's Container base and this gateway share one outbound-handler registry
 // and its SDK-internal mount routing stays intact.

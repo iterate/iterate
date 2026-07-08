@@ -23,35 +23,60 @@ function sandboxProcessor() {
 }
 
 describe("SandboxProcessor", () => {
-  it("folds the idle-out/restore lifecycle into running + lastBackupId", async () => {
+  it("folds a pet's whole life: created → running → stopped → running → destroyed", async () => {
     const processor = sandboxProcessor();
-    // The sequence observed live on preview_7: boot, clone, idle-out snapshot,
-    // stop, wake, restore of that same snapshot.
     await processor.ingest({
       events: [
-        event("events.iterate.com/sandbox/container-started"),
-        event("events.iterate.com/sandbox/workspace-cloned"),
-        event("events.iterate.com/sandbox/warmed-up"),
-        event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
-        event("events.iterate.com/sandbox/container-stopped"),
+        event("events.iterate.com/sandbox/create-requested", { instanceType: "basic" }),
+        event("events.iterate.com/sandbox/created", { instanceType: "basic" }),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: false, warmedUp: true },
+      state: { status: "created", instanceType: "basic", lastBackupId: null },
     });
 
     await processor.ingest({
       events: [
-        // A fresh container starts logged-out, so container-started resets
-        // warmedUp until this container reports its own warm-up.
-        event("events.iterate.com/sandbox/container-started"),
-        event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
+        event("events.iterate.com/sandbox/started"),
+        event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
+        event("events.iterate.com/sandbox/stopped"),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: true, warmedUp: false },
+      state: { status: "stopped", instanceType: "basic", lastBackupId: "bkp-1" },
+    });
+
+    await processor.ingest({
+      events: [
+        // An implicit wake: started without a start-requested.
+        event("events.iterate.com/sandbox/started"),
+        event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
+        event("events.iterate.com/sandbox/destroy-requested"),
+        event("events.iterate.com/sandbox/destroyed"),
+      ],
+      streamMaxOffset: nextOffset,
+    });
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: { status: "destroyed", instanceType: "basic" },
+    });
+  });
+
+  it("destroyed is terminal — a late-delivered stopped cannot resurrect the status", async () => {
+    const processor = sandboxProcessor();
+    await processor.ingest({
+      events: [
+        event("events.iterate.com/sandbox/created", { instanceType: "lite" }),
+        event("events.iterate.com/sandbox/destroyed"),
+        // The SDK delivers a stop that happened while the Durable Object was
+        // hibernated on the NEXT wake — after the destroy already landed.
+        event("events.iterate.com/sandbox/stopped"),
+      ],
+      streamMaxOffset: nextOffset,
+    });
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: { status: "destroyed" },
     });
   });
 
@@ -84,7 +109,7 @@ describe("SandboxProcessor", () => {
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: null, running: false },
+      state: { lastBackupId: null, status: "created" },
     });
   });
 });

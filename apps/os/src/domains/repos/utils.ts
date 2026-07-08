@@ -63,6 +63,26 @@ function base64UrlDecode(value: string): string {
 }
 
 /**
+ * Standard base64 of raw bytes — the binary lane of `readFile` /
+ * `commitFiles`. Not url-safe on purpose: these values travel inside JSON
+ * bodies and data: URLs, matching the `files.put` string convention.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** Inverse of {@link bytesToBase64}; throws a caller-friendly error on junk. */
+export function base64ToBytes(base64: string): Uint8Array {
+  try {
+    return Uint8Array.from(atob(base64.trim()), (char) => char.charCodeAt(0));
+  } catch {
+    throw new Error("contentBase64 must be valid base64.");
+  }
+}
+
+/**
  * Encodes repo artifact names for Cloudflare Artifacts.
  *
  * Project-scoped and deployment-wide repos share one Artifact namespace. The

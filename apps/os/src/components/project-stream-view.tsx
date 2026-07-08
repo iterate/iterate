@@ -1,4 +1,8 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { FilterIcon, XIcon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
+import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
   AgentUiState,
@@ -70,6 +74,7 @@ export function ProjectStreamView({
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
+  layout = "split",
   messageComposer,
   panel,
   projectId,
@@ -81,6 +86,12 @@ export function ProjectStreamView({
   autoFocusMessageComposer?: boolean;
   defaultComposerMode?: "message" | "raw";
   emptyLabel?: string;
+  /**
+   * "split" (default) shows the panel beside the feed; "fullPanel" hands the
+   * panel the whole content area and relegates the feed (with its filter row,
+   * tabs, and composer) to a sheet behind the header's Events button.
+   */
+  layout?: "split" | "fullPanel";
   messageComposer?: StreamMessageComposer;
   /**
    * The domain's reduced-state render (creation saga, settings forms, stream
@@ -149,7 +160,7 @@ export function ProjectStreamView({
   const metrics = useSimulatedRttMetrics();
   const [pauseMutationPending, setPauseMutationPending] = useState(false);
 
-  const { search } = useStreamViewSearch();
+  const { search, setSearch } = useStreamViewSearch();
   const panels = useStreamViewPanels();
   const activeTab = streamViewTab(search);
   // WHAT the feed shows is the preset's job; the stream path decides which
@@ -236,6 +247,178 @@ export function ProjectStreamView({
       }
     : undefined;
 
+  const filterRow =
+    search.filter !== true ? null : activeTab === "feed" ? (
+      <StreamFeedFilterRow
+        activePreset={activePreset}
+        defaultPresetId={defaultPreset.id}
+        eventCount={eventCount}
+        connectionStatus={snapshot.connectionStatus}
+        feedDatabase={feedStore.streamDatabase}
+        presets={presets}
+      />
+    ) : (
+      <div className="flex shrink-0 items-center justify-end px-4 pb-1.5 pt-1">
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
+        </span>
+      </div>
+    );
+
+  // The feed column — tab content with the right-edge overlays on top, the
+  // composer below. One JSX value so the split layout and the fullPanel
+  // sheet render the identical thing.
+  const feedColumn = (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {activeTab === "state" ? (
+          <StreamStateView store={store} />
+        ) : activePreset.kind === "agent-chat" ? (
+          <AgentFeedView
+            {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
+              ? { onInterruptQueuedMessages: interrupt.run }
+              : {})}
+            // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
+            key={store.streamDatabase.databasePath}
+            database={store.streamDatabase}
+            liveState={agentUiState}
+            search={feedSearch}
+            emptyLabel={connectionLabel}
+            isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
+            projectSlug={projectSlug}
+            // The reduced-state row only exists once the processor has
+            // checkpointed; an already-subscribed empty stream is "nothing
+            // here yet", not "connecting".
+            isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
+          />
+        ) : (
+          <FeedItemsView
+            // Fresh virtualizer state per stream mirror (see FeedItemsView
+            // docs); filter changes are handled inside without remounting.
+            key={feedStore.streamDatabase.databasePath}
+            database={feedStore.streamDatabase}
+            emptyLabel={connectionLabel}
+            filter={{
+              eventTypes: search.types ?? null,
+              eventTypePrefix: activePreset.eventTypePrefix ?? null,
+              searchQuery: feedSearch === "" ? null : feedSearch,
+              offsetFrom: search.from ?? null,
+              offsetTo: search.to ?? null,
+            }}
+            onInspectEvent={panels.inspectEvent}
+          />
+        )}
+        {panels.inspectedOffset != null ? (
+          <RawEventInspectorPanel
+            database={store.streamDatabase}
+            offset={panels.inspectedOffset}
+            onNavigate={panels.inspectEvent}
+            onClose={panels.closeInspector}
+          />
+        ) : null}
+        {panels.processorsPanelOpen ? (
+          <StreamProcessorsPanel
+            presence={presence}
+            metrics={metrics}
+            eventCount={eventCount}
+            busy={agentBusy}
+            focusedKey={panels.focusedProcessorKey}
+            onFocus={panels.focusProcessor}
+            onBack={panels.openProcessorsOverview}
+            onClose={panels.closeProcessorsPanel}
+            onClearClientDatabase={clearClientDatabases}
+            getProcessorRuntimeState={getProcessorRuntimeState}
+          />
+        ) : null}
+      </div>
+
+      {activeTab === "state" ? null : (
+        <div className="shrink-0 px-4 pb-4 pt-2.5">
+          <StreamViewComposer
+            autoFocusMessage={autoFocusMessageComposer}
+            {...(defaultComposerMode == null ? {} : { defaultMode: defaultComposerMode })}
+            interrupt={interrupt}
+            {...(messageComposer == null ? {} : { messageComposer })}
+            onNudgeDeliveries={nudgeDeliveries}
+            presence={presence}
+            store={store}
+          />
+        </div>
+      )}
+    </div>
+  );
+
+  if (layout === "fullPanel") {
+    return (
+      <section className="flex min-h-0 flex-1 flex-col bg-background">
+        <StreamViewHeader
+          agentBusy={agentBusy}
+          agentPause={agentPauseControl}
+          eventsToggle={{ eventCount }}
+          metrics={metrics}
+          presence={presence}
+          streamPath={streamPath}
+        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
+        <Sheet
+          open={search.events === true}
+          onOpenChange={(open) => setSearch({ events: open ? true : undefined })}
+        >
+          <SheetContent
+            side="right"
+            className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
+            showCloseButton={false}
+          >
+            <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
+            <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                {streamPath}
+              </span>
+              <div className="ml-auto flex items-center gap-1">
+                <Tabs
+                  value={activeTab}
+                  onValueChange={(value) =>
+                    setSearch({ tab: value === "feed" ? undefined : (value as "feed" | "state") })
+                  }
+                >
+                  <TabsList className="h-8">
+                    <TabsTrigger value="feed" className="px-3 text-xs">
+                      Feed
+                    </TabsTrigger>
+                    <TabsTrigger value="state" className="px-3 text-xs">
+                      State
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Search & filter"
+                  aria-expanded={search.filter === true}
+                  onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
+                  className="rounded-full text-muted-foreground"
+                >
+                  <FilterIcon className="size-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Close events"
+                  onClick={() => setSearch({ events: undefined })}
+                  className="rounded-full text-muted-foreground"
+                >
+                  <XIcon className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+            {filterRow}
+            {feedColumn}
+          </SheetContent>
+        </Sheet>
+      </section>
+    );
+  }
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
       {showHeader ? (
@@ -247,22 +430,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
       ) : null}
-      {!showHeader || search.filter !== true ? null : activeTab === "feed" ? (
-        <StreamFeedFilterRow
-          activePreset={activePreset}
-          defaultPresetId={defaultPreset.id}
-          eventCount={eventCount}
-          connectionStatus={snapshot.connectionStatus}
-          feedDatabase={feedStore.streamDatabase}
-          presets={presets}
-        />
-      ) : (
-        <div className="flex shrink-0 items-center justify-end px-4 pb-1.5 pt-1">
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
-          </span>
-        </div>
-      )}
+      {showHeader ? filterRow : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         {panel == null ? null : (
@@ -270,83 +438,7 @@ export function ProjectStreamView({
             <div className="flex flex-col gap-4 p-4">{panel}</div>
           </aside>
         )}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-            {activeTab === "state" ? (
-              <StreamStateView store={store} />
-            ) : activePreset.kind === "agent-chat" ? (
-              <AgentFeedView
-                {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
-                  ? { onInterruptQueuedMessages: interrupt.run }
-                  : {})}
-                // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
-                key={store.streamDatabase.databasePath}
-                database={store.streamDatabase}
-                liveState={agentUiState}
-                search={feedSearch}
-                emptyLabel={connectionLabel}
-                isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
-                projectSlug={projectSlug}
-                // The reduced-state row only exists once the processor has
-                // checkpointed; an already-subscribed empty stream is "nothing
-                // here yet", not "connecting".
-                isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
-              />
-            ) : (
-              <FeedItemsView
-                // Fresh virtualizer state per stream mirror (see FeedItemsView
-                // docs); filter changes are handled inside without remounting.
-                key={feedStore.streamDatabase.databasePath}
-                database={feedStore.streamDatabase}
-                emptyLabel={connectionLabel}
-                filter={{
-                  eventTypes: search.types ?? null,
-                  eventTypePrefix: activePreset.eventTypePrefix ?? null,
-                  searchQuery: feedSearch === "" ? null : feedSearch,
-                  offsetFrom: search.from ?? null,
-                  offsetTo: search.to ?? null,
-                }}
-                onInspectEvent={panels.inspectEvent}
-              />
-            )}
-            {panels.inspectedOffset != null ? (
-              <RawEventInspectorPanel
-                database={store.streamDatabase}
-                offset={panels.inspectedOffset}
-                onNavigate={panels.inspectEvent}
-                onClose={panels.closeInspector}
-              />
-            ) : null}
-            {panels.processorsPanelOpen ? (
-              <StreamProcessorsPanel
-                presence={presence}
-                metrics={metrics}
-                eventCount={eventCount}
-                busy={agentBusy}
-                focusedKey={panels.focusedProcessorKey}
-                onFocus={panels.focusProcessor}
-                onBack={panels.openProcessorsOverview}
-                onClose={panels.closeProcessorsPanel}
-                onClearClientDatabase={clearClientDatabases}
-                getProcessorRuntimeState={getProcessorRuntimeState}
-              />
-            ) : null}
-          </div>
-
-          {activeTab === "state" ? null : (
-            <div className="shrink-0 px-4 pb-4 pt-2.5">
-              <StreamViewComposer
-                autoFocusMessage={autoFocusMessageComposer}
-                {...(defaultComposerMode == null ? {} : { defaultMode: defaultComposerMode })}
-                interrupt={interrupt}
-                {...(messageComposer == null ? {} : { messageComposer })}
-                onNudgeDeliveries={nudgeDeliveries}
-                presence={presence}
-                store={store}
-              />
-            </div>
-          )}
-        </div>
+        {feedColumn}
       </div>
     </section>
   );

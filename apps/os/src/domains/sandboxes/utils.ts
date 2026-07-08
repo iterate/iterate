@@ -1,19 +1,61 @@
-import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
+import { SANDBOX_INSTANCE_TYPES, type SandboxInstanceType } from "./instance-types.ts";
 
 /**
- * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
- * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
+ * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
- * does not re-declare that surface (same stance as `McpClientRpc`); see
- * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
- * project's repo is ALWAYS checked out at `/workspace/repos/project` (with
- * working git credentials), which is also the default working directory — a
- * bare `exec("ls")` lists the project; no `ensureProjectRepo()` call needed
- * first.
+ * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
+ * contract deliberately does not re-declare that surface (same stance as
+ * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is
+ * the authoritative reference. The image is the stock Cloudflare sandbox
+ * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
+ * you need at runtime.
+ *
+ * Platform deltas over stock Cloudflare (everything else passes through):
+ * - Sandboxes are created explicitly (`itx.sandboxes.create`), never minted
+ *   by addressing.
+ * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the
+ *   idle timer, restored on the next start — where stock Cloudflare loses all
+ *   state. Everything outside `/workspace` is ephemeral, and a crash loses
+ *   anything since the last snapshot.
+ * - `start()` boots the container now instead of lazily; `sleep()` snapshots
+ *   and tears down now instead of waiting for `sleepAfter` (the SDK's
+ *   `stop()` forwards to it); `destroy()` is permanent — the name is retired.
+ * - `__describe()` (the capability-tree convention) carries the durable
+ *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
+ * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
+ *   journaled as a `configured` event); values are conventionally
+ *   `getSecret({ path })` placeholders substituted only at egress — real
+ *   secret material never enters the container. All sandbox egress flows
+ *   through project egress policy; there is no direct internet path.
+ * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
+ *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object;
+
+/** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
+ * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
+export type SandboxCreateInput = {
+  /** The sandbox's name; its path becomes `/sandboxes/<instanceType>/<name>`.
+   * Destroyed names are retired, not recycled — pick a new one. */
+  name: string;
+  /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
+  instanceType?: SandboxInstanceType;
+  /** Idle time before the container is snapshotted and torn down: a positive
+   * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,
+   * `"1h"` — no other units). Defaults to the SDK's 10 minutes. The workspace
+   * survives — see {@link CloudflareSandbox}. */
+  sleepAfter?: string | number;
+  /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
+   * `sleep()` or `destroy()` explicitly. */
+  keepAlive?: boolean;
+  /** Initial env-var map, merged as if by `setEnvVars` — values are
+   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw
+   * secret material. */
+  env?: Record<string, string>;
+};
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
 // Its value never leaves this module — real sandbox names carry the caller's
@@ -22,83 +64,74 @@ const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
 // Every sandbox lives under this prefix — the domain-prefix convention every
 // other domain already follows (`/secrets/...`, `/repos/...`, `/agents/...`),
-// so a project path names exactly one kind of object. Module-local: callers
-// spell full paths; only the guard and the agent mapping need the pieces.
+// so a project path names exactly one kind of object.
 const SANDBOX_PATH_PREFIX = "/sandboxes";
 
-// Cloudflare is today's only sandbox provider; the segment keeps room for
-// others (the daytona precedent) without renaming everything again.
-const CLOUDFLARE_SANDBOX_PREFIX = `${SANDBOX_PATH_PREFIX}/cloudflare`;
+/** The path a `create({ name, instanceType })` mints: the instance-type
+ * segment then the caller's name — `/sandboxes/basic/my-pet`. The instance
+ * type is part of identity because a Durable Object can never change
+ * container class (= instance type). */
+export function sandboxPathFor(instanceType: SandboxInstanceType, name: string): string {
+  return assertSandboxPath(`${SANDBOX_PATH_PREFIX}/${instanceType}/${name}`);
+}
 
-/**
- * Where an agent's own sandbox (`itx.sandbox`) lives: the agent path under
- * the Cloudflare sandbox prefix — `/agents/bla` →
- * `/sandboxes/cloudflare/agents/bla`. One function so the birth-certificate
- * mount, the eager mint at birth, and the lifecycle-event fan-out can never
- * disagree on the mapping.
- */
-export function agentSandboxPath(agentPath: string): string {
-  return normalizeSandboxPath(`${CLOUDFLARE_SANDBOX_PREFIX}${normalizePath(agentPath)}`);
+/** The instance-type segment of a sandbox path — which container namespace
+ * the sandbox lives in. Throws on paths that don't carry a known instance
+ * type (which includes every pre-pet `/sandboxes/cloudflare/...` path). */
+export function sandboxInstanceTypeForPath(path: string): SandboxInstanceType {
+  const asserted = assertSandboxPath(path);
+  const segment = asserted.split("/")[2];
+  const instanceType = SANDBOX_INSTANCE_TYPES.find((candidate) => candidate === segment);
+  if (instanceType === undefined) {
+    throw new Error(
+      `sandbox paths carry their instance type as the segment after /sandboxes/ ` +
+        `(one of ${SANDBOX_INSTANCE_TYPES.join(", ")}), got "${asserted}"`,
+    );
+  }
+  return instanceType;
 }
 
 /**
- * The agent that owns a sandbox path, or null when the path isn't an agent
- * sandbox — the inverse of {@link agentSandboxPath}. Used to fan an agent
- * sandbox's lifecycle events out to the agent's own journal as well.
- */
-export function agentPathForSandbox(sandboxPath: string): string | null {
-  return sandboxPath.startsWith(`${CLOUDFLARE_SANDBOX_PREFIX}/agents/`)
-    ? sandboxPath.slice(CLOUDFLARE_SANDBOX_PREFIX.length)
-    : null;
-}
-
-/**
- * The sandbox path is durable identity (it becomes the Durable Object name),
- * so this guard sits at the edge where callers choose a path — same role as
- * `normalizeAgentPath` / `normalizeSecretPath`.
+ * The sandbox path is durable identity (it becomes the Durable Object name).
+ * This VALIDATES and never rewrites: the path a caller uses is exactly the
+ * path `create` returned, or an error — no added slashes, no canonicalizing.
  *
- * Beyond the prefix, the only real constraint is codec safety. The Durable
+ * Beyond the prefix, the one real constraint is codec safety. The Durable
  * Object NAME is `{projectId}.iterate{path}`, and recovering identity from a
  * name parses it through `new URL(...)`, which rewrites some paths (a space
- * becomes `%20`, `/x/../y` collapses to `/y`). A path that does not survive
- * that round trip would let two spellings mint two Durable Objects that parse
- * back to one canonical path — so reject exactly those, and nothing more.
- * This accepts precisely the paths an agent's own Durable Object can already
- * tolerate (e.g. `/agents/foo@bar`), keeping {@link agentSandboxPath} in
- * lockstep with the agent path it mirrors, rather than a stricter
- * hand-rolled charset.
+ * becomes `%20`, `/x/../y` collapses to `/y`). A path the codec would rewrite
+ * would let two spellings mint two Durable Objects for one identity — so
+ * reject exactly those, and nothing more.
  */
-export function normalizeSandboxPath(path: string): string {
-  const normalized = normalizePath(path);
-  if (normalized === SANDBOX_PATH_PREFIX || !normalized.startsWith(`${SANDBOX_PATH_PREFIX}/`)) {
+export function assertSandboxPath(path: string): string {
+  if (!path.startsWith(`${SANDBOX_PATH_PREFIX}/`)) {
     throw new Error(
-      `sandbox paths live under ${SANDBOX_PATH_PREFIX}/ (an agent's sandbox at ` +
-        `${SANDBOX_PATH_PREFIX}<agent path>, standalone ones conventionally under ` +
-        `${SANDBOX_PATH_PREFIX}/cloudflare/), got "${normalized}"`,
+      `sandbox paths start with ${SANDBOX_PATH_PREFIX}/<instanceType>/ ` +
+        `(use the exact path itx.sandboxes.create returned), got "${path}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(
-    DurableObjectNameCodec.stringify({ path: normalized, projectId: ROUND_TRIP_PROJECT_ID }),
+    DurableObjectNameCodec.stringify({ path, projectId: ROUND_TRIP_PROJECT_ID }),
   ).path;
-  if (roundTripped !== normalized) {
+  if (roundTripped !== path) {
     throw new Error(
-      `sandbox path must be a stable Durable Object path (it round-trips unchanged ` +
-        `through the name codec), got "${normalized}" which normalizes to "${roundTripped}"`,
+      `sandbox path must be a stable Durable Object path (the name codec would ` +
+        `rewrite "${path}" to "${roundTripped}") — avoid spaces, "..", and "//"`,
     );
   }
-  return normalized;
+  return path;
 }
 
 /**
  * The `GH_TOKEN` value a sandbox plants for a project's GitHub connections,
  * or null when there is none: a `getSecret` placeholder for the connection
  * secret's `accessToken` field, so `gh` (which reads GH_TOKEN natively) and
- * the warm-up script's git extraheader authenticate against github.com while
- * the installation token itself is minted and substituted only at the egress
- * door. Several connections: the lexicographically first connection name wins
- * — arbitrary but deterministic, so a container restart can't silently flip
- * which installation a sandbox acts as; `configureEnvVars({ GH_TOKEN })`
- * overrides the pick. Pure so the choice is testable without a container.
+ * git-over-https against github.com authenticate while the installation token
+ * itself is minted and substituted only at the egress door. Several
+ * connections: the lexicographically first connection name wins — arbitrary
+ * but deterministic, so a container restart can't silently flip which
+ * installation a sandbox acts as; `setEnvVars({ GH_TOKEN })` overrides
+ * the pick. Pure so the choice is testable without a container.
  */
 export function githubTokenEnvForConnections(
   connections: readonly { connection: string; integration: string }[],

@@ -3,12 +3,12 @@ import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 
 /**
  * The sandbox lifecycle processor: folds the events declared by
- * {@link SandboxProcessorContract} into a small status projection (is the
- * container running, which snapshot would a restart restore). Deliberately
- * takes NO actions — the lifecycle itself is driven by the Sandbox SDK's hooks
- * inside `CloudflareSandboxDurableObject`, which appends these events; this
- * class exists to hold the contract and give stream consumers a folded view.
- * Not yet wired to a processor host anywhere.
+ * {@link SandboxProcessorContract} into a small status projection (where the
+ * sandbox is in its life, which snapshot a restart would restore).
+ * Deliberately takes NO actions — the lifecycle itself is driven by the
+ * imperative commands and SDK hooks inside the sandbox Durable Object, which
+ * appends these events; this class exists to hold the contract and give
+ * stream consumers a folded view. Not yet wired to a processor host anywhere.
  */
 export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorContract> {
   readonly contract = SandboxProcessorContract;
@@ -17,21 +17,34 @@ export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorCon
     event,
     state,
   }: Parameters<StreamProcessor<typeof SandboxProcessorContract>["reduce"]>[0]) {
+    // `destroyed` is terminal: a late-delivered `stopped` (the SDK can deliver
+    // a stop on a wake AFTER the destroy) must not resurrect the status.
+    const terminal = state.status === "destroyed";
     switch (event.type) {
-      case "events.iterate.com/sandbox/container-started":
-        // A fresh container starts logged-out (auth lives on ephemeral disk);
-        // warm-up re-runs, so this container is not warmed up until it reports so.
-        return { ...state, running: true, warmedUp: false };
-      case "events.iterate.com/sandbox/container-stopped":
-        return { ...state, running: false };
+      case "events.iterate.com/sandbox/created":
+        return {
+          ...state,
+          status: terminal ? state.status : ("created" as const),
+          instanceType: event.payload.instanceType,
+        };
+      case "events.iterate.com/sandbox/started":
+        return terminal ? state : { ...state, status: "running" as const };
+      case "events.iterate.com/sandbox/stopped":
+        return terminal ? state : { ...state, status: "stopped" as const };
+      case "events.iterate.com/sandbox/destroyed":
+        return { ...state, status: "destroyed" as const };
       case "events.iterate.com/sandbox/backup-created":
         return { ...state, lastBackupId: event.payload.backupId };
-      case "events.iterate.com/sandbox/warmed-up":
-        return { ...state, warmedUp: true };
-      case "events.iterate.com/sandbox/configured":
-        // Later configs win per key; keys are never removed (a "" value is an
-        // override that blanks a default, and it stays visible here).
-        return { ...state, env: { ...state.env, ...event.payload.env } };
+      case "events.iterate.com/sandbox/configured": {
+        // Later configs win per key; a null value unsets the key (the SDK's
+        // own setEnvVars semantics — undefined unsets, journaled as null).
+        const env = { ...state.env };
+        for (const [key, value] of Object.entries(event.payload.env)) {
+          if (value === null) delete env[key];
+          else env[key] = value;
+        }
+        return { ...state, env };
+      }
       default:
         return state;
     }
