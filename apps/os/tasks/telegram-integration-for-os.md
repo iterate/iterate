@@ -237,3 +237,24 @@ and outbound calls at a fake Bot API server (follow whatever pattern
   - github-connect/google-connection tests gained a `vi.mock("./telegram-api.ts")`
     line mirroring their existing slack-api mock (connect-flows → telegram-api
     → projects/egress drags the worker-only entrypoint into Node).
+- 2026-07-08 (evening): full-suite sweep exposed three regressions, all fixed:
+  - the shared config env-override walker didn't unwrap `ZodPrefault`, so
+    `.prefault({})` on the integrations block made every
+    `APP_CONFIG_INTEGRATIONS__*` env var throw AT RUNTIME (this would have
+    broken the deployed preview outright — same latent hazard existed for the
+    email block's documented `APP_CONFIG_EMAIL__ALLOWED_SENDERS`). Fixed in
+    packages/shared with a test.
+  - `project-repo-template/sdk.ts` drift (regenerated itx-api must be
+    re-copied; the lint codegen preset that should do it doesn't fire — the
+    template test caught it as designed; re-synced manually).
+  - `github-link.test.ts` needed the telegram-api module-graph severing.
+- 2026-07-08 (evening): discovered the PR was CONFLICTING with main since
+  ~17:45 — which is why the Depot CI runs for the first implementation pushes
+  spawned ZERO workflows (no merge ref → no checks, no preview deploy; Misha
+  was testing a preview slot that still had none of the telegram code). Merged
+  origin/main in (integrations page was redesigned by #1748 — the Telegram
+  card re-applied as a `connectControl` node on the new
+  ConnectableIntegrationCard, with a token-paste sheet; generated files
+  regenerated rather than hand-merged; `StreamEvent.path` from #1745 threaded
+  into the test MemoryStream). Post-merge CI then flagged three unused
+  telegram exports (knip) — un-exported.
