@@ -39,6 +39,7 @@ import { readProjectBySlug } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
+import { putProjectFile, sanitizeFileFilename } from "../files/project-files.ts";
 import { EmailProcessorContract } from "./email-processor-contract.ts";
 import {
   EMAIL_BODY_TRUNCATE_CHARS,
@@ -88,7 +89,7 @@ export async function handleInboundEmail(
 
   const recipient = parseInboundRecipient(message.to);
   // Only the deployment's email domain — the same normalized first hostname
-  // base every outbound From/Reply-To is built from (EmailRpcTarget
+  // base every outbound From/Reply-To is built from (EmailCapabilityRpcTarget
   // senderIdentity) — accepts inbound mail, so a thread's reply address
   // always lives on the domain the mail arrived on.
   const emailDomain = emailDomainForDeployment(config.projectHostnameBases);
@@ -166,13 +167,18 @@ export async function handleInboundEmail(
         subject: parsed.subject,
         ...truncatedBody("text", parsed.text),
         ...truncatedBody("html", parsed.html),
-        // Metadata only in this slice: attachment bytes are dropped at the
-        // door (loudly, via the transcription) rather than silently.
-        attachments: parsed.attachments.map((attachment) => ({
-          filename: attachment.filename,
-          mimeType: attachment.mimeType,
-          size: attachmentSize(attachment.content),
-        })),
+        // Attachment BYTES are stored into project file storage here at the
+        // door — the MIME parse is the only place they exist. The event
+        // carries metadata plus the stored `path`; the email-agent processor
+        // turns paths into signed AgentFileAttachments at transcription time.
+        // Storage is keyed on the message key, so MTA retries overwrite
+        // instead of duplicating. A failed store degrades that attachment to
+        // metadata-only (loudly) rather than bouncing the mail.
+        attachments: await storeInboundAttachments({
+          attachments: parsed.attachments,
+          messageKey,
+          projectId: project.id,
+        }),
       },
     },
   };
@@ -322,6 +328,62 @@ async function readProjectAllowedSenders(projectId: string): Promise<string[]> {
     console.error("[email] failed to read project sender allowlist", { error, projectId });
     return [];
   }
+}
+
+/** Where one message's inbound attachments live in project file storage. */
+function inboundAttachmentPath(input: {
+  filename: string | null | undefined;
+  index: number;
+  messageKey: string;
+}): string {
+  const filename = sanitizeFileFilename(input.filename ?? `attachment-${input.index}`);
+  return `/email/inbound/${input.messageKey}-${input.index}-${filename}`;
+}
+
+/**
+ * Store each parsed attachment's bytes as a project file and return the
+ * event-sized descriptor (metadata + stored path). Per-attachment failures
+ * degrade to metadata-only — the mail must still deliver.
+ */
+async function storeInboundAttachments(input: {
+  attachments: Email["attachments"];
+  messageKey: string;
+  projectId: string;
+}): Promise<
+  Array<{ filename: string | null; mimeType: string | null; size: number; path?: string }>
+> {
+  return await Promise.all(
+    input.attachments.map(async (attachment, index) => {
+      const descriptor = {
+        filename: attachment.filename ?? null,
+        mimeType: attachment.mimeType ?? null,
+        size: attachmentSize(attachment.content),
+      };
+      try {
+        const stored = await putProjectFile({
+          contentType: attachment.mimeType,
+          data:
+            typeof attachment.content === "string"
+              ? new TextEncoder().encode(attachment.content)
+              : attachment.content,
+          path: inboundAttachmentPath({
+            filename: attachment.filename,
+            index,
+            messageKey: input.messageKey,
+          }),
+          projectId: input.projectId,
+        });
+        return { ...descriptor, size: stored.size, path: stored.path };
+      } catch (error) {
+        console.error("[email] failed to store inbound attachment", {
+          error,
+          filename: attachment.filename,
+          projectId: input.projectId,
+        });
+        return descriptor;
+      }
+    }),
+  );
 }
 
 /** The address of a postal-mime Address, which may be a mailbox or a group. */

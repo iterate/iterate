@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import type { Stream } from "../../../../../types.ts";
+import type { Stream } from "../../../../../itx-api.generated.ts";
 import type { StreamProcessorStateStorage } from "../../../stream-processor.ts";
 import { browserProcessorStateStorage } from "../processor-state-storage.ts";
 import type { SqlClient } from "../stream-browser-db.ts";

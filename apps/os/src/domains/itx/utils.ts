@@ -1,6 +1,22 @@
 import { normalizePath } from "../durable-object-names.ts";
 import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
 
+/**
+ * Minimal ExecutionContext shape the RPC adapter layer needs.
+ *
+ * Server-side plumbing, not part of the client-facing ITX contract. It is
+ * exported only so domain hosts can inject project/agent capability targets
+ * without importing the full worker module.
+ */
+export type CfExecutionContext = {
+  exports: ExecutionContext["exports"];
+  /** Required, not optional: budget-expired dynamic worker builds are handed
+   * to it (worker-loader.ts withBuildBudget) — a silent no-op here would
+   * strand every cold build the caller gave up on. Hosts without a real
+   * runtime hook must still supply an explicit function. */
+  waitUntil: ExecutionContext["waitUntil"];
+};
+
 type DisposableLike = {
   [Symbol.dispose]?(): void;
   dup?(): DisposableLike;
@@ -103,7 +119,7 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
 
 /**
  * Shape helper for the `__describe()` convention (see `Description` in
- * types.ts): fills the always-present fields so every node returns
+ * ./describe.ts): fills the always-present fields so every node returns
  * `{ instructions, types, children, ... }` even before it has real content.
  * Deliberately dumb — each node hand-writes its description; this is the
  * anchor the future transitive (parent-composes-children) mechanism hangs off.

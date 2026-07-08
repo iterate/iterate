@@ -2,7 +2,6 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -10,12 +9,13 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
+import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
-  computeSignatureBase64Url,
   secretErrorResponse,
   secretReferencesFromHeaders,
   selectSecretField,
@@ -275,32 +275,13 @@ export class SecretDurableObject extends DurableObject<Env> {
       refresh.privateKey === "material"
         ? readStringField(material, "privateKey")
         : resolvePlatformGithubAppKey(parseConfig(this.env), refresh.privateKey, refresh.apiBase);
-    const now = Math.floor(Date.now() / 1000);
-    const signingInput = `${base64UrlOfJson({ alg: "RS256", typ: "JWT" })}.${base64UrlOfJson({
-      iat: now - 60,
-      exp: now + 540,
-      iss: refresh.appId,
-    })}`;
-    const signature = await computeSignatureBase64Url({ payload: signingInput, privateKeyPem });
-    const response = await fetch(
-      `${refresh.apiBase.replace(/\/$/, "")}/app/installations/${refresh.installationId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${signingInput}.${signature}`,
-          "user-agent": "iterate-os",
-        },
-      },
-    );
-    if (!response.ok) {
-      throw new Error(`github installation token mint failed: HTTP ${response.status}`);
-    }
-    const data = (await response.json()) as { token?: string };
-    if (typeof data.token !== "string") {
-      throw new Error("github installation token mint returned no token");
-    }
-    await this.update({ material: { ...material, accessToken: data.token } });
+    const token = await mintGithubInstallationToken({
+      apiBase: refresh.apiBase,
+      appId: refresh.appId,
+      installationId: refresh.installationId,
+      privateKeyPem,
+    });
+    await this.update({ material: { ...material, accessToken: token } });
   }
 
   /**
@@ -322,12 +303,26 @@ export class SecretDurableObject extends DurableObject<Env> {
     const password = readStringField(material, "password");
     const response = await fetch(refresh.graphqlUrl, {
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        // Waitrose's edge answers UA-less requests with HTTP 520 (proven live
+        // 2026-07-07); the Android app's UA is the known-good request shape.
+        "user-agent": "Waitrose/3.9.1 (Android)",
+      },
       body: JSON.stringify({
         query: WAITROSE_NEW_SESSION_MUTATION,
         variables: { input: { clientId: "ANDROID_APP", password, username } },
       }),
     });
+    if (response.status === 401) {
+      // The live API answers wrong credentials with a 401 GraphQL error (the
+      // failures[] shape below is the app-client contract, not what the edge
+      // actually returns) — name the fix without echoing the credential.
+      throw new Error(
+        "waitrose session mint refused (HTTP 401): check the connection secret's username/password",
+      );
+    }
     if (!response.ok) throw new Error(`waitrose session mint failed with HTTP ${response.status}`);
     const data = (await response.json()) as {
       data?: {
@@ -410,10 +405,6 @@ function readStringField(material: Record<string, unknown>, field: string): stri
     throw new SecretSubstitutionError("secret_reference_field_not_found");
   }
   return value;
-}
-
-function base64UrlOfJson(value: unknown): string {
-  return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /**

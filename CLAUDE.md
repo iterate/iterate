@@ -74,6 +74,11 @@ Before PRs:
 pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
+**Draft PRs don't get a preview deployment** (or preview e2e). If you open a
+PR as a draft and want a preview environment, add the `preview` label; marking
+the PR ready for review also starts previews. Lease model details:
+[Dev environments](docs/dev-environments.md).
+
 ## Repository map
 
 **Start here:** `apps/os/`

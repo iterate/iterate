@@ -5,10 +5,19 @@ import { PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { mutateProjectCustomDomainServerFn } from "~/domains/projects/custom-domain-server-fns.ts";
-import { isValidCustomHostname, normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import {
+  isReservedProjectHostname,
+  isValidCustomHostname,
+  normalizeCustomHostname,
+  normalizeProjectHostnameBase,
+} from "~/lib/project-host-routing.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import type { ProjectCustomDomain, ProjectProcessorState } from "~/types.ts";
+import type {
+  ProjectCustomDomain,
+  ProjectProcessorState,
+} from "~/domains/projects/project-processor-contract.ts";
 
 export function ProjectCustomDomainsSettings({
   projectId,
@@ -31,6 +40,7 @@ export function ProjectCustomDomainsSettings({
           domains={customDomains}
           projectId={projectId}
           projectHostnameBase={base}
+          projectHostnameBases={routeConfig.projectHostnameBases}
         />
       </div>
     </section>
@@ -40,10 +50,12 @@ export function ProjectCustomDomainsSettings({
 function CustomDomainsEditor({
   domains,
   projectHostnameBase,
+  projectHostnameBases,
   projectId,
 }: {
   domains?: ProjectCustomDomain[];
   projectHostnameBase: string;
+  projectHostnameBases: readonly string[];
   projectId: string;
 }) {
   const [hostname, setHostname] = useState("");
@@ -52,10 +64,18 @@ function CustomDomainsEditor({
     : null;
   const mutation = useMutation({
     mutationFn: async (input: { action: "add" | "refresh" | "remove"; hostname: string }) => {
-      const result = await mutateProjectCustomDomainServerFn({
-        data: { ...input, projectId },
+      const normalizedHostname = normalizeProjectCustomDomainInput({
+        hostname: input.hostname,
+        projectHostnameBases,
       });
-      return { action: input.action, hostname: result.hostname };
+      const itx = await connectItxBrowser({ projectId });
+      await itx.streams.get("/").append(
+        ProjectProcessorContract.buildEvent({
+          type: customDomainEventType(input.action),
+          payload: { hostname: normalizedHostname },
+        }),
+      );
+      return { action: input.action, hostname: normalizedHostname };
     },
     onSuccess: async ({ action, hostname: mutatedHostname }) => {
       if (action === "add") setHostname("");
@@ -123,6 +143,31 @@ function CustomDomainsEditor({
       )}
     </div>
   );
+}
+
+function customDomainEventType(action: "add" | "refresh" | "remove") {
+  switch (action) {
+    case "add":
+      return "events.iterate.com/project/custom-domain-add-requested";
+    case "refresh":
+      return "events.iterate.com/project/custom-domain-refresh-requested";
+    case "remove":
+      return "events.iterate.com/project/custom-domain-remove-requested";
+  }
+}
+
+function normalizeProjectCustomDomainInput(input: {
+  hostname: string;
+  projectHostnameBases: readonly string[];
+}) {
+  const hostname = normalizeCustomHostname(input.hostname);
+  if (!hostname || !isValidCustomHostname(hostname)) {
+    throw new Error("Enter a valid DNS hostname, such as garple.com.");
+  }
+  if (isReservedProjectHostname(hostname, input.projectHostnameBases)) {
+    throw new Error(`"${hostname}" is reserved for Iterate project hostnames.`);
+  }
+  return hostname;
 }
 
 function CustomDomainRow({

@@ -1,7 +1,7 @@
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import type { StreamProcessor } from "../streams/stream-processor.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   ProjectProcessorContract,
@@ -105,10 +105,17 @@ export function processCustomDomainEvent({
             const provisioner = assertCustomDomainProvisioner(customDomains);
             const project =
               (await provisioner.readProject()) ?? projectRecordFromState(state, projectId);
-            const input = { hostname: event.payload.hostname, project };
-            return event.type === "events.iterate.com/project/custom-domain-add-requested"
-              ? await provisioner.ensure(input)
-              : await provisioner.refresh(input);
+            if (event.type === "events.iterate.com/project/custom-domain-add-requested") {
+              return await provisioner.ensure({ hostname: event.payload.hostname, project });
+            }
+            const domain = state.customDomains.find(
+              (candidate) => candidate.hostname === event.payload.hostname,
+            );
+            return await provisioner.refresh({
+              cloudflareHostnameId: domain?.cloudflareHostnameId,
+              hostname: event.payload.hostname,
+              project,
+            });
           },
           projectId,
         });

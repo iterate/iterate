@@ -56,7 +56,9 @@ RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
   preflight="$LOG_DIR/preflight-deploy.log"
   echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
-  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps \
+  # --allow-draft: the marathon targets an arbitrary PR by number — an
+  # explicit ask, so the draft preview policy doesn't apply.
+  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
     --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
   deploy_exit=$?
   if [ "$deploy_exit" -ne 0 ]; then

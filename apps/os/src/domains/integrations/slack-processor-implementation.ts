@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEventInput } from "../../types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { readRecord, readString, slackThreadStreamPath } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
 
@@ -30,16 +30,13 @@ type SlackProcessorDeps = {
   connection: string | null;
 };
 
-export class SlackProcessor extends StreamProcessor<
-  typeof SlackProcessorContract,
-  SlackProcessorDeps
-> {
+export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
   readonly contract = SlackProcessorContract;
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof SlackProcessorContract>["reduce"]>[0]): SlackProcessorState {
+  }: Parameters<StreamProcessor<SlackProcessorContract>["reduce"]>[0]): SlackProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":
         return {
@@ -62,7 +59,7 @@ export class SlackProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof SlackProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<SlackProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/slack/webhook-received") return;
 
     if (this.deps.connection === null) {

@@ -10,7 +10,8 @@ import {
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
-import type { DynamicWorkerRef, UnauthenticatedOs } from "../../src/types.ts";
+import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
+import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -465,11 +466,11 @@ describe("itx", () => {
         async () => (await project.secrets.list()).some((item) => item.path === secretPath),
         { description: "secret stream to appear in project processor list" },
       );
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "secret processor to fold the update",
       });
 
-      const described = await secret.describe();
+      const described = await secret.__describe();
       expect(described).toMatchObject({
         audit: { usedCount: 0 },
         egress: { urls: [echo.url] },
@@ -495,7 +496,7 @@ describe("itx", () => {
       });
       expect(echoedEgressProofHeader(workerBody)).toBe(expected);
 
-      await waitForCondition(async () => (await secret.describe()).audit.usedCount === 2, {
+      await waitForCondition(async () => (await secret.__describe()).audit.usedCount === 2, {
         description: "secret usage audit to fold",
       });
       // Child-stream birth certificates propagate to the project root stream
@@ -603,7 +604,7 @@ describe("itx", () => {
         egress: { urls: [echo.url] },
         material: "intercept-secret-material",
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "intercept proof secret to be available",
       });
 
@@ -638,7 +639,7 @@ describe("itx", () => {
         url: echo.url,
       });
       expect(JSON.stringify(workerBody)).not.toContain("intercept-secret-material");
-      expect((await secret.describe()).audit.usedCount).toBe(0);
+      expect((await secret.__describe()).audit.usedCount).toBe(0);
 
       await intercept.release();
 
@@ -672,7 +673,7 @@ describe("itx", () => {
         egress: { urls: [api.url] },
         material: secretMaterial,
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "OpenAPI secret to be available",
         // Secret DO folds the update asynchronously; the 5s default flaked on
         // cold slots under full-suite CI load.
@@ -760,7 +761,7 @@ describe("itx", () => {
         egress: { urls: [mcp.url] },
         material: secretMaterial,
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "MCP secret to be available",
       });
 
@@ -841,7 +842,7 @@ describe("itx", () => {
         egress: { urls: [api.url, mcp.url] },
         material: secretMaterial,
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "expression built-in secret to be available",
       });
 
@@ -1833,7 +1834,7 @@ describe("itx", () => {
     });
   });
 
-  test("Agent scripts can send web-chat messages and call project tools", async () => {
+  test("Agent scripts can send web-chat messages (with file attachments) and call project tools", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -1859,6 +1860,11 @@ describe("itx", () => {
       predicate: (event) => event.payload?.message === "project tool saw project-capability",
       timeoutMs: 30_000,
     });
+    const filesOptionReply = agent.stream.waitForEvent({
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) => event.payload?.message === "string form with files",
+      timeoutMs: 30_000,
+    });
 
     await agent.stream.append({
       type: AGENT_OUTPUT_ADDED_TYPE,
@@ -1866,7 +1872,11 @@ describe("itx", () => {
         content: fencedAgentScript(`
           async (itx) => {
             const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.chat.sendMessage({ message });
+            await itx.chat.sendMessage(message);
+            // The way to attach files: the options second argument.
+            await itx.chat.sendMessage("string form with files", {
+              files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
+            });
           }
         `),
       },
@@ -1875,6 +1885,13 @@ describe("itx", () => {
     expect(await projectToolReply).toMatchObject({
       type: AGENT_WEB_MESSAGE_SENT_TYPE,
       payload: { message: "project tool saw project-capability" },
+    });
+    expect(await filesOptionReply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: {
+        message: "string form with files",
+        files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
+      },
     });
 
     const events = await agent.stream.getEvents();
@@ -1903,7 +1920,7 @@ describe("itx", () => {
 
     const content = fencedAgentScript(`
       async (itx) => {
-        await itx.chat.sendMessage({ message: ${JSON.stringify(marker)} });
+        await itx.chat.sendMessage(${JSON.stringify(marker)});
       }
     `);
     const [historicalOutput] = await agent.stream.append({
@@ -2052,14 +2069,12 @@ describe("itx", () => {
             const probe = await itx.agent.agentProbe.inspect("agent-only");
             const first = await itx.agent.agentCounter.increment();
             const current = await itx.agent.agentCounter.current();
-            await itx.chat.sendMessage({
-              message: JSON.stringify({
-                durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
-                current,
-                first,
-                probe,
-              }),
-            });
+            await itx.chat.sendMessage(JSON.stringify({
+              durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
+              current,
+              first,
+              probe,
+            }));
           }
         `),
       },

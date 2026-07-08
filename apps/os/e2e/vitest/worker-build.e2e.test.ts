@@ -133,6 +133,15 @@ describe("worker builds", () => {
         // Deployed runs reach this same fixture over apps/tunnels, so call
         // capture proves the request reached the runner-side mock.
         expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
+
+        // The seeded waitrose surface rides the SAME worker (worker.ts's
+        // `waitrose` getter over integrations/waitrose/client.ts): a
+        // method-miss proves the getter and vendored client compiled and the
+        // userspace walk dispatched — without ever dialing the real vendor.
+        await expect(
+          // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
+          project.worker.waitrose.mum.noSuchMethod(),
+        ).rejects.toThrow(/"waitrose.mum.noSuchMethod" is not a method on this project worker/);
       } finally {
         await mock.close();
       }

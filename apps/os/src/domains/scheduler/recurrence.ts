@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import type { SchedulerRecurrence, SetScheduleInput } from "../../types.ts";
+import type { SchedulerRecurrence, SetScheduleInput } from "./types.ts";
 import type { SchedulerProcessorState } from "./scheduler-processor-contract.ts";
 
 // =============================================================================

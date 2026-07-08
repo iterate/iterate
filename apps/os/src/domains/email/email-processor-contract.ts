@@ -33,6 +33,9 @@ const InboundEmailPayload = z
                 filename: z.string().nullish(),
                 mimeType: z.string().nullish(),
                 size: z.number().optional(),
+                /** Project file path where the door stored the bytes; absent
+                 * when storage failed (metadata-only degrade). */
+                path: z.string().optional(),
               })
               .loose(),
           )

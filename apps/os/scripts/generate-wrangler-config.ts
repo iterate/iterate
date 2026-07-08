@@ -154,6 +154,7 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  WORKSPACE: "WorkspaceDurableObject",
 } as const;
 
 // Durable Object migration history. Deployed workers only apply tags NEWER
@@ -176,6 +177,7 @@ const DO_MIGRATIONS = [
     ],
   },
   { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
+  { tag: "v3", new_sqlite_classes: ["WorkspaceDurableObject"] },
 ];
 
 // Every bound class needs a migration entry (and nothing else does).
@@ -370,12 +372,11 @@ function envBlock(env: DeployedEnv) {
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     // standard-1 uses 4 GiB per instance and Cloudflare validates max_instances
-    // against account memory quota at deploy time. Cap 500 blocked deploys once
-    // several preview slots existed, and cap 200 only fits while not every
-    // preview slot has an OS sandbox app. Cap 100 previously wedged sustained
-    // e2e churn at assigned == max_instances, so 150 is the fleet-wide
-    // compromise until Cloudflare changes assigned-slot accounting.
-    maxContainerInstances: isProduction ? 50 : 150,
+    // against account memory quota at deploy time. Preview slot 6 currently
+    // deploys at 31 and a jump to 150 is rejected by the shared preview account
+    // quota before e2e can run. Keep previews at the deployable cap until the
+    // account quota is raised; production has its own account and cap.
+    maxContainerInstances: isProduction ? 50 : 31,
   });
   return {
     name: env.osWorkerName,

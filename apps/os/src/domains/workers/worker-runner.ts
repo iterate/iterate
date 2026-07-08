@@ -1,13 +1,17 @@
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
   DynamicWorkerRef,
-} from "../../types.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+} from "./schemas.ts";
+import {
+  isWebSocketUpgradeRequest,
+  withWorkerFetchDispatchHeader,
+} from "./worker-fetch-dispatch.ts";
 import {
   loadResolvedWorker,
   resolveCachedArtifact,
@@ -117,6 +121,37 @@ export class DynamicWorkerRunner {
     return klass as T;
   }
 
+  /**
+   * Fetch-native dispatch into a dynamic worker.
+   *
+   * WebSocket upgrades cannot ride method replay: a 101 response carrying
+   * `webSocket` fails to serialize across RPC method-call boundaries
+   * (workerd DataCloneError). This lane keeps every hop a real `fetch()` —
+   * stateless refs hit the loaded entrypoint's fetch handler directly, and
+   * stateful refs ride the Durable Object stub's fetch into
+   * StatefulWorkerDurableObject, which forwards to the facet's fetch. Both
+   * channels tunnel upgrades natively.
+   */
+  async fetch({
+    buildBudgetMs,
+    ref,
+    request,
+  }: {
+    /** Give up on a cold build after this long (see resolveWorkerSource). */
+    buildBudgetMs?: number;
+    ref: DynamicWorkerRef;
+    request: Request;
+  }): Promise<Response> {
+    if (ref.type === "stateful") {
+      const stub = env.WORKER.getByName(
+        statefulWorkerDurableObjectName(this.#projectId, ref),
+      ) as unknown as Fetcher;
+      return await stub.fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
+    }
+    const entrypoint = await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs);
+    return await entrypoint.fetch(request);
+  }
+
   async invokeCapability({
     args = [],
     buildBudgetMs,
@@ -131,6 +166,23 @@ export class DynamicWorkerRunner {
     path: string[];
     ref: DynamicWorkerRef;
   }): Promise<unknown> {
+    // Capability dispatch is method calls; no name is protocol-special here,
+    // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
+    // upgrade needs the REAL fetch handler on a real workerd object reached
+    // over fetch hops — its 101 response cannot serialize across the RPC hops
+    // replay uses, and silently rerouting on the name `fetch` would make it
+    // magic in the capability tree when the model is precisely that it is
+    // not. Refuse loudly, with directions.
+    const [firstArg] = args;
+    if (firstArg instanceof Request && isWebSocketUpgradeRequest(firstArg)) {
+      throw new Error(
+        "WebSocket upgrades cannot ride capability dispatch: a 101 response's socket does not " +
+          "serialize across RPC method calls. Use the fetch lane instead — project ingress " +
+          "dispatches app hosts over it automatically, and worker code calls env.ITX.fetch " +
+          "with the target ref in the x-iterate-worker-dispatch header.",
+      );
+    }
+
     if (ref.type === "stateful") {
       // Method replay must happen inside StatefulWorkerDurableObject. Returning
       // a dynamic facet stub through one DO and then invoking it from another RPC

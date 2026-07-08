@@ -1,23 +1,24 @@
 import { z } from "zod";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+  DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
-export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
+export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof AgentProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<AgentProcessorContract>["reduce"]>[0]) {
     return reduceAgentEvent({ event, state });
   }
 
@@ -27,7 +28,8 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     event,
     previousState,
     runInBackground,
-  }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
+    state,
+  }: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
         if (event.payload.systemPrompt === undefined) return;
@@ -128,6 +130,42 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         );
         return;
       }
+      // A failed request must never brick the stream: the error becomes a
+      // model-visible input, exactly like a thrown script. Below the
+      // consecutive-failure cap the input triggers a retry so the model can
+      // react (fix its request, tell the user what happened); at the cap it
+      // sits in context untriggered so a persistent provider failure (bad key,
+      // outage) cannot retry-loop — the next user message resumes normally.
+      case "events.iterate.com/agent/llm-request-completed": {
+        const result = event.payload.result;
+        if (result.status !== "failure") return;
+        if (
+          previousState.currentRequest?.phase !== "requested" ||
+          previousState.currentRequest.llmRequestId !== event.payload.llmRequestId
+        ) {
+          // Stale completion (e.g. the request was already cancelled) — the
+          // reducer ignored it, so don't render an error input for it either.
+          return;
+        }
+        const retry = state.consecutiveLlmFailures < MAX_CONSECUTIVE_LLM_FAILURES;
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/render-llm-failure@${event.offset}`,
+            payload: {
+              content:
+                `Your LLM request failed (${event.payload.provider}):\n\`\`\`\n${result.error.message}\n\`\`\`` +
+                (retry
+                  ? ""
+                  : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
+              llmRequestPolicy: {
+                behaviour: retry ? "after-current-request" : "dont-trigger-request",
+              },
+            },
+          }),
+        );
+        return;
+      }
       // The agent's own sandbox came (back) up. Record a model-visible FYI —
       // never a trigger — so that next time the agent acts it knows the state
       // of its `itx.sandbox`, and is reminded how it works. `dont-trigger-request`
@@ -177,7 +215,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
   }
 
   protected override async processEventBatch(
-    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
     await this.#settleLlmRequestScheduling(args);
@@ -193,11 +231,26 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
    * the same stream event.
    */
   async #settleLlmRequestScheduling(
-    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
+      if (
+        state.pendingTriggerSource === "agent-loop" &&
+        state.autonomousTurnCount >= DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS
+      ) {
+        await args.append({
+          type: "events.iterate.com/agent/loop-stopped",
+          idempotencyKey: `agent/autonomous-turn-limit:${state.pendingTriggerOffset}`,
+          payload: {
+            maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+            reason: `Agent circuit breaker stopped after ${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS} consecutive autonomous turns.`,
+            triggerOffset: state.pendingTriggerOffset,
+          },
+        });
+        return;
+      }
       await args.append({
         type: "events.iterate.com/agent/llm-request-scheduled",
         idempotencyKey: `agent/llm-request-scheduled@generation:${state.requestGeneration}`,
@@ -297,7 +350,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
     case "events.iterate.com/agent/input-added": {
-      const shouldTrigger = event.payload.llmRequestPolicy.behaviour !== "dont-trigger-request";
+      const triggerSource = agentInputTriggerSource(event);
       const files = event.payload.files;
       return {
         ...state,
@@ -309,7 +362,9 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
             ...(files === undefined || files.length === 0 ? {} : { files }),
           },
         ],
-        pendingTriggerOffset: shouldTrigger ? event.offset : state.pendingTriggerOffset,
+        pendingTriggerOffset: triggerSource === null ? state.pendingTriggerOffset : event.offset,
+        pendingTriggerSource: triggerSource === null ? state.pendingTriggerSource : triggerSource,
+        autonomousTurnCount: triggerSource === "user" ? 0 : state.autonomousTurnCount,
       };
     }
     case "events.iterate.com/agent/output-added":
@@ -334,6 +389,9 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           scheduledOffset: event.offset,
         },
         pendingTriggerOffset: null,
+        pendingTriggerSource: null,
+        autonomousTurnCount:
+          state.pendingTriggerSource === "agent-loop" ? state.autonomousTurnCount + 1 : 0,
       };
     case "events.iterate.com/agent/llm-request-requested":
       if (
@@ -353,7 +411,13 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return state;
       }
-      return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
+      return {
+        ...state,
+        consecutiveLlmFailures:
+          event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        currentRequest: null,
+        requestGeneration: state.requestGeneration + 1,
+      };
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
@@ -370,6 +434,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
       return state;
+    case "events.iterate.com/agent/loop-stopped":
+      return {
+        ...state,
+        pendingTriggerOffset: null,
+        pendingTriggerSource: null,
+      };
     case "events.iterate.com/capability-host/script-execution-requested":
       return {
         ...state,
@@ -398,6 +468,18 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
   }
 }
 
+function agentInputTriggerSource(
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/input-added" }>,
+): "user" | "agent-loop" | null {
+  if (event.payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
+  // Inputs the loop generates for itself — script results, LLM-failure
+  // retries — must count against the autonomous turn limit, not reset it.
+  const agentLoopKeyPrefixes = ["agent/render-script-result@", "agent/render-llm-failure@"];
+  return agentLoopKeyPrefixes.some((prefix) => event.idempotencyKey?.startsWith(prefix))
+    ? "agent-loop"
+    : "user";
+}
+
 function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
   if (request.phase === "scheduled") {
     return {
@@ -423,6 +505,13 @@ function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRe
 }
 
 const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
+
+/**
+ * Failed-request error inputs stop auto-retrying once this many failures land
+ * in a row (counter resets on any success). Two automatic retries, then wait
+ * for the user.
+ */
+const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 
 // The "tool result" half of the codemode loop: a finished script execution
 // renders back into model-visible history so the next turn can look at the

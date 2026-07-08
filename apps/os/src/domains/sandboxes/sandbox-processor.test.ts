@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { Stream, StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
 

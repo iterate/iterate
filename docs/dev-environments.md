@@ -312,6 +312,14 @@ invariants:
   `preview deploy` / `preview test` run renews the lease for 24h; closing the
   PR tears the apps down and releases it. Lease expiry is only the safety
   valve for abandoned PRs (no pushes for >24h).
+- **Draft PRs don't claim a slot unless they ask.** Drafts are the default
+  for agent-opened PRs, and nine slots don't survive a busy night of them. A
+  draft asks by wearing the `preview` label (durable — previews then behave
+  as for a ready PR), being marked ready for review, or a one-shot explicit
+  run (dispatching the `Cloudflare Previews` workflow, or
+  `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
+  A draft that holds a slot without asking — e.g. a ready PR converted back
+  to draft — gives it back on the next lifecycle run.
 - **Nothing steals a live lease without a human `--force`.** Before running
   tests or destroying anything, the tooling re-asserts that the PR still
   holds the slot, and refuses (with an explanation naming the current holder)
@@ -345,7 +353,19 @@ Opening/pushing a PR that touches preview-relevant paths triggers the
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
-PR's apps and releases the slot — after verifying the PR still holds it.
+PR's apps (for os that means erasing the slot's data — auth D1 and
+project-directory KV) and releases the slot — after verifying the PR still
+holds it.
+
+Slot cleanliness is an **invariant of entry**, not a promise about exits:
+every handover — a fresh acquire, an adopted lease, a reclaim, an
+`assign`ed slot — erases the slot's data before the new holder gets it. So
+even when an exit path skips the cleanup erase (failed cleanup followed by
+lease expiry, `release --force`, a run cancelled mid-claim), the next tenant
+never sees the previous one's data; they just pay the ~half-minute wipe on
+their first deploy to that slot. The one deliberate exception is manual
+`preview acquire` (Story 4): it parks a slot without wiping it, so you can
+lease a slot precisely to inspect what's on it.
 
 ### Story 2: run what CI runs, locally
 
@@ -403,7 +423,8 @@ doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    #
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
 
 # Release when done. Workers/routes/DNS stay deployed — releasing a slot is
-# just giving the lease back; erase the data only if you want a clean slate:
+# just giving the lease back. You don't need to erase: the slot's next
+# holder erases on entry. Do it yourself only if the data shouldn't linger:
 (cd apps/os && pnpm erase-data --env preview_9)  # optional
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```
@@ -433,11 +454,18 @@ doppler run --project _shared --config prd -- pnpm preview reclaim --slot 4   # 
 doppler run --project _shared --config prd -- pnpm preview reconcile  # leases vs Doppler configs vs Cloudflare zones
 ```
 
+`reclaim --slot` takes the slot under a temporary lease of its own, **erases
+its data**, then returns it to the pool clean — the previous holder's
+projects, agents and schedules are gone, which is the point. If the erase
+fails, the temporary lease stays in place (the slot shows as held by
+`reclaim-<you>`) rather than a dirty slot going back in the pool.
+
 Orphaned leases are also garbage-collected automatically: when `preview
 deploy` finds every slot taken, it checks each `pr-N` holder against GitHub
-and reclaims a slot whose PR is closed before queueing. That is the **only**
-case automation takes a live lease — idle-but-open and manual holds always
-need a human running `reclaim --slot` / `--force`.
+and reclaims a slot whose PR is closed before queueing (erasing it on
+handover, like every acquire). That is the **only** case automation takes a
+live lease — idle-but-open and manual holds always need a human running
+`reclaim --slot` / `--force`.
 
 `--force` (on `acquire`, `release`, and `reclaim`) is the only way to take an
 actively-used lease from its holder. Every eviction logs an

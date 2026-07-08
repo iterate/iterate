@@ -61,3 +61,10 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-completed",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<CloudflareAiProcessorContract>`,
+ * `ConsumedEvent<CloudflareAiProcessorContract>`, `ProcessorEvent<CloudflareAiProcessorContract, T>`.
+ */
+export type CloudflareAiProcessorContract = typeof CloudflareAiProcessorContract;
