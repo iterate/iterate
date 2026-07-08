@@ -1,13 +1,15 @@
 import { normalizePath } from "../durable-object-names.ts";
 
 /**
- * The egress placeholder grammar. A request header may carry
+ * The egress placeholder grammar. A request may carry
  * `getSecret({ path: "/secrets/…" })` (substitute the whole material — which
  * must then be a string) or `getSecret({ path: "/secrets/…", field: "a.b" })`
- * (substitute one dotted field of structured material). Substitution is
- * header-only, everywhere, forever: a header is a substitutable reference, a
- * body is bytes the composer already holds (see
- * apps/os/docs/integrations-and-secrets-design.md §2.1 and ADR 0005). The
+ * (substitute one dotted field of structured material). Substitution reaches
+ * the request ENVELOPE — headers and the request URL (for providers that
+ * carry the credential in the URL path, e.g. Telegram's `/bot<token>/…`) —
+ * never the body: a header or URL is a substitutable reference, a body is
+ * bytes the composer already holds (see
+ * apps/os/docs/integrations-and-secrets-design.md §1 and ADR 0005). The
  * `field` key is optional; omit it for whole-material (plain-string) secrets.
  */
 const SECRET_REFERENCE =
@@ -41,21 +43,55 @@ export function normalizeSecretPath(path: string): string {
  * secret — the Secret DO rejects foreign paths (one request, one secret). */
 export function secretReferencesFromHeaders(headers: Headers): SecretReference[] {
   const byKey = new Map<string, SecretReference>();
-  headers.forEach((value) => {
-    for (const match of value.matchAll(SECRET_REFERENCE)) {
-      const path = normalizeSecretPath(match[1]!);
-      const field = match[2];
-      byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
-    }
-  });
+  headers.forEach((value) => collectSecretReferences(byKey, value));
   return [...byKey.values()];
 }
 
-/** The distinct secret PATHS referenced across all headers — used by the
- * project egress door to pick which Secret DO to hand the request to (exactly
- * one; multi-secret requests are not supported) and as a cheap presence check. */
-export function secretReferencePathsFromHeaders(headers: Headers): string[] {
-  return [...new Set(secretReferencesFromHeaders(headers).map((reference) => reference.path))];
+/** Every distinct placeholder across all headers AND the request URL. The
+ * request-level view of {@link secretReferencesFromHeaders} — URL placeholders
+ * exist for providers whose credential lives in the URL path (Telegram). */
+export function secretReferencesFromRequest(request: {
+  headers: Headers;
+  url: string;
+}): SecretReference[] {
+  const byKey = new Map<string, SecretReference>();
+  request.headers.forEach((value) => collectSecretReferences(byKey, value));
+  collectSecretReferences(byKey, decodedUrl(request.url));
+  return [...byKey.values()];
+}
+
+/** The distinct secret PATHS referenced across a request's headers and URL —
+ * used by the project egress door to pick which Secret DO to hand the request
+ * to (exactly one; multi-secret requests are not supported) and as a cheap
+ * presence check. */
+export function secretReferencePathsFromRequest(request: {
+  headers: Headers;
+  url: string;
+}): string[] {
+  return [...new Set(secretReferencesFromRequest(request).map((reference) => reference.path))];
+}
+
+function collectSecretReferences(byKey: Map<string, SecretReference>, value: string): void {
+  for (const match of value.matchAll(SECRET_REFERENCE)) {
+    const path = normalizeSecretPath(match[1]!);
+    const field = match[2];
+    byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
+  }
+}
+
+/**
+ * A request URL as placeholder-matchable text. URL parsing percent-encodes the
+ * placeholder's braces/spaces/quotes (`new Request("…/botgetSecret({ path:
+ * "…" })/sendMessage")` stores `bot getSecret(%7B%20path…`), so matching and
+ * substitution run on the decoded form. Returns the input unchanged when it
+ * does not decode (a stray `%` outside any escape).
+ */
+function decodedUrl(url: string): string {
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
 }
 
 /** Every distinct platform-credential placeholder across all headers. */
@@ -136,6 +172,35 @@ export function substituteSecretHeaders(
     );
   });
   return new Request(request, { headers });
+}
+
+/**
+ * Rewrites every `getSecret(...)` placeholder in every header AND in the
+ * request URL — the whole request envelope, still never the body. URL
+ * substitution exists for providers that authenticate in the URL path
+ * (Telegram's `/bot<token>/<method>`; there is no header auth). Matching runs
+ * on the decoded URL (see {@link decodedUrl}); a request whose URL carries no
+ * placeholder keeps its original URL byte-identical.
+ */
+export function substituteSecretRequest(
+  request: Request,
+  resolve: (reference: SecretReference) => string,
+): Request {
+  const substituted = substituteSecretHeaders(request, resolve);
+  const decoded = decodedUrl(request.url);
+  let urlHasPlaceholder = false;
+  const rewrittenUrl = decoded.replaceAll(
+    SECRET_REFERENCE,
+    (_match, path: string, field: string | undefined) => {
+      urlHasPlaceholder = true;
+      return resolve(
+        field === undefined
+          ? { path: normalizeSecretPath(path) }
+          : { field, path: normalizeSecretPath(path) },
+      );
+    },
+  );
+  return urlHasPlaceholder ? new Request(rewrittenUrl, substituted) : substituted;
 }
 
 /** Hex-encoded keyed HMAC-SHA256 over caller bytes — the webhook-signature

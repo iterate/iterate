@@ -19,7 +19,7 @@ import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.
 import {
   platformReferencesFromHeaders,
   secretErrorResponse,
-  secretReferencePathsFromHeaders,
+  secretReferencePathsFromRequest,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
@@ -149,7 +149,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     let secretPaths: string[];
     try {
-      secretPaths = secretReferencePathsFromHeaders(request.headers);
+      // Placeholders live in the request envelope: headers, or the URL for
+      // providers that authenticate in the URL path (Telegram).
+      secretPaths = secretReferencePathsFromRequest(request);
     } catch {
       return secretErrorResponse("secret_reference_required");
     }

@@ -117,7 +117,7 @@ and outbound calls at a fake Bot API server (follow whatever pattern
       `telegramConnectionFromAgentPath`)
 - [ ] `domains/secrets/utils.ts`: URL-path placeholder substitution + tests
 - [ ] `connect-flows.ts`: `connectTelegram` (getMe → claim check → secret →
-      setWebhook → `recordConnection`), `getConnectionStatus` + 
+      setWebhook → `recordConnection`), `getConnectionStatus` +
       `disconnectProvider` arms (disconnect calls `deleteWebhook` best-effort,
       then shared `recordDisconnection`)
 - [ ] `telegram-webhook.ts` + register in `integration-webhook-api.ts`

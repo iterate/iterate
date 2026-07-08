@@ -31,10 +31,12 @@ allowlist, an optional refresh strategy, an audit record.
 - `__describe()` — the node's self-report, metadata only (hasMaterial,
   egress, refresh kind, audit); material never leaves, in snapshots or pushes.
 - `fetch(request)` — the only lane material travels. Every request must carry
-  at least one `getSecret({ path[, field] })` header placeholder for THIS
-  secret (one request, one secret); the DO substitutes from decrypted material
-  and dispatches, after checking the destination origin against the pin.
-  Substitution is header-only, everywhere, forever.
+  at least one `getSecret({ path[, field] })` placeholder for THIS secret in
+  its headers or its URL (one request, one secret); the DO substitutes from
+  decrypted material and dispatches, after checking the destination origin
+  against the pin. Substitution reaches the request envelope — headers plus
+  the URL (added for Telegram, whose Bot API authenticates in the URL path
+  `/bot<token>/…`) — never the body.
 
 ### Refresh strategies
 
