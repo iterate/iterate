@@ -1284,6 +1284,7 @@ export type AgentProcessorState = {
   pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;
   requestGeneration: number;
+  consecutiveLlmFailures: number;
   inProgressScriptExecutions: {
     code: string;
     executionId: string;
