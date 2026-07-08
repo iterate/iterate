@@ -29,7 +29,7 @@
  *
  *   ACTIONS (mutations) → imperative on the handle, no extra primitive:
  *                           const itx = useItx();
- *                           <button onClick={() => itx.chat.sendMessage({ text })} />
+ *                           <button onClick={() => itx.chat.sendMessage(text)} />
  *                         or, for pending/error/refetch tracking, TanStack Query's useMutation.
  *
  * ───────────────────────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ export function ItxProvider({
  * in `useItxQuery` / `useItxEffect`.
  *
  *   const itx = useItx();
- *   const onSend = () => itx.chat.sendMessage({ text });
+ *   const onSend = () => itx.chat.sendMessage(text);
  */
 export function useItx(override?: ItxAddress): ItxHandle {
   const contextAddress = use(ItxAddressContext);

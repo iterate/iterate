@@ -512,12 +512,10 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
-              render={
-                <Link to="/projects/$projectSlug/settings" params={{ projectSlug }} search={{}} />
-              }
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/projects/$projectSlug/settings",
+                  to: "/projects/$projectSlug",
                   params: { projectSlug },
                   fuzzy: false,
                 }),
