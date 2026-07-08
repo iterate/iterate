@@ -4,18 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-catalogs:
-  cloudflare:
-    '@cloudflare/vite-plugin':
-      specifier: 1.43.0
-      version: 1.43.0
-    '@cloudflare/workers-types':
-      specifier: ^4.20260621.1
-      version: 4.20260621.1
-    miniflare:
-      specifier: 4.20260701.0
-      version: 4.20260701.0
-
 overrides:
   capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
   axios: 1.13.6
@@ -1114,9 +1102,6 @@ importers:
         specifier: ^6.1.2
         version: 6.1.2
       '@codemirror/language':
-        specifier: ^6.12.2
-        version: 6.12.2
-      '@codemirror/merge':
         specifier: ^6.12.2
         version: 6.12.2
       '@codemirror/search':

@@ -31,7 +31,15 @@ type ChangeKind = "added" | "deleted" | "modified";
 class ChangedLineMarker extends GutterMarker {
   constructor(readonly kind: ChangeKind) {
     super();
-    this.elementClass = `cm-changed-line-${kind}`;
+  }
+
+  // A child element, NOT a background on the gutter element: active-line
+  // gutter themes (plainChrome's transparent .cm-activeLineGutter) override
+  // gutter-element backgrounds, which would hide the bar on the cursor line.
+  toDOM(): Node {
+    const bar = document.createElement("div");
+    bar.className = `cm-changed-line-bar cm-changed-line-${this.kind}`;
+    return bar;
   }
 }
 
@@ -65,7 +73,7 @@ function markersFor(original: string, state: EditorState): RangeSet<GutterMarker
 
 const theme = EditorView.baseTheme({
   ".cm-changed-lines-gutter": { width: "3px" },
-  ".cm-changed-lines-gutter .cm-gutterElement": { borderRadius: "2px" },
+  ".cm-changed-line-bar": { width: "3px", height: "100%", borderRadius: "2px" },
   ".cm-changed-line-added": { backgroundColor: "#2da44e" },
   ".cm-changed-line-modified": { backgroundColor: "#0969da" },
   ".cm-changed-line-deleted": { backgroundColor: "#cf222e" },

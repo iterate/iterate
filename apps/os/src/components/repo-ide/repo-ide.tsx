@@ -1,7 +1,7 @@
 import { Suspense, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { FilesIcon, GitBranchIcon, GitCommitVerticalIcon, Trash2Icon } from "lucide-react";
+import { FilesIcon, GitBranchIcon, GitCommitVerticalIcon, Undo2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import {
@@ -303,7 +303,7 @@ function GitPanel({
             onClick={onDiscardAll}
             className="text-muted-foreground"
           >
-            <Trash2Icon className="size-3" />
+            <Undo2Icon className="size-3" />
           </Button>
         )}
       </div>
@@ -331,7 +331,7 @@ function GitPanel({
                 onClick={() => onDiscard(path)}
                 className="text-muted-foreground opacity-0 group-hover:opacity-100"
               >
-                <Trash2Icon className="size-3" />
+                <Undo2Icon className="size-3" />
               </Button>
               <span
                 className={

@@ -1,8 +1,9 @@
 import { useMemo } from "react";
+import { unifiedMergeView } from "@codemirror/merge";
+import { Undo2Icon } from "lucide-react";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { CodeDiffBlock } from "@iterate-com/ui/components/code-diff-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { repoFileKind } from "./repo-file-kinds.ts";
@@ -50,15 +51,16 @@ export function RepoEditorPane({
   });
   const headContent = headRead?.content;
 
-  // vscode-style gutter bars marking lines that differ from HEAD, shown even
-  // outside the diff view. Memoized so the editor view survives re-renders.
-  const changeGutter = useMemo(
-    () =>
-      kind.kind === "text" && headContent !== undefined && headContent !== null
-        ? [changedLinesGutter(headContent)]
-        : [],
-    [kind.kind, headContent],
-  );
+  // The plain editor carries vscode-style gutter bars for lines differing
+  // from HEAD; diff mode swaps in the unified (inline) merge view against the
+  // same document — deleted chunks appear inline, and with no changes it
+  // reduces to a normal editor, so the Diff toggle can always exist.
+  // Memoized so the editor view survives re-renders.
+  const editorExtensions = useMemo(() => {
+    if (kind.kind !== "text" || headContent === undefined || headContent === null) return [];
+    if (diffOpen) return [unifiedMergeView({ original: headContent, allowInlineDiffs: true })];
+    return [changedLinesGutter(headContent)];
+  }, [kind.kind, headContent, diffOpen]);
 
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
@@ -99,7 +101,7 @@ export function RepoEditorPane({
         status={dirty ? (headHasPath ? "modified" : "added") : undefined}
         actions={
           <>
-            {dirty && headHasPath ? (
+            {headHasPath ? (
               <Button
                 variant={diffOpen ? "secondary" : "ghost"}
                 size="sm"
@@ -110,35 +112,32 @@ export function RepoEditorPane({
               </Button>
             ) : null}
             {dirty ? (
-              <Button variant="ghost" size="sm" className="text-xs" onClick={onDiscard}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs"
+                title="Discard changes"
+                onClick={onDiscard}
+              >
+                <Undo2Icon className="size-3.5" />
                 Discard
               </Button>
             ) : null}
           </>
         }
       >
-        {diffOpen && dirty && headHasPath ? (
-          <CodeDiffBlock
-            className="min-h-0 flex-1"
-            original={headContent ?? ""}
-            modified={value}
-            language={kind.language}
-            onModifiedChange={stageText}
-          />
-        ) : (
-          <SourceCodeBlock
-            key={path}
-            className="min-h-0 flex-1"
-            plainChrome
-            showLineNumbers
-            editable
-            wrapLongLines={false}
-            code={value}
-            language={kind.language}
-            codeMirrorExtensions={changeGutter}
-            onChange={stageText}
-          />
-        )}
+        <SourceCodeBlock
+          key={path}
+          className="min-h-0 flex-1"
+          plainChrome
+          showLineNumbers
+          editable
+          wrapLongLines={false}
+          code={value}
+          language={kind.language}
+          codeMirrorExtensions={editorExtensions}
+          onChange={stageText}
+        />
       </FileChrome>
     );
   }
