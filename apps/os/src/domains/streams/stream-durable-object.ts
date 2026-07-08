@@ -8,6 +8,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { DynamicWorkerRef } from "../workers/schemas.ts";
 import { defaultProjectWorkerRef } from "../repos/utils.ts";
+import { indexStreamEventBatch } from "../search/search-index.ts";
 import { buildCrossPostAppendInput, type CrossPostProvenanceChain } from "./cross-post.ts";
 import type { ProcessorRuntimeState, StreamSubscriptionHandle } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
@@ -36,6 +37,9 @@ const MAX_GET_EVENTS_LIMIT = 500;
 
 /** DO-KV key holding the project worker delivery checkpoint (see ProjectWorkerDelivery). */
 const WORKER_DELIVERY_CHECKPOINT_KEY = "project-worker-delivery:checkpoint";
+
+/** DO-KV key holding the search-index delivery checkpoint (SPIKE — see domains/search). */
+const SEARCH_INDEX_DELIVERY_CHECKPOINT_KEY = "search-index-delivery:checkpoint";
 
 // A delivery that needs a cold worker build gives up after this long and
 // retries later; the build itself survives via waitUntil, so the retry hits
@@ -132,6 +136,31 @@ export class StreamDurableObject extends DurableObject<Env> {
           writeCheckpoint: (offset) =>
             this.ctx.storage.kv.put(WORKER_DELIVERY_CHECKPOINT_KEY, offset),
           deliver: (batch) => this.#deliverToProjectWorker(batch),
+        });
+  /**
+   * SPIKE: checkpointed delivery of every committed event into the search
+   * index (domains/search/search-index.ts). Same derived-delivery shape as
+   * `#workerDelivery` — the stream owns the checkpoint, so indexing is
+   * at-least-once and a fresh checkpoint backfills the stream's whole
+   * history. Segment documents are idempotent rewrites, so redelivery is
+   * harmless. Global streams are not indexed (no project to scope them to).
+   */
+  readonly #searchIndexDelivery: ProjectWorkerDelivery | null =
+    this.name.projectId === null
+      ? null
+      : new ProjectWorkerDelivery({
+          label: "Search index",
+          readEvents: (args) => this.getEvents(args),
+          coreState: () => this.#coreProcessorState,
+          readCheckpoint: () =>
+            this.ctx.storage.kv.get<number>(SEARCH_INDEX_DELIVERY_CHECKPOINT_KEY) ?? 0,
+          writeCheckpoint: (offset) =>
+            this.ctx.storage.kv.put(SEARCH_INDEX_DELIVERY_CHECKPOINT_KEY, offset),
+          deliver: (batch) =>
+            indexStreamEventBatch({
+              batch,
+              readEvents: (args) => this.getEvents(args),
+            }),
         });
   // subscriptionKeys with a configured subscriber wakeup in flight, so concurrent
   // reconciliation runs never wake the same subscriber twice.
@@ -267,6 +296,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     for (const reduced of reducedEvents) this.#processEvent(reduced);
     this.#connections.wake();
     this.#workerDelivery?.wake();
+    this.#searchIndexDelivery?.wake();
 
     // Re-wake any configured subscription left without a live connection (idle
     // teardown, clean unsubscribe, …). The subscriber re-handshakes from its
@@ -1276,6 +1306,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     coreProcessorState: CoreProcessorState;
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
+      searchIndexDelivery: ProjectWorkerDeliveryRuntimeState | null;
       workerDelivery: ProjectWorkerDeliveryRuntimeState | null;
     };
   } {
@@ -1283,6 +1314,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#connections.runtimeState(),
+        searchIndexDelivery: this.#searchIndexDelivery?.runtimeState() ?? null,
         workerDelivery: this.#workerDelivery?.runtimeState() ?? null,
       },
     };

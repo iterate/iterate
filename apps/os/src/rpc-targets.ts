@@ -159,6 +159,18 @@ import type {
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
+import {
+  indexRepoSnapshotToSearchIndex,
+  mirrorFileToSearchIndex,
+  projectSearchFilter,
+  SEARCH_MAX_DOCUMENT_BYTES,
+  searchInstanceName,
+} from "./domains/search/search-index.ts";
+import type {
+  SearchAnswerResult,
+  SearchQueryResult,
+  SearchSourceKind,
+} from "./domains/search/search-index.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import type {
@@ -1465,6 +1477,184 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
       path: normalizePath(path),
       projectId: this.props.projectId,
     });
+  }
+}
+
+/**
+ * SPIKE: project search over everything the project accumulates — stream
+ * events, itx.files, repo files — indexed in a Cloudflare AI Search instance
+ * over the deployment's search-index bucket (domains/search/search-index.ts).
+ * One instance per deployment; every query is scoped to this project via a
+ * folder-prefix metadata filter, so no query can see another project's data.
+ */
+class SearchRpcTarget extends IterateRpcTarget<"Search"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Semantic + keyword search over this project's streams, files, and repos " +
+        "(Cloudflare AI Search over the deployment's search-index bucket, indexed on a " +
+        "schedule — expect minutes of lag behind writes). query({ query }) returns scored " +
+        "chunks; answer({ query }) additionally generates an answer from them. Scope with " +
+        'source: "streams" | "files" | "repos". indexRepo({ path }) and backfillFiles() ' +
+        "force-reindex content written before this deployment started mirroring.",
+      children: {
+        answer: "RAG answer: retrieve matching chunks and generate a response from them.",
+        backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
+        query: "Retrieve scored chunks matching a query.",
+      },
+      parent: "a project itx (itx.search)",
+    });
+  }
+
+  #instance(): AutoRAG {
+    return env.AI.autorag(searchInstanceName());
+  }
+
+  #searchRequest(input: {
+    query: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: SearchSourceKind;
+  }): AutoRagSearchRequest {
+    return {
+      query: input.query,
+      filters: projectSearchFilter({ projectId: this.props.projectId, source: input.source }),
+      max_num_results: input.limit,
+      ranking_options:
+        input.scoreThreshold === undefined ? undefined : { score_threshold: input.scoreThreshold },
+      rewrite_query: input.rewriteQuery,
+    };
+  }
+
+  // The instance is provisioned out-of-band (ensure-resources.ts); a missing
+  // instance surfaces as an opaque binding error, so name the fix.
+  async #withInstanceHint<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      throw new Error(
+        `AI Search query failed (instance "${searchInstanceName()}"): ${String(error)}. ` +
+          "If the instance does not exist yet, create it via ensure-resources or the " +
+          "Cloudflare dashboard (AI > AI Search) over the deployment's search-index bucket.",
+      );
+    }
+  }
+
+  /** Retrieve scored chunks matching a query, scoped to this project. */
+  query(input: {
+    query: string;
+    /** Max chunks to return (1–50). */
+    limit?: number;
+    /** Let the instance rewrite the query for retrieval first. */
+    rewriteQuery?: boolean;
+    /** Drop chunks scoring below this threshold (0–1). */
+    scoreThreshold?: number;
+    /** Restrict to one corpus kind; omit to search everything. */
+    source?: SearchSourceKind;
+  }): Promise<SearchQueryResult> {
+    return this.#withInstanceHint(async () => {
+      const response = await this.#instance().search(this.#searchRequest(input));
+      return {
+        searchQuery: response.search_query,
+        results: response.data.map((item) => ({
+          filename: item.filename,
+          score: item.score,
+          content: item.content.map((chunk) => chunk.text).join("\n"),
+        })),
+      };
+    });
+  }
+
+  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  answer(input: {
+    query: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: SearchSourceKind;
+    /** Optional system prompt for the answer generation. */
+    systemPrompt?: string;
+  }): Promise<SearchAnswerResult> {
+    return this.#withInstanceHint(async () => {
+      const response = await this.#instance().aiSearch({
+        ...this.#searchRequest(input),
+        system_prompt: input.systemPrompt,
+      });
+      return {
+        response: response.response,
+        searchQuery: response.search_query,
+        results: response.data.map((item) => ({
+          filename: item.filename,
+          score: item.score,
+          content: item.content.map((chunk) => chunk.text).join("\n"),
+        })),
+      };
+    });
+  }
+
+  /**
+   * Snapshot one repo's default-branch HEAD into the search corpus now — the
+   * backfill verb for repos that predate search indexing (writes index
+   * incrementally from here on).
+   */
+  async indexRepo(input: { path: string }): Promise<{
+    deleted: number;
+    indexed: number;
+    skipped: number;
+  }> {
+    const stub = env.REPO.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalizePath(input.path),
+      }),
+    );
+    const snapshot = await stub.getFilesSnapshot();
+    return await indexRepoSnapshotToSearchIndex({
+      files: snapshot.files,
+      projectId: this.props.projectId,
+      repoPath: normalizePath(input.path),
+    });
+  }
+
+  /**
+   * Re-mirror every existing itx.files object into the search corpus — the
+   * backfill verb for files that predate search indexing (puts mirror
+   * incrementally from here on).
+   */
+  async backfillFiles(): Promise<{ mirrored: number; skipped: number }> {
+    const prefix = `${this.props.projectId}.iterate/`;
+    let mirrored = 0;
+    let skipped = 0;
+    let cursor: string | undefined;
+    do {
+      const page = await env.FILES_BUCKET.list({ cursor, limit: 500, prefix });
+      for (const entry of page.objects) {
+        const object = await env.FILES_BUCKET.get(entry.key);
+        if (object === null) continue;
+        const { path } = DurableObjectNameCodec.parse(entry.key);
+        const bytes = new Uint8Array(await object.arrayBuffer());
+        if (bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) {
+          skipped += 1;
+          continue;
+        }
+        await mirrorFileToSearchIndex({
+          bytes,
+          contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+          path,
+          projectId: this.props.projectId,
+        });
+        mirrored += 1;
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor !== undefined);
+    return { mirrored, skipped };
   }
 }
 
@@ -3600,6 +3790,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   get sandboxes(): SandboxCollectionRpcTarget {
     return new SandboxCollectionRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
+  }
+
+  /** SPIKE: search over this project's streams, files, and repos (Cloudflare AI Search). */
+  get search(): SearchRpcTarget {
+    return new SearchRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });

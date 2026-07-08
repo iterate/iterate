@@ -155,6 +155,8 @@ export interface Project {
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (\`itx.sandboxes.create\` / \`get\` / \`list\`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
+  /** SPIKE: search over this project's streams, files, and repos (Cloudflare AI Search). */
+  search: Search;
   /** The default project Scheduler — shorthand for \`schedulers.get("/scheduler/primary")\`. */
   scheduler: Scheduler;
   /** Path-addressed Schedulers; the default at \`/scheduler/primary\` covers almost every use. */
@@ -658,6 +660,55 @@ export interface SandboxCollection {
   /** Every sandbox stream path in the project (\`/sandboxes/...\`), including
    * destroyed sandboxes' streams — the stream is the history. */
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * SPIKE: project search over everything the project accumulates — stream
+ * events, itx.files, repo files — indexed in a Cloudflare AI Search instance
+ * over the deployment's search-index bucket (domains/search/search-index.ts).
+ * One instance per deployment; every query is scoped to this project via a
+ * folder-prefix metadata filter, so no query can see another project's data.
+ */
+export interface Search {
+  __describe(): Promise<Description>;
+  /** Retrieve scored chunks matching a query, scoped to this project. */
+  query(input: {
+    query: string;
+    /** Max chunks to return (1–50). */
+    limit?: number;
+    /** Let the instance rewrite the query for retrieval first. */
+    rewriteQuery?: boolean;
+    /** Drop chunks scoring below this threshold (0–1). */
+    scoreThreshold?: number;
+    /** Restrict to one corpus kind; omit to search everything. */
+    source?: SearchSourceKind;
+  }): Promise<SearchQueryResult>;
+  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  answer(input: {
+    query: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: SearchSourceKind;
+    /** Optional system prompt for the answer generation. */
+    systemPrompt?: string;
+  }): Promise<SearchAnswerResult>;
+  /**
+   * Snapshot one repo's default-branch HEAD into the search corpus now — the
+   * backfill verb for repos that predate search indexing (writes index
+   * incrementally from here on).
+   */
+  indexRepo(input: { path: string }): Promise<{
+    deleted: number;
+    indexed: number;
+    skipped: number;
+  }>;
+  /**
+   * Re-mirror every existing itx.files object into the search corpus — the
+   * backfill verb for files that predate search indexing (puts mirror
+   * incrementally from here on).
+   */
+  backfillFiles(): Promise<{ mirrored: number; skipped: number }>;
 }
 
 /**
@@ -1542,6 +1593,20 @@ export type SandboxInstanceType =
  */
 export type CloudflareSandbox = object;
 
+/** The source kinds a project's search corpus is folded from. */
+export type SearchSourceKind = "streams" | "files" | "repos";
+
+/** What \`itx.search.query\` returns: the (possibly rewritten) query plus scored chunks. */
+export type SearchQueryResult = {
+  searchQuery: string;
+  results: SearchResultChunk[];
+};
+
+/** What \`itx.search.answer\` returns: a generated answer plus the chunks it cited. */
+export type SearchAnswerResult = SearchQueryResult & {
+  response: string;
+};
+
 /**
  * Input to \`scheduler.set(...)\`: a keyed upsert. \`recurrence\` additionally
  * accepts \`{ in: seconds }\` sugar, converted to a canonical \`{ at }\` before
@@ -1794,6 +1859,16 @@ export type ProjectFileMetadata = {
   contentType: string;
   path: string;
   size: number;
+};
+
+/** One retrieved chunk: the matched index document plus its scored text. */
+export type SearchResultChunk = {
+  /** The index object key, e.g. \`prj_x/streams/agents/…/events-00000001.md\`. */
+  filename: string;
+  /** Relevance score in [0, 1]. */
+  score: number;
+  /** The matched text content. */
+  content: string;
 };
 
 /**

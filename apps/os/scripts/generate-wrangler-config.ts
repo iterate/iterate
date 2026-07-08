@@ -333,6 +333,9 @@ function workerBindings(input: {
     r2_buckets: [
       { binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` },
       { binding: "FILES_BUCKET", bucket_name: `${input.workerName}-files` },
+      // SEARCH_BUCKET: the itx.search corpus (domains/search/search-index.ts) —
+      // derived data an AI Search instance indexes. Same create-if-missing story.
+      { binding: "SEARCH_BUCKET", bucket_name: `${input.workerName}-search-index` },
     ],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see

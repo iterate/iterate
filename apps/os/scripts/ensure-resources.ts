@@ -42,6 +42,52 @@ export async function ensureR2Bucket(
   console.log(`created R2 bucket ${name}`);
 }
 
+/**
+ * Create-if-missing for the deployment's AI Search instance over the search
+ * corpus bucket (SPIKE — see domains/search/search-index.ts). Uses the AI
+ * Search REST API (https://developers.cloudflare.com/api/resources/ai_search/).
+ * Best-effort: instance creation requires a service API token the account
+ * token may not be able to mint, and the product is in open beta — a failure
+ * prints the manual dashboard recipe and lets the rest of the run proceed.
+ */
+export async function ensureAiSearchInstance(
+  cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>,
+  input: { bucketName: string; instanceName: string },
+): Promise<void> {
+  try {
+    const existing = await cf<{ id?: string; name?: string }[] | null>(
+      `/ai-search/instances?per_page=100`,
+    );
+    const instances = Array.isArray(existing) ? existing : [];
+    if (instances.some((instance) => (instance.name ?? instance.id) === input.instanceName)) {
+      console.log(`AI Search instance ${input.instanceName} exists`);
+      return;
+    }
+    await cf(`/ai-search/instances`, {
+      method: "POST",
+      body: JSON.stringify({
+        id: input.instanceName,
+        name: input.instanceName,
+        data_source: { type: "r2", source: input.bucketName },
+        // Poll the bucket as often as the product allows; the writers push
+        // continuously, so index freshness is bounded by this interval.
+        sync_interval: 3600,
+      }),
+    });
+    console.log(`created AI Search instance ${input.instanceName} over ${input.bucketName}`);
+  } catch (error) {
+    console.warn(
+      [
+        `Could not create AI Search instance ${input.instanceName} via the API: ${String(error)}`,
+        `Create it once in the dashboard instead: AI > AI Search > Create,`,
+        `name "${input.instanceName}", data source = R2 bucket "${input.bucketName}",`,
+        `default models, then leave everything else as is. itx.search works as`,
+        `soon as the first indexing job completes.`,
+      ].join("\n"),
+    );
+  }
+}
+
 /** Ensure apps/os's Cloudflare resources exist for an environment (create-only, idempotent). */
 export default async function ensureResources(
   options: {
@@ -111,6 +157,22 @@ export default async function ensureResources(
     }),
   });
   console.log(`R2 bucket ${r2BucketName} lifecycle: backups/ expire at 90d`);
+
+  // ---- R2 + AI Search: the itx.search corpus (SPIKE) ----------------------
+  // The worker mirrors stream events / itx.files / repo snapshots into this
+  // bucket (domains/search/search-index.ts); an AI Search instance named
+  // `${osWorkerName}-search` indexes it on a schedule and `itx.search`
+  // queries it through the Workers AI binding with per-project folder
+  // filters. Instance creation is best-effort: the AI Search REST API is in
+  // open beta and creating an instance needs a service API token — when the
+  // call fails, this prints the one-time dashboard recipe instead of failing
+  // the whole run.
+  const searchBucketName = `${env.osWorkerName}-search-index`;
+  await ensureR2Bucket(cf, searchBucketName);
+  await ensureAiSearchInstance(cf, {
+    bucketName: searchBucketName,
+    instanceName: `${env.osWorkerName}-search`,
+  });
 
   // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
   // One general-purpose queue per OS worker. Artifacts event subscriptions are

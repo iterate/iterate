@@ -81,6 +81,9 @@ export default async function deploy(
       // created here on their next deploy instead of a manual
       // ensure-resources run per environment.
       await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
+      // SEARCH_BUCKET (itx.search corpus, SPIKE) is likewise bound at upload
+      // time, so existing envs need it created on their next deploy too.
+      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`);
 
       // The builder sidecar deploys FIRST: the os worker's BUILDER service
       // binding is by name, and a binding to a not-yet-existing script fails

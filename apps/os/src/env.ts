@@ -123,6 +123,17 @@ export interface Env {
    * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
    */
   FILES_BUCKET: R2Bucket;
+  /**
+   * SPIKE: the search-index corpus behind `itx.search`
+   * (domains/search/search-index.ts). Stream event segments, itx.files
+   * mirrors, and repo file snapshots are written here under
+   * `{projectId}/{streams|files|repos}/…` keys; a Cloudflare AI Search
+   * instance (`${WORKER_SELF}-search`, created by ensure-resources.ts)
+   * indexes the bucket and `itx.search` queries it with per-project folder
+   * filters. One bucket per env (`${WORKER_SELF}-search-index`). The whole
+   * bucket is derived data — safe to wipe and rebuild.
+   */
+  SEARCH_BUCKET: R2Bucket;
   SCHEDULER: DurableObjectNamespace<
     import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
   >;

@@ -33,6 +33,8 @@ const MAX_DELIVERY_RETRY_ATTEMPTS = 6;
 
 /** The storage/dispatch seams the owning Stream Durable Object provides. */
 type ProjectWorkerDeliveryHooks = {
+  /** Log label naming this delivery's destination (default "Project worker"). */
+  label?: string;
   /** Synchronous committed-event range read from stream storage. */
   readEvents(args: { afterOffset: number; limit: number }): StreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
@@ -118,7 +120,7 @@ export class ProjectWorkerDelivery {
     } catch (error) {
       failed = true;
       this.#consecutiveFailures += 1;
-      console.error("Project worker event delivery failed", {
+      console.error(`${this.#hooks.label ?? "Project worker"} event delivery failed`, {
         checkpoint: this.#hooks.readCheckpoint(),
         consecutiveFailures: this.#consecutiveFailures,
         error,
@@ -132,10 +134,13 @@ export class ProjectWorkerDelivery {
   #scheduleRetry(): void {
     if (this.#retryTimer !== undefined) return;
     if (this.#consecutiveFailures > MAX_DELIVERY_RETRY_ATTEMPTS) {
-      console.error("Project worker event delivery retries exhausted; waiting for next append", {
-        checkpoint: this.#hooks.readCheckpoint(),
-        attempts: this.#consecutiveFailures,
-      });
+      console.error(
+        `${this.#hooks.label ?? "Project worker"} event delivery retries exhausted; waiting for next append`,
+        {
+          checkpoint: this.#hooks.readCheckpoint(),
+          attempts: this.#consecutiveFailures,
+        },
+      );
       return;
     }
     this.#retryTimer = setTimeout(

@@ -15,6 +15,7 @@ import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import { indexRepoSnapshotToSearchIndex } from "../search/search-index.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -246,7 +247,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       contentHash: result.contentHash,
     });
-    if (!result.noChanges) this.#scheduleGithubMirrorPush(result.branch);
+    if (!result.noChanges) {
+      this.#scheduleGithubMirrorPush(result.branch);
+      this.#scheduleSearchIndex(result.branch);
+    }
 
     return {
       branch: result.branch,
@@ -282,7 +286,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       contentHash: result.contentHash,
     });
-    if (!result.noChanges) this.#scheduleGithubMirrorPush(result.branch);
+    if (!result.noChanges) {
+      this.#scheduleGithubMirrorPush(result.branch);
+      this.#scheduleSearchIndex(result.branch);
+    }
 
     return {
       branch: result.branch,
@@ -575,6 +582,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         repo: link.repo,
       },
     });
+    this.#scheduleSearchIndex(branch);
     return {
       branch,
       changed: true,
@@ -626,6 +634,30 @@ export class RepoDurableObject extends DurableObject<Env> {
       push.catch((error: unknown) => {
         console.warn("github mirror push failed (recorded on the repo stream)", error);
       }),
+    );
+  }
+
+  /**
+   * SPIKE: best-effort re-index of this repo's default-branch HEAD into the
+   * itx.search corpus after a write lands. Same never-fail-the-write posture
+   * as the GitHub mirror push; a failure just leaves the index one commit
+   * stale until the next write (or an explicit `itx.search.indexRepo`).
+   */
+  #scheduleSearchIndex(branch: string): void {
+    const projectId = this.#name.projectId;
+    if (branch !== REPO_DEFAULT_BRANCH || projectId === null) return;
+    this.ctx.waitUntil(
+      this.getFilesSnapshot()
+        .then((snapshot) =>
+          indexRepoSnapshotToSearchIndex({
+            files: snapshot.files,
+            projectId,
+            repoPath: this.#name.path,
+          }),
+        )
+        .catch((error: unknown) => {
+          console.warn("search index repo snapshot failed", error);
+        }),
     );
   }
 
