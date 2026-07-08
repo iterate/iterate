@@ -157,6 +157,7 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  WORKSPACE: "WorkspaceDurableObject",
   // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
   // class) — bindings and class names come from the canonical table in
   // src/domains/sandboxes/instance-types.ts.
@@ -188,12 +189,14 @@ const DO_MIGRATIONS = [
     ],
   },
   { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
-  // Sandboxes became pets with a fixed per-sandbox size: one container class
-  // per Cloudflare instance type replaces the single implicit-size class.
-  // The old class is DELETED (its Durable Objects and their data go with it —
-  // old sandboxes were ephemeral by design and their R2 snapshots age out).
+  { tag: "v3", new_sqlite_classes: ["WorkspaceDurableObject"] },
+  // Sandboxes became pets with a fixed per-sandbox instance type: one
+  // container class per Cloudflare instance type replaces the single
+  // implicit-size class. The old class is DELETED (its Durable Objects and
+  // their data go with it — old sandboxes were ephemeral by design and their
+  // R2 snapshots age out).
   {
-    tag: "v3",
+    tag: "v4",
     new_sqlite_classes: SANDBOX_INSTANCE_TYPES.map(
       (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
     ),

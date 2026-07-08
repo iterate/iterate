@@ -140,7 +140,7 @@ function makeHarness() {
 }
 
 describe("ProjectProcessor agent birth", () => {
-  it("mounts no capabilities at birth — sandboxes are created explicitly, never granted", async () => {
+  it("mounts only the workspace at birth — sandboxes are created explicitly, never granted", async () => {
     const { network, processor } = makeHarness();
 
     await processor.ingest({
@@ -157,7 +157,8 @@ describe("ProjectProcessor agent birth", () => {
       .filter(
         (streamEvent) =>
           streamEvent.type === "events.iterate.com/capability-host/capability-provided",
-      );
-    expect(capabilityMounts).toEqual([]);
+      )
+      .map((streamEvent) => (streamEvent.payload as { path: string[] }).path);
+    expect(capabilityMounts).toEqual([["workspace"]]);
   });
 });

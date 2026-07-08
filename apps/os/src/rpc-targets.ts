@@ -46,6 +46,7 @@ import {
   sandboxPathFor,
   sandboxInstanceTypeForPath,
 } from "./domains/sandboxes/utils.ts";
+import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
@@ -164,6 +165,9 @@ import type {
   GmailRequestInput,
   IntegrationConnectionListEntry,
   ProjectIntegrations,
+  Workspace,
+  WorkspaceCollection,
+  WorkspaceGit,
 } from "./types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
@@ -705,6 +709,222 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
     return projectProcessorState(this.props.projectId).then((state) =>
       state.streams.filter((stream) => stream.path.startsWith("/sandboxes/")),
     );
+  }
+}
+
+/**
+ * Catalog of durable workspaces within one project — see the `Workspace`
+ * contract in types.ts. Every workspace lives under `/workspaces/` (the same
+ * domain-prefix convention as `/sandboxes/...`): an agent's workspace is its
+ * agent path under the prefix (`itx.workspace` on `/agents/bla` is
+ * `workspaces.get("/workspaces/agents/bla")`).
+ */
+class WorkspaceCollectionRpcTarget extends RpcTarget implements WorkspaceCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the project repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+      children: { get: "The workspace at a path (clones the project repo on first use)." },
+      parent: "a project itx (itx.workspaces)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get(path: string) {
+    return new WorkspaceRpcTarget({
+      auth: this.props.auth,
+      path: normalizeWorkspacePath(path),
+      projectId: this.props.projectId,
+    });
+  }
+}
+
+class WorkspaceRpcTarget extends RpcTarget implements Workspace {
+  async __describe() {
+    return describeNode({
+      instructions:
+        `A durable workspace at "${this.props.path}": a private checkout of the project repo in a Durable Object filesystem (cloned on first use; every call waits for that clone, so a successful read proves the checkout is ready). Paths are absolute with "/" as the repo root. Read/write/edit freely — nothing is shared until pushed; ` +
+        `workspace.git publishes commits to the project repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
+      children: {
+        appendFile: "Append to a file.",
+        cp: "Copy a file or directory ({ recursive } for trees).",
+        deleteFile: "Delete one file (false when it did not exist).",
+        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Working-tree only — commit via git.",
+        exists: "Whether a path exists.",
+        git: "Git over this checkout: status/add/rm/commit/log/diff/push — push goes to this workspace's own branch.",
+        glob: "Files matching a glob pattern.",
+        mkdir: "Create a directory ({ recursive } for parents).",
+        mv: "Move/rename a file or directory.",
+        readDir: "List a directory (defaults to the root).",
+        readFile: "One file's contents ({ path }); null when missing.",
+        readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
+        reset: "Wipe the checkout; the next call re-clones. Unpushed work is LOST.",
+        rm: "Remove a path ({ recursive, force }).",
+        stat: "Metadata for one path; null when missing.",
+        whoami: "Workspace identity string (debug).",
+        writeFile: "Write one file (creates parent directories).",
+        writeFileBytes: "Write raw bytes to one file.",
+      },
+      parent: "workspaces.get(path); an agent's own workspace is itx.workspace",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get #durableObjectStub() {
+    return env.WORKSPACE.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  whoami() {
+    return this.#durableObjectStub.whoami();
+  }
+
+  readFile(path: string) {
+    return this.#durableObjectStub.readFile(path);
+  }
+
+  readFileBytes(path: string) {
+    return this.#durableObjectStub.readFileBytes(path);
+  }
+
+  reset() {
+    return this.#durableObjectStub.reset();
+  }
+
+  writeFile(...[path, content]: Parameters<Workspace["writeFile"]>) {
+    return this.#durableObjectStub.writeFile(path, content);
+  }
+
+  writeFileBytes(...[path, data]: Parameters<Workspace["writeFileBytes"]>) {
+    return this.#durableObjectStub.writeFileBytes(path, data);
+  }
+
+  appendFile(...[path, content]: Parameters<Workspace["appendFile"]>) {
+    return this.#durableObjectStub.appendFile(path, content);
+  }
+
+  deleteFile(path: string) {
+    return this.#durableObjectStub.deleteFile(path);
+  }
+
+  edit(input: Parameters<Workspace["edit"]>[0]) {
+    return this.#durableObjectStub.edit(input);
+  }
+
+  mkdir(...[path, opts]: Parameters<Workspace["mkdir"]>) {
+    return this.#durableObjectStub.mkdir(path, opts);
+  }
+
+  readDir(dir?: string) {
+    return this.#durableObjectStub.readDir(dir);
+  }
+
+  glob(pattern: string) {
+    return this.#durableObjectStub.glob(pattern);
+  }
+
+  rm(...[path, opts]: Parameters<Workspace["rm"]>) {
+    return this.#durableObjectStub.rm(path, opts);
+  }
+
+  cp(...[src, dest, opts]: Parameters<Workspace["cp"]>) {
+    return this.#durableObjectStub.cp(src, dest, opts);
+  }
+
+  mv(...[src, dest, opts]: Parameters<Workspace["mv"]>) {
+    return this.#durableObjectStub.mv(src, dest, opts);
+  }
+
+  stat(path: string) {
+    return this.#durableObjectStub.stat(path);
+  }
+
+  exists(path: string) {
+    return this.#durableObjectStub.exists(path);
+  }
+
+  get git() {
+    return new WorkspaceGitRpcTarget(this.props);
+  }
+}
+
+/**
+ * The `git` member of a workspace, mirroring `@cloudflare/shell`'s git
+ * command names so upstream docs apply. Push credentials are injected inside
+ * the workspace Durable Object (from the project repo's `gitAccess()`), so no
+ * token ever rides this surface.
+ */
+class WorkspaceGitRpcTarget extends RpcTarget implements WorkspaceGit {
+  async __describe() {
+    return describeNode({
+      instructions:
+        `Git over the workspace checkout at "${this.props.path}". Ordinary flow: add({ filepath: "." }) → commit({ message }) → push(). ` +
+        `push() publishes to the project repo branch "${workspaceBranchName(this.props.path)}" (this workspace's own branch — never main); credentials are automatic.`,
+      children: {
+        add: 'Stage a file ("." for everything).',
+        commit: "Commit staged changes ({ message, author? }).",
+        diff: "Changed files relative to HEAD.",
+        log: "Commit history ({ depth? }).",
+        push: "Push the workspace branch to the project repo ({ force? }).",
+        rm: "Stage a file deletion.",
+        status: "Staging state of every changed file.",
+      },
+      parent: "a workspace (workspace.git)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get #durableObjectStub() {
+    return env.WORKSPACE.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  status() {
+    return this.#durableObjectStub.gitStatus();
+  }
+
+  add(input: Parameters<WorkspaceGit["add"]>[0]) {
+    return this.#durableObjectStub.gitAdd(input);
+  }
+
+  rm(input: Parameters<WorkspaceGit["rm"]>[0]) {
+    return this.#durableObjectStub.gitRm(input);
+  }
+
+  commit(input: Parameters<WorkspaceGit["commit"]>[0]) {
+    return this.#durableObjectStub.gitCommit(input);
+  }
+
+  log(input?: Parameters<WorkspaceGit["log"]>[0]) {
+    return this.#durableObjectStub.gitLog(input);
+  }
+
+  diff() {
+    return this.#durableObjectStub.gitDiff();
+  }
+
+  push(input?: Parameters<WorkspaceGit["push"]>[0]) {
+    return this.#durableObjectStub.gitPush(input);
   }
 }
 
@@ -2498,6 +2718,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   streams: "Project stream catalog: get(path), list().",
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
+  workspaces:
+    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the project repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
 };
 
 // The shortcut methods are children (callable members) but not capability
@@ -2778,6 +3000,13 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
+    });
+  }
+
+  get workspaces(): WorkspaceCollection {
+    return new WorkspaceCollectionRpcTarget({
+      auth: this.#props.auth,
       projectId: this.#props.projectId,
     });
   }
