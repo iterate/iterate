@@ -296,6 +296,40 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     ]);
   });
 
+  it("relinking to a different GitHub repo emits a fresh route fact that repoints the agent", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/");
+    const processor = newRepoProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(pullRequestBody({ number: 7 })),
+      },
+      // Relink: same repo path now mirrors a different GitHub repository.
+      {
+        type: "events.iterate.com/repo/github-link-configured",
+        payload: { ...GITHUB_LINK, repo: "gadgets" },
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(pullRequestBody({ number: 7 })),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    // A coordinate-free key would dedupe the second route fact into the stale
+    // acme/widgets coordinates; the coordinate-carrying key repoints instead.
+    const routeFacts = network
+      .eventsAt("/agents/repos/root/pull-requests/7")
+      .filter((event) => event.type === "events.iterate.com/github-pr/route-configured");
+    expect(routeFacts).toHaveLength(2);
+    expect(routeFacts[0]!.payload).toMatchObject({ repo: "widgets" });
+    expect(routeFacts[1]!.payload).toMatchObject({ repo: "gadgets" });
+  });
+
   it("ignores non-PR webhooks and webhooks on unlinked repos", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/");
@@ -410,5 +444,87 @@ describe("PrAgentProcessor (transcriber)", () => {
     expect(mentionInput.content).toContain("@iterate what does this change?");
     const openedInput = inputs[1]!.payload as { content: string };
     expect(openedInput.content).toContain("Add widgets");
+  });
+
+  it("gates triggers on action, mention boundary, and PR-description mentions", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new PrAgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      ROUTE_EVENT,
+      // Deleting (or editing) a mention comment must not wake the agent —
+      // GitHub sends the full body on both actions.
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload({
+          ...pullRequestBody({ comment: { body: "@iterate please review" }, number: 7 }),
+          action: "deleted",
+        }),
+      },
+      // An email address is not a mention.
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({ comment: { body: "mail support@iterate.com about this" }, number: 7 }),
+        ),
+      },
+      // A mention in the PR description triggers on open…
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload({
+          ...pullRequestBody({ number: 7 }),
+          pull_request: {
+            ...(pullRequestBody({ number: 7 }).pull_request as object),
+            body: "@iterate please review this",
+          },
+        }),
+      },
+      // …but not on later pull_request actions that still carry the body.
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload({
+          ...pullRequestBody({ number: 7 }),
+          action: "synchronize",
+          pull_request: {
+            ...(pullRequestBody({ number: 7 }).pull_request as object),
+            body: "@iterate please review this",
+          },
+        }),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = agentInputs(stream);
+    expect(inputs).toHaveLength(5);
+    const policies = inputs.map(
+      (event) => (event.payload as { llmRequestPolicy?: { behaviour: string } }).llmRequestPolicy,
+    );
+    expect(policies[1]).toEqual({ behaviour: "dont-trigger-request" }); // deleted mention
+    expect(policies[2]).toEqual({ behaviour: "dont-trigger-request" }); // email address
+    expect(policies[3]).toEqual({ behaviour: "after-current-request" }); // description mention on open
+    expect(policies[4]).toEqual({ behaviour: "dont-trigger-request" }); // synchronize
+  });
+
+  it("a relink's fresh route fact produces a fresh, corrected route-context input", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new PrAgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append(ROUTE_EVENT, {
+      ...ROUTE_EVENT,
+      payload: { ...ROUTE_EVENT.payload, repo: "gadgets" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = agentInputs(stream).map(
+      (event) => (event.payload as { content: string }).content,
+    );
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]).toContain("acme/widgets");
+    expect(inputs[1]).toContain("acme/gadgets");
+    expect(processor.state).toMatchObject({ repo: "gadgets" });
   });
 });

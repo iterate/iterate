@@ -5,6 +5,8 @@
 // routed stream transcribes them, and the project processor's
 // child-stream-created lane births the agent on first append.
 
+import { readNumber, readRecord } from "../integrations/utils.ts";
+
 /** Namespace prefix all PR agent streams live under. */
 export const PR_AGENT_PATH_PREFIX = "/agents/repos/";
 
@@ -15,9 +17,12 @@ const PULL_REQUESTS_SEGMENT = "/pull-requests/";
  * The agent-path slug for one repo path: `/` (the project repo) becomes
  * "root", a `/repos/…` path drops that conventional prefix, and any remaining
  * slashes flatten to dashes — `/repos/foo` → "foo", `/tools/bar` →
- * "tools-bar". Human-readable in the agent path, not a reversible codec: the
- * `github-pr/route-configured` fact on the agent stream carries the real
- * repoPath.
+ * "tools-bar". Pretty over injective: distinct repo paths CAN collide (`/a/b`
+ * vs `/a-b`, `/repos/root` vs `/`), interleaving their PR agents on one
+ * stream. Accepted for v1 — collisions need two linked repos with colliding
+ * names AND colliding PR numbers, and the coordinate-keyed
+ * `github-pr/route-configured` facts keep the folded state on the latest
+ * writer rather than wedging. The fact carries the real repoPath.
  */
 export function repoSlugForAgentPath(repoPath: string): string {
   const trimmed = repoPath.replace(/^\/+/, "").replace(/\/+$/, "");
@@ -47,29 +52,17 @@ export function isPrAgentPath(agentPath: string): boolean {
 
 /**
  * The PR number a GitHub webhook body is about, or null for non-PR webhooks.
- * Shape-based on purpose (no reliance on the x-github-event header surviving
- * capture): `pull_request` events carry `body.pull_request.number`;
- * `issue_comment` events on PRs carry `body.issue.pull_request` + the number
- * on the issue. Plain issue events (no `issue.pull_request`) stay null.
+ * Shape-based on purpose — ROUTING must not trust headers: `pull_request*`
+ * events carry `body.pull_request.number`; `issue_comment` events on PRs
+ * carry `body.issue.pull_request` + the number on the issue. Plain issue
+ * events (no `issue.pull_request`) stay null.
  */
 export function pullRequestNumberFromWebhookBody(body: unknown): number | null {
-  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
-  const record = body as Record<string, unknown>;
-
-  const pullRequest = record.pull_request;
-  if (pullRequest !== null && typeof pullRequest === "object" && !Array.isArray(pullRequest)) {
-    const number = (pullRequest as Record<string, unknown>).number;
-    if (typeof number === "number" && Number.isInteger(number) && number > 0) return number;
-  }
-
-  const issue = record.issue;
-  if (issue !== null && typeof issue === "object" && !Array.isArray(issue)) {
-    const issueRecord = issue as Record<string, unknown>;
-    if (issueRecord.pull_request != null) {
-      const number = issueRecord.number;
-      if (typeof number === "number" && Number.isInteger(number) && number > 0) return number;
-    }
-  }
-
-  return null;
+  const record = readRecord(body);
+  if (record === null) return null;
+  const pullRequestNumber = readNumber(readRecord(record.pull_request)?.number);
+  const issue = readRecord(record.issue);
+  const issueNumber = issue?.pull_request != null ? readNumber(issue.number) : undefined;
+  const number = pullRequestNumber ?? issueNumber;
+  return number !== undefined && Number.isInteger(number) && number > 0 ? number : null;
 }

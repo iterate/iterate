@@ -95,9 +95,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       const github = state.github;
       if (prNumber === null || github === null) return;
       const streamPath = prAgentPath(this.deps.path, prNumber);
+      // The key carries the FULL GitHub coordinates, not just the PR number:
+      // relinking the repo to a different repository or connection must emit
+      // a fresh route event that repoints existing PR agents — a coordinate-
+      // free key would dedupe forever against the stale link and the agent
+      // would keep replying to the OLD repository's PR.
       const routeEvent = {
         type: "events.iterate.com/github-pr/route-configured" as const,
-        idempotencyKey: `github-pr-route:${this.deps.projectId}:${this.deps.path}:${prNumber}`,
+        idempotencyKey: `github-pr-route:${this.deps.projectId}:${this.deps.path}:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
         payload: {
           ...github,
           number: prNumber,
