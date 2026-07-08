@@ -19,7 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import type { StreamEvent } from "../../../types.ts";
+import type { StreamEvent } from "../../streams/schemas.ts";
 import { AgentProcessor, reduceAgentEvents } from "../agent-processor-implementation.ts";
 import { OpenAiWsProcessor } from "../openai-ws-processor-implementation.ts";
 import { OpenAiWsProcessorContract } from "../openai-ws-processor-contract.ts";

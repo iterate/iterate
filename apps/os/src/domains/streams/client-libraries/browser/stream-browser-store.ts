@@ -13,13 +13,9 @@
 // hosts the processor over a fresh subscription, mirroring the Durable-Object-side
 // stream processor host.
 
-import type {
-  ProcessorRuntimeState,
-  Stream,
-  StreamEvent,
-  StreamEventInput,
-  SubscriptionKey,
-} from "../../../../types.ts";
+import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
+import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
+import type { Stream } from "../../../../itx-api.generated.ts";
 import { announceContract, type AnyHostedProcessor } from "../../stream-processor-host.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 /**
@@ -111,3 +111,16 @@ export const RepoProcessorContract = defineProcessorContract({
   ],
   emits: ["events.iterate.com/repo/created"],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<RepoProcessorContract>`,
+ * `ConsumedEvent<RepoProcessorContract>`, `ProcessorEvent<RepoProcessorContract, T>`.
+ */
+export type RepoProcessorContract = typeof RepoProcessorContract;
+
+/**
+ * The repo processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape.
+ */
+export type RepoProcessorState = ProcessorState<RepoProcessorContract>;

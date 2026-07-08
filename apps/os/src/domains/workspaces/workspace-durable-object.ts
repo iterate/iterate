@@ -9,7 +9,7 @@ import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
   WorkspaceFileInfo,
-} from "../../types.ts";
+} from "./types.ts";
 import { workspaceBranchName } from "./utils.ts";
 
 // Storage-schema-versioned so a clone-recipe change (different checkout

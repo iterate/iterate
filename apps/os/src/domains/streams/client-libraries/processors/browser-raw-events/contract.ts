@@ -14,3 +14,10 @@ export const BrowserRawEventsContract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<BrowserRawEventsContract>`,
+ * `ConsumedEvent<BrowserRawEventsContract>`, `ProcessorEvent<BrowserRawEventsContract, T>`.
+ */
+export type BrowserRawEventsContract = typeof BrowserRawEventsContract;

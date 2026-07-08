@@ -16,11 +16,11 @@ import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
 import type {
   ItxAuthCredentials,
+  Project,
   ProjectListEntry,
-  ProjectRpcTarget,
   Session,
   Stream,
-} from "../../../apps/os/src/types.ts";
+} from "../../../apps/os/src/itx-api.generated.ts";
 import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import {
   CONFIG_PATH,
@@ -329,7 +329,7 @@ export const verifyOsSession = async (input: {
 };
 
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
-  let projectItx: RpcStub<ProjectRpcTarget> | undefined;
+  let projectItx: RpcStub<Project> | undefined;
   let agentStream: RpcStub<Stream> | undefined;
   try {
     projectItx = (await session.projects.create({
@@ -337,7 +337,7 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
       slug: project.slug,
       ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
       waitUntilCreated: false,
-    })) as unknown as RpcStub<ProjectRpcTarget>;
+    })) as unknown as RpcStub<Project>;
     agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
     await agentStream.waitForEvent({
       afterOffset: 0,

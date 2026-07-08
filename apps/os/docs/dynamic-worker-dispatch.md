@@ -88,7 +88,7 @@ The root project worker sits in the middle of that chain for app hosts: it is
 itself a stateless dynamic worker whose `fetch` routes on the trusted
 `x-iterate-app` header and re-dispatches to the selected app via
 `env.ITX.fetch` — the loopback ItxEntrypoint's fetch handler, i.e. one more
-real fetch hop (`ItxBinding` in types.ts).
+real fetch hop (`ItxBinding` in domains/workers/schemas.ts).
 
 Two mechanics fall out of "real fetch has no argument channel besides the
 request":

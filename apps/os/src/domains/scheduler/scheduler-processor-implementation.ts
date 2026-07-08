@@ -1,6 +1,7 @@
-import type { JsonValue, StatelessDynamicWorkerRef, ScheduleView } from "../../types.ts";
+import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import type { ScheduleView } from "./types.ts";
 import {
   SchedulerProcessorContract,
   type ScheduleSetPayload,

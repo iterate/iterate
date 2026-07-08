@@ -1,5 +1,5 @@
 import { type AppConfig } from "../../config.ts";
-import { type PlatformCredsRef } from "../../types.ts";
+import { type PlatformCredsRef } from "./types.ts";
 import { SecretSubstitutionError, substitutePlatformHeaders } from "./utils.ts";
 
 /**

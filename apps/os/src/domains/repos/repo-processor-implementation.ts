@@ -1,5 +1,12 @@
+import type { ProcessorEvent } from "../streams/processor-contracts.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
+
+/** The one event this processor acts on, narrowed from the contract by its type string. */
+type RepoCreateRequested = ProcessorEvent<
+  RepoProcessorContract,
+  "events.iterate.com/repo/create-requested"
+>;
 
 type RepoProcessorDeps = {
   createRepoArtifact(input: { path: string; projectId: string | null }): Promise<{
@@ -11,16 +18,13 @@ type RepoProcessorDeps = {
   projectId: string | null;
 };
 
-export class RepoProcessor extends StreamProcessor<
-  typeof RepoProcessorContract,
-  RepoProcessorDeps
-> {
+export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
   readonly contract = RepoProcessorContract;
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof RepoProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<RepoProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/repo/created":
         return {
@@ -79,13 +83,9 @@ export class RepoProcessor extends StreamProcessor<
     event,
     state,
     append,
-  }: Parameters<StreamProcessor<typeof RepoProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/repo/create-requested") return;
-    if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
-      throw new Error(
-        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.deps.projectId}:${this.deps.path}"`,
-      );
-    }
+    this.#assertOwnCreateRequest(event);
     if (state.created) return;
 
     blockProcessorWhile(async () => {
@@ -100,5 +100,14 @@ export class RepoProcessor extends StreamProcessor<
         },
       });
     });
+  }
+
+  /** Reject a create-requested addressed to a different repo than this processor serves. */
+  #assertOwnCreateRequest(event: RepoCreateRequested): void {
+    if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
+      throw new Error(
+        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.deps.projectId}:${this.deps.path}"`,
+      );
+    }
   }
 }

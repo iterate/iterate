@@ -2,6 +2,14 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 
+/** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
+export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
+
+/** Disposable handle for one live project egress interception. */
+export interface ProjectEgressIntercept extends Disposable {
+  release(): Promise<void>;
+}
+
 /**
  * Host-minted Fetcher for Dynamic Worker `globalOutbound`. Workerd requires a
  * platform Fetcher here; a plain object with fetch() fails runtime validation.

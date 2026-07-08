@@ -4,6 +4,7 @@ import type {
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type { Stream } from "../itx-api.generated.ts";
 import {
   AGENT_UI_FEED_TABLE,
   AGENT_UI_SCHEMA_VERSION,
@@ -28,7 +29,6 @@ import {
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import type { Stream } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";

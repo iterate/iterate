@@ -3,7 +3,7 @@
 // substitutes the fresh access token and its oauth-refresh-token strategy
 // refreshes on 401. No token bytes ever reach this code.
 
-import type { GmailRequestInput } from "../../types.ts";
+import type { GmailRequestInput } from "./types.ts";
 
 export async function callGmailApi(input: {
   /** The Gmail REST call. */

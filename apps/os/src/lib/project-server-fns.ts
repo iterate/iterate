@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { env } from "cloudflare:workers";
+import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 import { itxAuthFromPrincipal } from "~/auth.ts";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
@@ -11,7 +12,6 @@ import {
 } from "~/lib/project-root-redirect.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
 import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
-import type { ProjectDeploymentStatus } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**

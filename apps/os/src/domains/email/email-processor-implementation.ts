@@ -3,7 +3,7 @@
 // types, payloads, and idempotency keys are stable wire formats.
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEventInput } from "../../types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   EmailProcessorContract,
   type EmailProcessorState,

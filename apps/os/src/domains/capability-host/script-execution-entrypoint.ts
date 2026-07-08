@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { JsonValue, StatelessDynamicWorkerRef } from "../../types.ts";
+import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 

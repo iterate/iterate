@@ -44,7 +44,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
 
   const recipient = parseInboundRecipient(message.to);
   // Only the deployment's email domain — the same normalized first hostname
-  // base every outbound From/Reply-To is built from (EmailRpcTarget
+  // base every outbound From/Reply-To is built from (EmailCapabilityRpcTarget
   // senderIdentity) — accepts inbound mail, so a thread's reply address
   // always lives on the domain the mail arrived on.
   const emailDomain = emailDomainForDeployment(config.projectHostnameBases);

@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import type { ScheduleView, SchedulerRecurrence } from "../../../../domains/scheduler/types.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SCHEDULER_PRIMARY_PATH } from "~/domains/scheduler/utils.ts";
@@ -18,7 +19,6 @@ import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { ScheduleView, SchedulerRecurrence } from "~/types.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/scheduler")({
   validateSearch: StreamViewSearch,

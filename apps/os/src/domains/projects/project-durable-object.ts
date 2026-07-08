@@ -8,7 +8,6 @@ import {
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
-import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -29,6 +28,7 @@ import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";

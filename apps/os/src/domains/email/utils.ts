@@ -1,8 +1,9 @@
 // First-party email (the `itx.email` capability): pure helpers only — the
-// env-touching send orchestration lives in rpc-targets.ts's EmailRpcTarget and
-// the inbound door in email-ingress.ts. Inbound mail routes through the
-// "email" processor on `/integrations/email` into one agent stream per email
-// thread (`/agents/email/t<threadId>`); see email-processor-contract.ts.
+// env-touching send orchestration lives in rpc-targets.ts's
+// EmailCapabilityRpcTarget and the inbound door in email-ingress.ts. Inbound
+// mail routes through the "email" processor on `/integrations/email` into one
+// agent stream per email thread (`/agents/email/t<threadId>`); see
+// email-processor-contract.ts.
 
 import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
 
@@ -47,6 +48,30 @@ export type SendEmailBinding = {
     attachments?: OutboundEmailAttachment[];
   }): Promise<unknown>;
 };
+
+/**
+ * One outbound email attachment as the CALLER passes it: either a stored
+ * project file addressed by its `itx.files` path, or inline base64 content
+ * for bytes the caller already holds. Any file type works (PDFs, images,
+ * archives, …) within the Email Service limits: 32 attachments, 5 MiB total
+ * message size.
+ */
+export type EmailAttachmentInput =
+  | {
+      /** Project file path (`itx.files.get(path)`) to attach. */
+      path: string;
+      /** Override the attachment filename; defaults to the path's last segment. */
+      filename?: string;
+      /** Override the MIME type; defaults to the stored file's contentType. */
+      contentType?: string;
+    }
+  | {
+      filename: string;
+      /** Base64-encoded content. */
+      data: string;
+      /** MIME type; defaults to application/octet-stream. */
+      contentType?: string;
+    };
 
 /** One outbound attachment in the Email Service structured send() shape. */
 export type OutboundEmailAttachment = {
@@ -367,10 +392,11 @@ function isProjectOwnedAddress(address: string, projectAddress: string): boolean
   return normalized.startsWith(`${slug}+`) && normalized.endsWith(domain);
 }
 
-/** What `itx.email.send` accepts — see EmailCapability in types.ts for the
- * contract docs. Attachments arrive already resolved to bytes: the caller
- * shape (`{ path }` project files / `{ data }` inline base64) is resolved by
- * EmailRpcTarget before this pure layer sees it. */
+/** What `itx.email.send` accepts — see EmailCapabilityRpcTarget in
+ * rpc-targets.ts for the contract docs. Attachments arrive already resolved to
+ * bytes: the caller shape (`{ path }` project files / `{ data }` inline
+ * base64) is resolved by EmailCapabilityRpcTarget before this pure layer sees
+ * it. */
 type SendProjectEmailRequest = {
   to: string | string[];
   subject: string;

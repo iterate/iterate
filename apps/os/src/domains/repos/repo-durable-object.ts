@@ -13,6 +13,8 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { parseConfig } from "../../config.ts";
+import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -21,9 +23,7 @@ import type {
   GithubRepoLink,
   GithubSyncResult,
   RepoFileChange,
-} from "../../types.ts";
-import { parseConfig } from "../../config.ts";
-import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+} from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
