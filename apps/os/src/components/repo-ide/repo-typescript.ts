@@ -37,13 +37,13 @@ const TYPESCRIPT_SEED_EXTENSIONS = new Set([
 
 /** Files worth showing to the TypeScript program: sources it can check plus
  * `.json` for `resolveJsonModule` (which also carries tsconfig.json in). */
-export function isTypeScriptSeedPath(path: string): boolean {
+function isTypeScriptSeedPath(path: string): boolean {
   const extension = path.split(".").pop() || "";
   return TYPESCRIPT_SEED_EXTENSIONS.has(extension.toLowerCase());
 }
 
 /** Whether the language service attaches to this open buffer at all. */
-export function isTypeScriptEditorPath(path: string): boolean {
+function isTypeScriptEditorPath(path: string): boolean {
   const extension = (path.split(".").pop() || "").toLowerCase();
   return isTypeScriptSeedPath(path) && extension !== "json";
 }
