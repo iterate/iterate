@@ -16,13 +16,33 @@ type ReducedConnection = {
   };
 };
 
+/** The per-subscription spine row `runtimeState().runtime.subscriptions` exposes. */
+type RuntimeSubscription = {
+  mode?: "wake" | "push";
+  ackedOffset?: number;
+  lag?: number;
+  connected?: boolean;
+};
+
+/** The stored latest-config record `configuredSubscribersByKey` keeps per key. */
+type ConfiguredSubscriberRecord = {
+  latestConfiguredEvent?: {
+    offset?: number;
+    payload?: {
+      subscriptionKey?: string;
+      selector?: { eventTypes?: string[] };
+    };
+  };
+};
+
 type StreamRuntimeState = {
   coreProcessorState: {
     connectionsByKey?: Record<string, ReducedConnection>;
-    configuredSubscribersByKey?: Record<string, unknown>;
+    configuredSubscribersByKey?: Record<string, ConfiguredSubscriberRecord>;
   };
   runtime: {
     connections: Record<string, RuntimeConnection>;
+    subscriptions: Record<string, RuntimeSubscription>;
   };
 };
 
@@ -31,16 +51,19 @@ const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 // These tests are intentionally about subscription lifecycle policy, not about
 // the old inbound/outbound transport direction. The current model has two
 // subscription types:
-// - configured: durable desired state in `configuredSubscribersByKey`; the
-//   stream may drop the live callback while idle because it can wake the target
-//   again from the stored configuration.
+// - configured: durable desired state in `configuredSubscribersByKey`, one
+//   `subscription-configured` event per key with a delivery mode. `wake` pokes
+//   a Durable-Object-hosted processor and streams into the returned sink (a
+//   live connection the stream may drop while idle, because the stored config
+//   can re-wake the target); `push` dials a persisted itx expression fresh per
+//   batch (no live connection; the stream owns the cursor).
 // - ephemeral: a direct caller supplied a live callback via `subscribe()`; the
 //   stream must keep it until unsubscribe, RPC break, or session end because
 //   there is no durable wakeup path.
 //
 // Several of these started life as failing regression tests for streams keeping
 // Durable Objects alive through retained callback stubs. The now-active tests
-// prove the configured path is teardownable and re-wakeable, while direct
+// prove the configured wake path is teardownable and re-wakeable, while direct
 // Cap'n Web subscriptions are cleaned up when their session is disposed.
 test("configured processor subscriptions are recorded as configured runtime connections", async () => {
   const marker = crypto.randomUUID();
@@ -93,7 +116,7 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
       subscriptionKey,
     });
     await handle.unsubscribe();
-  }).rejects.toThrow(/reserved for a configured subscriber/);
+  }).rejects.toThrow(/reserved for a durable subscriber/);
 });
 
 test("configured durable object subscribers must target the stream project", async () => {
@@ -120,7 +143,7 @@ test("configured durable object subscribers must target the stream project", asy
     stream.append(
       subscriptionConfiguredEvent({
         subscriptionKey,
-        subscriber: {
+        target: {
           address: {
             path: "/",
             projectId: `${projectId}-other`,
@@ -155,7 +178,7 @@ test("global streams reject project-scoped configured durable object subscribers
     stream.append(
       subscriptionConfiguredEvent({
         subscriptionKey,
-        subscriber: {
+        target: {
           address: {
             path: "/",
             projectId: `prj_${marker}`,
@@ -170,47 +193,64 @@ test("global streams reject project-scoped configured durable object subscribers
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
 
-test("global streams reject configured worker subscribers", async () => {
-  // Worker subscribers are slightly different from Durable Object subscribers:
-  // the event stores a DynamicWorkerRef, not a Durable Object address. The wake path
-  // scopes that DynamicWorkerRef with the stream's own projectId, so project streams
-  // are safe by construction. A global stream has no projectId to provide, so
-  // accepting this event would create durable desired state that can never be
-  // woken safely. This test makes that rejection happen during append, before
-  // `configuredSubscribersByKey` is updated.
+test("project streams are born with the project-worker push feed and replace it by key", async () => {
+  // Stateless workers are no longer a wake-target kind: a worker consumes via
+  // a PUSH subscription whose expression addresses it. Every project-scoped
+  // stream self-configures the default feed at birth — subscriptionKey
+  // "project-worker", expression ["worker", "processEventBatch"], deliver
+  // "all", onPoison "skip" — in the same synchronous turn as `created`, so
+  // there is no wiring window. It stays ordinary config: one registry, one
+  // spine, overridable by re-appending the same key.
   const marker = crypto.randomUUID();
-  const subscriptionKey = `configured-global-worker-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using stream = itx.streams.get(`/configured-global-worker-${marker}`);
+  using project = itx.projects.create({ slug: `lifecycle-worker-feed-${marker}` });
+  using stream = project.streams.get(`/lifecycle-worker-feed-${marker}`);
 
-  await expect(
-    stream.append(
-      subscriptionConfiguredEvent({
-        subscriptionKey,
-        subscriber: {
-          type: "worker",
-          workerRef: {
-            path: "/subscribers/noop",
-            source: {
-              files: {
-                files: { "index.js": "export default { wakeStreamSubscriber() {} };" },
-                type: "inline",
-              },
-              options: { bundle: false, entryPoint: "index.js" },
-            },
-            type: "stateless",
-          },
-        },
-      }),
-    ),
-  ).rejects.toThrow(/configured worker subscribers require a project-scoped stream/);
+  // Born configured: a fresh child stream's runtime subscription table shows
+  // the push feed before any caller wires anything.
+  const initial = asStreamRuntimeState(await stream.runtimeState());
+  expect(initial.runtime.subscriptions["project-worker"]?.mode).toBe("push");
 
-  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+  // Appending advances the feed's authoritative cursor once the project
+  // worker acks the batch (durable delivery, so it retries until the seeded
+  // worker answers).
+  const [appended] = await stream.append({
+    type: "events.iterate.test/lifecycle-worker-feed",
+    payload: { marker },
+  });
+  await waitForCondition(
+    async () => {
+      const state = asStreamRuntimeState(await stream.runtimeState());
+      return (state.runtime.subscriptions["project-worker"]?.ackedOffset ?? 0) >= appended.offset;
+    },
+    {
+      description: "project-worker feed ackedOffset to advance past the appended event",
+      timeoutMs: 30_000,
+    },
+  );
+
+  // Config replacement: a same-key subscription-configured append overrides
+  // the birth-certificate feed (latest committed event per key wins).
+  const narrowedTypes = [`events.iterate.test/lifecycle-worker-feed-selected-${marker}`];
+  const [replacement] = await stream.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "project-worker",
+      delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+      selector: { eventTypes: narrowedTypes },
+      onPoison: "skip",
+    },
+  });
+
+  const replaced = asStreamRuntimeState(await stream.runtimeState());
+  const record = replaced.coreProcessorState.configuredSubscribersByKey?.["project-worker"];
+  expect(record?.latestConfiguredEvent?.offset).toBe(replacement.offset);
+  expect(record?.latestConfiguredEvent?.payload?.selector?.eventTypes).toEqual(narrowedTypes);
 });
 
 test("stream idle teardown severs configured processor subscriptions", async () => {
@@ -480,7 +520,14 @@ async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
 }
 
 function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {
-  return Object.keys(state.coreProcessorState.configuredSubscribersByKey ?? {});
+  // Only WAKE subscriptions hold live delivery connections (a poke returns a
+  // sink the stream retains). Push subscriptions — the birth-certificate
+  // project-worker feed among them — dial fresh per batch and never appear in
+  // `runtime.connections`, so the connection-lifecycle tests must not wait on
+  // them.
+  return Object.entries(state.runtime.subscriptions)
+    .filter(([, subscription]) => subscription.mode === "wake")
+    .map(([key]) => key);
 }
 
 function asStreamRuntimeState(value: unknown): StreamRuntimeState {
@@ -488,7 +535,7 @@ function asStreamRuntimeState(value: unknown): StreamRuntimeState {
 }
 
 function subscriptionConfiguredEvent(input: {
-  subscriber: Record<string, unknown>;
+  target: Record<string, unknown>;
   subscriptionKey: string;
 }): StreamEventInput {
   // These tests hand-author the public event instead of using the bootstrap
@@ -500,7 +547,7 @@ function subscriptionConfiguredEvent(input: {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: input.subscriptionKey,
-      subscriber: input.subscriber,
+      delivery: { mode: "wake", target: input.target },
     },
   };
 }

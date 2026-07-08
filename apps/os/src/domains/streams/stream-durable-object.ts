@@ -825,16 +825,23 @@ export class StreamDurableObject extends DurableObject<Env> {
     const binding = itxEntrypointBinding(
       this.ctx.exports,
       itxEntrypointProps({ projectId, path: "/" }),
-    ) as unknown as { get(): Promise<unknown> };
-    const itx = await binding.get();
+    ) as unknown as { get(): Promise<unknown> } & Partial<Disposable>;
     try {
-      const { receiver, value } = await evaluateItxExpression(itx, expression);
-      if (typeof value !== "function") {
-        throw new Error("push subscription expression did not resolve to a callable sink");
+      const itx = await binding.get();
+      try {
+        const { receiver, value } = await evaluateItxExpression(itx, expression);
+        if (typeof value !== "function") {
+          throw new Error("push subscription expression did not resolve to a callable sink");
+        }
+        await Reflect.apply(value, receiver, [batch]);
+      } finally {
+        // Both stubs are per-delivery: the itx root and the loopback binding
+        // that minted it. Dropping either without disposal leaks the remote
+        // reference for the isolate's lifetime.
+        (itx as Partial<Disposable>)?.[Symbol.dispose]?.();
       }
-      await Reflect.apply(value, receiver, [batch]);
     } finally {
-      (itx as Partial<Disposable>)?.[Symbol.dispose]?.();
+      binding[Symbol.dispose]?.();
     }
   }
 
