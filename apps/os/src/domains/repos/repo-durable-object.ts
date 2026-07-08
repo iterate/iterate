@@ -311,7 +311,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   async readFile(input: {
     path: string;
     encoding?: "utf8" | "base64";
-  }): Promise<RepoFileRead | null> {
+  }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout();
@@ -897,8 +897,6 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     ...extra,
   };
 }
-
-type RepoFileRead = { commitOid: string; content: string; path: string };
 
 function repoHeadStorageKey(branch: string) {
   // The value is "latest head at this branch" ({ commitOid, contentHash }),

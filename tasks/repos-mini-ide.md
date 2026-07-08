@@ -8,7 +8,7 @@ branch: repos-mini-ide
 
 ## Status summary
 
-Spec fleshed out, implementation not started yet. Main pieces: full-width IDE layout on the repo detail page (events feed demoted to a popover), Pierre file tree + editable CodeMirror editors with dirty tracking, image/PDF renderers with replace, right-click file ops, diff view, and a small base64 lane on the repo backend for binary files.
+Implementation largely complete; browser verification pending. Done: backend base64 lane (+unit & e2e tests), full-panel stream-view layout with the events feed in a sheet, pierre file tree with git-status annotations and context menu (new/rename/delete/upload), editable CodeMirror with all requested languages, image/PDF renderers with Replace, @codemirror/merge diff view, staged-changes store with single-batch commit. Missing: live verification against local dev (screenshots for the PR), possible pierre-tree styling polish.
 
 ## Ask (verbatim-ish, from Misha)
 
