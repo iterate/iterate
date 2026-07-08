@@ -79,8 +79,9 @@ export function isBinaryRepoPath(path: string): boolean {
  * real html documents, plus .svg — raw svg markup is valid in an html body
  * (the parser switches to foreign content at `<svg>`; an XML prolog degrades
  * to an ignored bogus comment), so the same srcdoc lane previews it with the
- * same script-inert sandbox. An `<img>` would also neuter scripts but breaks
- * height-less/percentage sizing and never runs legitimate svg animations. */
+ * same script-inert sandbox and zero new rendering code. An `<img>` would
+ * also neuter scripts, but then script-driven animation and interactivity
+ * never run — the opaque-origin sandbox keeps them working AND inert. */
 export function isHtmlPreviewPath(path: string): boolean {
   return /\.(html?|svg)$/i.test(path);
 }

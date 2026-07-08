@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: repo-ide-preview-followups
 ---
@@ -12,8 +12,9 @@ Implemented and verified live; PR #1773 (stacked on #1767). `.svg` files get
 the same Code/Preview toggle via the existing sandboxed srcdoc iframe (an
 svg with an embedded `alert`/`window.top` script rendered inert — no dialog,
 top title untouched), and the readonly Index view gets the identical toggle
-over the staged snapshot (header flips to `(Index Preview)`). No missing
-pieces.
+over the staged snapshot (header flips to `(Index Preview)`). Review pass
+done (docs-only fix: two empirically false claims trimmed from the
+img-vs-iframe rationale). No missing pieces.
 
 ## Ask
 
@@ -32,9 +33,10 @@ Follow-up work identified in `tasks/repo-ide-html-preview.md` / PR #1767:
   foreign-content mode at `<svg>`, and an XML prolog/DOCTYPE degrade to
   ignored bogus comments — so `HtmlPreview` needs no changes. Why not an
   `<img>` with a blob URL (which also neuters scripts)?
-  - `<img>` changes sizing/behavior: percentage-sized or height-less SVGs
-    collapse to the 300×150 replaced-element default, and animations driven
-    by scripts (a legitimate thing to preview) never run.
+  - `<img>` suppresses scripts entirely, so script-driven animation and
+    interactivity (a legitimate thing to preview) never run. (Review-
+    verified: sizing and SMIL animation behave the _same_ in both lanes —
+    earlier claims to the contrary were wrong and have been removed.)
   - User-supplied SVG can embed `<script>`; the iframe's existing stance —
     `sandbox="allow-scripts"` with NO `allow-same-origin`, so an opaque
     origin — makes that inert against the dashboard while still letting
