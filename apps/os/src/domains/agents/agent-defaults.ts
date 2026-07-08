@@ -19,6 +19,7 @@ import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { isEmailAgentPath } from "../email/utils.ts";
+import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import {
   DEFAULT_AGENT_MODEL,
@@ -91,6 +92,29 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
+ * Agents under `/agents/repos/<slug>/pull-requests/<n>` are pull-request
+ * agents: the repo processor forwards that PR's GitHub webhooks to their
+ * stream, the `github-pr-agent` processor transcribes them (mention-gated —
+ * only human comments naming the agent trigger a turn), and replies go out
+ * through the linked connection's itx.integrations.github[connection] Octokit
+ * as PR comments. The exact coordinates arrive as a route-context input from
+ * the `github-pr/route-configured` fact on the stream.
+ */
+const PR_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent attached to one GitHub pull request.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "This pull request's GitHub webhooks (opens, pushes, reviews, comments) arrive as your inputs. You are woken when a human comment mentions you; treat the rest as context.",
+  'To reply, post a PR comment through the connection named in your route-context input: await itx.integrations.github["<connection>"].rest.issues.createComment({ owner, repo, issue_number, body }). Never use itx.chat.sendMessage to answer the PR.',
+  'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION: rest.pulls.get / rest.pulls.listFiles read the PR and its diff, the escape hatch .request("GET /repos/{owner}/{repo}/...", { ... }) covers everything else (user-scoped ...ForAuthenticatedUser endpoints answer 403).',
+  "The linked project repo is readable via itx.repos.get(<repoPath from your route-context input>).readFile({ path }) / .listFiles() when you need file contents beyond the diff.",
+  "GitHub is not chat: one complete, well-written comment per request. Do the work first (read the diff, fetch files, run scripts across turns), then comment once with the full answer. Write in GitHub-flavored markdown.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
+
+/**
  * Agents under `/agents/mcp/**` are inbound MCP session agents: one stream per
  * inbound MCP session. The ask_assistant MCP tool appends the caller's message
  * to the session stream and blocks until the agent's next chat reply, so the
@@ -126,6 +150,7 @@ function agentSystemPromptForPath(agentPath: string): string {
     return slackAgentSystemPrompt(slackConnection);
   }
   if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
+  if (isPrAgentPath(agentPath)) return PR_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
