@@ -732,6 +732,8 @@ export async function acquire(options: AcquireOptions) {
 
 /**
  * Release a preview slot lease. Pass the lease id from `preview acquire`, or --force to release someone else's (stale) lease.
+ * Does NOT erase the slot's data — that's safe, because every acquire erases
+ * on entry. Use `preview reclaim --slot N` to take back AND wipe in one step.
  */
 type ReleaseOptions = {
   /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
@@ -823,7 +825,7 @@ export async function reclaim(options: ReclaimOptions = {}) {
       reclaimable: report
         .filter((slot) => slot.verdict === "orphaned" || slot.verdict === "idle")
         .map((slot) => `pnpm preview reclaim --slot ${slot.slug}`),
-      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; taking an active slot needs --force and clobbers live work",
+      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; reclaiming ERASES the slot's data before returning it to the pool; taking an active slot needs --force",
     };
   }
 
@@ -840,24 +842,37 @@ export async function reclaim(options: ReclaimOptions = {}) {
       [
         `${slug} is actively held by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
         `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
-        "Taking it would clobber live work. Re-run with --force only after checking with the holder.",
+        "Taking it would ERASE their slot's data and clobber live work.",
+        "Re-run with --force only after checking with the holder.",
       ].join("\n"),
     );
   }
 
   logPreview(
-    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""})`,
+    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""}) — erasing its data before returning it to the pool`,
   );
-  // Erase BEFORE releasing: the stale lease still parks the slot, so nobody
-  // can acquire it and deploy fresh data mid-wipe. A reclaimed slot is dirty
-  // by definition (the holder's cleanup — which erases on the way out —
-  // didn't run), so an erase failure leaves the lease in place and throws
+  // Take the slot under OUR OWN fresh lease before erasing. The old holder's
+  // lease could expire mid-erase (the verdict is a snapshot), and destroying
+  // data on a slot another PR just acquired would wreck an innocent tenant —
+  // a fresh lease parks the slot for the whole wipe. An erase failure leaves
+  // that lease in place (parked and visible in this report) and throws
   // rather than returning a dirty slot to the pool.
+  const holder = `reclaim-${userInfo().username}`;
+  const taken = await semaphore.acquireSpecific({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    slug,
+    leaseMs: 30 * 60_000,
+    holder,
+    force: true,
+  });
+  if (!taken) {
+    throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
+  }
   await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    force: true,
+    leaseId: taken.leaseId,
   });
   return {
     released: result.released,
@@ -3144,7 +3159,6 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * it, and GitHub confirms that before we touch anything.
  */
 async function tryReclaimOrphanedEnvironmentConfigLease(input: {
-  eraseSlotData: EraseSlotData;
   fetchPullRequestState: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
@@ -3174,31 +3188,6 @@ async function tryReclaimOrphanedEnvironmentConfigLease(input: {
       logPreview(
         `reclaimed orphaned slot ${orphan.slug}: it was leased by ${orphan.holder ?? "unknown holder"} whose PR is closed (${orphan.pullRequestUrl ?? "no PR url"}) — their cleanup must have failed`,
       );
-      // The dead holder's cleanup is what erases a slot on the way out, and a
-      // reclaim only happens because that cleanup didn't run — so the slot
-      // still holds the dead PR's data. Erase before handing it over, while
-      // this fresh lease parks the slot against other takers.
-      try {
-        await input.eraseSlotData({
-          dopplerConfig: parseEnvironmentConfigLeaseData(lease.data).dopplerConfig,
-          slug: lease.slug,
-        });
-      } catch (error) {
-        // Never hand out a dirty slot. Give the lease back and try the next
-        // orphan; the acquire loop revisits this one on a later poll (erase
-        // failures are usually transient doppler/API hiccups).
-        logPreview(
-          `erase failed on reclaimed ${lease.slug} — releasing it rather than handing over a dirty slot: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        await input.semaphore
-          .release({ type: lease.type, slug: lease.slug, leaseId: lease.leaseId })
-          .catch((releaseError: unknown) => {
-            logPreview(
-              `failed to release ${lease.slug} after the failed erase (it will expire on its own): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
-            );
-          });
-        continue;
-      }
       return lease;
     }
   }
@@ -3207,14 +3196,54 @@ async function tryReclaimOrphanedEnvironmentConfigLease(input: {
 }
 
 /**
+ * Erase a just-acquired slot before it is handed to the caller, giving the
+ * lease back on failure. Returns true when the slot is clean and ours.
+ *
+ * This runs on EVERY handover — plain acquire included, not just reclaims —
+ * so slot cleanliness is an invariant of entry rather than an assumption
+ * about how the previous tenant exited. Every exit path that skips the
+ * cleanup erase (failed cleanup + 24h lease expiry, `release --force`, a run
+ * cancelled mid-claim) becomes harmless: whoever picks the slot up next
+ * wipes it first. A failed erase releases the lease rather than handing out
+ * a dirty slot, and the released slot is safe back in the pool because its
+ * next taker runs this same erase.
+ */
+async function eraseAcquiredSlotOrGiveItBack(input: {
+  eraseSlotData: EraseSlotData;
+  lease: { data: Record<string, unknown>; leaseId: string; slug: string; type: string };
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  try {
+    await input.eraseSlotData({
+      dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
+      slug: input.lease.slug,
+    });
+    return true;
+  } catch (error) {
+    logPreview(
+      `erase failed on just-acquired ${input.lease.slug} — giving the lease back (the next taker erases before use): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    await input.semaphore
+      .release({ type: input.lease.type, slug: input.lease.slug, leaseId: input.lease.leaseId })
+      .catch((releaseError: unknown) => {
+        logPreview(
+          `failed to release ${input.lease.slug} after the failed erase (it will expire on its own, and its next taker still erases first): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+        );
+      });
+    return false;
+  }
+}
+
+/**
  * Acquire any free slot, queueing (via semaphore long-poll) while all slots
  * are leased. Orphaned leases (holder PR closed but cleanup failed) are
- * garbage-collected before waiting. Fails with the full holder table and
+ * garbage-collected before waiting. Every handed-out slot is erased first
+ * (see eraseAcquiredSlotOrGiveItBack). Fails with the full holder table and
  * remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
-  /** Required so no acquire path can hand out a reclaimed slot without wiping it. */
+  /** Required so no acquire path can hand out a slot without wiping it. */
   eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
@@ -3233,26 +3262,56 @@ async function acquireAnyEnvironmentConfigLease(input: {
     // polls, re-checking for freshly orphaned slots between polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
-      return await input.semaphore.acquire({
+      const acquired = await input.semaphore.acquire({
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
         holder: input.holder,
       });
+      if (
+        await eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease: acquired,
+          semaphore: input.semaphore,
+        })
+      ) {
+        return acquired;
+      }
+      // Bound the acquire→failed-erase→release cycle: without this check the
+      // loop would spin on a free-but-unerasable slot past the wait budget.
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Could not hand ${input.holder} a clean slot: erasing ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+        );
+      }
+      continue;
     } catch (error) {
       if (!isNoSlotAvailableError(error)) {
         throw error;
       }
 
       const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
-        eraseSlotData: input.eraseSlotData,
         fetchPullRequestState: input.fetchPullRequestState ?? null,
         holder: input.holder,
         leaseMs: input.leaseMs,
         semaphore: input.semaphore,
       });
       if (reclaimed) {
-        return reclaimed;
+        if (
+          await eraseAcquiredSlotOrGiveItBack({
+            eraseSlotData: input.eraseSlotData,
+            lease: reclaimed,
+            semaphore: input.semaphore,
+          })
+        ) {
+          return reclaimed;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Could not hand ${input.holder} a clean slot: erasing ${reclaimed.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+          );
+        }
+        continue;
       }
       if (attempt === 1 && input.fetchPullRequestState) {
         logPreview(
@@ -3331,8 +3390,10 @@ async function claimEnvironmentConfigLease(input: {
   // held two slots and every deploy queued for 20 minutes). Adopt any lease the
   // semaphore already attributes to this holder before acquiring a fresh one.
   const adopted = await adoptExistingHolderLease({
+    eraseSlotData: input.eraseSlotData,
     holder: input.holder,
     leaseMs: input.leaseMs,
+    recordedSlug: previousLease?.slug ?? null,
     semaphore,
   });
   if (adopted) {
@@ -3442,6 +3503,18 @@ async function assignEnvironmentConfigLease(input: {
         ].join("\n"),
       );
     }
+    // Same entry invariant as every other handover — this also covers a
+    // --force eviction, where the acquired slot holds the evicted PR's data.
+    const clean = await eraseAcquiredSlotOrGiveItBack({
+      eraseSlotData: input.eraseSlotData,
+      lease: acquired,
+      semaphore: input.semaphore,
+    });
+    if (!clean) {
+      throw new Error(
+        `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
+      );
+    }
     lease = toEnvironmentConfigLease(acquired);
   } else {
     // A human is asking right now — fail fast with the holder table instead
@@ -3510,10 +3583,17 @@ function toEnvironmentConfigLease(lease: {
  * recorded-but-unrenewable slug is deliberately NOT excluded: if the list
  * still attributes it to this holder, re-issuing our own lease is idempotent
  * and adopting beats leasing a second slot.
+ *
+ * An adopted slug that is NOT the PR body's recorded slug has unknown
+ * provenance by construction (the run that acquired it died before recording
+ * — possibly mid-erase), so it is erased before it is handed over. The
+ * recorded slug is this PR's own live deployment and is never wiped here.
  */
 async function adoptExistingHolderLease(input: {
+  eraseSlotData: EraseSlotData;
   holder: string;
   leaseMs: number;
+  recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
   const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
@@ -3533,6 +3613,16 @@ async function adoptExistingHolderLease(input: {
         `lease adopted: the semaphore already had ${repaired.slug} leased to ${input.holder} ` +
           `(a previous run was cancelled before recording it); re-issued until ${formatUntil(repaired.expiresAt)}`,
       );
+      if (repaired.slug !== input.recordedSlug) {
+        const clean = await eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease: repaired,
+          semaphore: input.semaphore,
+        });
+        if (!clean) {
+          continue;
+        }
+      }
       return toEnvironmentConfigLease(repaired);
     }
   }
