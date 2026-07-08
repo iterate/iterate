@@ -162,12 +162,17 @@ export function convergeDoMigrations(input: {
 /**
  * What a worker answers while its DOs are being reset: parked until the next
  * deploy. Deliberately a 503 — preview machinery treats "parked" as healthy.
+ * The queue handler must exist because queue-consumer registration lives on
+ * the queue, not the script: Cloudflare rejects any new version of a
+ * consuming worker without one (error 11001, observed live on preview-4).
+ * It acks-and-drops — an erased slot has nothing to process.
  */
 const RESET_PLACEHOLDER_MODULE = `export default {
   fetch: () => new Response("This environment's Durable Objects were erased; the next deploy brings it back.", {
     status: 503,
     headers: { "content-type": "text/plain" },
   }),
+  queue: (batch) => batch.ackAll(),
 };
 `;
 
