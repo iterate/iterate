@@ -5,6 +5,7 @@ import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";
+import { repoPathFromSplat } from "~/lib/repo-splat.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
@@ -85,9 +86,4 @@ function ProjectRepoDetailContent() {
       emptyLabel="No events on this repo's stream yet."
     />
   );
-}
-
-function repoPathFromSplat(splat: string | undefined) {
-  const suffix = splat?.replace(/^\/+/, "") ?? "";
-  return `/repos/${suffix}`;
 }

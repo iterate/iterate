@@ -21,7 +21,7 @@ link becomes `/projects/misha/repos//`, which URL normalization collapses to
 to view.
 
 We plan to get rid of the `/` repo entirely (moving to `/repos/config`), but
-that migration needs real consideration. Until then we want *some* way to view
+that migration needs real consideration. Until then we want _some_ way to view
 it. Any simple hack is acceptable; it must be clearly marked as temporary.
 
 ## Approach (assumptions, made while Misha is AFK)
@@ -38,9 +38,20 @@ it. Any simple hack is acceptable; it must be clearly marked as temporary.
 
 ## Checklist
 
-- [ ] add shared `repoPathToSplat` / `repoPathFromSplat` helpers with `~` sentinel
-- [ ] use them in the repos index route (list link + create-repo navigate)
-- [ ] use them in the repo detail route (splat → repo path)
-- [ ] unit test the round-trip, including `/`
-- [ ] typecheck / lint / relevant tests
-- [ ] draft PR clearly marked as a temporary hack until `/` → `/repos/config`
+- [x] add shared `repoPathToSplat` / `repoPathFromSplat` helpers with `~` sentinel — _`apps/os/src/lib/repo-splat.ts`, loud TEMPORARY HACK comment_
+- [x] use them in the repos index route (list link + create-repo navigate) — _replaced the private `repoPathToSplat` at the bottom of `repos/index.tsx`_
+- [x] use them in the repo detail route (splat → repo path) — _replaced the private `repoPathFromSplat` in `repos/$.tsx`_
+- [x] unit test the round-trip, including `/` — _`apps/os/src/lib/repo-splat.test.ts`_
+- [x] typecheck / lint / relevant tests — _all green_
+- [x] draft PR clearly marked as a temporary hack until `/` → `/repos/config` — _https://github.com/iterate/iterate/pull/1765_
+- [ ] verify in a running dev server that `/projects/<slug>/repos/~` shows the root repo
+
+## Implementation notes
+
+- `stream-routes.ts` deliberately untouched: the `/` stream is the project root
+  stream, so ⌘K/breadcrumb navigation for `/` lands on the project page, which
+  is unchanged (and correct) behavior. Only the repos index link and direct
+  repo-viewer URLs needed the sentinel.
+- `itx.repos.get("/")` already works — `normalizePath` accepts it and the
+  project processor already lists `/` in its `repos` reduced state, so the
+  index table row for `/` existed but linked to a URL that normalized away.
