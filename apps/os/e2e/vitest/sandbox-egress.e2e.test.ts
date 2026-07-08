@@ -73,10 +73,10 @@ describe("sandbox egress", () => {
         description: "secret processor to fold the material",
       });
 
-      // The sandbox lives at an agent-sandbox-shaped path — the same
-      // primitive an agent's `itx.sandbox` resolves to (agentSandboxPath).
-      // Getting it needs no container; the curl below boots one.
-      const sandboxPath = `/sandboxes/cloudflare/agents/egress-proof/${crypto.randomUUID()}`;
+      // Sandboxes are pets: created explicitly, then addressed by the path
+      // create returns. Creating needs no container; the curl below boots one.
+      const sandboxName = `egress-proof/${crypto.randomUUID()}`;
+      const sandboxPath = `/sandboxes/lite/${sandboxName}`;
       const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
       const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
       // The issuer of the cert the container is presented for the echo host:
@@ -85,7 +85,8 @@ describe("sandbox egress", () => {
 
       const script = [
         "async (itx) => {",
-        `  const sandbox = await itx.sandboxes.get(${JSON.stringify(sandboxPath)});`,
+        `  const { path } = await itx.sandboxes.create({ name: ${JSON.stringify(sandboxName)}, instanceType: "lite" });`,
+        "  const sandbox = await itx.sandboxes.get(path);",
         `  const echo = await sandbox.exec(${JSON.stringify(curlCommand)});`,
         `  const issuer = await sandbox.exec(${JSON.stringify(issuerCommand)});`,
         "  return { body: echo.stdout, exitCode: echo.exitCode, certIssuer: issuer.stdout.trim() };",

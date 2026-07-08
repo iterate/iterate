@@ -19,7 +19,6 @@ import {
   OpenAiWsProcessorContract,
 } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { agentSandboxPath } from "../sandboxes/utils.ts";
 import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
@@ -457,32 +456,11 @@ function agentBirthCertificateEvents(input: {
         provider: input.llmProvider,
       },
     },
-    // The agent's own sandbox, as a provided capability on the agent's own
-    // capability host — part of the birth certificate, so the mount is durable
-    // and replays with the stream. A durable itx-expression, not a live mount:
-    // every `itx.sandbox.<method>(...)` re-evaluates
-    // `itx.sandboxes.get(/sandboxes/cloudflare<agent path>)` against the agent's own itx
-    // at call time. Agent birth itself does not call `sandboxes.get`, because
-    // that mints the container-backed Durable Object identity and creates
-    // Cloudflare container inventory rows even before a Linux container starts.
-    {
-      type: "events.iterate.com/capability-host/capability-provided" as const,
-      idempotencyKey: `capability-host/sandbox-provided:${input.projectId}:${input.childPath}`,
-      payload: {
-        path: ["sandbox"],
-        type: "itx-expression" as const,
-        expression: ["sandboxes", ["get", agentSandboxPath(input.childPath)]],
-        instructions:
-          `THIS agent's own sandbox: the container at "${agentSandboxPath(input.childPath)}" (your agent path under /sandboxes/cloudflare). ` +
-          "Full Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, …). " +
-          "The first command boots the container; it sleeps after idle. " +
-          'The project repo is ALWAYS checked out at /workspace/repos/project, also the default working directory — a bare exec("ls") lists the project.',
-      },
-    },
-    // The agent's own workspace, mounted the same way as the sandbox: a
-    // durable itx-expression re-evaluated per call, so agent birth never
-    // touches the workspace Durable Object — the project-repo clone happens
-    // lazily on the first workspace call.
+    // The agent's own workspace, a durable itx-expression re-evaluated per
+    // call, so agent birth never touches the workspace Durable Object — the
+    // project-repo clone happens lazily on the first workspace call. (No
+    // sandbox mount: sandboxes are pets, created explicitly via
+    // itx.sandboxes.create.)
     {
       type: "events.iterate.com/capability-host/capability-provided" as const,
       idempotencyKey: `capability-host/workspace-provided:${input.projectId}:${input.childPath}`,
@@ -511,8 +489,8 @@ function agentBirthCertificateEvents(input: {
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
-          '- You have your own sandbox: `itx.sandbox` is a real Linux container that is yours alone (it lives at your agent path under /sandboxes and was mounted on your scope at birth). Call it dotted: `await itx.sandbox.exec("...")`. First command boots it (allow a minute cold), it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project, which is also the default working directory — a bare `await itx.sandbox.exec("ls")` lists the project. The Codex CLI (`codex`, gpt-5.5/high) is preinstalled for real coding work. Expose a server publicly with a quick tunnel: `const { url } = await itx.sandbox.tunnels.get(<port>)` → an ephemeral `*.trycloudflare.com` url.',
-          '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than the sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use the sandbox when you need to RUN things.',
+          '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',
+          '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
           "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
