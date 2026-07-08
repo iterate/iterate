@@ -34,8 +34,10 @@ export type GetinOptions = {
    * @alias e
    */
   email?: string;
-  /** project slug to get or create (default test) */
-  slug?: string;
+  /** project slug to get or create (default test), or a prj_ id that must already exist
+   * @alias p
+   */
+  project?: string;
   /** doppler config override (default: this worktree's `doppler setup` choice) */
   config?: string;
   /** print the one-shot sign-in URL instead of opening the browser */
@@ -49,14 +51,14 @@ export type GetinOptions = {
 /** get into local OS: ensure the dev server, get-or-create the test project, mint a session, open the browser */
 export default async function getin(options?: GetinOptions) {
   const email = options?.email || "test+test@nustom.com";
-  const slug = options?.slug || "test";
+  const projectRef = options?.project || "test";
   const config = options?.config;
 
   if (options?.worktree !== undefined && options.worktree !== false) {
     const ref = typeof options.worktree === "string" ? options.worktree : undefined;
     return runInWorktree(ref, [
       ...(options.email ? ["--email", options.email] : []),
-      ...(options.slug ? ["--slug", options.slug] : []),
+      ...(options.project ? ["--project", options.project] : []),
       ...(config ? ["--config", config] : []),
       ...(options.print ? ["--print"] : []),
     ]);
@@ -65,7 +67,7 @@ export default async function getin(options?: GetinOptions) {
   const devServer = ensureDevServer(config);
   console.log(`dev server: ${devServer.baseUrl} (pid ${devServer.pid})`);
 
-  const project = getOrCreateProject(devServer.baseUrl, slug, config);
+  const project = getOrCreateProject(devServer.baseUrl, projectRef, config);
   console.log(`project: ${project.slug} (${project.id})`);
 
   // OS authorizes from claims, so when the project has no auth-side org (the
@@ -188,19 +190,22 @@ type ProjectClaim = {
   organizationName: string | null;
 };
 
+/** `ref` is a prj_ id (must already exist) or a slug (created when missing). */
 function getOrCreateProject(
   baseUrl: string,
-  slug: string,
+  ref: string,
   config: string | undefined,
 ): ProjectClaim {
   const script = [
-    `const slug = ${JSON.stringify(slug)};`,
+    `const ref = ${JSON.stringify(ref)};`,
+    `const byId = ref.startsWith("prj_");`,
     `const projects = await itx.projects.list({ scope: "deployment" });`,
-    `const existing = projects.find((p) => p.slug === slug);`,
+    `const existing = projects.find((p) => (byId ? p.id === ref : p.slug === ref));`,
     `if (existing) return existing;`,
-    `const project = await itx.projects.create({ slug });`,
+    `if (byId) throw new Error("No project with id " + ref + " on this deployment.");`,
+    `const project = await itx.projects.create({ slug: ref });`,
     `const description = await project.__describe();`,
-    `return { id: description.projectId, slug, organizationId: null, organizationSlug: null, organizationName: null };`,
+    `return { id: description.projectId, slug: ref, organizationId: null, organizationSlug: null, organizationName: null };`,
   ].join("\n");
   const out = runViaDoppler(
     [
