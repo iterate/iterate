@@ -194,6 +194,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm ? "ghost" : "secondary"}
           size="icon"
           title="Files"
+          aria-label="Files"
           // The Files view browses working-tree files; leaving the SCM view
           // also leaves any Index pseudo-file it had open.
           onClick={() => patchSearch({ scm: undefined, staged: undefined })}
@@ -205,6 +206,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm ? "secondary" : "ghost"}
           size="icon"
           title="Source control"
+          // Explicit name: the dirty-count badge inside would otherwise BE the
+          // accessible name ("1"), beating the title.
+          aria-label="Source control"
           onClick={() => patchSearch({ scm: true })}
           className="relative text-muted-foreground"
         >

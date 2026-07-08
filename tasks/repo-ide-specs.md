@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: repo-ide-specs
 ---
@@ -8,7 +8,7 @@ branch: repo-ide-specs
 
 ## Status summary
 
-Follow-up to `tasks/complete/2026-07-08-repos-mini-ide.md` (PR #1759, merged): the IDE shipped with backend tests but no committed UI regression coverage — every browser flow was verified with ad-hoc gitignored playwright scripts that died with the worktree. This adds the two layers that catch the regression classes we actually hit during development.
+Done: 11 vitest store tests + a passing golden-path playwright spec, plus a small product a11y fix the spec surfaced (activity-strip buttons' accessible names). Ready for review.
 
 ## Ask (from Misha)
 
@@ -16,9 +16,9 @@ Follow-up to `tasks/complete/2026-07-08-repos-mini-ide.md` (PR #1759, merged): t
 
 ## Scope
 
-- [ ] Vitest unit tests for the working-tree store (`staged-changes.test.ts`): working/staged slot semantics, the equal-content normalizations, stage/unstage/discard/clearStaged, commitPlan's staged-vs-everything modes, git-status derivation, and localStorage persistence (fake storage): per-oid keying, stale-key sweep, migrateTo.
-- [ ] Playwright spec (`specs/repo-ide.spec.ts`) covering the golden path as a readable product spec: open a seeded repo → edit a file (dirty badge + change gutter) → survive a reload (localStorage) → inline diff ("(Working Tree)") → stage → SCM sections + "Commit N staged" → edit-after-stage lands the file in both sections → the staged row opens the readonly "(Index)" pseudo-file → commit → clean state.
-- [ ] Run both locally (vitest lane + `pnpm spec` against the auto-started local dev server) and record results.
+- [x] Vitest unit tests for the working-tree store (`staged-changes.test.ts`): working/staged slot semantics, the equal-content normalizations, stage/unstage/discard/clearStaged, commitPlan's staged-vs-everything modes, git-status derivation, and localStorage persistence (fake storage): per-oid keying, stale-key sweep, migrateTo.
+- [x] Playwright spec (`specs/repo-ide.spec.ts`) covering the golden path as a readable product spec: open a seeded repo → edit a file (dirty badge + change gutter) → survive a reload (localStorage) → inline diff ("(Working Tree)") → stage → SCM sections + "Commit N staged" → edit-after-stage lands the file in both sections → the staged row opens the readonly "(Index)" pseudo-file → commit → clean state.
+- [x] Run both locally (vitest lane + `pnpm spec` against the auto-started local dev server) and record results.
 
 ## Notes
 
@@ -28,4 +28,9 @@ Follow-up to `tasks/complete/2026-07-08-repos-mini-ide.md` (PR #1759, merged): t
 
 ## Implementation log
 
-(nothing yet)
+- Store tests: 11 passing; a fake localStorage fixture with a unique repo identity per test (the module caches store instances per key, so identity reuse would leak state across tests). Rehydration is exercised by seeding storage JSON directly for a never-seen key.
+- Spec: passes locally in ~11s (twice consecutively). Findings along the way:
+  - Two seeded README.md files (root + integrations/waitrose) — tree rows are targeted by pierre's `data-item-path` attribute, which playwright pierces through the shadow root.
+  - Product a11y fix: the SCM activity button's dirty-count badge was its accessible name ("1"), beating the title — both activity buttons now carry explicit aria-labels.
+  - `waitFor({ state: "hidden" })` fights the middlewright spinner-waiter (it waits for the locator to be VISIBLE first); the spec asserts positive states instead.
+- The playwright lane still doesn't run in Depot CI (`ci/playwright-preview-specs` is in flight); the vitest test rides the normal Test lane.
