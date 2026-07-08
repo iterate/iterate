@@ -39,8 +39,9 @@ export function EventsStreamPathLabel({
           {displayValue}
         </span>
       </TooltipTrigger>
-      {/* side="right" so an open tooltip never covers the list item above */}
-      <TooltipContent side="right">
+      {/* side="right" so an open tooltip never covers the list item above; the
+          extra offset keeps the arrow from sitting on top of the label */}
+      <TooltipContent side="right" sideOffset={10}>
         <p className="font-mono text-xs">{path}</p>
       </TooltipContent>
     </Tooltip>
