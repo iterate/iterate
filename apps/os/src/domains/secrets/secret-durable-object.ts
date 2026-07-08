@@ -9,13 +9,13 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
+import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
-  computeSignatureBase64Url,
   secretErrorResponse,
   secretReferencesFromHeaders,
   selectSecretField,
@@ -275,32 +275,13 @@ export class SecretDurableObject extends DurableObject<Env> {
       refresh.privateKey === "material"
         ? readStringField(material, "privateKey")
         : resolvePlatformGithubAppKey(parseConfig(this.env), refresh.privateKey, refresh.apiBase);
-    const now = Math.floor(Date.now() / 1000);
-    const signingInput = `${base64UrlOfJson({ alg: "RS256", typ: "JWT" })}.${base64UrlOfJson({
-      iat: now - 60,
-      exp: now + 540,
-      iss: refresh.appId,
-    })}`;
-    const signature = await computeSignatureBase64Url({ payload: signingInput, privateKeyPem });
-    const response = await fetch(
-      `${refresh.apiBase.replace(/\/$/, "")}/app/installations/${refresh.installationId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: `Bearer ${signingInput}.${signature}`,
-          "user-agent": "iterate-os",
-        },
-      },
-    );
-    if (!response.ok) {
-      throw new Error(`github installation token mint failed: HTTP ${response.status}`);
-    }
-    const data = (await response.json()) as { token?: string };
-    if (typeof data.token !== "string") {
-      throw new Error("github installation token mint returned no token");
-    }
-    await this.update({ material: { ...material, accessToken: data.token } });
+    const token = await mintGithubInstallationToken({
+      apiBase: refresh.apiBase,
+      appId: refresh.appId,
+      installationId: refresh.installationId,
+      privateKeyPem,
+    });
+    await this.update({ material: { ...material, accessToken: token } });
   }
 
   /**
@@ -424,10 +405,6 @@ function readStringField(material: Record<string, unknown>, field: string): stri
     throw new SecretSubstitutionError("secret_reference_field_not_found");
   }
   return value;
-}
-
-function base64UrlOfJson(value: unknown): string {
-  return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /**

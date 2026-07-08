@@ -64,6 +64,7 @@ import {
   PROJECT_WORKER_ENTRY_POINT,
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
+import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
 import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
@@ -139,6 +140,8 @@ import type {
   CommitRepoFilesResult,
   EditRepoFileInput,
   EditRepoFileResult,
+  GithubSyncResult,
+  LinkGithubResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -616,13 +619,20 @@ async function requestRepoCreate(input: {
 class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes.`,
+      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
         commitFiles: "Commit a batch of file changes ({ message, changes }).",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
+        linkGithub:
+          "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
+        pushToGithub:
+          "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile: "Read one file ({ path }).",
+        syncFromGithub:
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
+        unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
       parent: "repos.get(path); the project repo is itx.repo",
@@ -689,6 +699,65 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     path: string;
   } | null> {
     return this.#durableObjectStub.readFile(input);
+  }
+
+  /**
+   * Back this repo with a real GitHub repository through a named GitHub
+   * connection. From then on every default-branch commit is mirrored to
+   * GitHub best-effort (failures journal on the repo stream and self-heal on
+   * the next commit), and every GitHub webhook about that repository is
+   * cross-posted onto this repo's stream. If the GitHub repository does not
+   * exist and the installation can create org repositories, it is created
+   * private. Re-linking replaces the previous link.
+   */
+  linkGithub(input: {
+    connection: string;
+    owner: string;
+    repo: string;
+  }): Promise<LinkGithubResult> {
+    return linkRepoToGithub({
+      connection: input.connection,
+      owner: input.owner,
+      projectId: this.#requireProjectId(),
+      repo: input.repo,
+      repoPath: this.props.path,
+    });
+  }
+
+  /** Remove the GitHub link and its webhook cross-post rule. */
+  unlinkGithub(): Promise<{ unlinked: boolean }> {
+    return unlinkRepoFromGithub({
+      projectId: this.#requireProjectId(),
+      repoPath: this.props.path,
+    });
+  }
+
+  /**
+   * Push the default branch head to the linked GitHub repository now — the
+   * repair verb for a failed mirror push. Never forced by default; `force:
+   * true` makes this repo win over commits made directly on GitHub.
+   */
+  pushToGithub(input: { force?: boolean } = {}): Promise<{ branch: string; commitOid: string }> {
+    return this.#durableObjectStub.pushToGithub(input);
+  }
+
+  /**
+   * Adopt the linked GitHub repository's default-branch head into this repo.
+   * Fast-forward only: fails when this repo has commits GitHub does not,
+   * unless `force: true` discards them. The synced head is immediately live
+   * for worker builds.
+   */
+  syncFromGithub(input: { force?: boolean } = {}): Promise<GithubSyncResult> {
+    return this.#durableObjectStub.syncFromGithub(input);
+  }
+
+  // GitHub connections are project-scoped (their secrets and streams live in
+  // a project), so a global repo has nothing to link through.
+  #requireProjectId(): string {
+    if (this.props.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
+    return this.props.projectId;
   }
 
   /** The repo stream processor (snapshot/state). */
@@ -1117,17 +1186,24 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
   }
 }
 
-/** Path-addressed secret capability. Secret material has no public read API. */
+/** Path-addressed secret capability. Secret material has no public read API:
+ * material never leaves the Secret Durable Object except substituted into a
+ * request bound for one of the secret's pinned egress hosts. */
 class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
-  async __describe(): Promise<Description> {
+  /** Like every other node, the secret's self-report IS `__describe()`: the
+   * discovery Description merged with the secret's public SecretDescription
+   * (audit, egress, whether material is present, the refresh strategy). The
+   * raw value is never part of it. */
+  async __describe(): Promise<Description & SecretDescription> {
+    const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": describe() for metadata, update() to set, fetch() to use it in an egress request via placeholder substitution. The raw value is never returned.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
-        describe: "Metadata (exists, updatedAt) — never the value.",
         fetch: "Egress fetch with secret placeholders substituted server-side.",
-        update: "Set the value.",
+        update: "Set the value, egress URLs, and/or refresh strategy.",
       },
       parent: "itx.secrets.get(path)",
+      ...state,
     });
   }
 
@@ -1144,11 +1220,6 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
         path: normalizeSecretPath(this.props.path),
       }),
     );
-  }
-
-  /** Metadata (exists, egress allowlist, audit trail) — never the value. */
-  describe(): Promise<SecretDescription> {
-    return this.durableObjectStub.describe();
   }
 
   /** Egress fetch with this secret's placeholders substituted server-side. */

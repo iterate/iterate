@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import jsonata from "@mmkal/jsonata/sync";
 import { z } from "zod";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
@@ -25,6 +26,32 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+
+/**
+ * Backstop cap on a cross-post provenance chain. The structural cycle guard
+ * (never post into a stream already on the chain) is the real protection; the
+ * cap only bounds acyclic rule graphs nobody should build (a 5-hop relay is a
+ * design smell, not a use case).
+ */
+const MAX_CROSS_POST_HOPS = 5;
+
+// Compiled-condition cache: rules re-evaluate on every matching append, and a
+// stream's rule set is small and stable, so compile-once is the sensible
+// steady state. Bounded so a pathological churn of rule expressions cannot
+// grow the map without limit (clearing wholesale is fine — recompiling is
+// cheap, correctness never depends on the cache).
+const compiledConditions = new Map<string, jsonata.Expression>();
+const MAX_COMPILED_CONDITIONS = 200;
+
+/** Parse a JSONata cross-post condition, throwing on invalid expressions. */
+function compileCrossPostCondition(condition: string): jsonata.Expression {
+  const cached = compiledConditions.get(condition);
+  if (cached !== undefined) return cached;
+  const compiled = jsonata(condition);
+  if (compiledConditions.size >= MAX_COMPILED_CONDITIONS) compiledConditions.clear();
+  compiledConditions.set(condition, compiled);
+  return compiled;
+}
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -312,6 +339,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         args.event,
       );
       this.#validateStreamRuleTarget(event.payload);
+      // A rule condition is durable desired state the cross-post path evaluates
+      // on every future matching append, so an unparseable expression must be
+      // rejected here — before it commits — not discovered as a per-event
+      // error forever after.
+      if (event.payload.condition !== undefined) {
+        compileCrossPostCondition(event.payload.condition);
+      }
     }
 
     if (!args.state.paused) return;
@@ -497,6 +531,15 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       }
 
+      case "events.iterate.com/stream/rule-removed": {
+        const event = parse("events.iterate.com/stream/rule-removed", args.event);
+        const { [event.payload.ruleId]: _removed, ...rulesById } = next.rulesById;
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: { ...next, rulesById },
+        });
+      }
+
       case "events.iterate.com/stream/child-stream-created": {
         const event = parse("events.iterate.com/stream/child-stream-created", args.event);
         if (next.path === undefined) {
@@ -536,6 +579,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#reconcileConnections();
         return;
       case "events.iterate.com/stream/rule-configured":
+      case "events.iterate.com/stream/rule-removed":
         return;
       case "events.iterate.com/stream/created":
         this.#announceToAncestors(args);
@@ -616,46 +660,74 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Copy an event into every stream a matching cross-post rule targets. */
+  /**
+   * Copy an event into every stream a matching cross-post rule targets.
+   *
+   * Every hop appends itself to the event's `source.crossPostedFrom` chain, so
+   * a multi-hop route stays legible end to end. Loop protection is structural:
+   * a copy is never posted into a stream that is already on the chain (which
+   * includes this stream, the newest hop), and the chain length is capped as a
+   * backstop against pathological rule graphs.
+   */
   #crossPostMatchingRules(args: ReducedCoreEvent): void {
-    if (args.event.source?.crossPost !== undefined) return;
+    const chain = args.event.source?.crossPostedFrom ?? [];
+    if (chain.length >= MAX_CROSS_POST_HOPS) return;
 
-    const matchingRules = Object.values(args.state.rulesById).filter(({ latestConfiguredEvent }) =>
-      latestConfiguredEvent.payload.eventTypes.includes(args.event.type),
-    );
-    if (matchingRules.length === 0) return;
+    const candidateRules = Object.values(args.state.rulesById)
+      .map(({ latestConfiguredEvent }) => latestConfiguredEvent.payload)
+      .filter((rule) => rule.eventTypes.includes(args.event.type));
+    if (candidateRules.length === 0) return;
 
     const sourceProjectId = args.state.projectId ?? this.name.projectId;
     const sourcePath = args.state.path ?? this.name.path;
+    const { createdAt, offset, ...copy } = args.event;
 
     this.#runInBackground(async () => {
       await Promise.all(
-        matchingRules.map(({ latestConfiguredEvent }) => {
-          const rule = latestConfiguredEvent.payload;
-          const { createdAt, offset, ...copy } = args.event;
-          return this.#appendToStreamCoordinate(
-            {
-              path: rule.path,
-              projectId: rule.projectId === undefined ? this.name.projectId : rule.projectId,
-            },
-            {
-              ...copy,
-              source: {
-                ...copy.source,
-                crossPost: {
-                  ruleId: rule.ruleId,
-                  from: {
-                    createdAt,
-                    offset,
-                    path: sourcePath,
-                    projectId: sourceProjectId,
-                    type: args.event.type,
-                  },
-                },
-              },
-              idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
-            },
+        candidateRules.map(async (rule) => {
+          const target = {
+            path: rule.path,
+            projectId: rule.projectId === undefined ? this.name.projectId : rule.projectId,
+          };
+          const hop = {
+            ruleId: rule.ruleId,
+            createdAt,
+            offset,
+            path: sourcePath,
+            projectId: sourceProjectId,
+            type: args.event.type,
+          };
+          const crossPostedFrom = [...chain, hop];
+          const targetOnChain = crossPostedFrom.some(
+            (entry) => entry.projectId === target.projectId && entry.path === target.path,
           );
+          if (targetOnChain) return;
+
+          if (rule.condition !== undefined) {
+            let matched: unknown;
+            try {
+              matched = compileCrossPostCondition(rule.condition).evaluate(args.event);
+            } catch (error) {
+              // The raw event stays authoritative; the durable error record
+              // just makes the skipped rule observable. Idempotent per
+              // (rule, offset) so redeliveries cannot spam it.
+              this.append({
+                type: "events.iterate.com/stream/error-occurred",
+                idempotencyKey: `cross-post-condition-failed:${rule.ruleId}:${offset}`,
+                payload: {
+                  message: `cross-post rule "${rule.ruleId}" condition failed on offset ${offset}: ${String(error)}`,
+                },
+              });
+              return;
+            }
+            if (matched !== true) return;
+          }
+
+          await this.#appendToStreamCoordinate(target, {
+            ...copy,
+            source: { ...copy.source, crossPostedFrom },
+            idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
+          });
         }),
       );
     });

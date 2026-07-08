@@ -466,11 +466,11 @@ describe("itx", () => {
         async () => (await project.secrets.list()).some((item) => item.path === secretPath),
         { description: "secret stream to appear in project processor list" },
       );
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "secret processor to fold the update",
       });
 
-      const described = await secret.describe();
+      const described = await secret.__describe();
       expect(described).toMatchObject({
         audit: { usedCount: 0 },
         egress: { urls: [echo.url] },
@@ -496,7 +496,7 @@ describe("itx", () => {
       });
       expect(echoedEgressProofHeader(workerBody)).toBe(expected);
 
-      await waitForCondition(async () => (await secret.describe()).audit.usedCount === 2, {
+      await waitForCondition(async () => (await secret.__describe()).audit.usedCount === 2, {
         description: "secret usage audit to fold",
       });
       // Child-stream birth certificates propagate to the project root stream
@@ -604,7 +604,7 @@ describe("itx", () => {
         egress: { urls: [echo.url] },
         material: "intercept-secret-material",
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "intercept proof secret to be available",
       });
 
@@ -639,7 +639,7 @@ describe("itx", () => {
         url: echo.url,
       });
       expect(JSON.stringify(workerBody)).not.toContain("intercept-secret-material");
-      expect((await secret.describe()).audit.usedCount).toBe(0);
+      expect((await secret.__describe()).audit.usedCount).toBe(0);
 
       await intercept.release();
 
@@ -673,7 +673,7 @@ describe("itx", () => {
         egress: { urls: [api.url] },
         material: secretMaterial,
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "OpenAPI secret to be available",
         // Secret DO folds the update asynchronously; the 5s default flaked on
         // cold slots under full-suite CI load.
@@ -761,7 +761,7 @@ describe("itx", () => {
         egress: { urls: [mcp.url] },
         material: secretMaterial,
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "MCP secret to be available",
       });
 
@@ -842,7 +842,7 @@ describe("itx", () => {
         egress: { urls: [api.url, mcp.url] },
         material: secretMaterial,
       });
-      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: "expression built-in secret to be available",
       });
 

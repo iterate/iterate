@@ -104,6 +104,16 @@ const RuleConfiguredPayload = z.object({
   projectId: z.string().trim().min(1).nullable().optional(),
   path: z.string().trim().min(1),
   eventTypes: z.array(z.string().trim().min(1)).min(1),
+  /**
+   * Optional JSONata expression evaluated against the committed event
+   * (`{ type, payload, metadata, source, offset, createdAt }`). The event is
+   * cross-posted only when the expression evaluates to exactly `true` — e.g.
+   * `payload.body.repository.full_name = "acme/widgets"` narrows a GitHub
+   * connection stream's webhook firehose to one repository. Parse errors are
+   * rejected at configure time; an expression that throws or returns non-true
+   * at match time skips the event and records a stream error.
+   */
+  condition: z.string().trim().min(1).optional(),
 });
 
 const CircuitBreakerConfig = z.object({
@@ -333,6 +343,12 @@ export const CoreProcessorContract = defineProcessorContract({
       description: "Configures or replaces a local stream rule.",
       payloadSchema: RuleConfiguredPayload,
     },
+    "events.iterate.com/stream/rule-removed": {
+      description: "Removes a previously configured local stream rule.",
+      payloadSchema: z.object({
+        ruleId: z.string().trim().min(1),
+      }),
+    },
     "events.iterate.com/stream/subscriber-connected": {
       description:
         "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. Reconciling processors treat this as 'someone's runtime state was reset'; it is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
@@ -387,6 +403,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/stream/rule-configured",
+    "events.iterate.com/stream/rule-removed",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/stream/subscriber-disconnected",
     "events.iterate.com/stream/error-occurred",

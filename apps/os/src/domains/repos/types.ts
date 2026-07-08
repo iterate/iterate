@@ -53,3 +53,34 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   occurrenceCount: number;
   path: string;
 };
+
+/**
+ * The GitHub repository a repo is linked to: the named GitHub connection (an
+ * App installation) whose token authenticates mirror pushes, its installation
+ * id, and the owner/repo coordinates on GitHub.
+ */
+export type GithubRepoLink = {
+  connection: string;
+  installationId: string;
+  owner: string;
+  repo: string;
+};
+
+/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
+ * repository was created by this call, and the initial mirror push's outcome
+ * (a failed initial push does not fail the link — it is journaled on the repo
+ * stream and repaired by `pushToGithub()` or the next commit). */
+export type LinkGithubResult = GithubRepoLink & {
+  created: boolean;
+  initialPush: { ok: boolean; commitOid?: string; error?: string };
+};
+
+/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
+ * commit, and the head it replaced (null when the branch had no cached head). */
+export type GithubSyncResult = {
+  branch: string;
+  changed: boolean;
+  commitOid: string;
+  forced: boolean;
+  previousCommitOid: string | null;
+};

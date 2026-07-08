@@ -692,6 +692,31 @@ export interface Repo {
     content: string;
     path: string;
   } | null>;
+  /**
+   * Back this repo with a real GitHub repository through a named GitHub
+   * connection. From then on every default-branch commit is mirrored to
+   * GitHub best-effort (failures journal on the repo stream and self-heal on
+   * the next commit), and every GitHub webhook about that repository is
+   * cross-posted onto this repo's stream. If the GitHub repository does not
+   * exist and the installation can create org repositories, it is created
+   * private. Re-linking replaces the previous link.
+   */
+  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
+  /** Remove the GitHub link and its webhook cross-post rule. */
+  unlinkGithub(): Promise<{ unlinked: boolean }>;
+  /**
+   * Push the default branch head to the linked GitHub repository now — the
+   * repair verb for a failed mirror push. Never forced by default; `force:
+   * true` makes this repo win over commits made directly on GitHub.
+   */
+  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;
+  /**
+   * Adopt the linked GitHub repository's default-branch head into this repo.
+   * Fast-forward only: fails when this repo has commits GitHub does not,
+   * unless `force: true` discards them. The synced head is immediately live
+   * for worker builds.
+   */
+  syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: StreamProcessorRpc<RepoProcessorState>;
 }
@@ -841,11 +866,15 @@ export interface CloudflareIntegrations {
   videos: CfVideosCapability;
 }
 
-/** Path-addressed secret capability. Secret material has no public read API. */
+/** Path-addressed secret capability. Secret material has no public read API:
+ * material never leaves the Secret Durable Object except substituted into a
+ * request bound for one of the secret's pinned egress hosts. */
 export interface Secret {
-  __describe(): Promise<Description>;
-  /** Metadata (exists, egress allowlist, audit trail) — never the value. */
-  describe(): Promise<SecretDescription>;
+  /** Like every other node, the secret's self-report IS `__describe()`: the
+   * discovery Description merged with the secret's public SecretDescription
+   * (audit, egress, whether material is present, the refresh strategy). The
+   * raw value is never part of it. */
+  __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
   /** Set the secret material and/or its egress allowlist. */
@@ -1266,17 +1295,15 @@ export type StreamEvent = {
   source?:
     | {
         processor?: { slug: string; version: string } | undefined;
-        crossPost?:
+        crossPostedFrom?:
           | {
               ruleId: string;
-              from: {
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              };
-            }
+              createdAt: string;
+              offset: number;
+              path: string;
+              projectId: string | null;
+              type: string;
+            }[]
           | undefined;
       }
     | undefined;
@@ -1487,6 +1514,25 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   path: string;
 };
 
+/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
+ * repository was created by this call, and the initial mirror push's outcome
+ * (a failed initial push does not fail the link — it is journaled on the repo
+ * stream and repaired by `pushToGithub()` or the next commit). */
+export type LinkGithubResult = GithubRepoLink & {
+  created: boolean;
+  initialPush: { ok: boolean; commitOid?: string; error?: string };
+};
+
+/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
+ * commit, and the head it replaced (null when the branch had no cached head). */
+export type GithubSyncResult = {
+  branch: string;
+  changed: boolean;
+  commitOid: string;
+  forced: boolean;
+  previousCommitOid: string | null;
+};
+
 /**
  * The repo processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape.
@@ -1495,7 +1541,15 @@ export type RepoProcessorState = {
   artifactName: string | null;
   created: boolean;
   defaultBranch: string | null;
+  github: { connection: string; installationId: string; owner: string; repo: string } | null;
   initialized: boolean;
+  lastGithubPush: {
+    at: string;
+    branch: string;
+    commitOid: string | null;
+    error: string | null;
+    ok: boolean;
+  } | null;
   remote: string | null;
 };
 
@@ -1528,17 +1582,15 @@ export type StreamEventInput = {
   source?:
     | {
         processor?: { slug: string; version: string } | undefined;
-        crossPost?:
+        crossPostedFrom?:
           | {
               ruleId: string;
-              from: {
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              };
-            }
+              createdAt: string;
+              offset: number;
+              path: string;
+              projectId: string | null;
+              type: string;
+            }[]
           | undefined;
       }
     | undefined;
@@ -1702,6 +1754,18 @@ export type RepoFileChange =
       path: string;
       delete: true;
     };
+
+/**
+ * The GitHub repository a repo is linked to: the named GitHub connection (an
+ * App installation) whose token authenticates mirror pushes, its installation
+ * id, and the owner/repo coordinates on GitHub.
+ */
+export type GithubRepoLink = {
+  connection: string;
+  installationId: string;
+  owner: string;
+  repo: string;
+};
 
 /**
  * Stateless workers are WorkerEntrypoint exports loaded directly from source.

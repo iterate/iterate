@@ -45,6 +45,7 @@
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@journeyapps/wa-sqlite": "^1.7.0",
+    "@mmkal/jsonata": "^2.2.1",
     "@modelcontextprotocol/client": "2.0.0-beta.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@octokit/rest": "^22.0.0",

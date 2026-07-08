@@ -129,7 +129,7 @@ describe("provided integrations", () => {
       for (const [connection, material] of Object.entries(secrets)) {
         using secret = project.secrets.get(`/secrets/integrations/waitrose/${connection}/session`);
         await secret.update({ egress: { urls: [echo.url] }, material });
-        await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+        await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
           description: `waitrose/${connection} secret to fold`,
         });
       }
@@ -185,9 +185,9 @@ describe("provided integrations", () => {
       // (sentAuthorization above), describe() leaks nothing, uses land on the
       // audit trail.
       using familySecret = project.secrets.get("/secrets/integrations/waitrose/family/session");
-      const described = await familySecret.describe();
+      const described = await familySecret.__describe();
       expect(JSON.stringify(described)).not.toContain(secrets.family);
-      await waitForCondition(async () => (await familySecret.describe()).audit.usedCount >= 1, {
+      await waitForCondition(async () => (await familySecret.__describe()).audit.usedCount >= 1, {
         description: "waitrose/family usage audit to fold",
       });
 
@@ -252,7 +252,7 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("waitrose-session strategy", () =
         graphqlUrl: `${petshop}/graphql`,
       },
     });
-    await waitForCondition(async () => (await secret.describe()).refresh === "waitrose-session", {
+    await waitForCondition(async () => (await secret.__describe()).refresh === "waitrose-session", {
       description: "waitrose/mum refresh strategy to fold",
     });
 
@@ -285,10 +285,10 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("waitrose-session strategy", () =
 
     // Confinement: describe() leaks neither the password nor a session token
     // (hasMaterial is the only material-shaped fact), and uses are audited.
-    const described = await secret.describe();
+    const described = await secret.__describe();
     expect(JSON.stringify(described)).not.toContain("correct-horse");
     expect(described.hasMaterial).toBe(true);
-    await waitForCondition(async () => (await secret.describe()).audit.usedCount >= 2, {
+    await waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 2, {
       description: "waitrose/mum usage audit to fold",
     });
   });
