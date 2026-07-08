@@ -217,3 +217,15 @@ simple. It must be visually honest that it's in-progress.
   pinned to the bottom. Upload used gif export's drag/drop-to-coordinate
   onto the PR-body textarea (file_upload rejects host paths); the drop
   inserts at the pointer so the body was then rewritten cleanly via gh.
+- Demo re-record for the show-code-only-when-needed follow-up: verified
+  end-to-end against local dev (minted session, fresh project, real agent
+  turns) — the bubble streams ALONE while the literal is open, then the
+  amber block appears below it reading `itx.chat.sendMessage(...)` once the
+  next statement's word characters stream in, then the settled rows take
+  over. Captured 20+ frame recordings twice, but the upload leg failed 3×
+  (extension disconnect mid-batch; `download: true` exports report success
+  but no file ever lands on disk; export drag/drop-to-coordinate onto the
+  PR-body textarea failed twice with "Failed to upload GIF to page" —
+  also note the standalone gif_creator tool schema strips `coordinate`, it
+  only goes through via browser_batch). Left the original GIF in the PR
+  body with an explicit note that it predates this change.
