@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 branch: repos-mini-ide
 ---
@@ -8,7 +8,7 @@ branch: repos-mini-ide
 
 ## Status summary
 
-Implementation complete and verified live against local dev (edit → dirty annotation → diff → commit landed at HEAD; images, context menu, events sheet all exercised via playwright). Tree pinned to light theme per Misha's feedback. Remaining: review feedback, and a noted pre-existing gap around the project repo at path `/` not being addressable by the detail route.
+Done and merged-ready: full mini IDE with pierre tree, editable CodeMirror (all requested languages), inline diff with block-level staging, git-shaped working/staged model persisted to localStorage per HEAD oid, Index/Working-Tree pseudo-file views, image/PDF renderers with Replace, context-menu file ops, events feed in a sheet, and a backend base64 lane for binaries. Every feedback round verified live via playwright. Follow-ups live in the Spinoffs section plus the noted pre-existing `/` repo routing gap.
 
 ## Ask (verbatim-ish, from Misha)
 
