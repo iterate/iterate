@@ -15,6 +15,7 @@ const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
   diff: z.boolean().optional().catch(undefined),
   scm: z.boolean().optional().catch(undefined),
+  staged: z.boolean().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({

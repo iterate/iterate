@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { getOriginalDoc, unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
-import { PlusIcon, Undo2Icon } from "lucide-react";
+import { MinusIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -31,6 +31,8 @@ export function RepoEditorPane({
   onSetWorking,
   onSetStaged,
   onStageFile,
+  onUnstageFile,
+  stagedView,
   onRestore,
 }: {
   projectId: string;
@@ -44,6 +46,10 @@ export function RepoEditorPane({
   onSetWorking: (entry: FileEntry | undefined) => void;
   onSetStaged: (entry: FileEntry | undefined) => void;
   onStageFile: () => void;
+  onUnstageFile: () => void;
+  /** Opened from Staged Changes: a READONLY diff of HEAD vs the staged
+   * snapshot — the non-diff (editable) version is deliberately unreachable. */
+  stagedView: boolean;
   onRestore: () => void;
 }) {
   const kind = repoFileKind(path);
@@ -106,6 +112,22 @@ export function RepoEditorPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks are stable store methods; content inputs drive recreation
   }, [kind.kind, textBaseline, headContent, diffOpen]);
 
+  // The readonly staged view diffs HEAD against the staged snapshot with no
+  // chunk controls — inspection only.
+  const stagedDiffExtensions = useMemo(
+    () =>
+      stagedView && staged?.type === "write"
+        ? [
+            unifiedMergeView({
+              original: headContent ?? "",
+              allowInlineDiffs: true,
+              mergeControls: false,
+            }),
+          ]
+        : [],
+    [stagedView, staged, headContent],
+  );
+
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
     if (!file) return;
@@ -164,6 +186,45 @@ export function RepoEditorPane({
 
   const status =
     entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
+
+  if (stagedView && staged?.type === "write" && kind.kind === "text") {
+    return (
+      <FileChrome
+        path={path}
+        status={status}
+        actions={
+          <>
+            <Button variant="secondary" size="sm" className="text-xs" disabled>
+              Diff
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs"
+              title="Unstage changes"
+              onClick={onUnstageFile}
+            >
+              <MinusIcon className="size-3.5" />
+              Unstage
+            </Button>
+          </>
+        }
+      >
+        <SourceCodeBlock
+          key={`${path}:staged`}
+          className="min-h-0 flex-1"
+          plainChrome
+          showLineNumbers
+          editable={false}
+          wrapLongLines={false}
+          code={staged.content}
+          language={kind.language}
+          codeMirrorExtensions={stagedDiffExtensions}
+          onChange={() => {}}
+        />
+      </FileChrome>
+    );
+  }
 
   if (kind.kind === "text" && working?.type !== "write-base64" && staged?.type !== "write-base64") {
     const value = working?.type === "write" ? working.content : (textBaseline ?? "");

@@ -48,10 +48,10 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   const changes = useWorkingTree(store);
   const headPaths = files.paths;
   const headPathSet = new Set(headPaths);
-  const { file: selectedPath, diff, scm, patchSearch } = useRepoIdeSearch();
+  const { file: selectedPath, diff, scm, stagedView, patchSearch } = useRepoIdeSearch();
 
   const selectFile = useCallback(
-    (path: string | undefined) => patchSearch({ file: path, diff: undefined }),
+    (path: string | undefined) => patchSearch({ file: path, diff: undefined, staged: undefined }),
     [patchSearch],
   );
 
@@ -217,8 +217,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
               onDiscard={(path) => store.discardWorking(path)}
               onDiscardAll={() => store.discardAll()}
               onOpen={(path, status) =>
-                patchSearch({ file: path, diff: status === "modified" ? true : undefined })
+                patchSearch({
+                  file: path,
+                  diff: status === "modified" ? true : undefined,
+                  staged: undefined,
+                })
               }
+              onOpenStaged={(path) => patchSearch({ file: path, diff: undefined, staged: true })}
             />
           ) : (
             <RepoFileTree
@@ -261,6 +266,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
                 onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
                 onStageFile={() => store.stage(selectedPath)}
+                onUnstageFile={() => {
+                  store.unstage(selectedPath);
+                  patchSearch({ staged: undefined });
+                }}
+                stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
                 onRestore={() => dropChange(selectedPath)}
               />
             </Suspense>
@@ -285,6 +295,7 @@ function GitPanel({
   onDiscard,
   onDiscardAll,
   onOpen,
+  onOpenStaged,
 }: {
   changes: WorkingTreeChanges;
   headPathSet: ReadonlySet<string>;
@@ -295,6 +306,7 @@ function GitPanel({
   onDiscard: (path: string) => void;
   onDiscardAll: () => void;
   onOpen: (path: string, status: "added" | "deleted" | "modified") => void;
+  onOpenStaged: (path: string) => void;
 }) {
   const rowStatus = (path: string, entry: FileEntry) =>
     entry.type === "delete"
@@ -307,7 +319,12 @@ function GitPanel({
   const working = [...changes].filter(([, change]) => change.working !== undefined);
   const plan = commitPlan(changes);
 
-  const row = (path: string, entry: FileEntry, buttons: React.ReactNode): React.ReactNode => {
+  const row = (
+    path: string,
+    entry: FileEntry,
+    buttons: React.ReactNode,
+    onClick?: () => void,
+  ): React.ReactNode => {
     const status = rowStatus(path, entry);
     return (
       <div
@@ -318,11 +335,11 @@ function GitPanel({
           type="button"
           className="min-w-0 flex-1 truncate text-left font-mono text-xs"
           title={path}
-          onClick={() => onOpen(path, status)}
+          onClick={onClick ?? (() => onOpen(path, status))}
         >
           {path}
         </button>
-        <span className="hidden items-center gap-0.5 group-hover:flex">{buttons}</span>
+        <span className="invisible flex items-center gap-0.5 group-hover:visible">{buttons}</span>
         <span
           className={
             status === "deleted"
@@ -344,7 +361,9 @@ function GitPanel({
       size="icon-sm"
       title={title}
       onClick={onClick}
-      className="text-muted-foreground"
+      // size-5, not icon-sm's size-7: the buttons must fit inside the row's
+      // natural height or hovering makes every row jump taller.
+      className="size-5 text-muted-foreground"
     >
       {icon}
     </Button>
@@ -405,6 +424,7 @@ function GitPanel({
                     () => onUnstage(path),
                     <MinusIcon className="size-3" />,
                   ),
+                  () => onOpenStaged(path),
                 ),
               )}
             </div>
@@ -457,13 +477,19 @@ function GitPanel({
  * route validates these (RepoDetailSearch), so loose reads here are safe.
  */
 function useRepoIdeSearch() {
-  const search = useSearch({ strict: false }) as { file?: string; diff?: boolean; scm?: boolean };
+  const search = useSearch({ strict: false }) as {
+    file?: string;
+    diff?: boolean;
+    scm?: boolean;
+    staged?: boolean;
+  };
   const navigate = useNavigate();
   const patchSearch = useCallback(
     (patch: {
       file?: string | undefined;
       diff?: boolean | undefined;
       scm?: boolean | undefined;
+      staged?: boolean | undefined;
     }) => {
       void navigate({
         search: ((previous: Record<string, unknown>) => ({
@@ -475,5 +501,11 @@ function useRepoIdeSearch() {
     },
     [navigate],
   );
-  return { file: search.file, diff: search.diff === true, scm: search.scm === true, patchSearch };
+  return {
+    file: search.file,
+    diff: search.diff === true,
+    scm: search.scm === true,
+    stagedView: search.staged === true,
+    patchSearch,
+  };
 }
