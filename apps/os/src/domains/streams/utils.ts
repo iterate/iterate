@@ -1,8 +1,5 @@
 import { DurableObjectNameCodec, type DurableObjectAddress } from "../durable-object-names.ts";
-import {
-  CoreProcessorContract,
-  type ConfiguredStreamSubscriber,
-} from "./core-processor-contract.ts";
+import { CoreProcessorContract, type WakeDeliveryTarget } from "./core-processor-contract.ts";
 import { buildEvent } from "./processor-contracts.ts";
 
 /**
@@ -62,7 +59,7 @@ export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
   durableObjectName: string;
   idempotencyKey?: string;
   processorSlug: string;
-  subscriberType: Exclude<ConfiguredStreamSubscriber["type"], "worker">;
+  subscriberType: WakeDeliveryTarget["type"];
   subscriptionKey?: string;
 }) {
   const address = DurableObjectNameCodec.parse(input.durableObjectName, {
@@ -77,9 +74,12 @@ export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
       payload: {
         subscriptionKey:
           input.subscriptionKey ?? `${input.durableObjectName}#${input.processorSlug}`,
-        subscriber: {
-          address,
-          type: input.subscriberType,
+        delivery: {
+          mode: "wake",
+          // processorSlug rides the target explicitly; the wake request
+          // carries it so multi-processor hosts resolve without parsing
+          // anything out of the (opaque) subscription key.
+          target: { address, type: input.subscriberType, processorSlug: input.processorSlug },
         },
       },
     },

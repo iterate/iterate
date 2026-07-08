@@ -1,10 +1,10 @@
-import type { ItxExpression } from "./types.ts";
+import { evaluateItxExpression, type EvaluatedItxExpression } from "../../itx/expression.ts";
 import { invokeFlattenedPath } from "./live-capability.ts";
 
-type EvaluatedExpression = {
-  receiver: unknown;
-  value: unknown;
-};
+// The evaluator itself lives at the itx leaf (src/itx/expression.ts) so stream
+// push subscriptions share it; this module keeps the capability-host-specific
+// halves: normalizing an evaluated expression into a provider and invoking it.
+export { evaluateItxExpression };
 
 type NormalizedCapabilityProvider = {
   capability: unknown;
@@ -12,39 +12,8 @@ type NormalizedCapabilityProvider = {
   receiver: unknown;
 };
 
-export async function evaluateItxExpression(
-  root: unknown,
-  expression: ItxExpression,
-): Promise<EvaluatedExpression> {
-  assertItxExpression(expression);
-
-  let value = root;
-  let receiver: unknown;
-  for (const step of expression) {
-    if (typeof step === "string") {
-      const target = await value;
-      assertObjectLike(target, step);
-      receiver = target;
-      value = Reflect.get(target, step);
-      continue;
-    }
-
-    const [method, ...args] = step;
-    const target = await value;
-    assertObjectLike(target, method);
-    const handler = Reflect.get(target, method);
-    if (typeof handler !== "function") {
-      throw new Error(`ITX expression method "${method}" did not resolve to a function`);
-    }
-    receiver = undefined;
-    value = Reflect.apply(handler, target, args);
-  }
-
-  return { receiver, value: await value };
-}
-
 export async function normalizeCapabilityProvider(
-  evaluated: EvaluatedExpression,
+  evaluated: EvaluatedItxExpression,
   overrides: {
     flattenNestedPaths?: boolean;
   } = {},
@@ -106,18 +75,6 @@ async function replayProviderPath({
     throw new Error(`capability path "${path.join(".")}" did not resolve to a function`);
   }
   return await Reflect.apply(handler, current, args);
-}
-
-function assertItxExpression(expression: ItxExpression): void {
-  if (!Array.isArray(expression) || expression.length === 0) {
-    throw new Error("ITX expression must contain at least one step");
-  }
-
-  for (const step of expression) {
-    if (typeof step === "string") continue;
-    if (Array.isArray(step) && typeof step[0] === "string") continue;
-    throw new Error(`invalid ITX expression step ${JSON.stringify(step)}`);
-  }
 }
 
 function assertObjectLike(value: unknown, segment: string): asserts value is object | Function {

@@ -310,14 +310,16 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains).`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
+        crossPostTo: "Copy matching events onto another stream (optionally JSONata-transformed).",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
         readEvents: "Create a pager for bounded event pages.",
-        subscribe: "Live event delivery; returns an unsubscribe handle.",
+        removeCrossPost: "Remove a cross-post configured by crossPostTo.",
+        subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
       parent: "streams.get(path)",
@@ -402,44 +404,129 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
-      workerDelivery: {
-        checkpoint: number;
-        consecutiveFailures: number;
-        retryScheduled: boolean;
-      } | null;
+      subscriptions: Record<
+        string,
+        {
+          mode: "wake" | "push";
+          ackedOffset: number;
+          lag: number;
+          attempt: number;
+          nextAttemptAt: number | null;
+          lastError: string | null;
+          parkedAtOffset: number | null;
+          connected: boolean;
+        }
+      >;
     };
   }> {
     return this.durableObjectStub.runtimeState();
   }
 
   /**
-   * Live event delivery: `processEventBatch` is called for every committed
-   * batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Set `configured: true` only from trusted-internal
-   * auth — it opens the durable configured subscription registered under
-   * `subscriptionKey` (the wake-handshake response) instead of an ephemeral one.
+   * Live EPHEMERAL event delivery: `processEventBatch` is called for every
+   * committed batch (optionally replayed from `replayAfterOffset`); returns an
+   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
+   * delivery is configured as data instead, by appending a
+   * `subscription-configured` event (wake or push mode) to the stream.
    */
   subscribe(args: {
     subscriptionKey?: string;
-    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
+    selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle> {
-    // `configured: true` opens the durable configured subscription for the
-    // given key (the wake-handshake response) — only the platform's own
-    // Durable Objects may do that; everyone else gets ephemeral subscriptions.
-    if (args.configured === true && this.props.auth.principal !== "trusted-internal") {
-      throw new Error("configured subscriptions require trusted internal auth");
-    }
     return this.durableObjectStub.subscribe(args);
+  }
+
+  /**
+   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
+   * appends the batch's events into THIS stream with provenance stamping,
+   * structural loop protection, and source-derived idempotency keys. A source
+   * stream cross-posts here by configuring
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
+   */
+  ingest(batch: {
+    projectId: string | null;
+    path: string;
+    events: StreamEvent[];
+    streamMaxOffset: number;
+    state: unknown;
+    subscriptionKey: string;
+    deliveryId: string;
+    attempt: number;
+    configuredEvent: StreamEvent;
+  }): Promise<void> {
+    // Only the platform's own delivery spine dials ingest: it arrives through
+    // a push expression evaluated against the project's trusted itx root. A
+    // session principal appending copies would bypass provenance stamping.
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("ingest is dialed by stream push subscriptions, not sessions");
+    }
+    return Promise.resolve(this.durableObjectStub.ingest(batch));
+  }
+
+  /**
+   * "When events matching this land HERE, post them onto stream `path`" — the
+   * cross-post verb. Pure sugar over appending a `subscription-configured`
+   * push subscription targeting the destination's `ingest` sink; the appended
+   * event (returned) is the real interface and shows in the log like any
+   * other config. Same-`key` calls replace the previous cross-post; remove
+   * with `removeCrossPost`. Copies carry the full provenance chain
+   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
+   * is an optional JSONata expression CONSTRUCTING the copied event's body
+   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":
+   * payload.body.repository.full_name } }`); omitted fields copy verbatim.
+   */
+  async crossPostTo(args: {
+    /** Destination stream path (this project). */
+    path: string;
+    /** Subscription identity; defaults to `cross-post:<destination path>`. */
+    key?: string;
+    eventTypes?: string[];
+    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
+    condition?: string;
+    /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
+    transform?: string;
+    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
+    deliver?: "all" | "new" | { afterOffset: number };
+  }): Promise<StreamEvent> {
+    const destination = normalizePath(args.path);
+    const selector = {
+      ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
+      ...(args.condition === undefined ? {} : { condition: args.condition }),
+    };
+    const [event] = await this.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        subscriptionKey: args.key ?? `cross-post:${destination}`,
+        delivery: { mode: "push", expression: ["streams", ["get", destination], "ingest"] },
+        ...(Object.keys(selector).length === 0 ? {} : { selector }),
+        ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
+        ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
+      },
+    });
+    return event!;
+  }
+
+  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
+  async removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent> {
+    const key =
+      args.key ?? (args.path === undefined ? undefined : `cross-post:${normalizePath(args.path)}`);
+    if (key === undefined) throw new Error("removeCrossPost needs a path or key");
+    const [event] = await this.append({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { subscriptionKey: key },
+    });
+    return event!;
   }
 }
 

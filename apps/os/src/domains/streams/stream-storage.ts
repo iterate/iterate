@@ -1,4 +1,4 @@
-// The stream's append log in Durable Object SQLite.
+// The stream's append log — and its delivery cursors — in Durable Object SQLite.
 //
 // Storage is normalized into two tables: `events` is the offset-ordered
 // metadata/index, and `event_chunks` holds the full event JSON as bounded
@@ -6,6 +6,15 @@
 // ~2 MB; BLOB columns do not raise that ceiling, and SQL-side substr(?)
 // chunking would still require binding the oversized value first, so event
 // JSON is chunked in JS.
+//
+// A third table, `subscriptions`, holds the delivery spine's cursor rows (see
+// stream-subscribers.ts). They live in the same SQLite as the log on purpose:
+// a cursor advance and the events it acknowledges commit under the same
+// output gate, so the cursor can never disagree with the log it points into.
+// Cursor rows are STORAGE, not facts — per-batch acks must not double the
+// journal — while park/resume transitions are facts appended to the log
+// (streams README: "acked offsets are storage, not facts; park and resume are
+// facts, not storage").
 //
 // Every method here is synchronous and must stay that way: the Stream
 // Durable Object's append commit point assigns offsets, reduces state, and
@@ -155,6 +164,162 @@ export class StreamEventLog {
     const parsed = JSON.parse(decodeChunks(chunks)) as unknown;
     return StreamEventSchema.parse(addLegacyEventPath(parsed, this.path));
   }
+}
+
+/**
+ * One durable subscription's delivery cursor row. `ackedOffset` is exclusive
+ * (delivery resumes at +1). For push subscriptions it is the AUTHORITATIVE
+ * cursor: it only advances when the receiver's awaited call resolved. For wake
+ * subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
+ * subscriber reported on the last successful poke, used only for poke
+ * coalescing and lag display — the subscriber's own `{offset, state}` snapshot
+ * is the truth, and a lost or stale row costs one redundant poke, nothing
+ * more.
+ */
+export type SubscriptionCursorRow = {
+  subscriptionKey: string;
+  ackedOffset: number;
+  /** Consecutive delivery/poke failures since the last success. */
+  attempt: number;
+  /** Epoch ms before which the spine must not retry; null when not backing off. */
+  nextAttemptAt: number | null;
+  lastError: string | null;
+};
+
+/**
+ * The delivery spine's durable rows, behind an interface so the spine's logic
+ * is unit-testable with an in-memory twin (stream-subscribers.test.ts). All
+ * methods synchronous — same rule as the event log above.
+ */
+export type SubscriptionCursorStore = {
+  get(subscriptionKey: string): SubscriptionCursorRow | undefined;
+  list(): SubscriptionCursorRow[];
+  /** Create the row if absent (configure); never resets an existing cursor. */
+  ensure(subscriptionKey: string, ackedOffset: number): void;
+  /** Successful delivery: advance the cursor (monotonic), clear failure state. */
+  ack(subscriptionKey: string, ackedOffset: number): void;
+  /** Failed delivery: record the consecutive attempt count and when to retry. */
+  nack(
+    subscriptionKey: string,
+    args: { attempt: number; nextAttemptAt: number; error: string },
+  ): void;
+  /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state. */
+  setCursor(subscriptionKey: string, ackedOffset: number): void;
+  delete(subscriptionKey: string): void;
+  /** Earliest pending retry across all rows, for arming the DO alarm. */
+  minNextAttemptAt(): number | null;
+};
+
+/** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
+export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
+  constructor(readonly sql: SqlStorage) {
+    this.sql.exec(`
+      -- Delivery cursors for durable subscriptions (the spine's rows). One row
+      -- per subscriptionKey; created on subscription-configured, dropped on
+      -- subscription-removed. See stream-subscribers.ts for the state machine.
+      create table if not exists subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        updated_at text not null
+      )
+    `);
+  }
+
+  get(subscriptionKey: string): SubscriptionCursorRow | undefined {
+    return this.sql
+      .exec<SubscriptionCursorRowRecord>(
+        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error from subscriptions where subscription_key = ?",
+        subscriptionKey,
+      )
+      .toArray()
+      .map(rowFromRecord)[0];
+  }
+
+  list(): SubscriptionCursorRow[] {
+    return this.sql
+      .exec<SubscriptionCursorRowRecord>(
+        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error from subscriptions",
+      )
+      .toArray()
+      .map(rowFromRecord);
+  }
+
+  ensure(subscriptionKey: string, ackedOffset: number): void {
+    this.sql.exec(
+      "insert into subscriptions (subscription_key, acked_offset, updated_at) values (?, ?, ?) on conflict (subscription_key) do nothing",
+      subscriptionKey,
+      ackedOffset,
+      new Date().toISOString(),
+    );
+  }
+
+  ack(subscriptionKey: string, ackedOffset: number): void {
+    this.sql.exec(
+      "update subscriptions set acked_offset = max(acked_offset, ?), attempt = 0, next_attempt_at = null, last_error = null, updated_at = ? where subscription_key = ?",
+      ackedOffset,
+      new Date().toISOString(),
+      subscriptionKey,
+    );
+  }
+
+  nack(
+    subscriptionKey: string,
+    args: { attempt: number; nextAttemptAt: number; error: string },
+  ): void {
+    this.sql.exec(
+      "update subscriptions set attempt = ?, next_attempt_at = ?, last_error = ?, updated_at = ? where subscription_key = ?",
+      args.attempt,
+      args.nextAttemptAt,
+      // Bound the stored error so a pathological message cannot bloat the row.
+      args.error.slice(0, 2_000),
+      new Date().toISOString(),
+      subscriptionKey,
+    );
+  }
+
+  setCursor(subscriptionKey: string, ackedOffset: number): void {
+    this.sql.exec(
+      "update subscriptions set acked_offset = ?, attempt = 0, next_attempt_at = null, last_error = null, updated_at = ? where subscription_key = ?",
+      ackedOffset,
+      new Date().toISOString(),
+      subscriptionKey,
+    );
+  }
+
+  delete(subscriptionKey: string): void {
+    this.sql.exec("delete from subscriptions where subscription_key = ?", subscriptionKey);
+  }
+
+  minNextAttemptAt(): number | null {
+    return (
+      this.sql
+        .exec<{ next: number | null }>(
+          "select min(next_attempt_at) as next from subscriptions where next_attempt_at is not null",
+        )
+        .toArray()[0]?.next ?? null
+    );
+  }
+}
+
+type SubscriptionCursorRowRecord = {
+  subscription_key: string;
+  acked_offset: number;
+  attempt: number;
+  next_attempt_at: number | null;
+  last_error: string | null;
+};
+
+function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
+  return {
+    subscriptionKey: record.subscription_key,
+    ackedOffset: record.acked_offset,
+    attempt: record.attempt,
+    nextAttemptAt: record.next_attempt_at,
+    lastError: record.last_error,
+  };
 }
 
 function addLegacyEventPath(value: unknown, path: string): unknown {

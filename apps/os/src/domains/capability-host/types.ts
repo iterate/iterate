@@ -5,9 +5,14 @@
  * to their zod schemas in capability-host-processor-contract.ts.
  */
 
-/** Durable expression over the project ITX surface. */
-export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-export type ItxExpression = ItxExpressionStep[];
+/**
+ * Durable expression over the project ITX surface. Defined at the itx leaf
+ * (`src/itx/expression.ts`) because stream push subscriptions persist the same
+ * shape; re-exported here so capability-host modules keep one import root.
+ */
+import type { ItxExpression } from "../../itx/expression.ts";
+
+export type { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {

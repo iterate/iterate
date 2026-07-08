@@ -80,6 +80,67 @@ export type StreamEventBatch = {
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
+/**
+ * The batch a PUSH subscription's receiver is invoked with: the ordinary
+ * {@link StreamEventBatch} envelope every other subscriber gets ("stream
+ * processor" is one shape), plus the fields an at-least-once stateless
+ * receiver needs to dedupe and self-configure.
+ */
+export type StreamPushEventBatch = StreamEventBatch & {
+  subscriptionKey: SubscriptionKey;
+  /**
+   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * so receivers can dedupe redeliveries even without per-event bookkeeping.
+   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
+   */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this batch. */
+  attempt: number;
+  /**
+   * The exact committed `subscription-configured` event this delivery serves —
+   * so a receiver can configure itself from committed stream state without a
+   * side-channel registry (which stream, which selector, whose params).
+   */
+  configuredEvent: StreamEvent;
+};
+
+/**
+ * What the stream sends when poking a durable wake-mode subscriber
+ * (`wakeStreamSubscriber`): serializable coordinates only.
+ */
+export type StreamSubscriberWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: SubscriptionKey;
+  /** Which hosted processor the poke is for (multi-processor hosts resolve on it). */
+  processorSlug?: string;
+};
+
+/**
+ * What the poked subscriber hands back — the entire handshake in one return
+ * value. The stream retains `sink` (ownership of a returned stub transfers to
+ * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
+ * there is no subscribe-back call and therefore no handshake race to fence.
+ */
+export type StreamSubscriberWakeResponse = {
+  /** The processor's durable checkpoint offset — replay resumes after it. */
+  checkpointOffset: number;
+  /** The live delivery callback the stream retains and invokes per batch. */
+  sink: ProcessEventBatch;
+  /**
+   * Serializable subscriber identity (validated against
+   * `StreamSubscriberDescriptor` by the stream) appended as the
+   * subscriber-connected presence fact; carries the processor's contract
+   * announcement for the stream's `processorsBySlug` registry.
+   */
+  subscriber?: unknown;
+  /** Live runtime-state capability, retained for the connection lifetime. */
+  getRuntimeState?: GetProcessorRuntimeState;
+};
+
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
 export type ProcessorRuntimeState<State = unknown> = {
   snapshot: { offset: number; state: State };

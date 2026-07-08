@@ -858,34 +858,88 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
-      workerDelivery: {
-        checkpoint: number;
-        consecutiveFailures: number;
-        retryScheduled: boolean;
-      } | null;
+      subscriptions: Record<
+        string,
+        {
+          mode: "wake" | "push";
+          ackedOffset: number;
+          lag: number;
+          attempt: number;
+          nextAttemptAt: number | null;
+          lastError: string | null;
+          parkedAtOffset: number | null;
+          connected: boolean;
+        }
+      >;
     };
   }>;
   /**
-   * Live event delivery: `processEventBatch` is called for every committed
-   * batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Set `configured: true` only from trusted-internal
-   * auth — it opens the durable configured subscription registered under
-   * `subscriptionKey` (the wake-handshake response) instead of an ephemeral one.
+   * Live EPHEMERAL event delivery: `processEventBatch` is called for every
+   * committed batch (optionally replayed from `replayAfterOffset`); returns an
+   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
+   * delivery is configured as data instead, by appending a
+   * `subscription-configured` event (wake or push mode) to the stream.
    */
   subscribe(args: {
     subscriptionKey?: string;
-    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
+    selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle>;
+  /**
+   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
+   * appends the batch's events into THIS stream with provenance stamping,
+   * structural loop protection, and source-derived idempotency keys. A source
+   * stream cross-posts here by configuring
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
+   */
+  ingest(batch: {
+    projectId: string | null;
+    path: string;
+    events: StreamEvent[];
+    streamMaxOffset: number;
+    state: unknown;
+    subscriptionKey: string;
+    deliveryId: string;
+    attempt: number;
+    configuredEvent: StreamEvent;
+  }): Promise<void>;
+  /**
+   * "When events matching this land HERE, post them onto stream `path`" — the
+   * cross-post verb. Pure sugar over appending a `subscription-configured`
+   * push subscription targeting the destination's `ingest` sink; the appended
+   * event (returned) is the real interface and shows in the log like any
+   * other config. Same-`key` calls replace the previous cross-post; remove
+   * with `removeCrossPost`. Copies carry the full provenance chain
+   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
+   * is an optional JSONata expression CONSTRUCTING the copied event's body
+   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":
+   * payload.body.repository.full_name } }`); omitted fields copy verbatim.
+   */
+  crossPostTo(args: {
+    /** Destination stream path (this project). */
+    path: string;
+    /** Subscription identity; defaults to `cross-post:<destination path>`. */
+    key?: string;
+    eventTypes?: string[];
+    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
+    condition?: string;
+    /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
+    transform?: string;
+    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
+    deliver?: "all" | "new" | { afterOffset: number };
+  }): Promise<StreamEvent>;
+  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
+  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
 }
 
 /**
@@ -1373,7 +1427,7 @@ export type StreamEvent = {
         processor?: { slug: string; version: string } | undefined;
         crossPostedFrom?:
           | {
-              ruleId: string;
+              subscriptionKey: string;
               createdAt: string;
               offset: number;
               path: string;
@@ -1410,6 +1464,7 @@ export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
 };
 
+/** A persisted capability name: the steps from an itx root to a value. */
 export type ItxExpression = ItxExpressionStep[];
 
 export type StreamListItem = { createdAt: string; path: string };
@@ -1725,7 +1780,7 @@ export type StreamEventInput = {
         processor?: { slug: string; version: string } | undefined;
         crossPostedFrom?:
           | {
-              ruleId: string;
+              subscriptionKey: string;
               createdAt: string;
               offset: number;
               path: string;
@@ -1815,7 +1870,7 @@ export type FlattenedCapabilityInvocation = {
   path: string[];
 };
 
-/** Durable expression over the project ITX surface. */
+/** One step of an {@link ItxExpression}: a property read, or a `[method, ...args]` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 
 /** Caller-supplied policy overrides, baked into the returned events. */

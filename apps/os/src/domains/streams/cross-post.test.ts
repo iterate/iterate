@@ -15,7 +15,7 @@ describe("buildCrossPostAppendInput", () => {
       path: "/source",
     };
     const hop = {
-      ruleId: "source-to-target",
+      subscriptionKey: "source-to-target",
       createdAt: sourceEvent.createdAt,
       offset: sourceEvent.offset,
       path: sourceEvent.path,

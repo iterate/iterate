@@ -6,6 +6,7 @@ import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
@@ -94,7 +95,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     };
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
