@@ -10,6 +10,8 @@ import type { OpenAiResponsesWebSocket } from "./openai-ws-processor-implementat
 export class MemoryStream implements Stream {
   events: StreamEvent[] = [];
 
+  constructor(readonly path = "/agents/test") {}
+
   async __describe() {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
@@ -29,6 +31,7 @@ export class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(offset).toISOString(),
         offset,
+        path: this.path,
       };
       this.events.push(event);
       return event;
