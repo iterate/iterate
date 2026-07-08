@@ -237,14 +237,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "sandbox-exec": {
-    // One shared sandbox path for the whole matrix: the first runtime pays
+    // One shared sandbox name for the whole matrix: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
     // (the example's get-or-create makes reuse natural). No marker on
     // purpose. 300s: a cold-host image pull + boot has a long tail even on
     // the stock image; anything past that is a container stuck provisioning,
     // and we'd rather fail and re-run than mask it.
     completionTimeoutMs: 300_000,
-    vars: () => ({ sandboxPath: "/sandboxes/basic/example-matrix" }),
+    vars: () => ({ sandboxName: "example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
     },
