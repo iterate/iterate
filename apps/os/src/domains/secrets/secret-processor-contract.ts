@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 
-/** Zod mirror of {@link import("../../types.ts").PlatformCredsRef} — a
+/** Zod mirror of {@link import("./types.ts").PlatformCredsRef} — a
  * deployment-owned credential resolved from typed AppConfig in trusted code. */
 const PlatformCredsRef = z.strictObject({ platform: z.string().trim().min(1) });
 
 /**
- * Zod mirror of {@link import("../../types.ts").SecretRefresh} — the named
+ * Zod mirror of {@link import("./types.ts").SecretRefresh} — the named
  * refresh strategy a secret runs in its own trusted DO code (one shared
  * implementation per protocol, not a worker copied into every secret).
  */

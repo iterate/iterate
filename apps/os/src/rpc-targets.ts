@@ -237,7 +237,7 @@ import { EmailAgentProcessorContract } from "./domains/email/email-agent-process
  * For a class that fronts an existing hand-authored contract instead of
  * defining its own interface, see {@link IterateRpcRelay}.
  */
-export class IterateRpcTarget<Name extends string> extends RpcTarget {
+class IterateRpcTarget<Name extends string> extends RpcTarget {
   /** Phantom carrier for the published name; never assigned, invisible at runtime. */
   declare protected readonly __itxPublicName?: Name;
 }
@@ -251,7 +251,7 @@ export class IterateRpcTarget<Name extends string> extends RpcTarget {
  * honest either by `implements <contract>` or by its construction sites being
  * typed as the contract.
  */
-export class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
+class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 
 type FetchOnly = Pick<Fetcher, "fetch">;
 
