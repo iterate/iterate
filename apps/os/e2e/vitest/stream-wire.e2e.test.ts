@@ -38,7 +38,9 @@ test("ephemeral live delivery originates zero subscriber-side frames", async () 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = publisherItx.projects.create({ slug: `wire-${RUN_SUFFIX}-${marker.slice(0, 8)}` });
+  using project = publisherItx.projects.create({
+    slug: `wire-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
+  });
   const { projectId } = await project.__describe();
 
   // Subscriber: a separate session with every decoded ws frame recorded.
@@ -63,8 +65,8 @@ test("ephemeral live delivery originates zero subscriber-side frames", async () 
   await new Promise((resolve) => setTimeout(resolve, 250));
   const liveDeliveryStartsAt = frames.length;
 
-  const appended = await project
-    .streams.get(streamPath)
+  const appended = await project.streams
+    .get(streamPath)
     .append(
       { type: EVENT_TYPE, payload: { n: 1 } },
       { type: EVENT_TYPE, payload: { n: 2 } },
