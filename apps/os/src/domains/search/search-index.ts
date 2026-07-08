@@ -47,7 +47,7 @@ const MAX_EVENT_PAYLOAD_CHARS = 8_000;
  * high-volume, zero retrieval value, and `woken`/presence events would make
  * every idle stream churn its newest segment document forever.
  */
-export const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
+const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/subscriber-connected",
   "events.iterate.com/stream/subscriber-disconnected",
@@ -57,11 +57,6 @@ export const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
 /** The AI Search instance name for this deployment (one instance per env). */
 export function searchInstanceName(): string {
   return `${itxEnv.WORKER_SELF}-search`;
-}
-
-/** The search-index R2 bucket name for a worker (mirrors wrangler config). */
-export function searchIndexBucketName(workerName: string): string {
-  return `${workerName}-search-index`;
 }
 
 /** The source kinds a project's search corpus is folded from. */
