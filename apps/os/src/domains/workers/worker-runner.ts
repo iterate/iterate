@@ -166,12 +166,14 @@ export class DynamicWorkerRunner {
     path: string[];
     ref: DynamicWorkerRef;
   }): Promise<unknown> {
-    // A dotted `worker.fetch(request)` carrying a WebSocket upgrade must not
-    // go through method replay — its response cannot cross the RPC hops
-    // replay uses. Same target, but via the fetch-native lane above. Only
-    // helps callers in-process with this runner (project ingress); a caller
-    // on the far side of an RPC boundary (a userspace router) must dispatch
-    // through its ITX binding's fetch handler instead.
+    // Safety net: a dotted `worker.fetch(request)` carrying a WebSocket
+    // upgrade must not go through method replay — its 101 response cannot
+    // serialize across the RPC hops replay uses. HTTP dispatch is explicit
+    // everywhere it matters (ingress and userspace routers call the fetch
+    // lane directly); this catches in-process stragglers like
+    // `itx.worker.fetch(upgradeRequest)` from platform code. Only works for
+    // callers in-process with this runner — on the far side of an RPC
+    // boundary the response is already doomed before it gets here.
     const [firstArg] = args;
     if (
       path.length === 1 &&

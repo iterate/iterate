@@ -3,7 +3,7 @@ import type { Env } from "../../env.ts";
 import type { StatefulDynamicWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { takeWorkerFetchDispatch } from "./worker-fetch-dispatch.ts";
+import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
 import { isWorkerBuildInProgressError } from "./worker-loader.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
@@ -60,12 +60,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     } catch (error) {
       // Answer the building case HERE rather than relying on the error name
       // surviving the Durable Object fetch hop back to the dispatching
-      // entrypoint — same retryable 503 a client's reconnect loop rides.
+      // entrypoint — same retryable building page every fetch-lane hop serves.
       if (!isWorkerBuildInProgressError(error)) throw error;
-      return new Response("This worker is still building.", {
-        headers: { "retry-after": "2" },
-        status: 503,
-      });
+      return workerBuildingResponse();
     }
     return await (facet as Fetcher).fetch(taken.request);
   }

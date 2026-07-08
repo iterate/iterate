@@ -6,10 +6,11 @@ import { DurableObject } from "cloudflare:workers";
 // it to every other connected client (`peer:<text>`). The homepage is a tiny
 // chat page exercising exactly that.
 //
-// WebSocket upgrades reach a stateful app only through the fetch-native
-// dispatch lane — see the router in the root worker.ts: upgrade requests go
-// through `this.env.ITX.fetch(...)` with the app's ref in the
-// x-iterate-worker-dispatch header, never through `app.fetch(req)` RPC.
+// All app HTTP — including the /ws upgrade below — reaches this Durable
+// Object over the platform's fetch-native worker lane (see the router in the
+// root worker.ts: `this.env.ITX.fetch(...)` with the app's ref in the
+// x-iterate-worker-dispatch header). That lane is what lets the 101 response
+// carry its socket; an `app.fetch(req)` RPC method call could not.
 export class WebsocketEchoApp extends DurableObject {
   private sockets = new Set<WebSocket>();
 

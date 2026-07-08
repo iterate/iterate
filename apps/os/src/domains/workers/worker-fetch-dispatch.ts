@@ -35,6 +35,43 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket";
 }
 
+/**
+ * Marks a 503 as "the worker is cold-building" on the fetch lane, where a
+ * named error cannot cross the hop the way it does over RPC. Routers that
+ * want their own building page can match on it; passing the response through
+ * untouched already gives browsers the auto-refresh page and WebSocket
+ * clients a retryable close.
+ */
+export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
+
+/** The one cold-build response every fetch-lane hop answers with: an
+ * auto-refreshing page for browsers, retry-after + the marker header for
+ * programmatic clients. */
+export function workerBuildingResponse(): Response {
+  return new Response(
+    `<!doctype html>
+      <html>
+        <head>
+          <meta http-equiv="refresh" content="3" />
+          <title>Building…</title>
+        </head>
+        <body>
+          <main>
+            <p>Your worker is building — this page retries automatically.</p>
+          </main>
+        </body>
+      </html>`,
+    {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "retry-after": "2",
+        [WORKER_BUILDING_HEADER]: "1",
+      },
+      status: 503,
+    },
+  );
+}
+
 export function withWorkerFetchDispatchHeader(
   request: Request,
   dispatch: WorkerFetchDispatch,
