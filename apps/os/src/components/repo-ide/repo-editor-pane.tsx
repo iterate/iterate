@@ -82,7 +82,8 @@ export function RepoEditorPane({
   const jsonSchema = useRepoFileJsonSchema({
     path,
     language:
-      kind.kind === "text" && (kind.language === "json" || kind.language === "yaml")
+      kind.kind === "text" &&
+      (kind.language === "json" || kind.language === "jsonc" || kind.language === "yaml")
         ? kind.language
         : null,
     content: working?.type === "write" ? working.content : (textBaseline ?? ""),

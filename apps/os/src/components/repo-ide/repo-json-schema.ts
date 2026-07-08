@@ -15,11 +15,18 @@ import {
   stateExtensions,
 } from "codemirror-json-schema";
 import { yamlCompletion, yamlSchemaHover, yamlSchemaLinter } from "codemirror-json-schema/yaml";
+import { json5Completion, json5SchemaHover, json5SchemaLinter } from "codemirror-json-schema/json5";
+import { json5Language, json5ParseLinter } from "codemirror-json5";
+import JSON5 from "json5";
 import type { JSONSchema7 } from "json-schema";
 import type { SourceCodeBlockExtension } from "@iterate-com/ui/components/source-code-block";
 
-/** The two languages the repo IDE runs json-schema validation for. */
-type JsonSchemaLanguage = "json" | "yaml";
+/**
+ * The languages the repo IDE runs json-schema validation for. "jsonc" is
+ * JSON-with-comments-by-convention (*.jsonc, the tsconfig family, …) — see
+ * repo-file-kinds.ts for the list — parsed with the json5 grammar.
+ */
+type JsonSchemaLanguage = "json" | "jsonc" | "yaml";
 
 /**
  * Which json-schema (by URL) applies to a repo file, in priority order:
@@ -37,15 +44,17 @@ export function repoFileSchemaUrl(input: {
   content: string;
 }): string | null {
   const explicit =
-    input.language === "json"
-      ? jsonDollarSchemaUrl(input.content)
-      : yamlModelineSchemaUrl(input.content);
+    input.language === "yaml"
+      ? yamlModelineSchemaUrl(input.content)
+      : // jsonc docs are usually invalid strict JSON (that's the point), so
+        // the $schema prop is extracted with the comment-tolerant parser.
+        jsonDollarSchemaUrl(input.content, input.language === "jsonc" ? JSON5.parse : JSON.parse);
   return explicit || wellKnownSchemaUrl(input.path);
 }
 
-function jsonDollarSchemaUrl(content: string): string | null {
+function jsonDollarSchemaUrl(content: string, parse: (text: string) => unknown): string | null {
   try {
-    const parsed: unknown = JSON.parse(content);
+    const parsed: unknown = parse(content);
     const schema =
       parsed && typeof parsed === "object" && "$schema" in parsed ? parsed.$schema : undefined;
     return typeof schema === "string" ? httpsUrlOrNull(schema) : null;
@@ -112,6 +121,20 @@ function jsonSchemaCodeMirrorExtensions(input: {
       }),
       jsonLanguage.data.of({ autocomplete: jsonCompletion() }),
       hoverTooltip(jsonSchemaHover()),
+      stateExtensions(input.schema),
+    ];
+  }
+  if (input.language === "jsonc") {
+    // The json5 lane needs no parseJsonDocumentColonFixed equivalent:
+    // lezer-json5 has always had an explicit PropertyColon node and
+    // codemirror-json-schema's JSON5 pointer walk already skips it (the
+    // @lezer/json 1.0.3 regression the fix above works around is specific
+    // to the strict-JSON grammar). Pinned by a position test.
+    return [
+      linter(json5ParseLinter()),
+      linter(json5SchemaLinter(), { needsRefresh: handleRefresh }),
+      json5Language.data.of({ autocomplete: json5Completion() }),
+      hoverTooltip(json5SchemaHover()),
       stateExtensions(input.schema),
     ];
   }
