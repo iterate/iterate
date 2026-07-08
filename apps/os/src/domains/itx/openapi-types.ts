@@ -1,5 +1,18 @@
 import { resolveJsonSchema, type JsonSchema } from "./json-schema-types.ts";
 
+export type OpenApiConnectInput = {
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  specUrl: string;
+};
+
+/**
+ * A connected OpenAPI service. Each operationId becomes a dotted method
+ * (`itx.openapi.<connection>.<operationId>({...})`) resolved through the
+ * dynamic path-call fallback, so this contract does not re-declare a surface.
+ */
+export type OpenApiRpc = object;
+
 type SchemaNode = Record<string, unknown>;
 
 // OpenAPI support is deliberately small: operationId is the RPC method name,

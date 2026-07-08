@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { DynamicWorkerRef } from "../../types.ts";
+import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
 
 /**

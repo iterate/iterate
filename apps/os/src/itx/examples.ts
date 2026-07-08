@@ -48,6 +48,16 @@ export type ItxExample = {
   title: string;
 };
 
+/** One example without its code — what `itx.examples.list()` returns. */
+export type ItxExampleSummary = {
+  description: string;
+  id: string;
+  title: string;
+};
+
+/** One example with its full script body — what `itx.examples.get({ id })` returns. */
+export type ItxExampleWithCode = ItxExampleSummary & { code: string };
+
 const ALL_RUNTIMES: ItxExampleRuntime[] = [...ITX_EXAMPLE_RUNTIMES];
 
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */

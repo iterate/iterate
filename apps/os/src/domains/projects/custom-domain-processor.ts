@@ -1,7 +1,7 @@
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import type { StreamProcessor } from "../streams/stream-processor.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   ProjectProcessorContract,

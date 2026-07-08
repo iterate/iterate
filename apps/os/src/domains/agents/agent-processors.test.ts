@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEventInput } from "../../types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   AgentProcessor,
   buildAgentLlmRequestBody,
@@ -65,8 +65,8 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage({ message })");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
     // The verbatim type surface rides along so the agent knows what it holds.
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<ProjectRpcTarget>");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface ProjectRpcTarget {");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Project>");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Project {");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface CapabilityHost {");
     // Tool-call stance: small data-first snippets, parallel fan-out, explicit
     // loop-ending rule, and the built-in discovery surfaces.

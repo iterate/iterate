@@ -10,10 +10,10 @@
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
-import type { GetProcessorRuntimeState } from "../../types.ts";
 import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRef } from "../workers/schemas.ts";
+import type { GetProcessorRuntimeState } from "./rpc-types.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
@@ -399,5 +399,12 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/child-stream-created",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<CoreProcessorContract>`,
+ * `ConsumedEvent<CoreProcessorContract>`, `ProcessorEvent<CoreProcessorContract, T>`.
+ */
+export type CoreProcessorContract = typeof CoreProcessorContract;
 
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;

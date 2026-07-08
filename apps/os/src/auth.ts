@@ -36,7 +36,42 @@ import {
   type UserPrincipal,
 } from "./auth/principal.ts";
 import type { AppConfig } from "./config.ts";
-import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
+
+/**
+ * Credentials accepted by `UnauthenticatedOs.authenticate`.
+ *
+ * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
+ *   the signed-in user's session cookie riding the WebSocket handshake.
+ * - `bearer` — an auth access token presented as RPC data.
+ * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
+ * - `impersonate` — admin-secret-gated fake principal, for test suites that
+ *   exercise per-project confinement without minting real users.
+ */
+export type ItxAuthCredentials =
+  | { type: "from-server-cookie" }
+  | { type: "bearer"; token: string }
+  | { type: "admin-secret"; secret: string }
+  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+
+/** Principal shape for `impersonate` credentials. */
+export type ItxAuthToken =
+  | { type: "admin"; principal?: string }
+  | { type: "user"; principal: string; projectScopes: string[] };
+
+/** Authority object carried by server-side RPC target instances. */
+export interface ItxAuth {
+  readonly principal: string;
+  isAdmin(): boolean;
+  canAccessProject(projectId: string): boolean;
+  assertCanAccessProject(projectId: string | null): void;
+  listAccessibleProjects(): string[];
+  /**
+   * Async access check that may consult the project directory (source of
+   * truth) when synchronous claims miss — see the auth adapter. Optional so
+   * in-process trusted contexts stay trivially constructible.
+   */
+  ensureCanAccessProject?(projectId: string): Promise<void>;
+}
 
 type ProjectDirectory = {
   userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { DynamicWorkerRef } from "../../types.ts";
+import type { DynamicWorkerRef } from "./schemas.ts";
 import {
   isWebSocketUpgradeRequest,
   takeWorkerFetchDispatch,

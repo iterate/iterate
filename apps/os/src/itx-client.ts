@@ -5,13 +5,8 @@ import {
   type RpcStub as CapnRpcStub,
 } from "capnweb";
 import { withOwnedRpcSession } from "./domains/itx/utils.ts";
-import type {
-  Agent,
-  ItxAuthCredentials,
-  ProjectRpcTarget,
-  Session,
-  UnauthenticatedOs,
-} from "./types.ts";
+import type { ItxAuthCredentials } from "./auth.ts";
+import type { Agent, Project, Session, UnauthenticatedOs } from "./itx-api.generated.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
@@ -96,7 +91,7 @@ type RpcSessionStub<T extends object> = CapnRpcStub<T> & {
 };
 
 export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<Agent>;
-export function connectItx(input: ConnectProjectItxInput): CapnRpcStub<ProjectRpcTarget>;
+export function connectItx(input: ConnectProjectItxInput): CapnRpcStub<Project>;
 export function connectItx(input: ConnectItxAuthenticatedInput): CapnRpcStub<Session>;
 export function connectItx(input: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedOs>;
 export function connectItx(
@@ -107,7 +102,7 @@ export function connectItx(
     | ConnectProjectItxInput,
 ):
   | CapnRpcStub<Agent>
-  | CapnRpcStub<ProjectRpcTarget>
+  | CapnRpcStub<Project>
   | CapnRpcStub<Session>
   | CapnRpcStub<UnauthenticatedOs> {
   const session = connect<UnauthenticatedOs>(
@@ -120,7 +115,7 @@ export function connectItx(
   const root = session.authenticate(input.auth) as CapnRpcStub<Session>;
   if (!("projectId" in input)) return withOwnedRpcSession(root, session);
 
-  const project = root.projects.get(input.projectId) as RpcSessionStub<ProjectRpcTarget>;
+  const project = root.projects.get(input.projectId) as RpcSessionStub<Project>;
   if (!("agentPath" in input)) return withOwnedRpcSession(project, root, session);
 
   // An "agent itx" reached from outside `/api` is just this agent's `Agent`

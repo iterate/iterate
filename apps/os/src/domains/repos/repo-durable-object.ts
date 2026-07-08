@@ -19,7 +19,7 @@ import type {
   EditRepoFileInput,
   EditRepoFileResult,
   RepoFileChange,
-} from "../../types.ts";
+} from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";

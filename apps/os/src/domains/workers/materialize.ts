@@ -1,5 +1,5 @@
 import type { Modules } from "@cloudflare/worker-bundler";
-import type { WorkerBuildOptions } from "../../types.ts";
+import type { WorkerBuildOptions } from "./schemas.ts";
 import { workerBuildOptionsMatchCloudflare } from "./schemas.ts";
 
 /**

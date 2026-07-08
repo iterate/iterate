@@ -15,13 +15,13 @@ import {
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
+import type { ProjectProcessorState } from "../../../../../domains/projects/project-processor-contract.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
-import type { ProjectProcessorState } from "~/types.ts";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;

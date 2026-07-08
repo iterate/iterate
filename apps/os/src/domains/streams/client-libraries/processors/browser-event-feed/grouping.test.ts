@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../../../../../types.ts";
+import type { StreamEvent } from "../../../schemas.ts";
 import {
   GROUP_COMPONENT,
   groupFeedData,

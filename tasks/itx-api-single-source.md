@@ -23,7 +23,7 @@ humans read as reference, and agents/the REPL receive verbatim. That PR is
 CI-green but conflicting with main. Misha reviewed it and asked for it to be
 remade fresh off main with his concrete suggestions applied ("remake the PR as
 is but doing my suggestions"). The `__describe()`/JSDoc overlap question from
-review is explicitly *out of scope* — he's mulling that one.
+review is explicitly _out of scope_ — he's mulling that one.
 
 ## The two suggestions (from PR #1655 review comments)
 
@@ -39,7 +39,9 @@ class IterateRpcTarget<Name extends string> extends RpcTarget {}
 
 class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response> { /* ... */ }
+  fetch(request: Request): Promise<Response> {
+    /* ... */
+  }
 }
 ```
 
@@ -82,8 +84,11 @@ practical (a temp-dir + `getSemanticDiagnostics` pass is acceptable there).
 
 ## Checklist
 
-- [ ] Port PR #1655 onto current main (squash-merge `victorious-wish`, resolve
-      conflicts, regenerate generated artifacts, all checks green)
+- [x] Port PR #1655 onto current main (squash-merge `victorious-wish`, resolve
+      conflicts, regenerate generated artifacts, all checks green) — _second
+      commit on this branch; see the implementation log for the merge-policy
+      details (main's post-#1655 features restyled into the branch's
+      docstrings-on-classes convention)_
 - [ ] Introduce `IterateRpcTarget<Name extends string>` in `rpc-targets.ts`;
       migrate every RpcTarget class to it (including relay classes, whose
       `Name` is the contract they front)
@@ -99,4 +104,38 @@ practical (a temp-dir + `getSemanticDiagnostics` pass is acceptable there).
 
 ## Implementation log
 
-(append as work happens)
+### Port of #1655 onto main (squash-merge of `victorious-wish`)
+
+Main had moved a lot since #1655's merge-base — 12 commits touching
+`rpc-targets.ts` alone (scheduler, `itx.files`, email threading + agent-bound
+replies, integrations v7 with the flattened Slack/Gmail/GitHub SDK dispatch,
+Cloudflare platform bindings under `integrations.cf`). Merge policy: **main's
+functionality wins, #1655's structure wins.** Concretely:
+
+- Main's new/rewritten capability classes (Scheduler, Files/FileHandle,
+  Cf\* bindings, the flattened ProjectIntegrations dispatch, the email
+  threading EmailRpcTarget) were restyled per #1655's convention: no
+  `implements`, docstrings + explicit signatures on the class (text grafted
+  from main's `types.ts`, which is deleted), class named to match its public
+  name (`IntegrationsRpcTarget` → `ProjectIntegrationsRpcTarget`,
+  `EmailRpcTarget` → `EmailCapabilityRpcTarget`, `BrowserRpcTarget` →
+  `CfBrowserCapabilityRpcTarget`, …).
+- Types main had added to `types.ts` since the merge-base were relocated to
+  domain modules: scheduler shapes → `domains/scheduler/types.ts` (hand-written
+  strict unions, with the contract's loose zod schemas tied back via
+  `satisfies` — the looseObject-inferred types would degrade narrowing for
+  implementation code); secrets v7 shapes (SecretRefresh, PlatformCredsRef,
+  SecretDescription.refresh) → `domains/secrets/types.ts`; integrations v7
+  shapes (BuiltinIntegrationSlug, IntegrationConnectionListEntry) →
+  `domains/integrations/types.ts` (replacing the stale `IntegrationProvider`);
+  Cf\* input/output shapes → `domains/itx/cf-capabilities.ts`;
+  EmailAttachmentInput → `domains/email/utils.ts`; FileData/ProjectFileMetadata
+  → the files domain (renamed from `ProjectFileData`, which was an exact
+  duplicate — the drift pattern this PR exists to kill);
+  ProjectCustomDomain\* → derived from the project processor contract's
+  existing zod schemas instead of the hand copy.
+- `AgentProcessorState` fix from #1655 carries over; scheduler contract also
+  gained the same-identifier `export type` + `ProcessorState<…>` treatment.
+- Generator: added lib globals (RequestInfo, RequestInit, ArrayBuffer,
+  Uint8Array, Blob) to AMBIENT_NAMES — the leak guard caught them in the new
+  files/browser signatures, exactly as designed.

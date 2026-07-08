@@ -4,7 +4,8 @@
 // and the script's cross-stream side effect land as events.
 
 import { expect, test } from "vitest";
-import type { ScheduleView, StreamEvent } from "../../src/types.ts";
+import type { ScheduleView } from "../../src/domains/scheduler/types.ts";
+import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 

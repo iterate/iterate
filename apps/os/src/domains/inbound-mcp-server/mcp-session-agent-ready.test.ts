@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import {
   ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
   ensureMcpSessionAgentReady,
 } from "./mcp-session-agent-ready.ts";
-import type { StreamEvent, StreamEventInput } from "~/types.ts";
 
 describe("ensureMcpSessionAgentReady", () => {
   it("creates the session stream and waits for the agent system prompt before returning", async () => {

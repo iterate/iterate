@@ -6,7 +6,7 @@
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../src/itx-client.ts";
-import type { ProjectRpcTarget, Session } from "../../src/types.ts";
+import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));

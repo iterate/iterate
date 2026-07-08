@@ -7,7 +7,19 @@ import {
   type StreamableHTTPClientTransportOptions,
   type Tool,
 } from "@modelcontextprotocol/client";
-import type { McpClientConnectInput } from "../../types.ts";
+
+export type McpClientConnectInput = {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  url: string;
+};
+
+/**
+ * A connected MCP client. Its tools are dotted method calls
+ * (`itx.mcp.<server>.<tool>({...})`) resolved through the dynamic path-call
+ * fallback, so this contract deliberately does not re-declare a fixed surface.
+ */
+export type McpClientRpc = object;
 
 const CLIENT_INFO = {
   name: "itx-mcp-client",

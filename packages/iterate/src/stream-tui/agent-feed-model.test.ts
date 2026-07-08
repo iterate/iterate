@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { StreamEvent } from "../../../../apps/os/src/types.ts";
+import type { StreamEvent } from "../../../../apps/os/src/itx-api.generated.ts";
 import { createAgentFeedModel } from "./agent-feed-model.ts";
 
 let nextOffset = 1;

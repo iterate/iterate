@@ -3,7 +3,8 @@
 // semantics, and a fake OpenAI Responses WebSocket. Used by
 // agent-processors.test.ts and the stream-repros/ tests.
 
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { OpenAiResponsesWebSocket } from "./openai-ws-processor-implementation.ts";
 
 export class MemoryStream implements Stream {

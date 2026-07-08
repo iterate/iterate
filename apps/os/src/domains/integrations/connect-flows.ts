@@ -22,15 +22,15 @@
 // These run with the itx bindings (SECRET_ENCRYPTION_KEY + the DO bindings).
 // The dashboard's /api/integrations/* routes reach them via itx (rpc-targets.ts).
 
+import { itxEnv } from "../../env.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import type { SecretRefresh } from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
-  SecretRefresh,
-} from "../../types.ts";
-import { itxEnv } from "../../env.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+} from "./types.ts";
 import {
   createOAuthState,
   randomBase64Url,

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import {
   createStreamProcessorHost,

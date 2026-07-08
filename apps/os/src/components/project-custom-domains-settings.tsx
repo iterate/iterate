@@ -14,7 +14,10 @@ import {
   normalizeProjectHostnameBase,
 } from "~/lib/project-host-routing.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import type { ProjectCustomDomain, ProjectProcessorState } from "~/types.ts";
+import type {
+  ProjectCustomDomain,
+  ProjectProcessorState,
+} from "~/domains/projects/project-processor-contract.ts";
 
 export function ProjectCustomDomainsSettings({
   projectId,

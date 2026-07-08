@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import type {
   SchedulerAction as SchedulerActionType,
   SchedulerRecurrence as SchedulerRecurrenceType,
-} from "../../types.ts";
+} from "./types.ts";
 
 // =============================================================================
 // Scheduler contract: durable time as stream events.
@@ -155,5 +155,8 @@ export const SchedulerProcessorContract = defineProcessorContract({
   ],
 });
 
+/** The contract's type under the same identifier — helpers read without `typeof`. */
+export type SchedulerProcessorContract = typeof SchedulerProcessorContract;
+
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
-export type SchedulerProcessorState = z.infer<typeof SchedulerProcessorContract.stateSchema>;
+export type SchedulerProcessorState = ProcessorState<SchedulerProcessorContract>;

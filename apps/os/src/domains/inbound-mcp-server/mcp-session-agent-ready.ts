@@ -1,4 +1,4 @@
-import type { Stream } from "~/types.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 
 export const ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS = 90_000;
 

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent } from "./schemas.ts";
 import { StreamEventLog } from "./stream-storage.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {

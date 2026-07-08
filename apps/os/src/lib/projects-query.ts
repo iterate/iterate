@@ -1,5 +1,5 @@
+import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
-import type { ProjectListEntry } from "~/types.ts";
 
 /**
  * The ONE client-side cache entry for `session.projects.list()` — the itx

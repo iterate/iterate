@@ -13,8 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import type { ProjectListEntry } from "../../project-deployment-status.ts";
 import { useItx } from "~/itx/itx-react.tsx";
-import type { ProjectListEntry } from "~/types.ts";
 
 export const Route = createFileRoute("/admin/projects")({
   component: AdminProjectsPage,

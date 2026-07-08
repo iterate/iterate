@@ -29,18 +29,18 @@ import {
   Sparkles,
 } from "lucide-react";
 import { z } from "zod";
+import type { Project } from "../../../../itx-api.generated.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { ProjectRpcTarget } from "~/types.ts";
 
-type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<Project["integrations"]["getConnection"]>>;
 
 /** One list() entry enriched with the built-in connection status (null for
  * provided integrations, whose status lives in project code). */
-type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list"]>>[number] & {
+type ConnectionEntry = Awaited<ReturnType<Project["integrations"]["list"]>>[number] & {
   status: Connection | null;
 };
 
