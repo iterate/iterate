@@ -742,8 +742,13 @@ export interface Repo {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * The transfer is server-side (the Artifacts service imports straight from
+   * GitHub), so any history size syncs. `depth` optionally prunes to the
+   * newest N commits — GitHub retains the full history, and a later deeper
+   * sync can always widen the window.
    */
-  syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult>;
+  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: StreamProcessorRpc<RepoProcessorState>;
 }
