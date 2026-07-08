@@ -1,9 +1,12 @@
 # Waitrose integration (the reference userspace integration)
 
-An integration your project OWNS: ordinary code in this repo, mounted once
-into the project's integrations collection and then addressed exactly like a
-built-in — `itx.integrations.waitrose.<connection>.<method>(...)`. Use it, or
-copy the pattern for any provider the platform has no built-in for.
+An integration your project OWNS: a vendored client in this repo
+(client.ts), exposed through the project worker's `waitrose` getter
+(worker.ts) as `itx.worker.waitrose.<connection>.<method>(...)`. The project
+worker always exists and is rebuilt from this repo, so there is no mount
+step and nothing session-owned to expire — the surface is durable by
+construction. Use it, or copy the pattern for any provider the platform has
+no built-in for: one vendored client file plus one getter on the worker.
 
 ## 1. Connect an account
 
@@ -30,48 +33,24 @@ The password goes in and never comes out: no code — including this
 integration's — can read it back, and the session tokens it mints substitute
 into requests only at project egress, toward the pinned host.
 
-## 2. Mount the integration (once)
-
-Mount at the PROJECT ROOT: `itx.integrations.*` resolves through the project
-capability table, so an own-scope `itx.provideCapability` from an agent is
-unreachable there.
+## 2. Call it
 
 ```js
-const rootHost = await itx.capabilityHosts.get("/");
-await rootHost.provideCapability({
-  path: ["integrations", "waitrose"],
-  type: "itx-expression", // durable: a journaled recipe, replayed per call
-  flattenNestedPaths: true,
-  instructions:
-    'Waitrose grocery integration. Address a connection first: itx.integrations.waitrose.<connection>.searchProducts("milk", { size: 5 }) / .addToTrolley(lineNumber, quantity) / .removeFromTrolley(lineNumber) / .trolley(orderId?) / .shoppingContext().',
-  expression: [
-    "workers",
-    [
-      "get",
-      {
-        type: "stateless",
-        path: "/",
-        entrypoint: "WaitroseIntegration",
-        source: {
-          files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
-          options: { entryPoint: "integrations/waitrose/worker.ts" },
-        },
-      },
-    ],
-  ],
-});
+const context = await itx.worker.waitrose.mum.shoppingContext();
+const search = await itx.worker.waitrose.mum.searchProducts("milk", { size: 5 });
+await itx.worker.waitrose.mum.addToTrolley(search.products[0].lineNumber, 1);
+const trolley = await itx.worker.waitrose.mum.trolley();
 ```
 
-## 3. Call it
-
-```js
-const context = await itx.integrations.waitrose.mum.shoppingContext();
-const search = await itx.integrations.waitrose.mum.searchProducts("milk", { size: 5 });
-await itx.integrations.waitrose.mum.addToTrolley(search.products[0].lineNumber, 1);
-const trolley = await itx.integrations.waitrose.mum.trolley(context.customerOrderId);
-```
+Every dotted call lands on the worker as one flattened
+`invokeCapability({ path, args })`; its userspace walk (see worker.ts)
+resolves `waitrose` → the connection's client → the method, all in one
+round trip. The client only ever sends a `getSecret(...)` placeholder as its
+bearer — the real token substitutes at project egress.
 
 Add methods by editing client.ts (each is one GraphQL operation or one REST
-call) — the mount is late-bound to the repo, so the next call after a commit
-runs the new code. Every request carries the Android app's User-Agent
-(`WAITROSE_USER_AGENT`): Waitrose's edge rejects UA-less requests with HTTP 520.
+call) — the worker rebuilds from the repo on the next call after a commit.
+Every request carries the Android app's User-Agent (`WAITROSE_USER_AGENT`):
+Waitrose's edge rejects UA-less requests with HTTP 520, and the GraphQL
+gateway rejects hand-slimmed selections with HTTP 400, so the queries are
+the app's verbatim.

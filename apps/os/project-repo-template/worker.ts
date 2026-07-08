@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
 import type { DynamicWorkerRef, ProjectRpcTarget, StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
+import { waitroseClient } from "./integrations/waitrose/client.ts";
 
 /** Bindings the platform supplies to every project worker. */
 type ProjectWorkerEnv = {
@@ -141,5 +142,28 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
       "fetch";
     return client;
+  }
+
+  /**
+   * Waitrose surface (the reference userspace integration): the vendored
+   * client from integrations/waitrose/client.ts, one per connection —
+   * `itx.worker.waitrose.<connection>.<method>(...)`. Durable by
+   * construction: this worker always exists and is late-bound to the repo,
+   * so there is no mount step and nothing session-owned to expire. The
+   * bearer is a `getSecret(...)` placeholder substituted at project egress;
+   * this code never sees a session token (the secret's own Durable Object
+   * logs in on first use and re-logins on 401 — see the README there).
+   */
+  get waitrose(): Record<string, ReturnType<typeof waitroseClient>> {
+    return new Proxy({} as Record<string, ReturnType<typeof waitroseClient>>, {
+      get: (_target, connection) =>
+        // "then" guard: the dispatch walk awaits each segment, and awaiting
+        // the proxy itself must not conjure a client named "then".
+        typeof connection !== "string" || connection === "then"
+          ? undefined
+          : waitroseClient({
+              authorization: `Bearer getSecret({ path: "/secrets/integrations/waitrose/${connection}/session", field: "accessToken" })`,
+            }),
+    });
   }
 }
