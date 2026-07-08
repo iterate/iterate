@@ -13,8 +13,10 @@ Implementation complete, PR open, preview publish verified live. The
 pkg.pr.new GitHub App turned out to already be installed on `iterate/iterate`:
 the PR's publish run succeeded, and a simulated customer repo installed
 `https://pkg.pr.new/iterate/iterate/iterate@1758` and typechecked against it.
-Remaining: e2e lanes in CI; the template's `@main` URL goes live with the
-first push-to-main publish (i.e. when this PR merges).
+All CI green including the preview deploy+e2e lane (draft PRs skip it by
+default — added the `preview` label to force it; both reworked worker-build
+e2e tests passed against a real preview deployment). The template's `@main`
+URL goes live with the first push-to-main publish (i.e. when this PR merges).
 
 ## Motivation
 
