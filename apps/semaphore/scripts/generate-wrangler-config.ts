@@ -107,7 +107,9 @@ const config = {
   ],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
-  migrations: [{ tag: "v1", new_sqlite_classes: ["ResourceCoordinator"] }],
+  // Declarative DO lifecycle — the server reconciles this against live
+  // namespaces per deploy, no tag history (see apps/os DO_EXPORTS).
+  exports: { ResourceCoordinator: { type: "durable-object", storage: "sqlite" } },
   // Local dev has no real database; miniflare only needs a stable id
   // (sqlfu.config.ts opens the same id for local migrations/queries).
   ...workerBindings({ resourcesDbId: LOCAL_DEV_RESOURCES_DB_ID }),
