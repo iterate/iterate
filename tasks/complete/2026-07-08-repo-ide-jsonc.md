@@ -1,7 +1,8 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: repo-ide-jsonc
+pr: https://github.com/iterate/iterate/pull/1774
 ---
 
 # Repo IDE: jsonc/json5 lane for comment-tolerant JSON files
