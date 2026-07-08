@@ -69,6 +69,19 @@ const Search = StreamViewSearch.extend({
   connect: z.string().optional(),
 });
 
+const STREAM_VIEW_SEARCH_RESET = {
+  event: undefined,
+  filter: undefined,
+  from: undefined,
+  panel: undefined,
+  preset: undefined,
+  processor: undefined,
+  q: undefined,
+  tab: undefined,
+  to: undefined,
+  types: undefined,
+} satisfies Partial<z.infer<typeof StreamViewSearch>>;
+
 const BUILTIN_API_INTEGRATIONS = [
   {
     description:
@@ -254,7 +267,16 @@ function ProjectIntegrationsContent() {
     // Unknown slug: ignored.
   }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
-  const openFeed = (panel: FeedPanel) => setFeedPanel(panel);
+  const resetFeedViewSearch = () => {
+    void navigate({
+      search: (previous) => ({ ...previous, ...STREAM_VIEW_SEARCH_RESET }),
+      replace: true,
+    });
+  };
+  const openFeed = (panel: FeedPanel) => {
+    resetFeedViewSearch();
+    setFeedPanel(panel);
+  };
   const openProjectFeed = () =>
     openFeed({
       description: "Project-wide integration lifecycle and routing events.",
@@ -378,7 +400,10 @@ function ProjectIntegrationsContent() {
       <IntegrationFeedSheet
         feedPanel={feedPanel}
         onOpenChange={(open) => {
-          if (!open) setFeedPanel(null);
+          if (!open) {
+            resetFeedViewSearch();
+            setFeedPanel(null);
+          }
         }}
         projectId={project.id}
       />
