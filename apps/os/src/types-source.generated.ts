@@ -1146,20 +1146,36 @@ export interface StreamProcessorRpc<State = unknown> {
  * \`flattenNestedPaths\` mirrors \`provideCapability\`: dotted calls on the stub
  * become ONE \`invokeCapability({ path, args })\` call that the worker's own
  * \`invokeCapability\` method dispatches in userspace (one RPC per call),
- * instead of the default member-by-member replay on the entrypoint.
+ * instead of the default member-by-member replay on the entrypoint. Under a
+ * flattened mount the intermediate path segments are pure DATA — they are
+ * not nodes of any tree, on either side of the wire, until the worker's
+ * dispatcher interprets them. \`worker.slack.chat.postMessage(x)\` delivers
+ * \`{ path: ["slack", "chat", "postMessage"], args: [x] }\`; nothing named
+ * \`slack\` exists anywhere.
+ *
  * \`buildBudgetMs\` bounds how long a call waits on a cold source build; past
  * it the call fails with an error whose \`name\` is
  * \`"WorkerBuildInProgressError"\` — the NAME is the contract (it survives
- * Workers RPC; class identity does not), so userspace matches
- * \`error.name === "WorkerBuildInProgressError"\` to render its own building
- * page (the seeded template's router does exactly this).
+ * Workers RPC; class identity does not). HTTP through the fetch lane never
+ * sees that error: a budget-expired build answers a 503 building page marked
+ * with the \`x-iterate-worker-building\` header instead.
  */
 export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
 };
 
-/** Capability-tree entry point for ad-hoc project-scoped worker refs. */
+/**
+ * Capability-tree entry point for ad-hoc project-scoped worker refs.
+ *
+ * The stub \`get\` returns speaks METHOD CALLS (Workers RPC): arguments and
+ * results are serialized data or live stubs. It is not an HTTP surface — a
+ * worker method named \`fetch\` is just a method here, and a Response it
+ * returns is a serialized copy, never a protocol act. HTTP into a dynamic
+ * worker (pages, streaming bodies, WebSocket upgrades) goes through the
+ * fetch lane instead: project ingress for app hosts, \`env.ITX.fetch\` from
+ * worker code (see \`ItxBinding\`).
+ */
 export interface DynamicWorkerCollection extends Describable {
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
@@ -1694,6 +1710,32 @@ export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorker
 
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+
+/**
+ * The \`env.ITX\` binding every dynamic worker receives — one object, two
+ * channels, split by what the wire can carry:
+ *
+ * - \`get()\` — the capability tree. An itx scoped to the worker's path;
+ *   everything on it is Workers RPC method calls whose arguments and results
+ *   are serialized data or live stubs. No name on this tree is
+ *   protocol-special (\`fetch\` included).
+ * - \`fetch(request)\` — the fetch lane. Real HTTP into a sibling dynamic
+ *   worker, selected by the \`x-iterate-worker-dispatch\` header (JSON
+ *   \`{ ref, buildBudgetMs? }\`, the same ref shape \`workers.get\` takes). This
+ *   is a chain of real workerd fetch hops end to end, so it is the ONLY
+ *   channel that can carry protocol semantics — WebSocket upgrades reach the
+ *   target class's own \`fetch\` handler and the 101's socket tunnels back.
+ *   A cold build answers a 503 building page marked
+ *   \`x-iterate-worker-building\` (auto-refreshing for browsers, retryable for
+ *   WebSocket reconnect loops).
+ *
+ * Authority is identical on both channels: the binding's own scope, minted by
+ * the host — worker code never picks its own project.
+ */
+export type ItxBinding = {
+  fetch(request: Request): Promise<Response>;
+  get(): Promise<ProjectRpcTarget>;
+};
 
 /**
  * Slack Web API surface exposed by the seeded project worker
