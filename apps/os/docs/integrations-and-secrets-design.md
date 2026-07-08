@@ -28,8 +28,8 @@ Folded state: encrypted material (one JSON blob, write-only), an egress URL
 allowlist, an optional refresh strategy, an audit record.
 
 - `update({ material?, egress?, refresh? })` — the only write verb.
-- `describe()` — metadata only (hasMaterial, egress, refresh kind, audit);
-  material never leaves, in snapshots or pushes.
+- `__describe()` — the node's self-report, metadata only (hasMaterial,
+  egress, refresh kind, audit); material never leaves, in snapshots or pushes.
 - `fetch(request)` — the only lane material travels. Every request must carry
   at least one `getSecret({ path[, field] })` header placeholder for THIS
   secret (one request, one secret); the DO substitutes from decrypted material

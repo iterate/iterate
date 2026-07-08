@@ -951,14 +951,18 @@ class SecretCollectionRpcTarget extends RpcTarget implements SecretCollection {
 
 class SecretRpcTarget extends RpcTarget implements Secret {
   async __describe() {
+    // The secret's self-report IS __describe (like every other node): the
+    // discovery node merged with the secret's public state (audit, egress,
+    // hasMaterial, refresh). The raw value is never part of it.
+    const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": describe() for metadata, update() to set, fetch() to use it in an egress request via placeholder substitution. The raw value is never returned.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
-        describe: "Metadata (exists, updatedAt) — never the value.",
         fetch: "Egress fetch with secret placeholders substituted server-side.",
-        update: "Set the value.",
+        update: "Set the value, egress URLs, and/or refresh strategy.",
       },
       parent: "itx.secrets.get(path)",
+      ...state,
     });
   }
 
@@ -974,10 +978,6 @@ class SecretRpcTarget extends RpcTarget implements Secret {
         path: normalizeSecretPath(this.props.path),
       }),
     );
-  }
-
-  describe() {
-    return this.durableObjectStub.describe();
   }
 
   fetch(request: Parameters<Secret["fetch"]>[0]) {

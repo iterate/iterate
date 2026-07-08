@@ -1133,7 +1133,11 @@ export interface SecretCollection extends Describable {
  * material never leaves the Secret Durable Object except substituted into a
  * request bound for one of the secret's pinned egress hosts. */
 export interface Secret extends Describable {
-  describe(): Promise<SecretDescription>;
+  /** Like every other node, the secret's self-report IS `__describe()`: the
+   * discovery {@link Description} merged with the secret's public
+   * {@link SecretDescription} (audit, egress, whether material is present, the
+   * refresh strategy). The raw value is never part of it. */
+  __describe(): Promise<Description & SecretDescription>;
   fetch(req: Request): Promise<Response>;
   processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;

@@ -517,10 +517,10 @@ await secret.update({
 });
 
 // The secret processor folds the update asynchronously — poll describe().
-let described = await secret.describe();
+let described = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  described = await secret.describe();
+  described = await secret.__describe();
 }
 
 // Metadata only: hasMaterial, the egress allowlist, and the usage audit.
@@ -548,10 +548,10 @@ await secret.update({
 
 // update() is durable immediately, but the secret processor folds the stream
 // asynchronously. Wait until the request path can see the new material.
-let before = await secret.describe();
+let before = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  before = await secret.describe();
+  before = await secret.__describe();
 }
 
 const response = await itx.egress.fetch(
@@ -566,7 +566,7 @@ if (!response.ok) {
 }
 
 const body = await response.json();
-const after = await secret.describe();
+const after = await secret.__describe();
 const echoedSecret = body?.headers?.["x-itx-secret"];
 
 return {
@@ -966,10 +966,10 @@ await secret.update({
   egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
   material: vars.githubPat,
 });
-let described = await secret.describe();
+let described = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  described = await secret.describe();
+  described = await secret.__describe();
 }
 
 // 2. One durable mount makes GitHub part of the integrations collection. The
