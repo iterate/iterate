@@ -136,14 +136,13 @@ function makeHarness() {
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
     stream: network.get("/"),
-    defaultLlmProvider: "openai-ws",
     itx,
   });
   return { network, processor };
 }
 
 describe("ProjectProcessor agent birth", () => {
-  it("mounts only the workspace at birth — sandboxes are created explicitly, never granted", async () => {
+  it("appends only processor subscriptions at birth — policy comes from the project worker", async () => {
     const { network, processor } = makeHarness();
 
     await processor.ingest({
@@ -155,13 +154,15 @@ describe("ProjectProcessor agent birth", () => {
       streamMaxOffset: 1,
     });
 
-    const capabilityMounts = network
-      .eventsAt("/agents/demo")
-      .filter(
-        (streamEvent) =>
-          streamEvent.type === "events.iterate.com/capability-host/capability-provided",
-      )
-      .map((streamEvent) => (streamEvent.payload as { path: string[] }).path);
-    expect(capabilityMounts).toEqual([["workspace"]]);
+    // Mechanics only. System prompt, provider selection, capability mounts,
+    // and boot context are appended by the project worker via
+    // itx.agents.defaults (see agents/agent-defaults.test.ts).
+    const born = network.eventsAt("/agents/demo").map((streamEvent) => streamEvent.type);
+    expect(born).toEqual([
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
   });
 });
