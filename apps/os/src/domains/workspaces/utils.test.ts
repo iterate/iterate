@@ -37,10 +37,10 @@ describe("workspaceBranchName", () => {
   });
 
   test("sanitizes git-refname-illegal sequences", () => {
-    // ~ ^ : * [ survive the URL-based name codec but git refuses them in refnames.
-    expect(workspaceBranchName("/workspaces/agents/a~b^c:d*e[f")).toBe(
-      "workspaces/agents/a-b-c-d-e-f",
-    );
+    // ~ : * [ survive the URL-based name codec but git refuses them in
+    // refnames. (^ is deliberately absent: some Node versions percent-encode
+    // it in URL paths, so it cannot round-trip the codec everywhere.)
+    expect(workspaceBranchName("/workspaces/agents/a~b:c*d[e")).toBe("workspaces/agents/a-b-c-d-e");
     expect(workspaceBranchName("/workspaces/agents/ends.lock")).toBe("workspaces/agents/ends-lock");
     // A trailing dot is illegal in a ref component.
     expect(workspaceBranchName("/workspaces/agents/v1.")).toBe("workspaces/agents/v1-");
