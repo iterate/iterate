@@ -130,6 +130,13 @@ function jsonSchemaCodeMirrorExtensions(input: {
     // codemirror-json-schema's JSON5 pointer walk already skips it (the
     // @lezer/json 1.0.3 regression the fix above works around is specific
     // to the strict-JSON grammar). Pinned by a position test.
+    //
+    // Known cosmetic edge: that walk is positional (nextSibling.nextSibling),
+    // not node-name-aware, so a comment adjacent to the colon reabsorbs the
+    // mispositioning — `{ "name": /* why */ 123 }` squiggles the comment
+    // instead of `123` (right message, wrong span). Rare in real configs;
+    // if it ever matters, a wrapper that skips Comment/PropertyColon
+    // siblings (same shape as parseJsonDocumentColonFixed) is the fix.
     return [
       linter(json5ParseLinter()),
       linter(json5SchemaLinter(), { needsRefresh: handleRefresh }),
