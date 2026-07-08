@@ -9,11 +9,12 @@ pr: https://github.com/iterate/iterate/pull/1758
 
 ## Status summary
 
-Implementation complete, PR open. Everything checked below is done and verified
-locally (including a simulated customer repo installing the packed tarball and
-typechecking). Remaining: Misha installs the pkg.pr.new GitHub App on
-`iterate/iterate`, then the first main publish makes the template's
-`@main` URL live; e2e lanes run in CI.
+Implementation complete, PR open, preview publish verified live. The
+pkg.pr.new GitHub App turned out to already be installed on `iterate/iterate`:
+the PR's publish run succeeded, and a simulated customer repo installed
+`https://pkg.pr.new/iterate/iterate/iterate@1758` and typechecked against it.
+Remaining: e2e lanes in CI; the template's `@main` URL goes live with the
+first push-to-main publish (i.e. when this PR merges).
 
 ## Motivation
 
@@ -38,9 +39,9 @@ and the template depends on `https://pkg.pr.new/iterate/iterate/iterate@main`
   Actions API via its GitHub App, and Depot runs aren't GHA runs. Precedent for
   GHA-when-Depot-can't: `claude-assistant.yml`. Runner: `depot-ubuntu-24.04`
   (Depot-managed GHA runner, same as claude-assistant).
-- **Manual step for Misha:** install the pkg.pr.new GitHub App on
-  `iterate/iterate` (https://github.com/apps/pkg-pr-new). Publishes fail until
-  then. No npm token needed — pkg.pr.new hosts the tarballs.
+- ~~**Manual step for Misha:** install the pkg.pr.new GitHub App~~ _(already
+  installed — the PR's publish run succeeded first try. No npm token needed;
+  pkg.pr.new hosts the tarballs.)_
 - **`iterate` goes in the template's `devDependencies`, not `dependencies`.**
   Verified in `@cloudflare/worker-bundler`'s installer source: it only installs
   `dependencies` (devDependencies require an off-by-default `dev` option), and
@@ -91,7 +92,8 @@ and the template depends on `https://pkg.pr.new/iterate/iterate/iterate@main`
 ### pkg.pr.new
 
 - [x] `.github/workflows/pkg-pr-new.yml` _(push to main + pull_request; `pkg-pr-new publish --pnpm`)_
-- [ ] verify a publish succeeds once the GitHub App is installed (blocked on Misha)
+- [x] verify a publish succeeds _(PR run 28949722539 published; fake customer repo
+      installed `…iterate@1758` from pkg.pr.new and typechecked)_
 
 ### project-repo-template
 
