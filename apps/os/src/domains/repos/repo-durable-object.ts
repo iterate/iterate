@@ -323,13 +323,19 @@ export class RepoDurableObject extends DurableObject<Env> {
     return isGithubLinkRecord(stored) ? stored : null;
   }
 
+  // In both link verbs the journal append comes FIRST and the KV write last:
+  // the append is the only step that can fail (it crosses to the Stream DO),
+  // while the synchronous KV write inside this DO cannot, so ordering them
+  // this way means a failure changes nothing and the caller can just retry —
+  // the journal and the KV projection never diverge.
+
   /** Record the GitHub link durably and journal the fact on the repo stream. */
   async configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink> {
-    this.ctx.storage.kv.put(GITHUB_LINK_KV_KEY, link);
     await this.#host.stream.append({
       type: "events.iterate.com/repo/github-link-configured",
       payload: { ...link },
     });
+    this.ctx.storage.kv.put(GITHUB_LINK_KV_KEY, link);
     return link;
   }
 
@@ -337,11 +343,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   async removeGithubLink(): Promise<GithubRepoLink | null> {
     const link = this.getGithubLink();
     if (link === null) return null;
-    this.ctx.storage.kv.delete(GITHUB_LINK_KV_KEY);
     await this.#host.stream.append({
       type: "events.iterate.com/repo/github-unlinked",
       payload: { connection: link.connection, owner: link.owner, repo: link.repo },
     });
+    this.ctx.storage.kv.delete(GITHUB_LINK_KV_KEY);
     return link;
   }
 
