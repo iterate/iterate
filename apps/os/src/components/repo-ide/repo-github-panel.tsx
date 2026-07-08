@@ -154,7 +154,11 @@ function LinkForm({ projectId, repoPath }: { projectId: string; repoPath: string
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const link = useMutation({
-    mutationFn: () => itx.repos.get(repoPath).linkGithub({ connection, owner, repo }),
+    // Trimmed at the call, not just in the enable-check: a padded owner/repo
+    // would store a link (and a full_name webhook condition) GitHub payloads
+    // never match — mirroring would work while cross-post silently didn't.
+    mutationFn: () =>
+      itx.repos.get(repoPath).linkGithub({ connection, owner: owner.trim(), repo: repo.trim() }),
     onSuccess: (result) => {
       if (result.initialPush.ok) {
         toast.success(

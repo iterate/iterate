@@ -39,6 +39,14 @@ export async function linkRepoToGithub(input: {
   repoPath: string;
 }): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
+  // Trim at the boundary: a padded owner/repo would store a link (and a
+  // full_name webhook condition) GitHub payloads never match — mirroring
+  // would appear to work while webhook cross-post silently didn't.
+  const owner = input.owner.trim();
+  const repo = input.repo.trim();
+  if (owner === "" || repo === "") {
+    throw new Error("linkGithub requires a non-empty owner and repo.");
+  }
   const status = await getConnectionStatus({
     connection: input.connection,
     projectId: input.projectId,
@@ -53,7 +61,7 @@ export async function linkRepoToGithub(input: {
   const octokit = connectionOctokit({ connection: input.connection, projectId: input.projectId });
   let created = false;
   try {
-    await octokit.rest.repos.get({ owner: input.owner, repo: input.repo });
+    await octokit.rest.repos.get({ owner, repo });
   } catch (error) {
     if ((error as { status?: number }).status !== 404) {
       throw normalizeGithubError(error, input.connection);
@@ -64,14 +72,14 @@ export async function linkRepoToGithub(input: {
     // the actionable "create it on GitHub first" case.
     try {
       await octokit.rest.repos.createInOrg({
-        name: input.repo,
-        org: input.owner,
+        name: repo,
+        org: owner,
         private: true,
       });
       created = true;
     } catch (createError) {
       throw new Error(
-        `GitHub repository ${input.owner}/${input.repo} does not exist and could not be created via connection "${input.connection}" (App installations can only create org repositories, and need Administration write). Create it on GitHub and link again. Cause: ${normalizeGithubError(createError, input.connection).message}`,
+        `GitHub repository ${owner}/${repo} does not exist and could not be created via connection "${input.connection}" (App installations can only create org repositories, and need Administration write). Create it on GitHub and link again. Cause: ${normalizeGithubError(createError, input.connection).message}`,
       );
     }
   }
@@ -79,8 +87,8 @@ export async function linkRepoToGithub(input: {
   const link: GithubRepoLink = {
     connection: input.connection,
     installationId: status.externalId,
-    owner: input.owner,
-    repo: input.repo,
+    owner,
+    repo,
   };
   const repoStub = repoDurableObjectStub(input.projectId, repoPath);
   const previous = await repoStub.getGithubLink();
@@ -113,7 +121,7 @@ export async function linkRepoToGithub(input: {
   await connectionStream.append({
     type: "events.iterate.com/stream/rule-configured",
     payload: {
-      condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
+      condition: `payload.body.repository.full_name = ${JSON.stringify(`${owner}/${repo}`)}`,
       eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
       path: repoPath,
       ruleId,
