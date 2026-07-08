@@ -10,33 +10,34 @@
  *
  * What it destroys and why that's sufficient:
  *   - every Durable Object on the os worker — instances, storage, alarms —
- *     via a placeholder-script upload whose migration `deleted_classes`es
- *     all live classes (the only control-plane way to delete DO instances;
- *     see scripts/lib/do-migrations.ts). This also resets the worker's DO
- *     migration history, so the next deploy — from ANY branch, with ANY
- *     migration tag history — replays its list onto a clean slate. Preview
- *     slots are deployed by many branches with divergent histories; without
- *     the reset a handover leaves the previous branch's classes+tag behind
- *     and the new branch's deploy dies on API 10074/10061 (observed live
- *     2026-07-08, preview-2 / PR #1747). Killing the instances also stops
- *     orphaned scheduler DOs whose alarms kept running itx scripts (= real
- *     LLM spend) against erased projects.
+ *     by deploying the parked worker with a `deleted` tombstone for each
+ *     live class (the only way to delete DO instances; see
+ *     scripts/lib/do-reset.ts). The next deploy — from ANY branch —
+ *     recreates exactly the classes its config's `exports` declares, fresh.
+ *     Preview slots are deployed by many branches; without this teardown a
+ *     handover leaves the previous branch's classes behind. Killing the
+ *     instances also stops orphaned scheduler DOs whose alarms kept running
+ *     itx scripts (= real LLM spend) against erased projects. Exception:
+ *     container-bearing classes (the sandboxes) survive as unreachable
+ *     orphans — recreating them is broken upstream (do-reset.ts explains).
  *   - the auth D1 database (identities, orgs, projects — the source of every
  *     project id), by deleting all rows from every table
  *   - the project-directory KV (slug/hostname -> project id cache)
  *
  * The os worker script and its routes stay (deleting a script cascades its
- * routes — the historical zombie-route/522 class), but it serves the
- * placeholder's 503 until the next deploy. The D1 schema and migration
- * history stay intact (rows are deleted, tables kept). NOTE: the auth OAuth
- * clients are data too — redeploy auth for the env afterwards (it re-seeds
- * the OS client) before anyone signs in.
+ * routes — the historical zombie-route/522 class), but it serves the parked
+ * worker's 503 until the next deploy. The D1 schema and migration history
+ * stay intact (rows are deleted, tables kept). NOTE: the auth OAuth clients
+ * are data too — redeploy auth for the env afterwards (it re-seeds the OS
+ * client) before anyone signs in.
  */
+import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
 import { wipeD1Tables } from "../../../scripts/lib/deploy-helpers.ts";
-import { resetWorkerDurableObjects } from "../../../scripts/lib/do-migrations.ts";
+import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { COMPATIBILITY_DATE } from "./generate-wrangler-config.ts";
 
 /** Erase ALL user data in a deployed environment; infrastructure stays (see file header). */
 export default async function eraseData(options: {
@@ -55,10 +56,19 @@ export default async function eraseData(options: {
     `Erasing all data in ${ctx.name} (worker ${env.osWorkerName}, auth D1 ${env.resources.authDbId}, KV ${env.resources.projectDirectoryKvId})`,
   );
 
-  // ---- Durable Objects: destroy every instance and reset migration history ----
+  // ---- Durable Objects: destroy every instance --------------------------------
   // First, so no surviving DO (agent turn, scheduler alarm) writes fresh rows
   // into the D1/KV we are about to wipe.
-  await resetWorkerDurableObjects(ctx, env.osWorkerName);
+  await resetWorkerDurableObjects({
+    ctx,
+    workerName: env.osWorkerName,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    credentials: {
+      CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
+      CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,
+    },
+    compatibilityDate: COMPATIBILITY_DATE,
+  });
 
   // ---- auth D1: delete every row of every user table -------------------------
   await wipeD1Tables(ctx, env.resources.authDbId);
@@ -79,7 +89,7 @@ export default async function eraseData(options: {
   console.log(`KV: deleted ${deleted} keys`);
 
   console.log(
-    `✅ ${ctx.name} data erased: Durable Objects destroyed (migration history reset), D1 and KV wiped; infra intact.`,
+    `✅ ${ctx.name} data erased: Durable Objects destroyed, D1 and KV wiped; infra intact.`,
   );
   console.log(
     `   The os worker serves 503 until its next deploy. The auth OAuth clients were data too — redeploy auth for ${ctx.name} (it re-seeds the OS client) before signing in.`,

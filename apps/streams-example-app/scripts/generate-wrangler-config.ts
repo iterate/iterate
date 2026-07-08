@@ -93,7 +93,9 @@ const config = {
   ],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
-  migrations: [{ tag: "v1", new_sqlite_classes: ["StreamDurableObject"] }],
+  // Declarative DO lifecycle — the server reconciles this against live
+  // namespaces per deploy, no tag history (see apps/os DO_EXPORTS).
+  exports: { StreamDurableObject: { type: "durable-object", storage: "sqlite" } },
   ...workerBindings(),
   // Local dev loads the iterate-auth keys from process.env when present (the
   // vite plugin reads exactly `secrets.required`); absent keys leave the dev
