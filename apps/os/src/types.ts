@@ -258,17 +258,21 @@ export interface ProjectRpcTarget {
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat extends Describable {
   /**
-   * Say something to the user. `files` attaches project files to the message
-   * — THE way to hand the user something you generated (e.g. an `itx.ai.run`
-   * image: base64 straight into `data`, never pasted into message text).
-   * Attached images render inline in the chat and stay visible to the model
-   * on later turns.
+   * Say something to the user — pass the message as a plain string:
+   * `await itx.chat.sendMessage("Here you go!")`.
+   *
+   * `options.files` attaches project files to the message — THE way to hand
+   * the user something you generated (e.g. an `itx.ai.run` image: base64
+   * straight into `data`, never pasted into message text). Attached images
+   * render inline in the chat and stay visible to the model on later turns.
    */
-  sendMessage(input: {
-    message: string;
-    files?: Array<{ contentType: string; data: FileData; filename: string }>;
-  }): Promise<StreamEvent>;
+  sendMessage(message: string, options?: AgentChatSendOptions): Promise<StreamEvent>;
 }
+
+/** Optional second argument to {@link AgentChat.sendMessage}. */
+export type AgentChatSendOptions = {
+  files?: Array<{ contentType: string; data: FileData; filename: string }>;
+};
 
 /**
  * Bytes accepted by file-writing APIs. Strings are ALWAYS decoded as base64

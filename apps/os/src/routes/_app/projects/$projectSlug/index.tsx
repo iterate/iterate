@@ -4,6 +4,7 @@ import { ArrowRightIcon } from "lucide-react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { z } from "zod";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
+import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
@@ -94,6 +95,11 @@ function ProjectHomePage() {
           </Link>
         ) : null}
         <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+        <ProjectCustomDomainsSettings
+          projectId={project.id}
+          projectState={lifecycle.state}
+          routeConfig={routeConfig}
+        />
       </>
     ) : (
       // Creating, or the welcome handoff is in flight (the effect above is
