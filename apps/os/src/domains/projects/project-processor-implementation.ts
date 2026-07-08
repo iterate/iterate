@@ -533,6 +533,11 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {
+      // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
+      // method call whose Response comes back as a serialized copy — exactly
+      // enough for "the worker built, loaded, and answered". Protocol traffic
+      // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
+      // protocol needs (docs/dynamic-worker-dispatch.md).
       const response = await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
       // This probe only cares that the project worker accepted the request. The
       // returned Response can be a Cap'n Web RPC stub, and keeping that stub
