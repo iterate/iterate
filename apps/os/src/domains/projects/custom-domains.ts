@@ -193,11 +193,24 @@ export function createCloudflareCustomDomainProvisioner(options: {
         projectHostnameBases: options.config.projectHostnameBases ?? [],
       });
       const client = await cloudflareClient({ config: options.config, fetch: fetcher });
-      const customHostname = await client.findCustomHostname(normalized);
-      if (customHostname) assertCloudflareHostnameBelongsToProject(customHostname, project);
-      const id = customHostname
-        ? (stringValue(customHostname.id) ?? cloudflareHostnameId)
-        : cloudflareHostnameId;
+      const customHostname = cloudflareHostnameId
+        ? await client.getCustomHostname(cloudflareHostnameId).catch((error) => {
+            if (error instanceof CloudflareApiError && error.status === 404) {
+              return client.findCustomHostname(normalized);
+            }
+            throw error;
+          })
+        : await client.findCustomHostname(normalized);
+      let id = cloudflareHostnameId;
+      if (customHostname) {
+        if (cloudflareHostnameId) {
+          assertCloudflareHostnameMatches(customHostname, normalized);
+          assertCloudflareHostnameNotOwnedByAnotherProject(customHostname, project);
+          id = stringValue(customHostname.id) ?? cloudflareHostnameId;
+        } else if (stringValue(customHostname.custom_metadata?.projectId) === project.id) {
+          id = stringValue(customHostname.id);
+        }
+      }
       if (id) await client.deleteCustomHostname(id);
       const registeredProject = await readProjectHostnameRegistration(
         options.directory,

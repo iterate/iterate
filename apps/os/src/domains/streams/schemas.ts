@@ -8,14 +8,19 @@ export const StreamEventInput = z.object({
   type: z.string(),
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  // Deliberately NOT strict: committed rows are re-parsed through this schema
+  // on every read (stream-storage.ts), so a strict envelope would poison
+  // every stream holding an event with a retired source shape (e.g. the
+  // pre-chain `crossPost` object). Unknown keys strip on read; the row is
+  // untouched.
   source: z
     .object({
       processor: z.object({ slug: z.string(), version: z.string() }).strict().optional(),
-      crossPost: z
-        .object({
-          ruleId: z.string().trim().min(1),
-          from: z
+      crossPostedFrom: z
+        .array(
+          z
             .object({
+              ruleId: z.string().trim().min(1),
               createdAt: z.string(),
               offset: z.number().int().nonnegative(),
               path: z.string().trim().min(1),
@@ -23,11 +28,10 @@ export const StreamEventInput = z.object({
               type: z.string().trim().min(1),
             })
             .strict(),
-        })
-        .strict()
+        )
+        .min(1)
         .optional(),
     })
-    .strict()
     .optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
 }) satisfies z.ZodType<StreamEventInputType, unknown>;
