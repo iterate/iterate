@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 branch: repo-ide-json-schema
 ---
@@ -8,7 +8,7 @@ branch: repo-ide-json-schema
 
 ## Status summary
 
-Done. Implemented, unit-tested (12 egress-free specs), and verified live in local dev via playwright: squigglies + hover + schema autocomplete for package.json/tsconfig/$schema/yaml-modeline/workflow files, plus graceful "schema unavailable" degradation with schemastore blocked. Notable find: an upstream codemirror-json-schema bug (squigglies land on the `:` with @lezer/json 1.0.3) worked around with a wrapped parser. Known limitation: json-schema-library doesn't descend into the github-workflow schema's `oneOf` job definitions, so deep workflow errors don't surface (top-level ones do).
+Done, including the review-feedback round. Implemented, unit-tested (14 egress-free specs), and verified live in local dev via playwright: squigglies + hover + schema autocomplete for package.json/tsconfig/$schema/yaml-modeline/workflow files, plus graceful "schema unavailable" degradation with schemastore blocked. Notable find: an upstream codemirror-json-schema bug (squigglies land on the `:` with @lezer/json 1.0.3) worked around with a wrapped parser. Known limitation: json-schema-library doesn't descend into the github-workflow schema's `oneOf` job definitions, so deep workflow errors don't surface (top-level ones do).
 
 ## Ask (verbatim, from Misha — spinoff 4 of the repos mini IDE task)
 
@@ -29,7 +29,8 @@ Done. Implemented, unit-tested (12 egress-free specs), and verified live in loca
 - **YAML modeline**: the `# yaml-language-server: $schema=<url>` comment convention is supported (cheap regex), and wins over the filename map, matching vscode-yaml behavior.
 - **Where it applies**: the editable text editor and the readonly staged (Index) view. ⚠️ Diagnostics also render inside diff mode since it's the same editor — acceptable, that's what vscode does too.
 - **Indicator**: while a schema is active the file header shows a muted schema name (title attribute = URL); on fetch failure, muted "schema unavailable". Nothing for files with no schema association.
-- **Editor recreation caveat**: ⚠️ `SourceCodeBlock` rebuilds the CodeMirror view when extensions change (schema arriving after fetch, or the `$schema` URL being edited). To keep that from being jarring, the rebuild now preserves the selection — a small, generally-useful fix in packages/ui (this also fixes cursor loss when toggling diff view).
+- **Editor recreation caveat**: ⚠️ `SourceCodeBlock` rebuilds the CodeMirror view when extensions change (schema arriving after fetch, or the `$schema` URL being edited). The rebuild carries the document position, selection, AND focus over — the review round exposed that the first version of this never ran (the effect cleanup destroys the view and nulls the ref before the next effect body could capture it), which meant a rebuild mid-typing dumped focus to `<body>` and silently ate subsequent keystrokes. The cleanup now stashes state for the following effect body to restore; verified live by typing a full `$schema` line through two association changes.
+- **Fetch hygiene** (review round): the resolved URL passes through a 500ms "settle" query (`keepPreviousData`) before it can reach the network, so typing out a `$schema` URL fires zero fetches to garbage prefix hosts — exactly one request once the URL is stable. Errored fetches don't poison the infinite-staleTime cache (staleTime governs data; errored queries refetch on next mount).
 
 ## Checklist
 
@@ -50,10 +51,13 @@ Done. Implemented, unit-tested (12 egress-free specs), and verified live in loca
 - `@codemirror/lang-json`, `@codemirror/lang-yaml`, `@codemirror/language` added to apps/os (previously only in packages/ui; same semver ranges so pnpm dedupes to one instance — necessary for the `jsonLanguage.data.of(...)` singleton to match).
 - Live verification (local dev, project `test`, repo `/repos/demo`): seeded schema-violating files via the itx CLI, then a playwright walkthrough. Verified: positioned squigglies + hover docs for package.json / tsconfig / `$schema` / yaml modeline / workflow `name:`; live edits re-lint without cursor loss; schema-driven autocomplete (`"no` → noEmit, noImplicitAny, …) inside tsconfig's compilerOptions; with `**schemastore.org**` requests aborted: zero squigglies, muted "schema unavailable" note, editor fully usable.
 - **Known limitation**: json-schema-library (codemirror-json-schema's validator) doesn't produce positioned errors inside the github-workflow schema's `oneOf`-heavy `jobs` subtree (e.g. `runs-on: 123` is silent; `name: 123` and missing required top-level props do squiggle). Flat schemas (pnpm-workspace, package.json, tsconfig) validate deeply and precisely. Upstream validator quality issue, out of scope.
+- **Review round** (PR review 4656795407, all four threads handled): (1) debounced schema fetches via a 500ms settle query + `content.includes('"$schema"')` guard before the per-keystroke JSON.parse; (2) JSONC/tsconfig strict-parse squiggles → coordinated with the stacked #1774 (`repo-ide-jsonc`), not fixed here; (3) two more upstream pointer potholes documented below; (4) regex fallback anchored to shallow indent (+2 unit specs, now 14). While live-verifying (1), found and fixed the SourceCodeBlock rebuild focus-loss bug described in the design decisions.
 
 ## Follow-ups deliberately left out
 
-- File an upstream codemirror-json-schema issue/PR for the @lezer/json 1.0.3 colon regression (our `parseJsonDocumentColonFixed` can be deleted once fixed upstream).
-- jsonc/json5 handling: `.jsonc` files (and comment-tolerant tsconfig.json) hit the strict JSON parse linter; codemirror-json-schema has a `/json5` mode that could back a `jsonc` language lane.
+- File an upstream codemirror-json-schema issue/PR for the @lezer/json 1.0.3 colon regression (our `parseJsonDocumentColonFixed` can be deleted once fixed upstream). The reviewer confirmed two adjacent potholes the eventual filing should cover too (both verified against installed packages):
+  1. **Array-of-objects positions**: `[{"x": 1}, {"y": 2}]` with `items: {type: "string"}` puts the type errors on the `,` and `]` — upstream's `Object`-token branch takes `object.nextSibling`. The `,` case is new in @lezer/json 1.0.3 (its changelog: "Emit tokens for colons **and commas**"); the `]` case exists even on 1.0.2. The right fix upstream is using the object's own `keyFrom/keyTo`, not a sibling shift, so our colon heuristic can't be trivially extended.
+  2. **Object-valued property errors vanish**: `{"a": {"b": 1}}` with `a: {type: "string"}` yields zero diagnostics — upstream's `Object` branch overwrites the pointer entry without `valueFrom/valueTo` and the linter skips it. Present on 1.0.2 too (not a regression from this PR), and likely a second contributor to the github-workflow `jobs` silence alongside json-schema-library's oneOf handling.
+- jsonc/json5 handling: `.jsonc` files (and comment-tolerant tsconfig.json) hit the strict JSON parse linter; **staged as #1774** (branch `repo-ide-jsonc`, based on this one) — a comment/trailing-comma-tolerant lane via codemirror-json-schema's `/json5` mode.
 - Schema-aware validation inside the unified **diff** view baselines on the working doc and works, but the merge-view original side is unvalidated (fine — it's HEAD).
 - Consider showing schema `description` hovers on property _names_ in non-error positions more prominently (works today via jsonSchemaHover, but the completion info panel renders raw markdown fences as plain text — upstream rendering nit).
