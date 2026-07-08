@@ -411,6 +411,8 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
+  /** The platform's default agent policy, as data. */
+  defaults: AgentDefaults;
 }
 
 /**
@@ -876,6 +878,25 @@ export interface Stream {
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle>;
+}
+
+/**
+ * The `itx.agents.defaults` built-in: default agent POLICY as data. The
+ * project worker owns applying it — the seeded template reacts to
+ * `stream/child-stream-created` for `/agents/**` by appending
+ * `forPath(path).events` to the new agent stream (and edits the result to
+ * customize agents). The platform appends only mechanics (processor
+ * subscriptions); an agent nobody configures runs on stock defaults.
+ */
+export interface AgentDefaults {
+  __describe(): Promise<Description>;
+  /**
+   * The default policy for one agent path: the named pieces plus the exact
+   * event batch that applies them. Events are idempotency-keyed on
+   * (projectId, path), so appending them twice — or racing a redelivery — is
+   * a no-op.
+   */
+  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1789,6 +1810,22 @@ export type FlattenedCapabilityInvocation = {
 /** Durable expression over the project ITX surface. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  provider?: AgentLlmProvider;
+  model?: string;
+};
+
+/** The default policy for one agent path: the named pieces plus the exact
+ * event batch that applies them (idempotency-keyed, safe to re-append). */
+export type AgentDefaultPolicy = {
+  systemPrompt: string;
+  provider: AgentLlmProvider;
+  model: string;
+  events: AgentPolicyEventInput[];
+};
+
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
   contentType: string;
@@ -1957,6 +1994,17 @@ export type WorkspaceFileInfo = {
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
+
+export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
+
+/** The policy events an agent is born with, as append inputs. Typed
+ * structurally (not against the full event catalog) so the SDK projection
+ * stays self-contained. */
+export type AgentPolicyEventInput = {
+  type: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+};
 
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;
