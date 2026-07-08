@@ -169,6 +169,7 @@ export async function deploy(
   try {
     environmentConfigLease = await claimEnvironmentConfigLease({
       createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
+      eraseSlotData: makePreviewSlotDataEraser(runtime),
       fetchPullRequestState: makePullRequestStateFetcher(
         context.githubToken,
         context.repositoryFullName,
@@ -556,6 +557,7 @@ export async function assign(options: AssignOptions = {}) {
 
   const current = await readCloudflarePreviewState(context);
   const result = await assignEnvironmentConfigLease({
+    eraseSlotData: makePreviewSlotDataEraser(runtime),
     fetchPullRequestState: makePullRequestStateFetcher(
       context.githubToken,
       context.repositoryFullName,
@@ -846,6 +848,12 @@ export async function reclaim(options: ReclaimOptions = {}) {
   logPreview(
     `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""})`,
   );
+  // Erase BEFORE releasing: the stale lease still parks the slot, so nobody
+  // can acquire it and deploy fresh data mid-wipe. A reclaimed slot is dirty
+  // by definition (the holder's cleanup — which erases on the way out —
+  // didn't run), so an erase failure leaves the lease in place and throws
+  // rather than returning a dirty slot to the pool.
+  await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -853,6 +861,7 @@ export async function reclaim(options: ReclaimOptions = {}) {
   });
   return {
     released: result.released,
+    erased: true,
     slug,
     reclaimedFrom: slot.holder,
     verdict: slot.verdict,
@@ -2896,6 +2905,46 @@ async function runPreviewDeployCommand(input: {
   });
 }
 
+/**
+ * Erase a preview slot's user data before handing the slot to a new holder.
+ * Reclaim paths MUST run this: a reclaim only ever happens because the
+ * previous holder's cleanup — which normally erases on the way out — failed
+ * or never ran, so a reclaimed slot is dirty by definition. Deploying over
+ * stale identity data breaks the next tenant (observed 2026-07-07 on
+ * preview-5: 208 orphaned project-directory KV keys against an empty auth D1
+ * → every itx project lookup answered "KV GET failed: 500").
+ */
+type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
+
+/**
+ * The real {@link EraseSlotData}: the os app's destroy command, which is the
+ * erase-data script — it wipes the slot's auth D1 and project-directory KV
+ * (the data plane every preview app shares) and leaves infrastructure alone.
+ * The deploy that follows the reclaim re-seeds auth's OAuth client.
+ */
+function makePreviewSlotDataEraser(runtime: {
+  commandEnvironment: NodeJS.ProcessEnv;
+  repositoryRoot: string;
+  signal?: AbortSignal;
+}): EraseSlotData {
+  return async ({ dopplerConfig, slug }) => {
+    const startedAt = Date.now();
+    logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
+    const result = await runPreviewDeployCommand({
+      app: cloudflarePreviewApps.os,
+      commandEnvironment: runtime.commandEnvironment,
+      dopplerConfig,
+      operation: "down",
+      repositoryRoot: runtime.repositoryRoot,
+      signal: runtime.signal,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(commandFailureMessage(result, `Erasing ${slug} data failed.`));
+    }
+    logPreview(`erased ${slug} data (${formatDurationMs(Date.now() - startedAt)})`);
+  };
+}
+
 function logPreview(message: string) {
   console.error(`[preview] ${message}`);
 }
@@ -3060,6 +3109,13 @@ async function classifyEnvironmentConfigLeases(input: {
       return {
         slug: resource.slug,
         verdict,
+        // What `eraseSlotData` needs to wipe the slot. Falls back to the
+        // slug-derived config (preview-3 → preview_3) for slots that have
+        // never been leased and so carry no data payload yet.
+        dopplerConfig:
+          typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
+            ? resource.data.dopplerConfig.trim()
+            : resource.slug.replaceAll("-", "_"),
         holder,
         pullRequestUrl: holderPullRequestUrl(holder),
         pullRequestState: holderPullRequestState,
@@ -3088,6 +3144,7 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * it, and GitHub confirms that before we touch anything.
  */
 async function tryReclaimOrphanedEnvironmentConfigLease(input: {
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
@@ -3117,6 +3174,31 @@ async function tryReclaimOrphanedEnvironmentConfigLease(input: {
       logPreview(
         `reclaimed orphaned slot ${orphan.slug}: it was leased by ${orphan.holder ?? "unknown holder"} whose PR is closed (${orphan.pullRequestUrl ?? "no PR url"}) — their cleanup must have failed`,
       );
+      // The dead holder's cleanup is what erases a slot on the way out, and a
+      // reclaim only happens because that cleanup didn't run — so the slot
+      // still holds the dead PR's data. Erase before handing it over, while
+      // this fresh lease parks the slot against other takers.
+      try {
+        await input.eraseSlotData({
+          dopplerConfig: parseEnvironmentConfigLeaseData(lease.data).dopplerConfig,
+          slug: lease.slug,
+        });
+      } catch (error) {
+        // Never hand out a dirty slot. Give the lease back and try the next
+        // orphan; the acquire loop revisits this one on a later poll (erase
+        // failures are usually transient doppler/API hiccups).
+        logPreview(
+          `erase failed on reclaimed ${lease.slug} — releasing it rather than handing over a dirty slot: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await input.semaphore
+          .release({ type: lease.type, slug: lease.slug, leaseId: lease.leaseId })
+          .catch((releaseError: unknown) => {
+            logPreview(
+              `failed to release ${lease.slug} after the failed erase (it will expire on its own): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+            );
+          });
+        continue;
+      }
       return lease;
     }
   }
@@ -3132,6 +3214,8 @@ async function tryReclaimOrphanedEnvironmentConfigLease(input: {
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
+  /** Required so no acquire path can hand out a reclaimed slot without wiping it. */
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
@@ -3161,6 +3245,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
       }
 
       const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
+        eraseSlotData: input.eraseSlotData,
         fetchPullRequestState: input.fetchPullRequestState ?? null,
         holder: input.holder,
         leaseMs: input.leaseMs,
@@ -3213,6 +3298,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
  */
 async function claimEnvironmentConfigLease(input: {
   createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
@@ -3255,6 +3341,7 @@ async function claimEnvironmentConfigLease(input: {
 
   const lease = await acquireAnyEnvironmentConfigLease({
     semaphore,
+    eraseSlotData: input.eraseSlotData,
     fetchPullRequestState: input.fetchPullRequestState,
     holder: input.holder,
     leaseMs: input.leaseMs,
@@ -3274,6 +3361,7 @@ async function claimEnvironmentConfigLease(input: {
  * no longer records.
  */
 async function assignEnvironmentConfigLease(input: {
+  eraseSlotData: EraseSlotData;
   fetchPullRequestState?: PullRequestStateFetcher | null;
   force?: boolean;
   holder: string;
@@ -3361,6 +3449,7 @@ async function assignEnvironmentConfigLease(input: {
     lease = toEnvironmentConfigLease(
       await acquireAnyEnvironmentConfigLease({
         semaphore: input.semaphore,
+        eraseSlotData: input.eraseSlotData,
         fetchPullRequestState: input.fetchPullRequestState,
         holder: input.holder,
         leaseMs: input.leaseMs,
