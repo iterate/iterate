@@ -42,7 +42,6 @@ project-scoped:
 /projects/:projectSlug/repos[/*]
 /projects/:projectSlug/secrets
 /projects/:projectSlug/streams[/*]
-/projects/:projectSlug/settings
 /new-project
 /admin[/projects, /repl, /streams]
 /itx-repl
