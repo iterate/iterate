@@ -190,6 +190,13 @@ doppler run --project os --config dev -- pnpm auth:mint --email agent+test@nusto
 # → opens straight onto /projects/my-proj
 ```
 
+**`pnpm getin` automates this whole recipe for local dev**: it finds (or
+detached-starts) the worktree's dev server, gets-or-creates the `test` project,
+mints `test+test@nustom.com` with matching claims, and opens the sign-in URL in
+your browser. `pnpm getin -w [name]` runs it against another worktree
+(bare `-w` lists them, most recently touched first); `--print` prints the URL
+instead of opening it.
+
 A signed-in _human_ never hits this: the real OAuth flow walks you through
 creating an org + project on first sign-in (`+test@nustom.com` test emails with
 OTP `424242` work for that flow too, fully headless).
