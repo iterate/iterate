@@ -123,9 +123,12 @@ options?: AgentChatSendOptions)`; also gained the previously-missing
 
 ## Possible follow-up
 
-- The legacy `{ message }` union in `types.ts` is visible to models because
-  `ITX_TYPES_SOURCE` embeds the file verbatim into agent system prompts — so
-  "undocumented" is only true for human-facing docs. If the streaming-preview
-  PR finds models still emitting the object form, the lever is to narrow the
-  PROMPT-FACING generated type surface to `sendMessage(message: string,
-options?)` while keeping the runtime union in the real contract.
+- ~~Narrow the prompt-facing type surface if models keep emitting the object
+  form~~ — moot: Misha asked for the runtime back-compat to be removed
+  entirely (2026-07-08), so the union is gone from types, runtime, and
+  prompts alike.
+- 2026-07-08 (post-review): Misha: "Remove the runtime backcompat." Done —
+  `sendMessage(message: string, options?: AgentChatSendOptions)` only. The
+  legacy `{ message, files? }` object branch, its mixed-form merge logic, and
+  the e2e legacy/mixed-form sends are all deleted; generated files
+  regenerated. The earlier back-compat Assumption above is superseded.

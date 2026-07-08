@@ -1662,25 +1662,15 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   }
 
   async sendMessage(...[message, options]: Parameters<AgentChat["sendMessage"]>) {
-    // Live agents have conversation history full of the legacy
-    // `sendMessage({ message, files? })` object form, and models imitate
-    // history, so it stays accepted here. The documented form is a plain
-    // string with an optional options second argument. A mixed call (legacy
-    // object + options) still honors the options rather than silently
-    // dropping an attachment; the object's own files win if both are given.
-    const input =
-      typeof message === "string"
-        ? { message, files: options?.files }
-        : { ...message, files: message.files || options?.files };
-    const trimmed = input.message.trim();
+    const trimmed = message.trim();
     if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
-      input.files === undefined || input.files.length === 0
+      options?.files === undefined || options.files.length === 0
         ? undefined
         : await storeAgentFileAttachments({
             agentPath: this.props.path,
             config: parseConfig(env),
-            files: input.files,
+            files: options.files,
             projectId: this.props.projectId,
           });
     const [event] = await this.stream.append({
