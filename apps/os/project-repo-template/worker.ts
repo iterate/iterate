@@ -90,20 +90,25 @@ export default class ProjectWorker extends IterateProjectWorker {
   }
 
   override async processEvent(event: StreamEvent): Promise<void> {
-    // React to anything happening anywhere in the project. For example:
-    //
-    //   if (
-    //     event.path === "/integrations/email" &&
-    //     event.type === "events.iterate.com/email/received"
-    //   ) {
-    //     const itx = await this.env.ITX.get();
-    //     await itx.streams.get("/mailroom").append({
-    //       type: "events.iterate.com/test/mail-logged",
-    //       idempotencyKey: `mail-logged:${event.path}@${event.offset}`,
-    //       payload: { subject: event.payload?.subject ?? null },
-    //     });
-    //   }
-    console.log("project event", event.path, event.type);
+    // React to anything happening anywhere in the project: one `if` per
+    // reaction, keyed on event.path + event.type. Delivery is at-least-once,
+    // so anything a reaction appends carries an idempotency key.
+
+    // THIS WORKER configures new agents. When any stream under /agents/ is
+    // born (a web chat, the onboarding agent, a Slack thread, an email
+    // thread), the platform announces it on the project root stream and this
+    // reaction appends the agent's policy: system prompt, model/provider,
+    // capability mounts, boot context. `itx.agents.defaults.forPath` returns
+    // the platform's defaults as data — edit the result (or pass overrides:
+    // { systemPrompt, provider, model }) to change how YOUR agents behave.
+    if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
+      const childPath = event.payload?.childPath;
+      if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
+        const itx = await this.env.ITX.get();
+        const defaults = await itx.agents.defaults.forPath(childPath);
+        await itx.streams.get(childPath).append(...defaults.events);
+      }
+    }
   }
 
   /**

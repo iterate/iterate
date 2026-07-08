@@ -2199,6 +2199,52 @@ describe("itx", () => {
     });
   });
 
+  test("Project worker births agents: policy from itx.agents.defaults, appended by the seeded template", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+
+    using project = itx.projects.create({ slug: "worker-births-agents" });
+    const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
+    using agentStream = project.streams.get(agentPath);
+
+    // Wait for the policy BEFORE materializing the stream, so the birth
+    // reaction (worker sees child-stream-created on "/") races nothing.
+    const config = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/config-updated"],
+      timeoutMs: 60_000,
+    });
+    const providerSelected = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
+      timeoutMs: 60_000,
+    });
+    const workspaceMount = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/capability-host/capability-provided"],
+      timeoutMs: 60_000,
+    });
+
+    // Any append materializes the agent stream; the platform announces it on
+    // the root stream, the project worker reacts with the defaults batch.
+    await agentStream.append({
+      type: "events.iterate.test/agent-policy-probe",
+      payload: {},
+    });
+
+    const configEvent = await config;
+    expect(configEvent.payload?.systemPrompt).toContain("async (itx)");
+    expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
+    expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+
+    // The subscriptions (mechanics) still come from the platform, not the worker.
+    const events = await agentStream.getEvents({ afterOffset: 0 });
+    const subscriptions = events.filter(
+      (event) => event.type === "events.iterate.com/stream/subscription-configured",
+    );
+    expect(subscriptions.length).toBeGreaterThanOrEqual(4);
+  });
+
   test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
     using session = withItxSession();
     using itx = session.authenticate({

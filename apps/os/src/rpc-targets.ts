@@ -235,6 +235,12 @@ import {
 } from "./domains/email/utils.ts";
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
+import {
+  agentDefaultsForPath,
+  deploymentDefaultLlmProvider,
+  type AgentDefaultPolicy,
+  type AgentDefaultsOverrides,
+} from "./domains/agents/agent-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -656,7 +662,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         readFile:
           'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
         syncFromGithub:
-          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
@@ -774,8 +780,13 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * The transfer is server-side (the Artifacts service imports straight from
+   * GitHub), so any history size syncs. `depth` optionally prunes to the
+   * newest N commits — GitHub retains the full history, and a later deeper
+   * sync can always widen the window.
    */
-  syncFromGithub(input: { force?: boolean } = {}): Promise<GithubSyncResult> {
+  syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);
   }
 
@@ -847,7 +858,11 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     return describeNode({
       instructions:
         'Agent catalog: get("/agents/<name>") returns the agent control surface; list() the known agent streams.',
-      children: { get: "One agent by path.", list: "Known agents (from project state)." },
+      children: {
+        get: "One agent by path.",
+        list: "Known agents (from project state).",
+        defaults: "The platform's default agent policy, as data (forPath).",
+      },
       parent: "a project itx (itx.agents)",
     });
   }
@@ -875,6 +890,50 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]> {
     return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  }
+
+  /** The platform's default agent policy, as data. */
+  get defaults(): AgentDefaultsRpcTarget {
+    return new AgentDefaultsRpcTarget(this.props);
+  }
+}
+
+/**
+ * The `itx.agents.defaults` built-in: default agent POLICY as data. The
+ * project worker owns applying it — the seeded template reacts to
+ * `stream/child-stream-created` for `/agents/**` by appending
+ * `forPath(path).events` to the new agent stream (and edits the result to
+ * customize agents). The platform appends only mechanics (processor
+ * subscriptions); an agent nobody configures runs on stock defaults.
+ */
+class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, provider, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, provider selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, provider?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
+      children: { forPath: "Default policy (and its event batch) for one agent path." },
+      parent: "the agent catalog (itx.agents.defaults)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /**
+   * The default policy for one agent path: the named pieces plus the exact
+   * event batch that applies them. Events are idempotency-keyed on
+   * (projectId, path), so appending them twice — or racing a redelivery — is
+   * a no-op.
+   */
+  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+    return agentDefaultsForPath({
+      agentPath: normalizeAgentPath(path),
+      deploymentLlmProvider: deploymentDefaultLlmProvider(env),
+      projectId: this.props.projectId,
+      ...(overrides === undefined ? {} : { overrides }),
+    });
   }
 }
 

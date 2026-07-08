@@ -14,9 +14,10 @@
  *      vite.config.ts regenerates wrangler.jsonc from envs.ts before the
  *      cloudflare plugin reads it — the build always sees a fresh config.
  *   3. `wrangler deploy --config <built config> --secrets-file <doppler>` —
- *      secrets land atomically in the same version as the code (with a plain
- *      deploy first when the worker has no DO classes yet, i.e. a brand-new
- *      env's first upload — see deploy-helpers.ts).
+ *      secrets land atomically in the same version as the code, and the
+ *      config's declarative Durable Object `exports` are reconciled
+ *      server-side in the same upload (a brand-new env, a parked slot and a
+ *      steady-state redeploy are all the same single command).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
  *
@@ -29,8 +30,14 @@ import { envs } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
+import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
 import {
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SANDBOX_INSTANCE_TYPES,
+} from "../src/domains/sandboxes/instance-types.ts";
+import {
+  COMPATIBILITY_DATE,
   envShapedVars,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
@@ -84,6 +91,20 @@ export default async function deploy(
       // SEARCH_BUCKET (itx.search corpus, SPIKE) is likewise bound at upload
       // time, so existing envs need it created on their next deploy too.
       await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`);
+
+      // Sandbox container classes must exist container-enabled BEFORE the
+      // exports deploy — the exports reconciliation can't enable namespaces
+      // it creates (upstream gap; see ensureContainerClasses). Makes
+      // brand-new environments deployable from scratch; no-op everywhere
+      // else.
+      await ensureContainerClasses({
+        ctx,
+        workerName: ctx.env.osWorkerName,
+        containerClassNames: SANDBOX_INSTANCE_TYPES.map(
+          (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+        ),
+        compatibilityDate: COMPATIBILITY_DATE,
+      });
 
       // The builder sidecar deploys FIRST: the os worker's BUILDER service
       // binding is by name, and a binding to a not-yet-existing script fails
