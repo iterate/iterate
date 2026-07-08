@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { ProjectRpcTarget } from "../../sdk.ts";
+import type { ItxBinding } from "../../sdk.ts";
 
 // A stateless app: a plain WorkerEntrypoint the root project worker routes
 // to when ingress selects the "hello" app. It still gets the full project
@@ -7,7 +7,7 @@ import type { ProjectRpcTarget } from "../../sdk.ts";
 // APPS map in the root worker.ts), so it can import shared modules like
 // sdk.ts.
 export default class HelloApp extends WorkerEntrypoint<{
-  ITX: { get(): Promise<ProjectRpcTarget> };
+  ITX: ItxBinding;
 }> {
   async fetch(req: Request): Promise<Response> {
     const project = await this.env.ITX.get();

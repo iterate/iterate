@@ -186,6 +186,7 @@ export interface ProjectRpcTarget {
   __describe(): Promise<ProjectDescription>;
   ai: Ai;
   agents: AgentCollection;
+  browser: CfBrowserCapability;
   /**
    * This scope's own capability host: the durable capability table behind
    * this itx (`provideCapability`, `revokeCapability`, `runScript`,
@@ -209,15 +210,33 @@ export interface ProjectRpcTarget {
   email: EmailCapability;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   examples: ItxExampleCatalog;
-  /** Slack/Google connections + the connection-scoped API proxies (`integrations.gmail`, `integrations.slack`). */
+  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
+  files: Files;
+  /** The integrations collection: built-in integrations as dispatch branches
+   * on the dotted-call surface (`itx.integrations.slack["main-slack"].chat
+   * .postMessage(...)`), provided integrations through the capability table,
+   * management verbs, `list()`. */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
+  /** Parallel API, preconfigured with Iterate's platform API key. */
+  parallel: OpenApiRpc;
   processor: StreamProcessorRpc<ProjectProcessorState>;
+  /**
+   * This project's stable id (`prj_…`). Handy inside scripts: `await
+   * itx.projectId` answers "which project am I running in", and `await
+   * itx.capabilityHost.path` answers "at which scope" (`"/"` for the project
+   * root, `/agents/bla` for an agent — the agent's stream path).
+   */
+  projectId: string;
   repo: Repo;
   repos: ProjectRepoCollection;
   /** Path-addressed sandboxes (`itx.sandboxes.get(path)`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
+  /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
+  scheduler: Scheduler;
+  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
+  schedulers: SchedulerCollection;
   secrets: SecretCollection;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
@@ -244,6 +263,7 @@ export interface ProjectRpcTarget {
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat extends Describable {
   /**
+<<<<<<< HEAD
    * Say something to the user — pass the message as a plain string:
    * `await itx.chat.sendMessage("Here you go!")`. `options.files` attaches
    * generated files, which render inline in the chat.
@@ -258,21 +278,237 @@ export type AgentChatSendOptions = {
     data: string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
     filename: string;
   }>;
+=======
+   * Say something to the user. `files` attaches project files to the message
+   * — THE way to hand the user something you generated (e.g. an `itx.ai.run`
+   * image: base64 straight into `data`, never pasted into message text).
+   * Attached images render inline in the chat and stay visible to the model
+   * on later turns.
+   */
+  sendMessage(input: {
+    message: string;
+    files?: Array<{ contentType: string; data: FileData; filename: string }>;
+  }): Promise<StreamEvent>;
+}
+
+/**
+ * Bytes accepted by file-writing APIs. Strings are ALWAYS decoded as base64
+ * (a full `data:` URL also works) — that is what Workers AI image models
+ * return, so `itx.ai.run` output pipes straight in.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
+/** A stored project file: its itx path plus wire facts. */
+export type ProjectFileMetadata = {
+  contentType: string;
+  path: string;
+  size: number;
+};
+
+/**
+ * Project file storage, R2-backed. Paths are project-scoped, mutable, and
+ * last-write-wins; files attached to agent conversations live under the
+ * agent's own path. Bytes are served to any HTTP client via signed URLs
+ * (`FileHandle.url()`).
+ */
+export interface Files extends Describable {
+  /** A handle for the file at `path` — a pure address, no I/O until called. */
+  get(path: string): FileHandle;
+}
+
+/** One project file, addressed by path. */
+export interface FileHandle extends Describable {
+  /** Store bytes at this path (creates or overwrites). */
+  put(input: { contentType?: string; data: FileData }): Promise<ProjectFileMetadata>;
+  /** The file's bytes. Throws when no file exists at this path. */
+  bytes(): Promise<Uint8Array>;
+  /**
+   * A signed public HTTPS URL for this file (default expiry 7 days). Anyone
+   * holding the URL can fetch the bytes — share it in chat, feed it to
+   * vision models, use it as an `<img src>`.
+   */
+  url(input?: { expiresInSeconds?: number }): Promise<string>;
+  delete(): Promise<void>;
+}
+
+/**
+ * A file reference attached to an agent input event: where the bytes live
+ * (`path`) plus a signed public `url` minted when the file was attached, so
+ * UIs and LLM providers can fetch it without another round trip.
+ */
+export type AgentFileAttachment = {
+  contentType: string;
+  filename: string;
+  path: string;
+  size: number;
+  url: string;
+>>>>>>> 319b92d93 (The dispatch model, stated and enforced: capability tree vs fetch lane)
 };
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
 export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
+  toMarkdown(
+    ...args: CfMarkdownConversionArgs
+  ): Promise<
+    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
+  >;
+}
+
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
+};
+
+export type CfMarkdownConversionResult = {
+  name: string;
+  format: "markdown" | "error";
+  mimeType?: string;
+  tokens?: number;
+  data?: string;
+  error?: string;
+};
+
+export type CfMarkdownSupportedFormat = {
+  extension: string;
+  mimeType: string;
+};
+
+export type CfMarkdownConversionArgs =
+  | []
+  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
+
+export type CfBrowserQuickAction =
+  | "content"
+  | "screenshot"
+  | "pdf"
+  | "markdown"
+  | "snapshot"
+  | "scrape"
+  | "json"
+  | "links"
+  | "crawl";
+
+export type CfBrowserQuickActionOptions = Record<string, unknown> &
+  ({ url: string } | { html: string });
+
+/** Cloudflare Browser Run binding exposed through ITX. */
+export interface CfBrowserCapability extends Describable {
+  /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  /** Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. */
+  quickAction(
+    action: CfBrowserQuickAction,
+    options: CfBrowserQuickActionOptions,
+  ): Promise<Response>;
+}
+
+export type CfImageTransformOptions = Record<string, unknown>;
+
+export type CfImageOutputOptions = { format: string } & Record<string, unknown>;
+
+export type CfImageDrawOptions = Record<string, unknown>;
+
+export type CfImageTransformInput = {
+  image: ReadableStream<Uint8Array>;
+  transforms?: CfImageTransformOptions[];
+  draws?: Array<{
+    image: ReadableStream<Uint8Array>;
+    options?: CfImageDrawOptions;
+    transforms?: CfImageTransformOptions[];
+  }>;
+  output: CfImageOutputOptions;
+};
+
+/** Cloudflare Images binding exposed through ITX as one-call helpers. */
+export interface CfImagesCapability extends Describable {
+  info(image: ReadableStream<Uint8Array>): Promise<unknown>;
+  transform(input: CfImageTransformInput): Promise<Response>;
+}
+
+export type CfVideoTransformOptions = Record<string, unknown>;
+
+export type CfVideoOutputOptions = {
+  mode: "video" | "spritesheet" | "frame" | "audio";
+} & Record<string, unknown>;
+
+export type CfVideoTransformInput = {
+  video: ReadableStream<Uint8Array>;
+  transform?: CfVideoTransformOptions;
+  output: CfVideoOutputOptions;
+};
+
+/** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */
+export interface CfVideosCapability extends Describable {
+  transform(input: CfVideoTransformInput): Promise<Response>;
+}
+
+/** Grouped first-party Cloudflare platform bindings under integrations.cf. */
+export interface CloudflareIntegrations extends Describable {
+  ai: Ai;
+  browser: CfBrowserCapability;
+  images: CfImagesCapability;
+  videos: CfVideosCapability;
 }
 
 /**
- * First-party outbound email through Cloudflare Email Service. Mail is sent
- * from the project's own address — `<slug>@<project hostname base>`, e.g.
+ * First-party email through Cloudflare Email Service. Mail is sent from the
+ * project's own address — `<slug>@<project hostname base>`, e.g.
  * `acme@iterate.app` — and an explicit `from` must match it: a project can
  * never send as another project or an arbitrary address. Requires the
  * deployment's sender domain to be onboarded for Email Sending in Cloudflare.
+ *
+ * Inbound mail routes into one agent stream per email thread
+ * (`/agents/email/t<threadId>`); inside such an agent scope, `reply` is the
+ * thread's reply door — it derives the counterpart, `Re:` subject, threading
+ * headers, and the thread's `<slug>+t<threadId>@…` Reply-To address from the
+ * thread stream, so agents never assemble threading by hand.
+ *
+ * `send` from ANY agent scope (Slack, web chat, …) binds the conversation to
+ * the calling agent: the outgoing Reply-To carries a thread token routed to
+ * that agent's own stream, so the human's replies arrive as the agent's
+ * inputs and `reply` continues the conversation from there.
  */
+/**
+ * One outbound email attachment: either a stored project file addressed by
+ * its `itx.files` path, or inline base64 content for bytes the caller already
+ * holds. Any file type works (PDFs, images, archives, …) within the Email
+ * Service limits: 32 attachments, 5 MiB total message size.
+ */
+export type EmailAttachmentInput =
+  | {
+      /** Project file path (`itx.files.get(path)`) to attach. */
+      path: string;
+      /** Override the attachment filename; defaults to the path's last segment. */
+      filename?: string;
+      /** Override the MIME type; defaults to the stored file's contentType. */
+      contentType?: string;
+    }
+  | {
+      filename: string;
+      /** Base64-encoded content. */
+      data: string;
+      /** MIME type; defaults to application/octet-stream. */
+      contentType?: string;
+    };
+
 export interface EmailCapability extends Describable {
   send(input: {
     to: string | string[];
@@ -282,28 +518,48 @@ export interface EmailCapability extends Describable {
     html?: string;
     /** Optional explicit sender; must equal the project's own address. */
     from?: string;
+    /** Optional Reply-To; must be the project address or a +tagged variant. */
+    replyTo?: string;
+    /** RFC 5322 threading: the message id this send replies to. */
+    inReplyTo?: string;
+    /** RFC 5322 threading: the References chain, oldest first. */
+    references?: string[];
+    /** Attachments: project files by path and/or inline base64 content. */
+    attachments?: EmailAttachmentInput[];
   }): Promise<{ from: string; messageId: string | null }>;
+  /**
+   * Reply within this agent's email conversation — an email thread agent, or
+   * any agent scope whose `send` bound a thread. Sends to the latest
+   * counterpart with correct subject and threading headers derived from the
+   * agent's stream. At least one of text/html is required.
+   */
+  reply(input: {
+    text?: string;
+    html?: string;
+    /** Optional subject override; defaults to `Re: <thread subject>`. */
+    subject?: string;
+    /** Attachments: project files by path and/or inline base64 content. */
+    attachments?: EmailAttachmentInput[];
+  }): Promise<{ from: string; to: string; messageId: string | null }>;
 }
 
 // -----------------------------------------------------------------------------
-// Integrations (Slack + Google) — the Phase 12 surface.
+// Integrations. The unit is a CONNECTION at a fully qualified path
+// `/integrations/<slug>/<connection>` — one integration (slack) can hold many
+// connections (main-slack, support-slack). Built-in integrations (code shipped
+// with the OS deployment) are named members of the collection; any other name
+// resolves through the ordinary ITX capability table, so a project adds its
+// own integration with `provideCapability({ path: ["integrations", ...] })` —
+// data, not deployment.
 // -----------------------------------------------------------------------------
 
-export type IntegrationProvider = "google" | "slack";
+/** The integration slugs whose call surfaces ship with the OS deployment
+ * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
+export type BuiltinIntegrationSlug = "github" | "google" | "slack";
 
-/**
- * Slack Web API proxy. `request` is the explicit form; dotted Web API method
- * paths (`itx.integrations.slack.chat.postMessage({...})`) resolve through the dynamic
- * path-call fallback onto `invokeCapability`.
- */
-export interface SlackCapability extends Describable {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  request(input: {
-    body?: Record<string, unknown>;
-    method: string;
-  }): Promise<Record<string, unknown>>;
-}
-
+/** Input to `itx.integrations.google["<connection>"].gmail.request(...)` — a
+ * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
+ * response is `{ data, headers, status, statusText }`. */
 export type GmailRequestInput = {
   body?: unknown;
   headers?: Record<string, string>;
@@ -312,16 +568,6 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
-/** Gmail REST proxy (`itx.integrations.gmail.request({ path: "/users/me/messages" })`). */
-export interface GmailCapability extends Describable {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
-    headers: Record<string, string>;
-    status: number;
-    statusText: string;
-  }>;
-}
-
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -329,45 +575,95 @@ export type IntegrationConnectionStatus = {
   metadata: Record<string, unknown>;
 };
 
+/**
+ * One entry of {@link ProjectIntegrations.list}. Discriminated on `source`:
+ * built-in entries always name a concrete connection (they come from
+ * `/integrations/<slug>/<connection>` journals); provided entries may be
+ * integration-level mounts (`connection: null` — one recipe serving every
+ * connection name beneath it, path `/integrations/<slug>`).
+ */
+export type IntegrationConnectionListEntry =
+  | {
+      connection: string;
+      integration: BuiltinIntegrationSlug;
+      /** The fully qualified connection path, e.g. `/integrations/slack/main-slack`. */
+      path: string;
+      source: "builtin";
+    }
+  | {
+      connection: string | null;
+      integration: string;
+      path: string;
+      source: "provided";
+    };
+
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
 
 /**
- * Project-scoped integration management (connection status, OAuth, disconnect)
- * plus the connection-scoped API proxies: `integrations.gmail` and
- * `integrations.slack` live here because they only work through the project's
- * connected accounts.
+ * The `itx.integrations` collection.
+ *
+ * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
+ * Built-in slugs (`slack`, `google`, `github`) dispatch to deployment code —
+ * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
+ * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
+ * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
+ * Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
+ * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
+ * there is NO generic `.api.request({ method, path })` shape, and the
+ * connection acts as a GitHub App INSTALLATION, so user-scoped
+ * `...ForAuthenticatedUser` endpoints answer 403 — and every
+ * other slug resolves through the ITX
+ * capability table under the `integrations` prefix. The exception is
+ * `itx.integrations.parallel`: a first-party API-key RPC target, not a
+ * connection and not returned by `list()`. For provided integrations,
+ * `itx.integrations.waitrose.mum.searchProducts("milk")` reaches whatever the
+ * project mounted at `["integrations", "waitrose", "mum"]`. There is no
+ * implicit connection: a built-in call without a connection name is an error.
+ * Management verbs (OAuth, disconnect) are connection-scoped.
  */
 export interface ProjectIntegrations extends Describable {
-  /** Gmail REST proxy for the project's connected Google account. */
-  gmail: GmailCapability;
-  /** Slack Web API proxy for the connected workspace (`integrations.slack.chat.postMessage(...)`). */
-  slack: SlackCapability;
-  completeGoogleConnect(input: {
-    code: string;
+  /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
+   * Transformations. Like `parallel`, these ride the deployment's own
+   * Cloudflare account — not a per-project connection. */
+  cf: CloudflareIntegrations;
+  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  parallel: OpenApiRpc;
+  /** Every connection the project holds: `/integrations/<slug>/<connection>`
+   * journals plus provided mounts from the capability table (deduped by path;
+   * a mount over its own webhook journal is one entry). */
+  list(): Promise<IntegrationConnectionListEntry[]>;
+  /** The dotted-call surface. Slack methods are unary — one body object:
+   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  /** Called by the app worker's OAuth callback route; authority is the
+   * HMAC-signed OAuth state minted by startOAuthFlow. */
+  completeConnect(input: {
+    /** OAuth authorization code (slack/google). */
+    code?: string;
+    /** GitHub App installation id — github's callback carries this, not a code. */
+    installationId?: string;
+    provider: BuiltinIntegrationSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
-  completeSlackConnect(input: {
-    code: string;
-    state: string;
-    userId: string | null;
-  }): Promise<CompleteConnectResult>;
-  disconnect(input: { provider: IntegrationProvider }): Promise<{ success: true }>;
-  getConnection(input: { provider: IntegrationProvider }): Promise<IntegrationConnectionStatus>;
+  disconnect(input: {
+    connection: string;
+    provider: BuiltinIntegrationSlug;
+  }): Promise<{ success: true }>;
+  getConnection(input: {
+    connection: string;
+    provider: BuiltinIntegrationSlug;
+  }): Promise<IntegrationConnectionStatus>;
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: IntegrationProvider;
+    provider: BuiltinIntegrationSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
   }): Promise<{ authorizationUrl: string }>;
 }
-
-export type RouteSlackWebhookResult =
-  | { ok: true; projectId: string }
-  | { ignored: "team-not-claimed"; ok: true };
 
 /** Agent catalog within one project. */
 export interface AgentCollection extends Describable {
@@ -389,6 +685,25 @@ export interface Agent {
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
+  /**
+   * Store files AND make them part of this agent's conversation in one call.
+   * The bytes land in project file storage under the agent's own path
+   * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all
+   * attachments (each with a signed public `url`) is appended to the agent
+   * stream — so the files show up as a single conversation message, and
+   * images become visible to vision-capable models on following turns. Pass
+   * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files
+   * WITHOUT starting an LLM turn (the right choice for files the agent
+   * itself generated, e.g. `itx.ai.run` images).
+   */
+  addFiles(input: {
+    files: Array<{ contentType: string; data: FileData; filename: string }>;
+    /** Conversation text accompanying the files. Defaults to a short attachment note. */
+    message?: string;
+    llmRequestPolicy?: {
+      behaviour: "dont-trigger-request" | "after-current-request" | "interrupt-current-request";
+    };
+  }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /**
    * Send-and-wait convenience: appends a user message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -412,6 +727,87 @@ export interface StreamCollection extends Describable {
 /** Project-scoped stream catalog with reduced-state listing. */
 export interface ProjectStreamCollection extends StreamCollection {
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * When a Schedule triggers. Exactly one canonical spelling per shape: a single
+ * ISO instant, a seconds interval (re-anchored on each trigger, so intervals
+ * drift by execution latency), or a cron expression with optional IANA
+ * timezone. Sub-minute rates belong to `every`; calendar points to `cron`.
+ */
+export type SchedulerRecurrence =
+  | { at: string }
+  | { every: number }
+  | { cron: string; timezone?: string };
+
+/**
+ * What a Schedule does when it triggers. A closed union so an `append` kind
+ * can be added later; the only kind today is running an itx script.
+ */
+export type SchedulerAction = {
+  kind: "itx-script";
+  /** A function-expression string, invoked as `fn(itx, schedule, trigger)`. */
+  script: string;
+};
+
+/**
+ * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
+ * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
+ * anything is appended — the event log has exactly one spelling of every
+ * schedule.
+ */
+export type SetScheduleInput = {
+  key: string;
+  metadata?: Record<string, unknown>;
+  recurrence: SchedulerRecurrence | { in: number };
+  /**
+   * itx script source: `async (itx, schedule, trigger) => { ... }`. A string,
+   * not a function — closures would silently not survive serialization.
+   * `schedule` is `{ key, path, recurrence, metadata?, setAt }` (`path` is the
+   * Scheduler stream this Schedule lives on); `trigger` is `{ executionId,
+   * scheduledFor, requestedAt, runCount }`. The itx is project-root scoped —
+   * `await itx.projectId` identifies the project.
+   */
+  script: string;
+};
+
+/** One Schedule as reduced from the Scheduler stream — the UI list row. */
+export type ScheduleView = {
+  action: SchedulerAction;
+  /** Offset of the `schedule-set` event that defined this version (audit provenance). */
+  definedAtOffset: number;
+  key: string;
+  metadata?: Record<string, unknown>;
+  /** ISO time of the next occurrence; null when exhausted or unparseable. */
+  nextTriggerAt: string | null;
+  recurrence: SchedulerRecurrence;
+  /** Triggers requested for this key since it was (re)set. */
+  runCount: number;
+  /** When this version of the Schedule was set. */
+  setAt: string;
+};
+
+/**
+ * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
+ * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
+ * append, `list` reads reduced state, and every Trigger's request and outcome
+ * are appended back, so the stream is the complete audit log. Scripts run
+ * with project-root itx authority, at least once per Trigger (derive append
+ * idempotency keys from `trigger.executionId`).
+ */
+export interface Scheduler extends Describable {
+  /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
+  set(input: SetScheduleInput): Promise<ScheduleView>;
+  /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
+  cancel(key: string): Promise<void>;
+  list(): Promise<ScheduleView[]>;
+  /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */
+  trigger(key: string): Promise<{ executionId: string }>;
+}
+
+/** Path-addressed Scheduler catalog; `itx.scheduler` is `get("/scheduler/primary")`. */
+export interface SchedulerCollection extends Describable {
+  get(path: string): Scheduler;
 }
 
 /**
@@ -555,7 +951,9 @@ export interface SecretCollection extends Describable {
   list(): Promise<StreamListItem[]>;
 }
 
-/** Path-addressed secret capability. Secret material has no public read API. */
+/** Path-addressed secret capability. Secret material has no public read API:
+ * material never leaves the Secret Durable Object except substituted into a
+ * request bound for one of the secret's pinned egress hosts. */
 export interface Secret extends Describable {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
@@ -565,8 +963,68 @@ export interface Secret extends Describable {
 
 export type SecretUpdateInput = {
   egress?: { urls: string[] };
-  material?: string;
+  /** Any serializable value (write-only, one JSON blob). A plain string keeps
+   * the whole-material placeholder working; structured material is addressed
+   * by `field` in placeholders (design §2.1). */
+  material?: unknown;
+  /** A named refresh strategy the secret runs in trusted DO code when a
+   * substituted request 401s (or a referenced field is missing), or `null` to
+   * clear it. Omitted leaves any configured strategy unchanged. */
+  refresh?: SecretRefresh | null;
 };
+
+/**
+ * A reference to a deployment-owned platform credential, resolved from typed
+ * AppConfig in trusted platform code — never stored in project material, never
+ * readable. Each known config path carries its own allowed-origin list
+ * (platform-secrets.ts), so a credential can only ever be sent to the hosts it
+ * belongs to, no matter who configured the reference.
+ */
+export type PlatformCredsRef = { platform: string };
+
+/**
+ * A named credential-refresh strategy a secret runs in its own trusted DO
+ * code — one shared implementation per protocol instead of a worker copied
+ * into every secret. Client credentials come from the secret's own material
+ * (`"material"`, the bring-your-own-app case) or a platform config reference
+ * (built-ins). Exchange endpoints must fall within the secret's pinned egress
+ * hosts, so refresh preserves the cell invariant: bytes only ever leave toward
+ * pinned hosts.
+ */
+export type SecretRefresh =
+  | {
+      kind: "oauth-refresh-token";
+      /** RFC 6749 refresh_token grant target (e.g. the provider's /token URL).
+       * Its origin must be within the secret's pinned egress hosts. */
+      tokenEndpoint: string;
+      /** Where the Basic client credential comes from: `"material"` reads
+       * clientId/clientSecret fields of this secret's own material. */
+      clientCreds: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "github-app-installation";
+      /** GitHub API origin (or a stand-in in e2e). Its origin must be within
+       * the secret's pinned egress hosts. */
+      apiBase: string;
+      /** The App id — the JWT issuer (public). */
+      appId: string;
+      /** The installation this connection acts as (public — it is the
+       * connection's external id, not secret material). */
+      installationId: string;
+      /** Where the App's RS256 private key comes from: `"material"` reads the
+       * privateKey field of this secret's own material (bring-your-own-App). */
+      privateKey: PlatformCredsRef | "material";
+    }
+  | {
+      kind: "waitrose-session";
+      /** The Waitrose GraphQL endpoint (or a stand-in in e2e) the `NewSession`
+       * mutation is POSTed to. Its origin must be within the secret's pinned
+       * egress hosts. Waitrose has no token-refresh grant — re-login IS the
+       * refresh — so this strategy re-runs the login with `username`/`password`
+       * from this secret's own material and stores the returned `accessToken`.
+       * Material-only by nature: a Waitrose account is always the user's own. */
+      graphqlUrl: string;
+    };
 
 export type SecretDescription = {
   audit: {
@@ -577,6 +1035,8 @@ export type SecretDescription = {
   };
   egress: { urls: string[] };
   hasMaterial: boolean;
+  /** The configured refresh strategy's kind, or null when none is configured. */
+  refresh: SecretRefresh["kind"] | null;
 };
 
 export type StreamListItem = {
@@ -584,10 +1044,39 @@ export type StreamListItem = {
   path: string;
 };
 
+export type ProjectCustomDomainStatus =
+  | "requested"
+  | "provisioning"
+  | "pending_validation"
+  | "active"
+  | "failed"
+  | "removing";
+
+export type ProjectCustomDomainValidationRecord = {
+  name: string;
+  status: string | null;
+  value: string;
+};
+
+export type ProjectCustomDomain = {
+  cloudflareHostnameId: string | null;
+  createdAt: string;
+  error: string | null;
+  hostname: string;
+  hostnameStatus: string | null;
+  ownershipVerification: { name: string; value: string } | null;
+  sslStatus: string | null;
+  status: ProjectCustomDomainStatus;
+  updatedAt: string;
+  validationRecords: ProjectCustomDomainValidationRecord[];
+  wildcard: boolean;
+};
+
 export type ProjectProcessorState = {
   agents: StreamListItem[];
   createRequest: { projectId: string; slug: string } | null;
   created: boolean;
+  customDomains: ProjectCustomDomain[];
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   repos: StreamListItem[];
@@ -670,20 +1159,36 @@ export interface StreamProcessorRpc<State = unknown> {
  * `flattenNestedPaths` mirrors `provideCapability`: dotted calls on the stub
  * become ONE `invokeCapability({ path, args })` call that the worker's own
  * `invokeCapability` method dispatches in userspace (one RPC per call),
- * instead of the default member-by-member replay on the entrypoint.
+ * instead of the default member-by-member replay on the entrypoint. Under a
+ * flattened mount the intermediate path segments are pure DATA — they are
+ * not nodes of any tree, on either side of the wire, until the worker's
+ * dispatcher interprets them. `worker.slack.chat.postMessage(x)` delivers
+ * `{ path: ["slack", "chat", "postMessage"], args: [x] }`; nothing named
+ * `slack` exists anywhere.
+ *
  * `buildBudgetMs` bounds how long a call waits on a cold source build; past
  * it the call fails with an error whose `name` is
  * `"WorkerBuildInProgressError"` — the NAME is the contract (it survives
- * Workers RPC; class identity does not), so userspace matches
- * `error.name === "WorkerBuildInProgressError"` to render its own building
- * page (the seeded template's router does exactly this).
+ * Workers RPC; class identity does not). HTTP through the fetch lane never
+ * sees that error: a budget-expired build answers a 503 building page marked
+ * with the `x-iterate-worker-building` header instead.
  */
 export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
 };
 
-/** Capability-tree entry point for ad-hoc project-scoped worker refs. */
+/**
+ * Capability-tree entry point for ad-hoc project-scoped worker refs.
+ *
+ * The stub `get` returns speaks METHOD CALLS (Workers RPC): arguments and
+ * results are serialized data or live stubs. It is not an HTTP surface — a
+ * worker method named `fetch` is just a method here, and a Response it
+ * returns is a serialized copy, never a protocol act. HTTP into a dynamic
+ * worker (pages, streaming bodies, WebSocket upgrades) goes through the
+ * fetch lane instead: project ingress for app hosts, `env.ITX.fetch` from
+ * worker code (see `ItxBinding`).
+ */
 export interface DynamicWorkerCollection extends Describable {
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
@@ -1218,6 +1723,32 @@ export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorker
 
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+
+/**
+ * The `env.ITX` binding every dynamic worker receives — one object, two
+ * channels, split by what the wire can carry:
+ *
+ * - `get()` — the capability tree. An itx scoped to the worker's path;
+ *   everything on it is Workers RPC method calls whose arguments and results
+ *   are serialized data or live stubs. No name on this tree is
+ *   protocol-special (`fetch` included).
+ * - `fetch(request)` — the fetch lane. Real HTTP into a sibling dynamic
+ *   worker, selected by the `x-iterate-worker-dispatch` header (JSON
+ *   `{ ref, buildBudgetMs? }`, the same ref shape `workers.get` takes). This
+ *   is a chain of real workerd fetch hops end to end, so it is the ONLY
+ *   channel that can carry protocol semantics — WebSocket upgrades reach the
+ *   target class's own `fetch` handler and the 101's socket tunnels back.
+ *   A cold build answers a 503 building page marked
+ *   `x-iterate-worker-building` (auto-refreshing for browsers, retryable for
+ *   WebSocket reconnect loops).
+ *
+ * Authority is identical on both channels: the binding's own scope, minted by
+ * the host — worker code never picks its own project.
+ */
+export type ItxBinding = {
+  fetch(request: Request): Promise<Response>;
+  get(): Promise<ProjectRpcTarget>;
+};
 
 /**
  * Slack Web API surface exposed by the seeded project worker
