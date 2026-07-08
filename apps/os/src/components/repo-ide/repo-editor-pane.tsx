@@ -8,6 +8,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { repoFileKind } from "./repo-file-kinds.ts";
+import { useRepoTypeScriptExtensions } from "./repo-typescript.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -72,6 +73,17 @@ export function RepoEditorPane({
   // snapshot when one exists, else HEAD.
   const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
 
+  // TypeScript language service (diagnostics, hover, autocomplete) for
+  // ts/tsx/js/jsx working-tree buffers — empty for everything else, and for
+  // the readonly Index view (an inspection surface, not a live buffer).
+  const typeScriptExtensions = useRepoTypeScriptExtensions({
+    projectId,
+    repoPath,
+    commitOid: headCommitOid,
+    path,
+    enabled: kind.kind === "text" && !stagedView,
+  });
+
   // The plain editor carries vscode-style gutter bars for lines differing
   // from the baseline; diff mode swaps in the unified (inline) merge view on
   // the same document, whose per-chunk "+" controls STAGE the chunk — the
@@ -79,9 +91,13 @@ export function RepoEditorPane({
   // listener below writes that doc back as the staged snapshot. Memoized so
   // the editor view survives re-renders.
   const editorExtensions = useMemo(() => {
-    if (kind.kind !== "text" || textBaseline === undefined) return [];
-    if (!diffOpen) return [changedLinesGutter(textBaseline)];
+    if (kind.kind !== "text") return [];
+    // A never-committed file has no baseline to diff against, but the
+    // language service still applies.
+    if (textBaseline === undefined) return typeScriptExtensions;
+    if (!diffOpen) return [...typeScriptExtensions, changedLinesGutter(textBaseline)];
     return [
+      ...typeScriptExtensions,
       unifiedMergeView({
         original: textBaseline,
         allowInlineDiffs: true,
@@ -113,7 +129,7 @@ export function RepoEditorPane({
       }),
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks are stable store methods; content inputs drive recreation
-  }, [kind.kind, textBaseline, headContent, diffOpen]);
+  }, [kind.kind, textBaseline, headContent, diffOpen, typeScriptExtensions]);
 
   // The readonly staged view diffs HEAD against the staged snapshot with no
   // chunk controls — inspection only.
