@@ -12,8 +12,8 @@ base: itx-chat-send-message-string
 Mostly done. The pure parser (`extractStreamingSendMessagePreview`) is
 implemented with 15 hard unit tests (token-by-token prefix simulation), and
 wired into `LiveStepStream` in `agent-feed.tsx` — the preview renders as an
-in-flight assistant message bubble above the streaming code block. Main
-missing piece: PR-body media (screenshot/recording) — follow-up. PR 2 of 2,
+in-flight assistant message bubble above the streaming code block. A demo
+recording of a real streaming turn is in the PR body. PR 2 of 2,
 stacked on `itx-chat-send-message-string` (#1735) — depends on the
 plain-string `itx.chat.sendMessage("...")` form landing first.
 
@@ -103,9 +103,10 @@ simple. It must be visually honest that it's in-progress.
       step (`LiveStepStream` is only mounted for running llm steps), and the
       real message row lands after the script executes — see log for why the
       running-code phase deliberately gets no preview_
-- [ ] Screenshot / short recording in the PR body
-      _skipped for now — driving a real browser with a mid-stream agent turn
-      is heavy/flaky; unit tests were the priority. Follow-up._
+- [x] Screenshot / short recording in the PR body
+      _done on request — GIF of a real agent turn against local dev in the PR
+      body's "Demo" section (user-attachments asset 879eaf14); recorded with
+      the browser gif recorder, uploaded via GitHub's attachment flow_
 - [x] `pnpm typecheck && pnpm lint && pnpm format && pnpm test` green
       _run from the worktree root; live-env e2e lanes not run (need a running
       environment)_
@@ -155,3 +156,15 @@ simple. It must be visually honest that it's in-progress.
      markdown mode, so it's typographically identical to the settled
      `web-message-sent` row it hands off to (cursor blinks on its own line —
      streamdown owns the markdown DOM).
+- Demo recording (post-review): ran the OS dev server locally, drove a real
+  agent turn in the browser ("how many lines does AGENTS.md have? message me
+  first…"), and verified the feature end-to-end visually — the preview bubble
+  streams above the amber code block (markdown `.ts`/`AGENTS.md` inline code
+  renders via MessageResponse) and hands off to the settled row when the
+  script runs. Captured with the claude-in-chrome gif recorder. Gotchas for
+  next time: the recorder only keeps action-keyed frames (screenshots taken
+  while recording are mostly dropped — use no-op scroll-down ticks at the
+  feed bottom as frame generators), and the feed only follows streaming when
+  pinned to the bottom. Upload used gif export's drag/drop-to-coordinate
+  onto the PR-body textarea (file_upload rejects host paths); the drop
+  inserts at the pointer so the body was then rewritten cleanly via gh.
