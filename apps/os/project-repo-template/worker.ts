@@ -1,5 +1,18 @@
+import { WebClient } from "@slack/web-api";
 import { IterateProjectWorker, type DynamicWorkerRef, type StreamEvent } from "./sdk.ts";
 import { waitroseClient } from "./integrations/waitrose/client.ts";
+
+/** Configuration for the `slack` getter below. Commit changes here to point
+ * the SDK at your workspace: set `token` to a bot token, and leave
+ * `slackApiUrl` null for the real Slack API (override it only for mocks or
+ * staging proxies). */
+const slackConfig: {
+  slackApiUrl: string | null;
+  token: string | null;
+} = {
+  slackApiUrl: null,
+  token: null,
+};
 
 // The root project worker is a small ROUTER over the project's apps. Each app
 // is its own repo-backed dynamic worker built from this repo (multi-file
@@ -112,11 +125,11 @@ export default class ProjectWorker extends IterateProjectWorker {
   /**
    * The platform dispatches dotted calls on this worker as ONE flattened
    * `invokeCapability({ path, args })` call, and this userspace method walks
-   * the path over the worker itself. That is what lets the `waitrose` getter
-   * below hand back a raw vendored client: nothing ever crosses RPC except
-   * the final method's arguments and result, so
-   * `itx.worker.waitrose.<connection>.<method>(...)` — or any nested surface
-   * a getter returns — is a single round trip into plain userland code.
+   * the path over the worker itself. That is what lets the `slack` and
+   * `waitrose` getters below hand back raw SDK clients: nothing ever crosses
+   * RPC except the final method's arguments and result, so
+   * `itx.worker.slack.chat.postMessage({...})` — or any nested surface a
+   * getter returns — is a single round trip into plain userland code.
    */
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     let receiver: unknown = this;
@@ -129,6 +142,24 @@ export default class ProjectWorker extends IterateProjectWorker {
       throw new Error(`"${path.join(".")}" is not a method on this project worker`);
     }
     return await Reflect.apply(handler, receiver, args);
+  }
+
+  /**
+   * Slack Web API surface: the real `@slack/web-api` SDK from package.json,
+   * configured by the `slackConfig` constant at the top of this file. Only
+   * ever reached through the userspace `invokeCapability` walk above, so the
+   * client needs no RPC-safe projection.
+   */
+  get slack(): WebClient {
+    const client = new WebClient(slackConfig.token || undefined, {
+      ...(slackConfig.slackApiUrl === null ? {} : { slackApiUrl: slackConfig.slackApiUrl }),
+    });
+    // The SDK's axios defaults to its node-http adapter, whose response
+    // handling hangs under the Workers runtime; the fetch adapter rides the
+    // platform's native fetch (and therefore project egress) instead.
+    (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
+      "fetch";
+    return client;
   }
 
   /**

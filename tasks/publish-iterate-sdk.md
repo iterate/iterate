@@ -79,14 +79,13 @@ and the template depends on `https://pkg.pr.new/iterate/iterate/iterate@main`
   `publishConfig.exports`, so the tarball would ship dev exports pointing at
   `src/`. `pnpm pack` applies the dist remap (this is also how the existing
   `pubme.js` flow produced correct tarballs).
-- **Removing `slack.config.ts` removes the whole userland Slack surface from
-  the template** (the `get slack()` getter, `@slack/web-api` dep, docs lines):
-  a committed config of nulls was the dumb part, and the getter is useless
-  without it. The platform-side Slack capability (slack-api.ts) is unaffected.
-  The worker-build e2e test was reworked to commit its own `package.json` +
-  `worker.ts` — better coverage anyway (proves users can ADD deps, not just
-  use seeded ones), plus a separate seeded-worker cold-build test keeping the
-  waitrose dispatch coverage.
+- ~~**Removing `slack.config.ts` removes the whole userland Slack surface from
+  the template**~~ _(wrong call — Misha: "You took too much slack out. I just
+  wanted the stupid slack.config.ts file gone". Restored the `get slack()`
+  getter, `@slack/web-api` dep, contract types and docs; the config is now an
+  inline `slackConfig` constant at the top of the seeded worker.ts, and the
+  worker-build e2e points it at the mock with a `repo.edit` exact-string
+  replacement — same UX an agent/user has.)_
 
 ## Checklist
 
@@ -113,17 +112,24 @@ and the template depends on `https://pkg.pr.new/iterate/iterate/iterate@main`
 
 - [x] delete `sdk.ts`; imports → `"iterate/sdk"` _(worker.ts, apps/hello; counter/websocket had no sdk import)_
 - [x] remove `"sdk.ts"` from the hello app's include globs
-- [x] delete `slack.config.ts`, `WebClient` import, `get slack()`, `@slack/web-api` dep
+- [x] delete `slack.config.ts` _(only the file: the `slack` getter, `WebClient`
+      import and `@slack/web-api` dep stay, configured by an inline `slackConfig`
+      constant in worker.ts — the full surface was briefly removed, then restored
+      after review feedback)_
 - [x] `package.json`: `devDependencies.iterate = "https://pkg.pr.new/iterate/iterate/iterate@main"`
 - [x] update `AGENTS.md`, apps/os `src/README.md` _(template README/ONBOARDING had no references)_
 - [x] regenerate `project-repo-template.generated.ts`
 
 ### tests
 
-- [x] `project-repo-template.test.ts`: replaced slack-range + sdk-verbatim tests
-      with an iterate/sdk-consumption test
-- [x] `project-ingress.e2e.test.ts`: file listing without sdk.ts/slack.config.ts
-- [x] `worker-build.e2e.test.ts`: reworked _(seeded-worker waitrose test + add-npm-dep slack test)_
+- [x] `project-repo-template.test.ts`: sdk-verbatim test replaced with an
+      iterate/sdk-consumption test; slack-range test restored _(plus asserts
+      slack.config.ts stays gone and the inline `slackConfig` exists)_
+- [x] `project-ingress.e2e.test.ts`: file listing without slack.config.ts
+      _(sdk.ts back in the list after the runtime-shim merge)_
+- [x] `worker-build.e2e.test.ts`: original seeded-slack test restored, pointing
+      the inline config at the mock via `repo.edit` instead of committing
+      slack.config.ts\_
 - [x] `live-capability-websocket.e2e.test.ts` _(imported "../../sdk.ts" in its committed app source)_
 - [x] `pnpm typecheck && pnpm lint && pnpm format` green; unit tests green
 - [x] simulated customer repo: template + `pnpm pack` tarball + `npm install` + `tsc` passes

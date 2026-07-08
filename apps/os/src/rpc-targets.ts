@@ -3714,8 +3714,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so a dotted call into any userland getter
-   * (`itx.worker.waitrose.<connection>.<method>(...)`) is one RPC end to end.
+   * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
+   * is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {

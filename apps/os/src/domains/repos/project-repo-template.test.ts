@@ -1,9 +1,33 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
+
+test("template @slack/web-api range matches the apps/os dependency", () => {
+  // The host copy is a real runtime dependency (the Slack itx caller wraps a
+  // WebClient — slack-api.ts); the version that RUNS inside a project worker is
+  // installed by the worker build pipeline from the template's own package.json.
+  // Keeping the two ranges equal keeps host + project runtime on the same SDK.
+  const templatePackageJson = JSON.parse(templateFile("package.json")) as {
+    dependencies: Record<string, string>;
+  };
+  const hostPackageJson = JSON.parse(
+    readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  const hostRange =
+    hostPackageJson.dependencies?.["@slack/web-api"] ||
+    hostPackageJson.devDependencies?.["@slack/web-api"];
+
+  expect(templatePackageJson.dependencies["@slack/web-api"]).toBe(hostRange);
+
+  // The Slack surface is configured by an inline constant in worker.ts — the
+  // old standalone slack.config.ts is gone.
+  expect(PROJECT_REPO_INITIAL_FILES.map((file) => file.path)).not.toContain("slack.config.ts");
+  expect(templateFile("worker.ts")).toContain("const slackConfig");
+});
 
 test("template gets the platform types from iterate/sdk, not a committed snapshot", () => {
   // Seeded repos used to carry a 2000-line sdk.ts, a copy of the itx contract

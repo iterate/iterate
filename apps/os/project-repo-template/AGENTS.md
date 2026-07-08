@@ -16,7 +16,7 @@ at-least-once, per-stream order — `event.path` says which stream; see the
 project's capabilities through `await this.env.ITX.get()`. The worker is built
 by the platform's
 worker build pipeline: multi-file TypeScript works, and npm dependencies
-declared in `package.json` are installed at build time. The platform's
+declared in `package.json` (like `@slack/web-api`) are installed at build time. The platform's
 capability types come from the `iterate` package — `import type { Project,
 StreamEvent } from "iterate/sdk"`. It's a devDependency here (worker code only
 imports types from it); run `npm install` to get typechecking and editor

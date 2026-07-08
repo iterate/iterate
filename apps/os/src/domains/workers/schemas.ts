@@ -190,14 +190,30 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 /**
+ * Slack Web API surface exposed by the seeded project worker
+ * (`itx.worker.slack.chat.postMessage({...})`).
+ *
+ * The seeded repo implements this in userland with the real `@slack/web-api`
+ * package (installed by the worker build pipeline from its `package.json`), so
+ * any nested Web API method family resolves — the index signature reflects
+ * that this tree is as wide as the SDK's.
+ */
+export interface ProjectWorkerSlack {
+  chat: {
+    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  } & Record<string, unknown>;
+  [family: string]: unknown;
+}
+
+/**
  * Default seeded project worker contract.
  *
  * This documents the reference repo's `worker.ts` only. Arbitrary dynamic
  * workers should be typed by callers through `workers.get<T>(ref)`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * `invokeCapability` in userspace and every dotted call — including any
- * nested surface a userland getter hands back (the seeded `waitrose` getter,
- * an SDK client you add) — is one RPC.
+ * nested surface a userland getter hands back (the seeded `slack` and
+ * `waitrose` getters, an SDK client you add) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -212,6 +228,7 @@ export interface ProjectWorker {
    * the whole batch is redelivered later.
    */
   processEventBatch(batch: StreamEventBatch): Promise<void>;
+  slack: ProjectWorkerSlack;
 }
 
 const WorkerFileSource = z.discriminatedUnion("type", [
@@ -330,8 +347,8 @@ export const DynamicWorkerRef = z.discriminatedUnion("type", [
  * the host — worker code never picks its own project.
  *
  * @public — not reachable from the /api entrypoint walk; published for
- * project-worker code, which imports it from the project repo's sdk.ts copy
- * of this contract.
+ * project-worker code, which imports it from its `iterate` devDependency's
+ * `iterate/sdk` export (re-exported by the seeded sdk.ts).
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;

@@ -49,10 +49,10 @@ a dispatch convention **on top of** RPC. Its "nodes" are not workerd objects:
   call arrives at the target as ONE
   `invokeCapability({ path, args })` invocation, and the path segments are
   **pure data** that the worker's own `invokeCapability` method interprets in
-  userspace. `worker.waitrose.mum.getOrders(x)` delivers
-  `{ path: ["waitrose", "mum", "getOrders"], args: [x] }`; nothing named
-  `waitrose` exists on either side of the wire. This is what lets the seeded
-  template hand back a raw vendored SDK client — but it also means
+  userspace. `worker.slack.chat.postMessage(x)` delivers
+  `{ path: ["slack", "chat", "postMessage"], args: [x] }`; nothing named
+  `slack` exists on either side of the wire. This is what lets the seeded
+  template hand back a raw `WebClient` — but it also means
   intermediate segments are not addressable, describable, or
   protocol-capable. They are strings.
 
@@ -146,7 +146,7 @@ deliberately not blessed here: the specification above is the intended shape.
   `new Response(null, { status: 101, webSocket })`. The seeded
   `apps/websocket` app is the reference; `project-ingress.e2e.test.ts` proves
   the lane end to end.
-- Calling methods on a worker (`itx.worker.waitrose.mum.getOrders`, provided
+- Calling methods on a worker (`itx.worker.slack.chat.postMessage`, provided
   capabilities, probes)? That is the capability tree — RPC dispatch,
   serialized results, `flattenNestedPaths` if the worker wants to interpret
   paths itself. Never expect protocol behavior from it, whatever the method

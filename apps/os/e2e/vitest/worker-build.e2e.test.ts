@@ -68,34 +68,12 @@ describe("worker builds", () => {
     });
   });
 
-  // Cold build of the untouched seeded template. The waitrose method-miss
-  // proves the seeded worker (and its vendored integrations/waitrose client)
-  // compiled and the userspace invokeCapability walk dispatched — without
-  // ever dialing the real vendor.
-  test(
-    "Seeded project worker compiles and dispatches userland capabilities",
-    { timeout: 240_000 },
-    async () => {
-      using session = withItxSession();
-      using itx = session.authenticate({
-        type: "admin-secret",
-        secret: adminSecret(),
-      });
-      using project = itx.projects.create({ slug: `seeded-worker-${crypto.randomUUID()}` });
-
-      await expect(
-        // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
-        project.worker.waitrose.mum.noSuchMethod(),
-      ).rejects.toThrow(/"waitrose.mum.noSuchMethod" is not a method on this project worker/);
-    },
-  );
-
-  // First use after the commit is always a cold build (new contentHash)
+  // First use after the config edit is always a cold build (new contentHash)
   // including an npm install of @slack/web-api inside the bundler — give it
   // generous headroom so a slow registry surfaces as a build error, not an
   // opaque vitest timeout.
   test(
-    "Project workers can add npm deps: @slack/web-api exposed as itx.worker.slack",
+    "Default project worker exposes the real Slack SDK as itx.worker.slack",
     { timeout: 240_000 },
     async () => {
       const mock = await startMockSlackApi();
@@ -107,65 +85,17 @@ describe("worker builds", () => {
         });
         using project = itx.projects.create({ slug: `slack-worker-${crypto.randomUUID()}` });
 
-        // The Slack surface is USERLAND: the committed worker.ts constructs a
-        // real @slack/web-api WebClient, installed by the build pipeline from
-        // the committed package.json `dependencies` — the template seeds no
-        // runtime deps, so this proves users can ADD them. Point the client at
-        // the mock; the branch head moves, so the next worker use rebuilds.
-        await project.repo.commitFiles({
-          changes: [
-            {
-              path: "package.json",
-              content: JSON.stringify(
-                {
-                  name: "iterate-project-worker",
-                  private: true,
-                  type: "module",
-                  dependencies: { "@slack/web-api": "^7.14.1" },
-                },
-                null,
-                2,
-              ),
-            },
-            {
-              path: "worker.ts",
-              content: [
-                `// build salt ${crypto.randomUUID()}`,
-                // The seeded sdk.ts survives this commit (only package.json
-                // and worker.ts change), so the replacement worker keeps the
-                // IterateProjectWorker base class — processEventBatch stays
-                // implemented and stream deliveries keep checkpointing.
-                'import { IterateProjectWorker } from "./sdk.ts";',
-                'import { WebClient } from "@slack/web-api";',
-                "",
-                "export default class ProjectWorker extends IterateProjectWorker {",
-                "  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {",
-                "    let receiver: unknown = this;",
-                "    for (const segment of path.slice(0, -1)) {",
-                "      receiver = await Reflect.get(Object(receiver), segment);",
-                "    }",
-                "    const method = path.at(-1)!;",
-                "    const handler = Reflect.get(Object(receiver), method);",
-                '    if (typeof handler !== "function") {',
-                "      throw new Error(`\"${path.join('.')}\" is not a method on this project worker`);",
-                "    }",
-                "    return await Reflect.apply(handler, receiver, args);",
-                "  }",
-                "",
-                "  get slack(): WebClient {",
-                `    const client = new WebClient("xoxb-e2e-test-token", { slackApiUrl: ${JSON.stringify(mock.url)} });`,
-                "    // The SDK's axios defaults to its node-http adapter, which hangs",
-                "    // under the Workers runtime; the fetch adapter rides native fetch.",
-                "    (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =",
-                '      "fetch";',
-                "    return client;",
-                "  }",
-                "}",
-                "",
-              ].join("\n"),
-            },
-          ],
-          message: "Add a userland Slack SDK surface pointed at the e2e mock",
+        // The Slack surface is USERLAND: worker.ts constructs a real
+        // @slack/web-api WebClient (installed from the seeded package.json by
+        // the build pipeline) from the `slackConfig` constant at the top of
+        // the seeded worker.ts. Point it at the mock the same way a user
+        // would — an exact-string edit; the branch head moves, so the next
+        // worker use rebuilds.
+        await project.repo.edit({
+          path: "worker.ts",
+          oldString: "  slackApiUrl: null,\n  token: null,",
+          newString: `  slackApiUrl: ${JSON.stringify(mock.url)},\n  token: "xoxb-e2e-test-token",`,
+          message: "Point the Slack SDK at the e2e mock",
         });
 
         // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
@@ -196,6 +126,15 @@ describe("worker builds", () => {
         // Deployed runs reach this same fixture over apps/tunnels, so call
         // capture proves the request reached the runner-side mock.
         expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
+
+        // The seeded waitrose surface rides the SAME worker (worker.ts's
+        // `waitrose` getter over integrations/waitrose/client.ts): a
+        // method-miss proves the getter and vendored client compiled and the
+        // userspace walk dispatched — without ever dialing the real vendor.
+        await expect(
+          // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
+          project.worker.waitrose.mum.noSuchMethod(),
+        ).rejects.toThrow(/"waitrose.mum.noSuchMethod" is not a method on this project worker/);
       } finally {
         await mock.close();
       }
