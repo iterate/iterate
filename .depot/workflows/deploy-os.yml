@@ -2,6 +2,7 @@ name: Deploy OS
 permissions:
   contents: read
   deployments: write
+  statuses: write
 concurrency:
   group: os-${{ github.ref_name || 'prd' }}
   cancel-in-progress: true
@@ -60,7 +61,22 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy
+        # Teed so the size-report step below can parse wrangler's
+        # "Total Upload" line out of the deploy output.
+        run: |-
+          set -euo pipefail
+          doppler run -- pnpm run-script deploy 2>&1 | tee /tmp/deploy-os.log
+      # Publishes the deployed bundle size as a worker-size/os commit status;
+      # PR preview tables read it back as the "vs main" baseline
+      # (scripts/preview/preview.ts). Never fails the deploy.
+      - name: Report worker size
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          APP_SLUG: os
+          DEPLOY_LOG_FILE: /tmp/deploy-os.log
+        run: pnpm tsx scripts/ci/report-worker-size.ts
   notify:
     needs:
       - deploy
