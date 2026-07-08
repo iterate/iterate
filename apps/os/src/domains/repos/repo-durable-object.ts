@@ -367,17 +367,35 @@ export class RepoDurableObject extends DurableObject<Env> {
 
       // Full single-branch clone: a mirror push must be able to send every
       // commit GitHub is missing, not just the tip.
-      const filesystem = new InMemoryFs();
-      const git = createGit(filesystem, REPO_DIR);
-      await git.clone({
-        branch,
-        singleBranch: true,
-        url: repo.remote,
-        username: "x",
-        password: repo.token,
-      });
-      const [head] = await git.log({ depth: 1 });
-      if (!head) throw new Error("Repo has no commits.");
+      const clone = async () => {
+        const filesystem = new InMemoryFs();
+        const git = createGit(filesystem, REPO_DIR);
+        await git.clone({
+          branch,
+          singleBranch: true,
+          url: repo.remote,
+          username: "x",
+          password: repo.token,
+        });
+        const [head] = await git.log({ depth: 1 });
+        if (!head) throw new Error("Repo has no commits.");
+        return { git, head };
+      };
+
+      // Same read-your-write retry as getFilesSnapshot: the Artifacts remote
+      // is eventually consistent, and a mirror push runs right after the
+      // commit it mirrors — a stale clone here would push the PRE-commit head
+      // to GitHub and record success, leaving the mirror silently behind
+      // until the next commit.
+      let { git, head } = await clone();
+      const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+      for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
+        console.warn(
+          `github mirror clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        ({ git, head } = await clone());
+      }
       commitOid = head.oid;
 
       await git.remote({ add: { name: "github", url: githubRemoteUrl(link) } });
