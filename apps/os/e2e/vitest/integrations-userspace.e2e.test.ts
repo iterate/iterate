@@ -210,6 +210,14 @@ describe("provided integrations", () => {
       await expect(integrations.ocado.family.searchProducts("milk")).rejects.toThrow(
         /no capability/,
       );
+
+      // Discovery: __describe on a provided mount answers from the mount's
+      // durable metadata, never dialing the provider. (A trailing __describe
+      // is a valid INVOCATION path — only mount NAMES reserve it; this used
+      // to die in path validation with "invalid capability path segment".)
+      const describedMount = await integrations.waitrose.__describe();
+      expect(JSON.stringify(describedMount)).toContain("Waitrose grocery integration");
+      await expect(integrations.ocado.__describe()).rejects.toThrow(/no capability/);
     } finally {
       await echo.close();
     }
@@ -283,57 +291,5 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("waitrose-session strategy", () =
     await waitForCondition(async () => (await secret.describe()).audit.usedCount >= 2, {
       description: "waitrose/mum usage audit to fold",
     });
-  });
-});
-
-// The SEEDED waitrose integration (apps/os/project-repo-template
-// /integrations/waitrose/**, carried by every project repo) talks to the REAL
-// Waitrose, so CI never calls its vendor methods — this lane proves the
-// cheaper platform half: the seeded files BUILD as a dynamic worker, MOUNT
-// into the collection, and DISPATCH userspace code (the method-miss error
-// below is thrown by the seeded worker itself, not by the platform).
-describe("seeded waitrose integration files", () => {
-  test("seeded files build, mount, and dispatch", async () => {
-    using session = withItxSession();
-    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `waitrose-seed-${RUN_SUFFIX}` });
-    await project.__describe();
-    const integrations = project.integrations as any;
-
-    using _provision = await project.provideCapability({
-      path: ["integrations", "waitrose"],
-      type: "itx-expression",
-      flattenNestedPaths: true,
-      instructions: "Waitrose grocery integration (seeded template files).",
-      expression: [
-        "workers",
-        [
-          "get",
-          {
-            type: "stateless",
-            path: "/",
-            entrypoint: "WaitroseIntegration",
-            source: {
-              files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
-              options: { entryPoint: "integrations/waitrose/worker.ts" },
-            },
-          },
-        ],
-      ],
-    });
-
-    // The seeded worker's own dispatcher answers — proof the repo files
-    // compiled and ran without any call ever leaving toward the vendor.
-    await expect(integrations.waitrose.mum.noSuchMethod()).rejects.toThrow(
-      /waitrose client has no method noSuchMethod/,
-    );
-
-    // Discovery: __describe on a provided mount answers from the mount's
-    // durable metadata, never dialing the vendor. (A trailing __describe is a
-    // valid INVOCATION path — only mount NAMES reserve it; this used to die
-    // in path validation with "invalid capability path segment".)
-    const described = await integrations.waitrose.__describe();
-    expect(JSON.stringify(described)).toContain("Waitrose grocery integration");
-    await expect(integrations.ocado.__describe()).rejects.toThrow(/no capability/);
   });
 });

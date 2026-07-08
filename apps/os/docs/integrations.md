@@ -114,63 +114,59 @@ exactly one confined home, never onto journals.
 
 ## Provided integrations (the waitrose case)
 
-A project implements a whole integration as code in its own repo and mounts it
-once. Every seeded repo carries a real one — `integrations/waitrose/`
-(`apps/os/project-repo-template`): a vendored Waitrose GraphQL client
-(`client.ts`, the reverse-engineered Android app's operations) plus the
-entrypoint:
+A project implements a whole integration as ordinary code in its own repo.
+Every seeded repo carries a real one — `integrations/waitrose/`
+(`apps/os/project-repo-template`): a vendored Waitrose client (`client.ts`,
+the reverse-engineered Android app's operations — its GraphQL gateway rejects
+hand-slimmed selections, so the queries are the app's verbatim) exposed
+through the project worker's `waitrose` getter (`worker.ts`):
 
 ```js
-// integrations/waitrose/worker.ts in the project repo
-export class WaitroseIntegration extends WorkerEntrypoint {
-  invokeCapability({ path, args }) {
-    const [connection, ...rest] = path; // /integrations/waitrose/<connection>/...
-    // walk `rest` on waitroseClient(connection), apply args
-  }
+// worker.ts in the project repo — same shape as the slack getter
+get waitrose() {
+  return new Proxy({}, {
+    get: (_t, connection) => waitroseClient({
+      authorization: `Bearer getSecret({ path: "/secrets/integrations/waitrose/${connection}/session", field: "accessToken" })`,
+    }),
+  });
 }
 ```
 
 ```js
-await itx.provideCapability({
-  path: ["integrations", "waitrose"],
-  type: "itx-expression", // durable: a journaled recipe, replayed per call
-  flattenNestedPaths: true, // the remaining path arrives as data (workerd RPC
-  //                           does not traverse instance fields)
-  expression: [
-    "workers",
-    [
-      "get",
-      {
-        type: "stateless",
-        path: "/",
-        entrypoint: "WaitroseIntegration",
-        source: {
-          files: { type: "repo", repoPath: "/", include: ["integrations/waitrose/**"] },
-          options: { entryPoint: "integrations/waitrose/worker.ts" },
-        },
-      },
-    ],
-  ],
-});
-
-await itx.integrations.waitrose.mum.shoppingContext();
-await itx.integrations.waitrose.family.trolley(orderId);
+await itx.worker.waitrose.mum.shoppingContext();
+await itx.worker.waitrose.mum.searchProducts("milk", { size: 5 });
 ```
 
-The mount is a `capability-provided` event on the ITX journal — durable,
-replayable, revocable, enumerable. The client addresses its session secrets at
-`/secrets/integrations/waitrose/<connection>/session` with `getSecret`
-placeholders and bare `fetch()`; dynamic-worker egress routes through the
-project egress door, so **even the project's own integration code never holds
-its tokens**. The connection secret holds only `{ username, password }` plus
-the `waitrose-session` refresh strategy — Waitrose has no refresh grant, so
-the Secret DO re-runs the login itself: mint on first use, re-mint on 401.
+No mount step: the project worker always exists and is late-bound to the
+repo, so the surface is **durable by construction** — nothing session-owned
+to expire, and a commit to `client.ts` is live on the next call. The platform
+dispatches every dotted `itx.worker.*` call as one flattened
+`invokeCapability({ path, args })` that the worker walks in userland (workerd
+RPC does not traverse instance fields). The client addresses its session
+secrets at `/secrets/integrations/waitrose/<connection>/session` with
+`getSecret` placeholders and bare `fetch()`; dynamic-worker egress routes
+through the project egress door, so **even the project's own integration code
+never holds its tokens**. The connection secret holds only
+`{ username, password }` plus the `waitrose-session` refresh strategy —
+Waitrose has no refresh grant, so the Secret DO re-runs the login itself:
+mint on first use, re-mint on 401.
+
+For providers a project wants addressed like a built-in —
+`itx.integrations.<slug>.<connection>.<method>()` — `provideCapability({
+path: ["integrations", "<slug>"], type: "itx-expression", flattenNestedPaths:
+true })` mounts any expression (a standalone dynamic worker, an MCP
+connection, …) into the collection; the mount is a `capability-provided`
+event on the ITX journal — replayable, revocable, enumerable by
+`integrations.list()`. Mount at the project root
+(`itx.capabilityHosts.get("/")`) so the collection's dispatch can see it.
+
 Exercised in `e2e/vitest/integrations-userspace.e2e.test.ts`: the echo lane
-(two connections, substitution proof, negative controls), the strategy lane
-against petshop's GraphQL session-login door (`apps/dummy-petshop/src/graphql-login.ts`
-— the same wire shape the strategy speaks; the session is an ordinary petshop bearer), and a
-build+mount+dispatch check of the seeded files that never dials the vendor.
-The integration itself talks to the real Waitrose.
+(two connections, substitution proof, `__describe` discovery, negative
+controls) and the strategy lane against petshop's GraphQL session-login door
+(`apps/dummy-petshop/src/graphql-login.ts` — the same wire shape the strategy
+speaks; the session is an ordinary petshop bearer). The seeded worker surface
+is exercised in `worker-build.e2e.test.ts` (build + userland dispatch, never
+dialing the vendor). The integration itself talks to the real Waitrose.
 
 The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at

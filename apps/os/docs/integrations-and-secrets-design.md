@@ -137,9 +137,11 @@ What ships now:
   code never holds bytes.
 - **Provided integrations**: `provideCapability({ path: ["integrations",
 "<name>"] })` mounts project-authored integrations into the same collection
-  and address shape as built-ins (the waitrose e2e). Every seeded project
-  repo carries a real one: `integrations/waitrose/` (vendored GraphQL client
-  plus entrypoint, from `apps/os/project-repo-template`).
+  and address shape as built-ins (the waitrose echo e2e). Every seeded
+  project repo carries a real one — `integrations/waitrose/` (vendored
+  client, from `apps/os/project-repo-template`) — exposed through the project
+  worker's `waitrose` getter as `itx.worker.waitrose.<connection>.<method>()`:
+  durable by construction, no mount step (see integrations.md).
 - **Shared refresh strategies**: a standards-shaped userspace provider
   configures `oauth-refresh-token` with `clientCreds: "material"` — no worker
   needed (the petshop userspace e2e). A provider-specific dance is another
