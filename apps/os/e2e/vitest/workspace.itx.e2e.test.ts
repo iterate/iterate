@@ -70,5 +70,47 @@ describe("itx workspaces", () => {
     // A second workspace is a fully independent checkout.
     using other = project.workspaces.get(`/workspaces/agents/e2e-${crypto.randomUUID()}`);
     expect(await other.readFile("/notes/e2e.md")).toBeNull();
+
+    // -- itx.files <-> workspace: the two file domains compose through bytes.
+
+    // files -> workspace: pull a stored file into the checkout. (files.put
+    // string data must be base64, so plain text goes in as encoded bytes.)
+    await project.files
+      .get("/e2e/transfer.txt")
+      .put({ contentType: "text/plain", data: new TextEncoder().encode("born in itx.files") });
+    await workspace.writeFileBytes(
+      "/imported/transfer.txt",
+      await project.files.get("/e2e/transfer.txt").bytes(),
+    );
+    expect(await workspace.readFile("/imported/transfer.txt")).toBe("born in itx.files");
+
+    // workspace -> files: publish a checkout file and mint a signed URL.
+    const packageJsonBytes = await workspace.readFileBytes("/package.json");
+    expect(packageJsonBytes).not.toBeNull();
+    const published = await project.files.get("/e2e/package-from-workspace.json").put({
+      contentType: "application/json",
+      data: packageJsonBytes!,
+    });
+    expect(published).toMatchObject({
+      contentType: "application/json",
+      path: "/e2e/package-from-workspace.json",
+    });
+    expect(published.size).toBeGreaterThan(0);
+    expect(await project.files.get("/e2e/package-from-workspace.json").url()).toContain(
+      "iterate-files--",
+    );
+
+    // Binary bytes survive the round trip files -> workspace -> files intact
+    // (workspace text reads would mojibake these; the bytes lanes must not).
+    const binary = new Uint8Array([0, 255, 1, 254, 137, 80, 78, 71, 13, 10, 26, 10]);
+    await project.files
+      .get("/e2e/blob.bin")
+      .put({ contentType: "application/octet-stream", data: binary });
+    await workspace.writeFileBytes(
+      "/imported/blob.bin",
+      await project.files.get("/e2e/blob.bin").bytes(),
+    );
+    const roundTripped = await workspace.readFileBytes("/imported/blob.bin");
+    expect(Array.from(roundTripped ?? [])).toEqual(Array.from(binary));
   });
 });
