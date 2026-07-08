@@ -1,12 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, ItxBinding, StreamEvent } from "./sdk.ts";
-import { slackConfig } from "./slack.config.ts";
+import type { DynamicWorkerRef, ItxBinding, StreamEvent } from "iterate/sdk";
 import { waitroseClient } from "./integrations/waitrose/client.ts";
 
 /** Bindings the platform supplies to every project worker. `ItxBinding`
- * (sdk.ts) documents the two channels: `get()` for capability method calls,
- * `fetch()` for HTTP into sibling workers. */
+ * (iterate/sdk) documents the two channels: `get()` for capability method
+ * calls, `fetch()` for HTTP into sibling workers. */
 type ProjectWorkerEnv = {
   ITX: ItxBinding;
 };
@@ -22,7 +20,7 @@ const APPS = {
     type: "stateless",
     path: "/",
     source: {
-      files: { type: "repo", repoPath: "/", include: ["apps/hello/**", "sdk.ts"] },
+      files: { type: "repo", repoPath: "/", include: ["apps/hello/**"] },
       options: { entryPoint: "apps/hello/worker.ts" },
     },
   },
@@ -121,24 +119,6 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
       throw new Error(`"${path.join(".")}" is not a method on this project worker`);
     }
     return await Reflect.apply(handler, receiver, args);
-  }
-
-  /**
-   * Slack Web API surface: the real `@slack/web-api` SDK from package.json,
-   * configured by committing slack.config.ts. Only ever reached through the
-   * userspace `invokeCapability` walk above, so the client needs no RPC-safe
-   * projection.
-   */
-  get slack(): WebClient {
-    const client = new WebClient(slackConfig.token ?? undefined, {
-      ...(slackConfig.slackApiUrl === null ? {} : { slackApiUrl: slackConfig.slackApiUrl }),
-    });
-    // The SDK's axios defaults to its node-http adapter, whose response
-    // handling hangs under the Workers runtime; the fetch adapter rides the
-    // platform's native fetch (and therefore project egress) instead.
-    (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
-      "fetch";
-    return client;
   }
 
   /**

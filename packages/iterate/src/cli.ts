@@ -14,14 +14,14 @@ import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
+import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import type {
   ItxAuthCredentials,
   Project,
   ProjectListEntry,
   Session,
   Stream,
-} from "../../../apps/os/src/itx-api.generated.ts";
-import { connectItx } from "../../../apps/os/src/itx-client.ts";
+} from "./itx-api.generated.ts";
 import {
   CONFIG_PATH,
   Config,

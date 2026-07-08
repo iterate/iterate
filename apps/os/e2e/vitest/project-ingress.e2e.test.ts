@@ -176,10 +176,9 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
       "apps/hello/worker.ts",
       "apps/counter/worker.ts",
       "package.json",
-      "sdk.ts",
-      "slack.config.ts",
     ]),
   );
+  expect(tree.paths).not.toContain("sdk.ts");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.

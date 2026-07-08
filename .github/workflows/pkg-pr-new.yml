@@ -1,0 +1,40 @@
+# Continuous preview publishing of packages/iterate via https://pkg.pr.new.
+#
+# Every push to main and every PR publishes a tarball to pkg.pr.new's CDN
+# (no npm token involved), installable as:
+#
+#   https://pkg.pr.new/iterate/iterate/iterate@main     (latest main build)
+#   https://pkg.pr.new/iterate/iterate/iterate@<sha>    (specific commit)
+#   https://pkg.pr.new/iterate/iterate/iterate@<pr>     (latest build of a PR)
+#
+# The seeded project-repo-template depends on the @main URL — that's how
+# customer repos get `iterate/sdk` types without a manual npm release.
+#
+# This lives in .github/workflows (real GitHub Actions, like
+# claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend
+# verifies each publish against the GitHub Actions API via its GitHub App,
+# which must be installed on this repo: https://github.com/apps/pkg-pr-new
+name: pkg.pr.new
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+jobs:
+  publish:
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile --filter iterate...
+      - run: pnpm --dir packages/iterate build
+      # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
+      # is applied — `npm pack` would ship the dev exports pointing at src/.
+      - run: pnpm dlx pkg-pr-new publish --pnpm ./packages/iterate

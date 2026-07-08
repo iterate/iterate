@@ -193,8 +193,9 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 (the project directory — OS has no database of its own), primes the KV cache,
 then appends the create-request onto the project's root stream. The project
 processor seeds the default repo at `/` from the template folder at
-`apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`,
-`sdk.ts`, `slack.config.ts`, `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`
+— platform types come from its `iterate` devDependency's `iterate/sdk` export —
+`AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
 `domains/repos/project-repo-template.generated.ts` in sync), builds and loads
 the seeded project worker through the worker build pipeline, boots the
 onboarding agent,

@@ -13,10 +13,11 @@ handles HTTP for the project's hosts, receives every committed project event
 through `processEvent({ event })`, and reaches the project's capabilities
 through `await this.env.ITX.get()`. The worker is built by the platform's
 worker build pipeline: multi-file TypeScript works, and npm dependencies
-declared in `package.json` (like `@slack/web-api`) are installed at build time.
-`sdk.ts` is a snapshot of the platform's capability types (the future
-`@iterate-com/sdk` package) taken when this repo was seeded — import types
-from it, treat it as read-only.
+declared in `package.json` are installed at build time. The platform's
+capability types come from the `iterate` package — `import type { Project,
+StreamEvent } from "iterate/sdk"`. It's a devDependency here (worker code only
+imports types from it); run `npm install` to get typechecking and editor
+support.
 
 Apps live under `apps/` as their own dynamic workers, routed by the APPS map
 in the root `worker.ts`. The router dispatches every app request through
@@ -36,10 +37,6 @@ results are serialized copies, so it can serve data but never a socket.
 Durable Object app serving live sockets at `/ws`; copy its shape for anything
 real-time. Method calls on apps (`project.workers.get(ref).someMethod()`)
 still use RPC dispatch — only HTTP rides the fetch lane.
-
-The worker also exposes a Slack Web API surface backed by the real Slack SDK:
-`itx.worker.slack.chat.postMessage({ channel, text })` (any nested Web API
-method works). Configure it by committing `slack.config.ts`.
 
 `integrations/waitrose/` is the reference project-owned integration: a
 vendored client exposed through this worker's `waitrose` getter —

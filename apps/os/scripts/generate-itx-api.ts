@@ -5,7 +5,9 @@
 // source of truth: docstrings live on the classes, data shapes on the schemas.
 // This script projects that source of truth into one import-free .ts file that
 // (a) itx scripts can typecheck against, (b) humans can read top-to-bottom,
-// (c) agents receive verbatim via the ITX_TYPES_SOURCE embed.
+// (c) agents receive verbatim via the ITX_TYPES_SOURCE embed. A second copy is
+// written into packages/iterate, where the published `iterate/sdk` export
+// re-exports it (freshness enforced by the same test).
 //
 // How it works: open the apps/os project with the native TypeScript compiler
 // (@typescript/native-preview — the same API the type-aware lint plugin uses),
@@ -59,8 +61,8 @@ const projectDir = fileURLToPath(new URL("..", import.meta.url));
 const tsconfigPath = path.join(projectDir, "tsconfig.json");
 const rpcTargetsPath = path.join(projectDir, "src/rpc-targets.ts");
 const outPath = path.join(projectDir, "src/itx-api.generated.ts");
-/** The codegen COPY of the generated file seeded into project repos — same content, so its exports must not count as declarations. */
-const sdkCopyPath = path.join(projectDir, "project-repo-template/sdk.ts");
+/** The copy published as `iterate/sdk` (packages/iterate re-exports it from its hand-written sdk.ts). Same content as outPath. */
+const packageCopyPath = path.resolve(projectDir, "../../packages/iterate/src/itx-api.generated.ts");
 
 /** The opt-in roots in rpc-targets.ts (see their docstrings there). */
 const ITERATE_ROOT = "IterateRpcTarget";
@@ -251,7 +253,7 @@ export function generateItxApi(): string {
   for (const fileName of project.rootFiles) {
     if (fileName.endsWith(".d.ts")) continue;
     const resolved = path.resolve(fileName);
-    if (resolved === rpcTargetsPath || resolved === outPath || resolved === sdkCopyPath) continue;
+    if (resolved === rpcTargetsPath || resolved === outPath) continue;
     if (fileName.includes("node_modules")) continue;
     const sourceFile = project.program.getSourceFile(fileName);
     if (!sourceFile) continue;
@@ -625,4 +627,6 @@ if (isMain) {
   verifyRpcTargetsSatisfyContract(source);
   writeFileSync(outPath, source);
   console.log(`wrote ${outPath}`);
+  writeFileSync(packageCopyPath, source);
+  console.log(`wrote ${packageCopyPath}`);
 }
