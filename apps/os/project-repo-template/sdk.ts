@@ -550,6 +550,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        connectTelegram: string;
         disconnect: string;
         getConnection: string;
         github: string;
@@ -558,6 +559,7 @@ export interface ProjectIntegrations {
         parallel: string;
         slack: string;
         startOAuthFlow: string;
+        telegram: string;
       };
       parent: string;
     }
@@ -567,10 +569,19 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure.
+   */
+  connectTelegram(input: {
+    botToken: string;
+  }): Promise<{ botId: string; botUsername: string | null; connection: string; ok: true }>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -582,7 +593,7 @@ export interface ProjectIntegrations {
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
@@ -1420,7 +1431,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1428,6 +1439,12 @@ export type IntegrationConnectionStatus = {
   externalId: string | null;
   metadata: Record<string, unknown>;
 };
+
+/** The built-ins that connect via a redirect flow (OAuth code exchange or
+ * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
+ * Telegram is excluded: it connects by bot-token paste (`connectTelegram`),
+ * with no redirect and no signed state. */
+export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
