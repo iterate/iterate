@@ -351,10 +351,18 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     await this.#ready();
     return this.#serializeWrite(async () => {
       // isomorphic-git happily creates empty commits; a retrying agent would
-      // stack them. Same guard as the Repo DO's mutate path.
-      if ((await this.#git.status()).length === 0) {
+      // stack them. Only STAGED changes commit, so the guard must ignore
+      // working-tree-only entries (status lists those too): staged means the
+      // index differs from HEAD — a tracked file whose stage is not
+      // "identical" (1), or an untracked file that has been added (stage > 0).
+      const status = await this.#git.status();
+      const staged = status.filter((entry) =>
+        entry.head === 1 ? entry.stage !== 1 : entry.stage !== 0,
+      );
+      if (staged.length === 0) {
+        const unstaged = status.length - staged.length;
         throw new Error(
-          "Nothing to commit: the working tree matches HEAD (did you git.add first?)",
+          `Nothing staged to commit${unstaged > 0 ? ` (${unstaged} unstaged change(s) in the working tree)` : ""} — call git.add({ filepath: "." }) first.`,
         );
       }
       return this.#git.commit({

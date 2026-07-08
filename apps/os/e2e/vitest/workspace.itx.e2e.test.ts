@@ -54,6 +54,8 @@ describe("itx workspaces", () => {
     // Ordinary git flow publishes to the workspace's own branch.
     const status = await workspace.git.status();
     expect(status.map((entry) => entry.filepath)).toContain("notes/e2e.md");
+    // Unstaged changes alone are not committable — no empty commits.
+    await expect(workspace.git.commit({ message: "premature" })).rejects.toThrow(/Nothing staged/);
     await workspace.git.add({ filepath: "." });
     const commit = await workspace.git.commit({ message: "e2e workspace commit" });
     expect(commit.oid).toMatch(/^[0-9a-f]{40}$/);
