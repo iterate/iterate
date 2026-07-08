@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
-import { RepoArtifactNameCodec } from "./utils.ts";
+import { RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
   test("round-trips project-scoped repo paths", () => {
@@ -31,6 +31,20 @@ describe("RepoArtifactNameCodec", () => {
     expect(() => RepoArtifactNameCodec.stringify({ projectId: "global", path: "/" })).toThrow(
       /reserved/,
     );
+  });
+});
+
+describe("repo binary base64 lane", () => {
+  test("round-trips bytes a utf8 decode would corrupt", () => {
+    // PNG magic followed by invalid-utf8 continuation bytes.
+    const bytes = Uint8Array.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x80,
+    ]);
+    expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
+  });
+
+  test("rejects junk base64 with a caller-friendly error", () => {
+    expect(() => base64ToBytes("not base64!!!")).toThrow(/contentBase64 must be valid base64/);
   });
 });
 
