@@ -29,7 +29,7 @@ Done: 11 vitest store tests + a passing golden-path playwright spec, plus a smal
 ## Implementation log
 
 - Store tests: 11 passing; a fake localStorage fixture with a unique repo identity per test (the module caches store instances per key, so identity reuse would leak state across tests). Rehydration is exercised by seeding storage JSON directly for a never-seen key.
-- Spec: passes locally in ~11s (twice consecutively). Findings along the way:
+- Spec: passes locally in ~11-13s (3 green runs; one intermediate invocation died before any test ran with playwright's 'Process from config.webServer exited early' — the pre-existing dev-server startup race in the spec lane, not this spec). Findings along the way:
   - Two seeded README.md files (root + integrations/waitrose) — tree rows are targeted by pierre's `data-item-path` attribute, which playwright pierces through the shadow root.
   - Product a11y fix: the SCM activity button's dirty-count badge was its accessible name ("1"), beating the title — both activity buttons now carry explicit aria-labels.
   - `waitFor({ state: "hidden" })` fights the middlewright spinner-waiter (it waits for the locator to be VISIBLE first); the spec asserts positive states instead.
