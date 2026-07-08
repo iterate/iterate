@@ -25,6 +25,7 @@ import {
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
 import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -102,6 +103,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
           });
         }
       },
+    });
+  });
+
+  // The Telegram webhook router — same hosting shape as the Slack router: it
+  // only ever WAKES on `/integrations/telegram/{connection}` instances, where
+  // connectTelegram configured its subscription. No routed-webhook ack dep:
+  // Telegram has no reaction primitive; the telegram-agent processor's
+  // "typing…" chat action covers acknowledgement.
+  protected readonly telegramRouterRegistration = this.#processorHost.add((deps) => {
+    return new TelegramProcessor({
+      ...deps,
+      connection: connectionFromIntegrationStreamPath(this.#name.path),
     });
   });
 

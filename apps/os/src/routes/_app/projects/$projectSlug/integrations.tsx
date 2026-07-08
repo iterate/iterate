@@ -44,6 +44,7 @@ import {
   Mail,
   MessageSquare,
   Search as SearchIcon,
+  Send,
   Sparkles,
 } from "lucide-react";
 import { z } from "zod";
@@ -163,6 +164,9 @@ function ProjectIntegrationsContent() {
   const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
   const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
   const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
+  const telegramConnections = builtinConnections.filter(
+    (entry) => entry.integration === "telegram",
+  );
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
@@ -366,6 +370,8 @@ function ProjectIntegrationsContent() {
           </ItemActions>
         </Item>
 
+        <TelegramItem connections={telegramConnections} projectSlug={project.slug} />
+
         {providedConnections.length > 0 ? (
           <Item variant="outline" className="items-start justify-between gap-4 p-4">
             <ItemMedia variant="icon">
@@ -449,6 +455,115 @@ function BuiltInApiIntegrationRow({
   );
 }
 
+/**
+ * The Telegram card: token-paste connect (no OAuth — Telegram has none; the
+ * BotFather token IS the credential, validated with getMe and stored in a
+ * write-only connection secret) plus the usual per-connection disconnect rows.
+ */
+function TelegramItem({
+  connections,
+  projectSlug,
+}: {
+  connections: (ConnectionEntry & { connection: string; source: "builtin" })[];
+  projectSlug: string;
+}) {
+  const itx = useItx();
+  const queryClient = useQueryClient();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const connect = useMutation({
+    mutationFn: async (botToken: string) => await itx.integrations.connectTelegram({ botToken }),
+    onSuccess: async (result) => {
+      setSheetOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", projectSlug] });
+      toast.success(
+        `Telegram bot ${result.botUsername ? `@${result.botUsername}` : result.botId} connected`,
+      );
+    },
+    onError: (error) => toast.error(`Failed to connect Telegram: ${error.message}`),
+  });
+  const disconnect = useMutation({
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "telegram" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", projectSlug] });
+      toast.success("Telegram disconnected");
+    },
+    onError: (error) => toast.error(`Failed to disconnect Telegram: ${error.message}`),
+  });
+
+  return (
+    <Item variant="outline" className="items-start justify-between gap-4 p-4">
+      <ItemMedia variant="icon">
+        <Send className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>Telegram</ItemTitle>
+        <ItemDescription>
+          {connectedCount(connections) > 0
+            ? `${connectedCount(connections)} connected bot${connectedCount(connections) === 1 ? "" : "s"}`
+            : "Connect a Telegram bot (via @BotFather) so agents can chat in Telegram."}
+        </ItemDescription>
+        {connections.map((entry) => (
+          <ConnectionRow
+            key={entry.path}
+            entry={entry}
+            provider="telegram"
+            disconnecting={disconnect.isPending}
+            onDisconnect={() => disconnect.mutate(entry.connection)}
+          />
+        ))}
+      </ItemContent>
+      <ItemActions>
+        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+          <SheetTrigger render={<Button type="button" size="sm" />}>Connect Telegram</SheetTrigger>
+          <SheetContent side="right" className="overflow-y-auto">
+            <form
+              className="flex h-full flex-col"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const botToken = String(new FormData(event.currentTarget).get("botToken") || "");
+                connect.mutate(botToken);
+              }}
+            >
+              <SheetHeader>
+                <SheetTitle>Connect a Telegram bot</SheetTitle>
+                <SheetDescription>
+                  In Telegram, message @BotFather, send /newbot (or /token for an existing bot), and
+                  paste the token here. The token is stored write-only and only ever leaves toward
+                  api.telegram.org.
+                </SheetDescription>
+              </SheetHeader>
+              <FieldGroup className="flex-1 space-y-4 p-4">
+                <Field>
+                  <FieldLabel htmlFor="telegram-bot-token">Bot token</FieldLabel>
+                  <Input
+                    id="telegram-bot-token"
+                    name="botToken"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="123456789:AAF..."
+                    required
+                  />
+                  <FieldDescription>
+                    Note: by default, bots in group chats only see commands and mentions
+                    (Telegram&apos;s privacy mode); direct messages always work.
+                  </FieldDescription>
+                </Field>
+              </FieldGroup>
+              <SheetFooter>
+                <Button type="submit" disabled={connect.isPending}>
+                  {connect.isPending ? <Spinner /> : null}
+                  {connect.isPending ? "Connecting..." : "Connect"}
+                </Button>
+              </SheetFooter>
+            </form>
+          </SheetContent>
+        </Sheet>
+      </ItemActions>
+    </Item>
+  );
+}
+
 function ConnectionRow({
   disconnecting,
   entry,
@@ -458,7 +573,7 @@ function ConnectionRow({
   disconnecting: boolean;
   entry: ConnectionEntry;
   onDisconnect: () => void;
-  provider: "github" | "google" | "slack";
+  provider: "github" | "google" | "slack" | "telegram";
 }) {
   return (
     <div className="mt-2 flex items-start justify-between gap-2 rounded-md border p-2">
@@ -482,7 +597,7 @@ function IntegrationMetadata({
   provider,
 }: {
   connection?: Connection;
-  provider: "github" | "google" | "slack";
+  provider: "github" | "google" | "slack" | "telegram";
 }) {
   if (!connection?.connected) return null;
 

@@ -10,7 +10,12 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
-import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
+import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
+import {
+  slackConnectionFromAgentPath,
+  telegramConnectionFromAgentPath,
+} from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { mintProjectFileUrl } from "../files/project-files.ts";
 import { parseConfig } from "../../config.ts";
@@ -104,6 +109,46 @@ export class AgentDurableObject extends DurableObject<Env> {
             projectId: this.#name.projectId,
             storageKey: input.storageKey,
           });
+        },
+      }),
+  );
+
+  // Registered on every agent host; it only wakes on routed Telegram agent
+  // streams (`/agents/telegram/**`) where the project processor configured its
+  // subscription. Telegram-facing side effects (the typing chat action) are
+  // best effort: a failure must not wedge the processor checkpoint.
+  readonly telegramAgentProcessor = this.#processorHost.add(
+    (deps) =>
+      new TelegramAgentProcessor({
+        ...deps,
+        callTelegramApi: async (method, body) => {
+          // Only best-effort UX side effects ride this dep — the agent's
+          // actual REPLY goes through itx.integrations.telegram in its script,
+          // which fails loudly on its own. The agent path carries the named
+          // connection (/agents/telegram/{connection}/chat-{chatId}); without
+          // it there is no bot token, so skip rather than wedge the checkpoint.
+          const connection = telegramConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            console.error(
+              "[telegram-agent] agent path carries no connection; skipping Telegram call",
+              { method, path: this.#name.path },
+            );
+            return;
+          }
+          try {
+            await callProjectTelegramBotApi({
+              body,
+              connection,
+              method,
+              projectId: this.#name.projectId,
+            });
+          } catch (error) {
+            console.error("[telegram-agent] Telegram side effect failed", {
+              error,
+              method,
+              path: this.#name.path,
+            });
+          }
         },
       }),
   );

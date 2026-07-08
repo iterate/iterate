@@ -1,6 +1,7 @@
 // itx-side connect/disconnect flows for the built-in integrations (Slack +
-// Google OAuth, GitHub App installation). Each provider contributes only its
-// exchange half; the storage half is the shared recordConnection.
+// Google OAuth, GitHub App installation, Telegram bot-token paste). Each
+// provider contributes only its exchange half; the storage half is the shared
+// recordConnection.
 //
 // Every connection is NAMED: a project can hold several Slack workspaces /
 // Google accounts / GitHub installations, each at a sanitized connection name.
@@ -30,6 +31,7 @@ import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
+  OAuthProviderSlug,
 } from "./types.ts";
 import {
   createOAuthState,
@@ -46,6 +48,8 @@ import {
 } from "./integration-streams.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
+import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
+import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 import {
   GITHUB_CONNECTED_EVENT_TYPE,
   GITHUB_CONNECTION_EGRESS_URLS,
@@ -56,6 +60,8 @@ import {
   GOOGLE_OAUTH_TOKEN_URL,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
+  TELEGRAM_CONNECTED_EVENT_TYPE,
+  TELEGRAM_DISCONNECTED_EVENT_TYPE,
   githubConnectionSecretPath,
   googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
@@ -64,6 +70,8 @@ import {
   integrationConnectionStreamPath,
   sanitizeConnectionName,
   slackBotTokenSecretPath,
+  telegramBotTokenSecretPath,
+  telegramWebhookSecretToken,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -85,13 +93,13 @@ function requireGoogleConfig(config: AppConfig) {
   return google;
 }
 
-function oauthRedirectUri(input: { baseUrl: string; provider: BuiltinIntegrationSlug }) {
+function oauthRedirectUri(input: { baseUrl: string; provider: OAuthProviderSlug }) {
   return `${input.baseUrl.replace(/\/$/, "")}/api/integrations/${input.provider}/callback`;
 }
 
 function requestBaseUrl(input: { config: AppConfig }) {
-  if (input.config.baseUrl) return input.config.baseUrl;
-  throw new Error("config.baseUrl is required for OAuth flows.");
+  if (input.config.baseUrl) return input.config.baseUrl.replace(/\/$/, "");
+  throw new Error("config.baseUrl is required to connect this integration.");
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +110,7 @@ export async function startOAuthFlow(input: {
   callbackUrl?: string;
   config: AppConfig;
   projectId: string;
-  provider: BuiltinIntegrationSlug;
+  provider: OAuthProviderSlug;
   /** The user to bind the OAuth state to. Browser-supplied, not authority; the
    * callback's user check against the signed state is the backstop. */
   userId: string;
@@ -200,7 +208,7 @@ export async function completeConnect(input: {
   /** GitHub App installation id — github's callback carries this, not a code. */
   installationId?: string;
   projectId: string;
-  provider: BuiltinIntegrationSlug;
+  provider: OAuthProviderSlug;
   state: string;
   userId: string | null;
 }): Promise<CompleteConnectResult> {
@@ -232,7 +240,7 @@ export async function completeConnect(input: {
 async function gateConnectState(input: {
   errorPrefix: string;
   projectId: string;
-  provider: BuiltinIntegrationSlug;
+  provider: OAuthProviderSlug;
   state: string;
   userId: string | null;
 }): Promise<
@@ -605,6 +613,149 @@ async function completeGoogleConnect(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Telegram connect (no OAuth — bot-token paste + setWebhook)
+// ---------------------------------------------------------------------------
+
+/** What `getMe` said about the pasted token's bot. The numeric id is the
+ * stable identity (usernames can change) — it is the directory external id,
+ * the webhook path segment, and the secret-token derivation input. */
+type TelegramBotIdentity = { firstName?: string; id: string; username?: string };
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain.
+ */
+export async function connectTelegram(input: {
+  botToken: string;
+  config: AppConfig;
+  projectId: string;
+}): Promise<{ botId: string; botUsername: string | null; connection: string; ok: true }> {
+  const botToken = input.botToken.trim();
+  if (!botToken) throw new Error("A Telegram bot token is required (get one from @BotFather).");
+  const apiBaseUrl = telegramApiBaseUrl(input.config);
+  const baseUrl = requestBaseUrl(input);
+
+  const bot = await telegramGetMe({ apiBaseUrl, botToken });
+
+  const existingClaim = await lookupConnectionClaim("telegram", bot.id);
+  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
+    throw new Error(
+      `Telegram bot ${bot.username ?? bot.id} is already connected to another project.`,
+    );
+  }
+
+  // Reconnects reuse the claiming connection's name; fresh connects derive it
+  // from the bot username (or the bot id when the username sanitizes away).
+  const connection =
+    existingClaim?.connection ??
+    (sanitizeConnectionName(bot.username ?? "") || `bot-${sanitizeConnectionName(bot.id)}`);
+
+  // Point the bot at this deployment BEFORE recording anything: a failed
+  // setWebhook leaves no half-connected state behind.
+  const secretToken = await telegramWebhookSecretToken({
+    botId: bot.id,
+    keyMaterial: itxEnv.SECRET_ENCRYPTION_KEY,
+  });
+  await callTelegramWithToken({
+    apiBaseUrl,
+    body: {
+      secret_token: secretToken,
+      url: `${baseUrl}/api/integrations/telegram/webhook/${bot.id}`,
+    },
+    botToken,
+    method: "setWebhook",
+  });
+
+  await recordConnection({
+    connection,
+    projectId: input.projectId,
+    slug: "telegram",
+    secrets: [
+      {
+        // The Bot API host is the only place this token is ever useful.
+        egressUrls: [new URL(apiBaseUrl).origin],
+        material: botToken,
+        path: telegramBotTokenSecretPath(connection),
+      },
+    ],
+    // No idempotency keys on the connected/claim facts — same reasoning as
+    // Slack: a disconnect->reconnect cycle must append fresh facts.
+    connectedEvent: {
+      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      payload: {
+        botFirstName: bot.firstName,
+        botId: bot.id,
+        botUsername: bot.username,
+        connection,
+        externalId: bot.id,
+        projectId: input.projectId,
+      },
+    },
+    processorSubscription: {
+      idempotencyKey: `telegram-router-subscription:${input.projectId}:${connection}`,
+      processorSlug: TelegramProcessorContract.slug,
+    },
+    directoryClaim: { externalId: bot.id },
+  });
+
+  return { botId: bot.id, botUsername: bot.username ?? null, connection, ok: true };
+}
+
+/** Validate the pasted token against the live Bot API and read the bot's
+ * identity. Runs with the raw token (the connect flow holds it by definition,
+ * exactly as the OAuth flows hold their freshly exchanged access tokens). */
+async function telegramGetMe(input: {
+  apiBaseUrl: string;
+  botToken: string;
+}): Promise<TelegramBotIdentity> {
+  const me = await callTelegramWithToken({ ...input, body: {}, method: "getMe" });
+  const result = readRecord(me.result);
+  const id = result?.id;
+  if (typeof id !== "number" && typeof id !== "string") {
+    throw new Error("Telegram getMe returned no bot id.");
+  }
+  const username = readString(result?.username);
+  const firstName = readString(result?.first_name);
+  return {
+    ...(firstName === undefined ? {} : { firstName }),
+    id: String(id),
+    ...(username === undefined ? {} : { username }),
+  };
+}
+
+async function callTelegramWithToken(input: {
+  apiBaseUrl: string;
+  body: Record<string, unknown>;
+  botToken: string;
+  method: string;
+}): Promise<{ description?: string; ok?: boolean; result?: unknown }> {
+  const response = await fetch(`${input.apiBaseUrl}/bot${input.botToken}/${input.method}`, {
+    body: JSON.stringify(input.body),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  const data = (await response.json().catch(() => null)) as {
+    description?: string;
+    ok?: boolean;
+    result?: unknown;
+  } | null;
+  if (data === null || !response.ok || data.ok !== true) {
+    // 401 here means the pasted token is wrong — the one failure users hit.
+    const reason =
+      data?.description ??
+      (response.status === 401 ? "invalid bot token" : `HTTP ${response.status}`);
+    throw new Error(`Telegram ${input.method} failed: ${reason}`);
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
 // Connection status + disconnect (the itx.integrations surface)
 // ---------------------------------------------------------------------------
 
@@ -680,6 +831,27 @@ export async function getConnectionStatus(input: {
         metadata: { installationId: readString(fact.payload.installationId) },
       };
     }
+    case "telegram": {
+      const fact = await latestLifecycleFact({
+        connectedType: TELEGRAM_CONNECTED_EVENT_TYPE,
+        connection: input.connection,
+        disconnectedType: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        projectId: input.projectId,
+        slug: "telegram",
+      });
+      if (!fact) return notConnectedStatus();
+      const botUsername = readString(fact.payload.botUsername);
+      return {
+        connected: fact.connected,
+        displayName: botUsername === undefined ? null : `@${botUsername}`,
+        externalId: readString(fact.payload.externalId) ?? null,
+        metadata: {
+          botFirstName: readString(fact.payload.botFirstName),
+          botId: readString(fact.payload.botId),
+          botUsername,
+        },
+      };
+    }
     case "google": {
       const fact = await latestLifecycleFact({
         connectedType: GOOGLE_CONNECTED_EVENT_TYPE,
@@ -720,6 +892,8 @@ export async function disconnectProvider(input: {
       return await disconnectGithub(input);
     case "google":
       return await disconnectGoogle(input);
+    case "telegram":
+      return await disconnectTelegram(input);
   }
 }
 
@@ -814,6 +988,41 @@ async function disconnectGithub(input: {
     secretPath: githubConnectionSecretPath(input.connection),
     slug: "github",
     unclaimExternalId: status.externalId ?? undefined,
+  });
+  return { success: true };
+}
+
+async function disconnectTelegram(input: {
+  connection: string;
+  projectId: string;
+}): Promise<{ success: true }> {
+  const status = await getConnectionStatus({ ...input, provider: "telegram" });
+  // Best-effort deleteWebhook so Telegram stops delivering (the secret-
+  // substituted egress path — no material read), like Slack's auth.revoke.
+  // Must run BEFORE recordDisconnection empties the egress allowlist.
+  await callProjectTelegramBotApi({
+    body: {},
+    connection: input.connection,
+    method: "deleteWebhook",
+    projectId: input.projectId,
+  }).catch(() => null);
+  const botId = status.metadata.botId as string | undefined;
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
+      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      payload: {
+        botId,
+        botUsername: (status.metadata.botUsername as string | undefined) ?? undefined,
+        connection: input.connection,
+        externalId: status.externalId ?? undefined,
+        projectId: input.projectId,
+      },
+    },
+    projectId: input.projectId,
+    secretPath: telegramBotTokenSecretPath(input.connection),
+    slug: "telegram",
+    unclaimExternalId: botId,
   });
   return { success: true };
 }

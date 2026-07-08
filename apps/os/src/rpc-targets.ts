@@ -82,6 +82,7 @@ import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/schedu
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeConnect,
+  connectTelegram,
   disconnectProvider,
   getConnectionStatus,
   listIntegrationConnections,
@@ -104,6 +105,10 @@ import {
   normalizeSlackError,
   SLACK_CALL_GRAMMAR,
 } from "./domains/integrations/slack-api.ts";
+import {
+  callProjectTelegramBotApi,
+  TELEGRAM_CALL_GRAMMAR,
+} from "./domains/integrations/telegram-api.ts";
 import {
   deleteProjectFile,
   mintProjectFileUrl,
@@ -159,6 +164,7 @@ import type {
   GmailRequestInput,
   IntegrationConnectionStatus,
   IntegrationConnectionListEntry,
+  OAuthProviderSlug,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
@@ -1750,6 +1756,30 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       }
     }
 
+    if (slug === "telegram") {
+      if (!connection || method.length === 0) {
+        throw new Error(TELEGRAM_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.telegram[${JSON.stringify(connection)}].sendMessage({ chat_id, text })`,
+          grammar: TELEGRAM_CALL_GRAMMAR,
+          sdk: "the Telegram Bot API (https://core.telegram.org/bots/api): any method name as ONE dotted segment (sendMessage, sendPhoto, getMe, …) with ONE params object; the bot token is substituted at the egress door",
+          slug: "telegram",
+        });
+      }
+      // The Bot API is flat — a deeper path means the caller invented a
+      // namespace (telegram["bot"].chat.sendMessage): answer with the grammar.
+      if (method.length !== 1) throw new Error(TELEGRAM_CALL_GRAMMAR);
+      return await callProjectTelegramBotApi({
+        body: (args[0] ?? {}) as Record<string, unknown>,
+        connection,
+        method: method[0]!,
+        projectId: this.props.projectId,
+      });
+    }
+
     if (slug === "parallel") {
       const [, ...operationPath] = path;
       return await (
@@ -1807,6 +1837,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
         'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
+        'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
@@ -1842,6 +1873,12 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
         "}",
+        '// itx.integrations.telegram["<connection>"] is the Telegram Bot API:',
+        "// flat method names (ONE segment), one params object, JSON result.",
+        "interface TelegramConnection {",
+        "  sendMessage(params: { chat_id: number | string; text: string } & Record<string, unknown>): Promise<Record<string, unknown>>;",
+        "  // ...every other Bot API method, same flat shape (sendPhoto, getMe, ...)",
+        "}",
         "// itx.integrations.parallel exposes a flat OpenAPI RPC target:",
         "type Parallel = OpenApiRpc;",
       ].join("\n"),
@@ -1849,6 +1886,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        connectTelegram:
+          "Connect a Telegram bot by BotFather token: { botToken } — no OAuth, no redirect.",
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
@@ -1860,6 +1899,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         slack:
           'Per-connection wrapped Slack WebClient: slack["<connection>"].chat.postMessage({ channel, text }) — any Web API method, one body object.',
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
+        telegram:
+          'Per-connection Telegram Bot API: telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method, one params object.',
       },
       parent: "a project itx (itx.integrations)",
     });
@@ -1877,10 +1918,26 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure.
+   */
+  connectTelegram(input: {
+    botToken: string;
+  }): Promise<{ botId: string; botUsername: string | null; connection: string; ok: true }> {
+    return connectTelegram({
+      botToken: input.botToken,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+    });
+  }
+
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -1901,7 +1958,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult> {

@@ -147,6 +147,16 @@ export const AppConfig = z.object({
           webhookSecret: redacted(z.string().trim().min(1)).optional(),
         })
         .optional(),
+      /** Telegram Bot API integration. Deliberately NO deployment credential:
+       * bots connect by BotFather-token paste (`connectTelegram`), and the
+       * webhook secret token is derived from SECRET_ENCRYPTION_KEY. The block
+       * exists only so tests (and, in a pinch, a proxy deployment) can repoint
+       * the Bot API base at a controllable fake server. */
+      telegram: z
+        .object({
+          apiBaseUrl: z.url().default("https://api.telegram.org"),
+        })
+        .prefault({}),
       /** The dummy third-party used to prove the integrations model end to end
        * (apps/dummy-petshop). Its client credentials back the FIRST-PARTY
        * petshop lane's `{ platform: "integrations.petshop" }` clientCreds ref
@@ -172,7 +182,9 @@ export const AppConfig = z.object({
         })
         .optional(),
     })
-    .default({}),
+    // prefault (not default): `{}` is valid INPUT — the nested telegram block
+    // fills its own defaults — but not the parsed output shape.
+    .prefault({}),
   typeIdPrefix: z
     .string()
     .trim()

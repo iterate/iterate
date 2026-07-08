@@ -13,9 +13,13 @@ the existing Slack/GitHub/Google integration machinery.
 
 ## Status summary
 
-Spec committed; implementation not started yet. PR is open as a draft with the
-`preview` label so a preview slot deploys — the goal is for Misha to connect a
-real BotFather bot from his phone against the preview.
+Implementation is largely complete: URL secret substitution, connect/status/
+disconnect flows, webhook door, router + agent processors, itx dispatch +
+`connectTelegram` verb, system prompt, and the dashboard card are all in and
+typechecking, with existing suites green. Main missing piece: the new Telegram
+test files (processors, webhook door, connect flow). PR is a draft with the
+`preview` label — the goal is for Misha to connect a real BotFather bot from
+his phone against the preview.
 
 ## Objective
 
@@ -111,31 +115,63 @@ and outbound calls at a fake Bot API server (follow whatever pattern
 
 ## Touch points
 
-- [ ] `types.ts` + `utils.ts`: add `"telegram"` to `BuiltinIntegrationSlug` /
+- [x] `types.ts` + `utils.ts`: add `"telegram"` to `BuiltinIntegrationSlug` /
       `BUILTIN_INTEGRATION_SLUGS`; event type constants; secret/thread path
       helpers (`telegramBotTokenSecretPath`, `telegramChatStreamPath`,
-      `telegramConnectionFromAgentPath`)
-- [ ] `domains/secrets/utils.ts`: URL-path placeholder substitution + tests
-- [ ] `connect-flows.ts`: `connectTelegram` (getMe → claim check → secret →
+      `telegramConnectionFromAgentPath`) — _done; also added
+      `telegramChatIdFromAgentPath` (the prompt embeds the chat id) and
+      `telegramWebhookSecretToken` (the derived setWebhook/door secret), plus a
+      new `OAuthProviderSlug = Exclude<BuiltinIntegrationSlug, "telegram">` so
+      the OAuth-only verbs stay exhaustively typed_
+- [x] `domains/secrets/utils.ts`: URL-path placeholder substitution + tests —
+      _`secretReferencesFromRequest` / `secretReferencePathsFromRequest` /
+      `substituteSecretRequest` (headers + decoded URL; placeholder-free URLs
+      pass through byte-identical); Secret DO + project egress door switched to
+      the request-level functions; ADR 0005 + design doc reworded to
+      "envelope, never the body"_
+- [x] `connect-flows.ts`: `connectTelegram` (getMe → claim check → secret →
       setWebhook → `recordConnection`), `getConnectionStatus` +
       `disconnectProvider` arms (disconnect calls `deleteWebhook` best-effort,
-      then shared `recordDisconnection`)
-- [ ] `telegram-webhook.ts` + register in `integration-webhook-api.ts`
-      handler chain
-- [ ] `telegram-api.ts`: `callProjectTelegramBotApi` via egress substitution
-- [ ] `telegram-processor-contract.ts` / `-implementation.ts` (router),
+      then shared `recordDisconnection`) — _done; throws human-readable errors
+      (direct RPC verb, not a redirect chain); egress pinned to the config's
+      Bot API origin_
+- [x] `telegram-webhook.ts` + register in `integration-webhook-api.ts`
+      handler chain — _`createTelegramWebhookFetch(deps)` DI factory (fake
+      router + fixed key in tests, real halves in prod); 401 on bad secret
+      token, ACK-and-drop otherwise; idempotency key
+      `telegram-webhook:<botId>:<update_id>`_
+- [x] `telegram-api.ts`: `callProjectTelegramBotApi` via egress substitution —
+      _placeholder in the URL path (`/bot<placeholder>/<method>`), POST JSON
+      through the project egress door; secret-pipeline errors named per
+      connection like slack-api_
+- [x] `telegram-processor-contract.ts` / `-implementation.ts` (router),
       `telegram-agent-processor-contract.ts` / `-implementation.ts`; register
-      on the project + agent Durable Objects next to the Slack pair
-- [ ] `project-processor-implementation.ts`: telegram agent path detection +
-      system prompt
-- [ ] `rpc-targets.ts`: `itx.integrations.telegram["<connection>"].<method>`
+      on the project + agent Durable Objects next to the Slack pair — _router
+      is stateless (chat id is a pure function of the update, unlike Slack's
+      route table); agent processor transcribes updates to YAML agent input
+      with `[photo]`-style media placeholder notes, ignores bot-authored
+      updates, sends `sendChatAction: typing` after input commit and on
+      llm-request/script-execution events_
+- [x] `project-processor-implementation.ts`: telegram agent path detection +
+      system prompt — _`telegramAgentSystemPrompt({ connection, chatId })`
+      (chat id parsed from the agent path so replies need no payload
+      spelunking); birth certificate arms `telegram-agent` on
+      `/agents/telegram/**`_
+- [x] `rpc-targets.ts`: `itx.integrations.telegram["<connection>"].<method>`
       dispatch branch + the `connectTelegram` verb reachable from the
-      dashboard
-- [ ] Dashboard integrations page: Telegram card with token-paste connect
-      dialog (no OAuth redirect), disconnect, status
+      dashboard — _flat one-segment method dispatch with `__describe` +
+      TELEGRAM_CALL_GRAMMAR; `connectTelegram` verb; itx-api regenerated;
+      `connectTelegram` added to the provideCapability collision guard_
+- [x] Dashboard integrations page: Telegram card with token-paste connect
+      dialog (no OAuth redirect), disconnect, status — _`TelegramItem` card
+      with a Sheet + single token field (uncontrolled input, tanstack
+      mutations; sheet-open useState mirrors the existing
+      AccountConnectionsItem precedent); notes group privacy mode in the
+      field description_
 - [ ] Tests: mirror `slack-processors.test.ts` (router + agent pair),
       webhook door tests (secret token, unclaimed bot, dedupe), connect flow
       tests with a fake Bot API (no `vi.mock`), URL substitution tests
+      — _URL substitution tests done (secrets/utils.test.ts); the rest next_
 
 ## Manual test plan (phone-friendly, against the preview)
 
@@ -163,3 +199,36 @@ and outbound calls at a fake Bot API server (follow whatever pattern
 
 - 2026-07-08: worktree + branch `telegram-integration` created off main; spec
   committed before implementation per AFK-task protocol.
+- 2026-07-08: URL secret substitution landed first (the one cross-domain
+  change): request-level reference scan + substitute in `domains/secrets`,
+  matching on the DECODED url (Request construction percent-encodes the
+  placeholder's braces/spaces/quotes). Substitution only rewrites URLs that
+  actually carry a placeholder, so ordinary URLs never round-trip through
+  decode/re-encode. ADR 0005 + integrations design doc updated from
+  "header-only, forever" to "envelope (headers + URL), never the body".
+- 2026-07-08: core integration landed. Notable choices within the spec's
+  latitude:
+  - `config.integrations.telegram` defaults to
+    `{ apiBaseUrl: "https://api.telegram.org" }` via `.prefault({})` (the
+    parent `integrations` object switched `.default({})` → `.prefault({})`
+    since `{}` is now input, not output). Zero deployment config still holds.
+  - Agent transcription is the FULL update payload as YAML (the Slack
+    precedent) plus a bracketed-placeholder summary line for media, rather
+    than a reduced text-only transcript — a superset of the spec's
+    "text/sender/chat" ask that avoids inventing a lossy reduced shape.
+  - `message` and `callback_query` updates trigger the LLM; edits/channel
+    posts/membership updates are recorded as `dont-trigger-request` inputs
+    (mirrors the Slack non-message lane).
+  - Typing action: sent right after the agent input commits (receipt ack —
+    Telegram has no reaction primitive) and re-sent on llm-request-requested /
+    script-execution-requested (the indicator auto-expires after ~5s).
+  - Chat ids are used verbatim in paths (`chat--100123` for supergroups): the
+    sign is significant and digits/minus are safe path chars, so no
+    sanitization — deliberate difference from Slack's sanitized segments.
+  - `startOAuthFlow`/`completeConnect` now take `OAuthProviderSlug` (the old
+    trio) instead of `BuiltinIntegrationSlug`, so a stray
+    `startOAuthFlow({ provider: "telegram" })` is a type error rather than
+    falling into the google branch.
+  - github-connect/google-connection tests gained a `vi.mock("./telegram-api.ts")`
+    line mirroring their existing slack-api mock (connect-flows → telegram-api
+    → projects/egress drags the worker-only entrypoint into Node).
