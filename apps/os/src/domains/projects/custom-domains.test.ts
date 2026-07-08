@@ -402,6 +402,20 @@ describe("custom domain provisioning", () => {
     );
   });
 
+  it("clears a failed local custom domain without deleting another project's Cloudflare hostname", async () => {
+    const directory = new MemoryKv() as unknown as KVNamespace;
+    const cloudflare = createCloudflareFetchMock({
+      hostnames: [cloudflareHostname({ project: otherProject })],
+    });
+    const provisioner = createProvisioner({ directory, fetch: cloudflare.fetch });
+
+    await expect(
+      provisioner.remove({ cloudflareHostnameId: null, hostname: "garple.com", project }),
+    ).resolves.toBeUndefined();
+    expect(cloudflare.deletedIds).toEqual([]);
+    await expect(readProjectHostnameRegistration(directory, "garple.com")).resolves.toBeNull();
+  });
+
   it("treats stale Cloudflare delete ids as already removed and clears same-project routing", async () => {
     const directory = new MemoryKv() as unknown as KVNamespace;
     await primeProjectHostname(directory, "garple.com", project);
