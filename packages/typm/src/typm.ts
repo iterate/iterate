@@ -68,6 +68,10 @@ interface PendingDependency {
 
 const FILE_FETCH_CONCURRENCY = 8;
 
+/** Charged per file against the byte budget, so the budget bounds the
+ * NUMBER of CDN requests as well as their size (see the fan-out comment). */
+const PER_FILE_OVERHEAD_BYTES = 512;
+
 export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTypesResult> {
   const root = JSON.parse(input.packageJson) as PackageJsonShape;
   const files: Record<string, string> = {};
@@ -123,12 +127,21 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
       const major = version.split(".")[0]!;
       return [{ name: typesPackage, ranges: [major, "latest"] }];
     }
-    const packageJsonEntry = tree.files.find((file) => file.name === "/package.json");
-    const wanted = packageJsonEntry ? [...declarationFiles, packageJsonEntry] : declarationFiles;
-    const bytes = wanted.reduce((sum, file) => sum + (file.size || 0), 0);
+    // EVERY package.json in the tree, not just the root one: pre-`exports`
+    // packages route subpath types through per-directory package.jsons
+    // (`pkg/sub/package.json` with a `types` field — older rxjs/date-fns
+    // layouts), and they're tiny. The root one additionally drives the
+    // dependency recursion below.
+    const packageJsonEntries = tree.files.filter((file) => file.name.endsWith("/package.json"));
+    const packageJsonEntry = packageJsonEntries.find((file) => file.name === "/package.json");
+    const wanted = [...declarationFiles, ...packageJsonEntries];
+    // Charge a flat per-file overhead so the byte budget also bounds request
+    // FAN-OUT: a hostile listing reporting thousands of zero-size files would
+    // otherwise pass the precheck while triggering a fetch per file.
+    const bytes = wanted.reduce((sum, file) => sum + (file.size || 0) + PER_FILE_OVERHEAD_BYTES, 0);
     if (totalBytes + bytes > input.limits.maxTotalBytes) {
       warn(
-        `skipping ${name}@${version}: ${bytes} bytes would exceed the ${input.limits.maxTotalBytes} byte budget`,
+        `skipping ${name}@${version}: ${bytes} bytes (incl. per-file overhead) would exceed the ${input.limits.maxTotalBytes} byte budget`,
       );
       return [];
     }

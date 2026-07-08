@@ -262,12 +262,65 @@ test("skips a package whole when it would exceed the byte budget", async () => {
 
   const result = await acquireTypes({
     ...input(registry, { dependencies: { small: "1", huge: "1" } }),
-    limits: { maxPackages: 100, maxTotalBytes: 1000 },
+    // Room for small's 2 files (content + per-file overhead) but not huge's 10 kB.
+    limits: { maxPackages: 100, maxTotalBytes: 5000 },
   });
 
   expect(result.packages.map((acquired) => acquired.name)).toEqual(["small"]);
   expect(result.warnings.join("\n")).toContain("byte budget");
   expect(Object.keys(result.files).some((path) => path.includes("huge"))).toBe(false);
+});
+
+test("the byte budget bounds request fan-out, not just content size", async () => {
+  // A hostile flat listing: thousands of zero-size declaration files would
+  // pass a content-only budget while triggering a fetch per file.
+  const zeroSizeFiles = Object.fromEntries(
+    Array.from({ length: 5000 }, (_, i) => [`/gen/file-${i}.d.ts`, ""]),
+  );
+  const registry = fakeRegistry({
+    resolve: { "hostile@1": "1.0.0" },
+    packages: {
+      "hostile@1.0.0": {
+        packageJson: { name: "hostile", version: "1.0.0" },
+        files: zeroSizeFiles,
+      },
+    },
+  });
+
+  const result = await acquireTypes({
+    ...input(registry, { dependencies: { hostile: "1" } }),
+    limits: { maxPackages: 100, maxTotalBytes: 1024 * 1024 },
+  });
+
+  expect(result.packages).toEqual([]);
+  expect(result.warnings.join("\n")).toContain("byte budget");
+  const fileFetches = registry.requests.filter((url) => url.startsWith("https://cdn.jsdelivr.net"));
+  expect(fileFetches).toEqual([]);
+});
+
+test("keeps nested package.json files (pre-exports subpath types routing)", async () => {
+  const registry = fakeRegistry({
+    resolve: { "old-style@^6.0.0": "6.6.6" },
+    packages: {
+      "old-style@6.6.6": {
+        packageJson: { name: "old-style", version: "6.6.6" },
+        files: {
+          "/index.d.ts": "export {};",
+          "/operators/package.json": '{ "types": "../typings/operators/index.d.ts" }',
+          "/typings/operators/index.d.ts": "export declare const map: unknown;",
+        },
+      },
+    },
+  });
+
+  const result = await acquireTypes(input(registry, { dependencies: { "old-style": "^6.0.0" } }));
+
+  expect(Object.keys(result.files).sort()).toEqual([
+    "/node_modules/old-style/index.d.ts",
+    "/node_modules/old-style/operators/package.json",
+    "/node_modules/old-style/package.json",
+    "/node_modules/old-style/typings/operators/index.d.ts",
+  ]);
 });
 
 test("skips unfetchable specifiers (workspace:/github:/file:) with warnings", async () => {

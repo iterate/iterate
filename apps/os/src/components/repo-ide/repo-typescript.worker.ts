@@ -201,6 +201,11 @@ const typmFetch = createCachedFetch({
  * dependencies (scripts, formatting) must not trigger anything. */
 let lastAcquiredDependencies: string | null = null;
 
+/** Every vfs path the last acquisition wrote — the delete baseline. Without
+ * it, removing a dep would leave its phantom types resolving forever, and a
+ * major bump would leave a mixed-version tree (old files v4 doesn't ship). */
+let lastAcquiredFilePaths = new Set<string>();
+
 /** Serializes acquisition runs: overlapping runs would interleave their vfs
  * writes, so a slow stale run (old dep ranges) could land its package
  * versions AFTER a newer run's and stick. Chaining keeps writes in request
@@ -270,17 +275,28 @@ const api = {
           log: (message) => console.info(`[typm] ${message}`),
           limits: TYPM_LIMITS,
         });
+        const nextPaths = new Set(Object.keys(result.files));
+        // Warnings with NOTHING acquired usually means offline/CDN-down (the
+        // core degrades per-package, so total wipeout is transient-shaped).
+        // Reset so a retry is possible — retries stay cheap, they re-enter
+        // this dedupe — and keep the previous acquisition's types in place
+        // rather than degrading working buffers over a blip.
+        if (nextPaths.size === 0 && result.warnings.length > 0) {
+          lastAcquiredDependencies = null;
+          return { acquired: false, failed: true };
+        }
+        // Drop what the previous acquisition wrote and this one didn't:
+        // removed deps must degrade back to the wildcard (not keep phantom
+        // types), and version bumps must not leave a mixed-version tree.
+        const stalePaths = [...lastAcquiredFilePaths].filter((path) => !nextPaths.has(path));
+        const env = worker.getEnv();
+        if (env) for (const path of stalePaths) env.deleteFile(path);
         for (const [path, content] of Object.entries(result.files)) {
           worker.updateFile({ path, code: nonEmpty(content) });
         }
-        const acquired = Object.keys(result.files).length > 0;
-        // Warnings with NOTHING acquired usually means offline/CDN-down (the
-        // core degrades per-package, so total wipeout is transient-shaped).
-        // Reset so a retry is possible; retries stay cheap — they re-enter
-        // this dedupe.
-        const failed = !acquired && result.warnings.length > 0;
-        if (failed) lastAcquiredDependencies = null;
-        return { acquired, failed };
+        lastAcquiredFilePaths = nextPaths;
+        // Deletions change effective types too — the host relints on either.
+        return { acquired: nextPaths.size > 0 || stalePaths.length > 0, failed: false };
       } catch (error) {
         // Transient failure (offline, CDN hiccup): allow a later retrigger.
         lastAcquiredDependencies = null;
