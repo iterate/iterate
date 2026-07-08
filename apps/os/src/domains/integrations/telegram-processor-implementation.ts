@@ -83,7 +83,7 @@ export class TelegramProcessor extends StreamProcessor<
  * many parallel topics that must not share an agent. Null when the update has
  * no chat at all.
  */
-export function telegramChatFromUpdate(
+function telegramChatFromUpdate(
   body: unknown,
 ): { chatId: string; messageThreadId?: string } | null {
   const update = readRecord(body);

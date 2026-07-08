@@ -132,7 +132,7 @@ function telegramWebhookAgentInput(payload: unknown) {
 
 /** Bracketed placeholders for the media a message carries — the v1 stand-in
  * for actually downloading Telegram files. */
-export function telegramMediaPlaceholders(payload: unknown): string[] {
+function telegramMediaPlaceholders(payload: unknown): string[] {
   const update = readRecord(readRecord(payload)?.body);
   const message =
     readRecord(update?.message) ??
@@ -165,7 +165,7 @@ type TelegramUpdateTarget = {
 
 /** The chat/sender coordinates of one raw update — what the transcription
  * gates and the typing action need. Null when the update carries no chat. */
-export function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
+function telegramUpdateTarget(body: unknown): TelegramUpdateTarget | null {
   const update = readRecord(body);
   if (update == null) return null;
   const containers: Array<[kind: TelegramUpdateTarget["kind"], value: unknown]> = [
