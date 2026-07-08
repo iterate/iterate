@@ -241,6 +241,8 @@ export interface ProjectRpcTarget {
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
   workers: DynamicWorkerCollection;
+  /** Path-addressed durable workspaces (\`itx.workspaces.get(path)\`) — see {@link WorkspaceCollection}. */
+  workspaces: WorkspaceCollection;
   // Present only on an agent-scoped itx (path under \`/agents/\`). \`agent\` is this
   // agent's own control surface; \`chat\` is its web-chat door. They are getters
   // derived from the scope path, not mounted capabilities — see rpc-targets.ts.
@@ -258,22 +260,36 @@ export interface ProjectRpcTarget {
    * dotted calls (\`await itx.sandbox.exec("...")\`) over grabbing the value.
    */
   sandbox?: CloudflareSandbox;
+  /**
+   * THIS agent's own workspace — the workspace at the agent's path under the
+   * workspace prefix (\`/agents/bla\` → \`/workspaces/agents/bla\`). Like
+   * \`sandbox\`, NOT a built-in: a durable itx-expression capability mounted on
+   * the agent's capability host at birth
+   * (\`expression: ["workspaces", ["get", "/workspaces" + <agent path>]]\`), so
+   * every \`itx.workspace.readFile(...)\` re-resolves through
+   * \`itx.workspaces.get\` at call time. See {@link Workspace}.
+   */
+  workspace?: Workspace;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat extends Describable {
   /**
-   * Say something to the user. \`files\` attaches project files to the message
-   * — THE way to hand the user something you generated (e.g. an \`itx.ai.run\`
-   * image: base64 straight into \`data\`, never pasted into message text).
-   * Attached images render inline in the chat and stay visible to the model
-   * on later turns.
+   * Say something to the user — pass the message as a plain string:
+   * \`await itx.chat.sendMessage("Here you go!")\`.
+   *
+   * \`options.files\` attaches project files to the message — THE way to hand
+   * the user something you generated (e.g. an \`itx.ai.run\` image: base64
+   * straight into \`data\`, never pasted into message text). Attached images
+   * render inline in the chat and stay visible to the model on later turns.
    */
-  sendMessage(input: {
-    message: string;
-    files?: Array<{ contentType: string; data: FileData; filename: string }>;
-  }): Promise<StreamEvent>;
+  sendMessage(message: string, options?: AgentChatSendOptions): Promise<StreamEvent>;
 }
+
+/** Optional second argument to {@link AgentChat.sendMessage}. */
+export type AgentChatSendOptions = {
+  files?: Array<{ contentType: string; data: FileData; filename: string }>;
+};
 
 /**
  * Bytes accepted by file-writing APIs. Strings are ALWAYS decoded as base64
@@ -885,17 +901,73 @@ export interface Repo extends Describable {
    * \`oldString\` must match exactly once unless \`replaceAll\` is true.
    */
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
+  /**
+   * Back this repo with a real GitHub repository through a named GitHub
+   * connection. From then on every default-branch commit is mirrored to
+   * GitHub best-effort (failures journal on the repo stream and self-heal on
+   * the next commit), and every GitHub webhook about that repository is
+   * cross-posted onto this repo's stream. If the GitHub repository does not
+   * exist and the installation can create org repositories, it is created
+   * private. Re-linking replaces the previous link.
+   */
+  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   processor: StreamProcessorRpc<RepoProcessorState>;
+  /**
+   * Push the default branch head to the linked GitHub repository now — the
+   * repair verb for a failed mirror push. Never forced by default; \`force:
+   * true\` makes this repo win over commits made directly on GitHub.
+   */
+  pushToGithub(input?: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;
   /** Committed file contents at HEAD; null when the path does not exist. */
   readFile(input: { path: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
   } | null>;
+  /**
+   * Adopt the linked GitHub repository's default-branch head into this repo.
+   * Fast-forward only: fails when this repo has commits GitHub does not,
+   * unless \`force: true\` discards them. The synced head is immediately live
+   * for worker builds.
+   */
+  syncFromGithub(input?: { force?: boolean }): Promise<GithubSyncResult>;
+  /** Remove the GitHub link and its webhook cross-post rule. */
+  unlinkGithub(): Promise<{ unlinked: boolean }>;
   whoami(): Promise<string>;
 }
+
+/**
+ * The GitHub repository a repo is linked to: the named GitHub connection (an
+ * App installation) whose token authenticates mirror pushes, its installation
+ * id, and the owner/repo coordinates on GitHub.
+ */
+export type GithubRepoLink = {
+  connection: string;
+  installationId: string;
+  owner: string;
+  repo: string;
+};
+
+/** What \`repo.linkGithub\` returns: the recorded link, whether the GitHub
+ * repository was created by this call, and the initial mirror push's outcome
+ * (a failed initial push does not fail the link — it is journaled on the repo
+ * stream and repaired by \`pushToGithub()\` or the next commit). */
+export type LinkGithubResult = GithubRepoLink & {
+  created: boolean;
+  initialPush: { ok: boolean; commitOid?: string; error?: string };
+};
+
+/** What \`repo.syncFromGithub\` returns: whether the head moved, the adopted
+ * commit, and the head it replaced (null when the branch had no cached head). */
+export type GithubSyncResult = {
+  branch: string;
+  changed: boolean;
+  commitOid: string;
+  forced: boolean;
+  previousCommitOid: string | null;
+};
 
 /**
  * Catalog of sandboxes within one project.
@@ -928,6 +1000,129 @@ export interface SandboxCollection extends Describable {
  */
 export type CloudflareSandbox = object;
 
+/**
+ * Catalog of durable workspaces within one project.
+ *
+ * A workspace is addressed by its FULL path, which always lives under
+ * \`/workspaces/\` — the same domain-prefix convention as \`/sandboxes/...\` and
+ * \`/repos/...\`: an agent's workspace is the agent path under the prefix
+ * (\`/workspaces/agents/...\`, exposed as \`itx.workspace\` in that agent's
+ * scope), and standalone workspaces live under \`/workspaces/<anything>\`.
+ * Getting a workspace is cheap; the first call on it clones the project repo.
+ */
+export interface WorkspaceCollection extends Describable {
+  get(path: string): Workspace;
+}
+
+/**
+ * One durable workspace: a private virtual filesystem living in a Durable
+ * Object (no container, always warm), seeded on first use with a checkout of
+ * the project repo at \`/\` — every call waits for that clone, so a read that
+ * returns proves the checkout exists. Read, write, and edit files freely;
+ * nothing is shared until pushed. \`git\` publishes commits to the workspace's
+ * own branch in the project repo (\`workspaces/<path>\`), never to main.
+ *
+ * Constraints: individual files are capped at ~1.5MB (store large blobs with
+ * \`itx.files\`), and the \`.git\` directory is platform-managed — read it if you
+ * like, but writes there are rejected (use the \`git\` methods). Workspace
+ * branches are for durability and handoff, not worker builds: point worker
+ * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
+ */
+export interface Workspace extends Describable {
+  appendFile(path: string, content: string): Promise<void>;
+  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
+  /** Delete one file. Returns false when the path did not exist. */
+  deleteFile(path: string): Promise<boolean>;
+  /**
+   * Safely replace text in one file (uncommitted — use \`git\` to publish).
+   * The \`oldString\` must match exactly once unless \`replaceAll\` is true.
+   */
+  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
+  exists(path: string): Promise<boolean>;
+  /** Git over this workspace's checkout — see {@link WorkspaceGit}. */
+  git: WorkspaceGit;
+  glob(pattern: string): Promise<WorkspaceFileInfo[]>;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
+  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;
+  /** File contents, or null when the path does not exist. */
+  readFile(path: string): Promise<string | null>;
+  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
+  readFileBytes(path: string): Promise<Uint8Array | null>;
+  /**
+   * Wipe the checkout and re-clone the project repo on the next call — the
+   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
+   * commits survive on the workspace branch).
+   */
+  reset(): Promise<void>;
+  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;
+  /** File metadata, or null when the path does not exist. */
+  stat(path: string): Promise<WorkspaceFileInfo | null>;
+  whoami(): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
+}
+
+/**
+ * Git operations over a workspace's checkout. The workflow is ordinary git:
+ * \`add({ filepath: "." })\` stages everything, \`commit({ message })\` commits,
+ * \`push()\` publishes to the workspace's own branch in the project repo
+ * (credentials are injected by the platform — never passed by callers).
+ */
+export interface WorkspaceGit extends Describable {
+  /** Stage a file (\`filepath: "."\` stages everything). */
+  add(input: { filepath: string }): Promise<{ added: string }>;
+  commit(input: {
+    author?: { email: string; name: string };
+    message: string;
+  }): Promise<{ message: string; oid: string }>;
+  /** Changed files in the working tree relative to HEAD. */
+  diff(): Promise<{ filepath: string; status: string }[]>;
+  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]>;
+  /** Push the workspace branch to the project repo. */
+  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }>;
+  /** Stage a file deletion. */
+  rm(input: { filepath: string }): Promise<{ removed: string }>;
+  status(): Promise<WorkspaceGitStatusEntry[]>;
+}
+
+/**
+ * Metadata for one workspace filesystem entry — mirrors \`@cloudflare/shell\`'s
+ * \`FileInfo\`, the shape \`readDir\`/\`glob\`/\`stat\` return.
+ */
+export type WorkspaceFileInfo = {
+  createdAt: number;
+  mimeType: string;
+  name: string;
+  path: string;
+  size: number;
+  /** Symlink target, present only on symlinks. */
+  target?: string;
+  type: "directory" | "file" | "symlink";
+  updatedAt: number;
+};
+
+/** One commit returned by {@link WorkspaceGit.log}. */
+export type WorkspaceGitLogEntry = {
+  author: { email: string; name: string; timestamp: number };
+  message: string;
+  oid: string;
+  parent: string[];
+};
+
+/** One file's staging state returned by {@link WorkspaceGit.status}. */
+export type WorkspaceGitStatusEntry = {
+  filepath: string;
+  /** HEAD status: 0=absent, 1=present. */
+  head: number;
+  /** Stage status: 0=absent, 1=identical, 2=modified, 3=added. */
+  stage: number;
+  /** Human-readable status (e.g. "modified", "added"). */
+  status: string;
+  /** Workdir status: 0=absent, 1=identical, 2=modified. */
+  workdir: number;
+};
+
 /** Secret catalog within one project. */
 export interface SecretCollection extends Describable {
   get(path: string): Secret;
@@ -938,7 +1133,11 @@ export interface SecretCollection extends Describable {
  * material never leaves the Secret Durable Object except substituted into a
  * request bound for one of the secret's pinned egress hosts. */
 export interface Secret extends Describable {
-  describe(): Promise<SecretDescription>;
+  /** Like every other node, the secret's self-report IS \`__describe()\`: the
+   * discovery {@link Description} merged with the secret's public
+   * {@link SecretDescription} (audit, egress, whether material is present, the
+   * refresh strategy). The raw value is never part of it. */
+  __describe(): Promise<Description & SecretDescription>;
   fetch(req: Request): Promise<Response>;
   processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
@@ -1090,7 +1289,19 @@ export type RepoProcessorState = {
   artifactName: string | null;
   created: boolean;
   defaultBranch: string | null;
+  /** The linked GitHub repository, or null when the repo is not linked. */
+  github: GithubRepoLink | null;
   initialized: boolean;
+  /** Outcome of the most recent GitHub mirror push (or sync), or null before
+   * the first one. \`ok: false\` means the mirror is stale until the next
+   * commit's push or an explicit \`pushToGithub()\` repairs it. */
+  lastGithubPush: {
+    at: string;
+    branch: string;
+    commitOid: string | null;
+    error: string | null;
+    ok: boolean;
+  } | null;
   remote: string | null;
 };
 
@@ -1142,20 +1353,36 @@ export interface StreamProcessorRpc<State = unknown> {
  * \`flattenNestedPaths\` mirrors \`provideCapability\`: dotted calls on the stub
  * become ONE \`invokeCapability({ path, args })\` call that the worker's own
  * \`invokeCapability\` method dispatches in userspace (one RPC per call),
- * instead of the default member-by-member replay on the entrypoint.
+ * instead of the default member-by-member replay on the entrypoint. Under a
+ * flattened mount the intermediate path segments are pure DATA — they are
+ * not nodes of any tree, on either side of the wire, until the worker's
+ * dispatcher interprets them. \`worker.slack.chat.postMessage(x)\` delivers
+ * \`{ path: ["slack", "chat", "postMessage"], args: [x] }\`; nothing named
+ * \`slack\` exists anywhere.
+ *
  * \`buildBudgetMs\` bounds how long a call waits on a cold source build; past
  * it the call fails with an error whose \`name\` is
  * \`"WorkerBuildInProgressError"\` — the NAME is the contract (it survives
- * Workers RPC; class identity does not), so userspace matches
- * \`error.name === "WorkerBuildInProgressError"\` to render its own building
- * page (the seeded template's router does exactly this).
+ * Workers RPC; class identity does not). HTTP through the fetch lane never
+ * sees that error: a budget-expired build answers a 503 building page marked
+ * with the \`x-iterate-worker-building\` header instead.
  */
 export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
 };
 
-/** Capability-tree entry point for ad-hoc project-scoped worker refs. */
+/**
+ * Capability-tree entry point for ad-hoc project-scoped worker refs.
+ *
+ * The stub \`get\` returns speaks METHOD CALLS (Workers RPC): arguments and
+ * results are serialized data or live stubs. It is not an HTTP surface — a
+ * worker method named \`fetch\` is just a method here, and a Response it
+ * returns is a serialized copy, never a protocol act. HTTP into a dynamic
+ * worker (pages, streaming bodies, WebSocket upgrades) goes through the
+ * fetch lane instead: project ingress for app hosts, \`env.ITX.fetch\` from
+ * worker code (see \`ItxBinding\`).
+ */
 export interface DynamicWorkerCollection extends Describable {
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
@@ -1308,16 +1535,21 @@ export type StreamEventSource = {
     slug: string;
     version: string;
   };
-  crossPost?: {
+  /**
+   * Cross-post provenance chain, oldest hop first. Every cross-post rule hop
+   * appends one entry naming the stream (and event) it copied from, so a
+   * multi-hop chain reads as the event's full routing history. The stream
+   * refuses to cross-post an event into any stream already on its chain,
+   * which is what makes rule cycles safe to configure.
+   */
+  crossPostedFrom?: {
     ruleId: string;
-    from: {
-      createdAt: string;
-      offset: number;
-      path: string;
-      projectId: string | null;
-      type: string;
-    };
-  };
+    createdAt: string;
+    offset: number;
+    path: string;
+    projectId: string | null;
+    type: string;
+  }[];
 };
 
 export type StreamEventInput = {
@@ -1434,6 +1666,20 @@ export type EditRepoFileInput = {
 
 /** Result returned after an exact string edit commit attempt. */
 export type EditRepoFileResult = CommitRepoFilesResult & {
+  occurrenceCount: number;
+  path: string;
+};
+
+/** Input for {@link Workspace.edit} — an exact-string replace in one workspace file. */
+export type EditWorkspaceFileInput = {
+  newString: string;
+  oldString: string;
+  path: string;
+  replaceAll?: boolean;
+};
+
+/** Result of {@link Workspace.edit}. The change is in the working tree only — not committed. */
+export type EditWorkspaceFileResult = {
   occurrenceCount: number;
   path: string;
 };
@@ -1690,6 +1936,32 @@ export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorker
 
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+
+/**
+ * The \`env.ITX\` binding every dynamic worker receives — one object, two
+ * channels, split by what the wire can carry:
+ *
+ * - \`get()\` — the capability tree. An itx scoped to the worker's path;
+ *   everything on it is Workers RPC method calls whose arguments and results
+ *   are serialized data or live stubs. No name on this tree is
+ *   protocol-special (\`fetch\` included).
+ * - \`fetch(request)\` — the fetch lane. Real HTTP into a sibling dynamic
+ *   worker, selected by the \`x-iterate-worker-dispatch\` header (JSON
+ *   \`{ ref, buildBudgetMs? }\`, the same ref shape \`workers.get\` takes). This
+ *   is a chain of real workerd fetch hops end to end, so it is the ONLY
+ *   channel that can carry protocol semantics — WebSocket upgrades reach the
+ *   target class's own \`fetch\` handler and the 101's socket tunnels back.
+ *   A cold build answers a 503 building page marked
+ *   \`x-iterate-worker-building\` (auto-refreshing for browsers, retryable for
+ *   WebSocket reconnect loops).
+ *
+ * Authority is identical on both channels: the binding's own scope, minted by
+ * the host — worker code never picks its own project.
+ */
+export type ItxBinding = {
+  fetch(request: Request): Promise<Response>;
+  get(): Promise<ProjectRpcTarget>;
+};
 
 /**
  * Slack Web API surface exposed by the seeded project worker

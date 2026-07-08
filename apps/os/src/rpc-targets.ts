@@ -35,7 +35,9 @@ import {
   PROJECT_WORKER_ENTRY_POINT,
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
+import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
+import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
@@ -154,6 +156,9 @@ import type {
   GmailRequestInput,
   IntegrationConnectionListEntry,
   ProjectIntegrations,
+  Workspace,
+  WorkspaceCollection,
+  WorkspaceGit,
 } from "./types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
@@ -472,13 +477,20 @@ async function requestRepoCreate(input: {
 class RepoRpcTarget extends RpcTarget implements Repo {
   async __describe() {
     return describeNode({
-      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes.`,
+      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
         commitFiles: "Commit a batch of file changes ({ message, changes }).",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
+        linkGithub:
+          "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
+        pushToGithub:
+          "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile: "Read one file ({ path }).",
+        syncFromGithub:
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
+        unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
       parent: "repos.get(path); the project repo is itx.repo",
@@ -532,6 +544,40 @@ class RepoRpcTarget extends RpcTarget implements Repo {
 
   readFile(input: Parameters<Repo["readFile"]>[0]) {
     return this.#durableObjectStub.readFile(input);
+  }
+
+  linkGithub(input: Parameters<Repo["linkGithub"]>[0]) {
+    return linkRepoToGithub({
+      connection: input.connection,
+      owner: input.owner,
+      projectId: this.#requireProjectId(),
+      repo: input.repo,
+      repoPath: this.props.path,
+    });
+  }
+
+  unlinkGithub() {
+    return unlinkRepoFromGithub({
+      projectId: this.#requireProjectId(),
+      repoPath: this.props.path,
+    });
+  }
+
+  pushToGithub(input: Parameters<Repo["pushToGithub"]>[0] = {}) {
+    return this.#durableObjectStub.pushToGithub(input ?? {});
+  }
+
+  syncFromGithub(input: Parameters<Repo["syncFromGithub"]>[0] = {}) {
+    return this.#durableObjectStub.syncFromGithub(input ?? {});
+  }
+
+  // GitHub connections are project-scoped (their secrets and streams live in
+  // a project), so a global repo has nothing to link through.
+  #requireProjectId(): string {
+    if (this.props.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
+    return this.props.projectId;
   }
 
   get processor() {
@@ -659,6 +705,222 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
   }
 }
 
+/**
+ * Catalog of durable workspaces within one project — see the `Workspace`
+ * contract in types.ts. Every workspace lives under `/workspaces/` (the same
+ * domain-prefix convention as `/sandboxes/...`): an agent's workspace is its
+ * agent path under the prefix (`itx.workspace` on `/agents/bla` is
+ * `workspaces.get("/workspaces/agents/bla")`).
+ */
+class WorkspaceCollectionRpcTarget extends RpcTarget implements WorkspaceCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the project repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+      children: { get: "The workspace at a path (clones the project repo on first use)." },
+      parent: "a project itx (itx.workspaces)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get(path: string) {
+    return new WorkspaceRpcTarget({
+      auth: this.props.auth,
+      path: normalizeWorkspacePath(path),
+      projectId: this.props.projectId,
+    });
+  }
+}
+
+class WorkspaceRpcTarget extends RpcTarget implements Workspace {
+  async __describe() {
+    return describeNode({
+      instructions:
+        `A durable workspace at "${this.props.path}": a private checkout of the project repo in a Durable Object filesystem (cloned on first use; every call waits for that clone, so a successful read proves the checkout is ready). Paths are absolute with "/" as the repo root. Read/write/edit freely — nothing is shared until pushed; ` +
+        `workspace.git publishes commits to the project repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
+      children: {
+        appendFile: "Append to a file.",
+        cp: "Copy a file or directory ({ recursive } for trees).",
+        deleteFile: "Delete one file (false when it did not exist).",
+        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Working-tree only — commit via git.",
+        exists: "Whether a path exists.",
+        git: "Git over this checkout: status/add/rm/commit/log/diff/push — push goes to this workspace's own branch.",
+        glob: "Files matching a glob pattern.",
+        mkdir: "Create a directory ({ recursive } for parents).",
+        mv: "Move/rename a file or directory.",
+        readDir: "List a directory (defaults to the root).",
+        readFile: "One file's contents ({ path }); null when missing.",
+        readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
+        reset: "Wipe the checkout; the next call re-clones. Unpushed work is LOST.",
+        rm: "Remove a path ({ recursive, force }).",
+        stat: "Metadata for one path; null when missing.",
+        whoami: "Workspace identity string (debug).",
+        writeFile: "Write one file (creates parent directories).",
+        writeFileBytes: "Write raw bytes to one file.",
+      },
+      parent: "workspaces.get(path); an agent's own workspace is itx.workspace",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get #durableObjectStub() {
+    return env.WORKSPACE.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  whoami() {
+    return this.#durableObjectStub.whoami();
+  }
+
+  readFile(path: string) {
+    return this.#durableObjectStub.readFile(path);
+  }
+
+  readFileBytes(path: string) {
+    return this.#durableObjectStub.readFileBytes(path);
+  }
+
+  reset() {
+    return this.#durableObjectStub.reset();
+  }
+
+  writeFile(...[path, content]: Parameters<Workspace["writeFile"]>) {
+    return this.#durableObjectStub.writeFile(path, content);
+  }
+
+  writeFileBytes(...[path, data]: Parameters<Workspace["writeFileBytes"]>) {
+    return this.#durableObjectStub.writeFileBytes(path, data);
+  }
+
+  appendFile(...[path, content]: Parameters<Workspace["appendFile"]>) {
+    return this.#durableObjectStub.appendFile(path, content);
+  }
+
+  deleteFile(path: string) {
+    return this.#durableObjectStub.deleteFile(path);
+  }
+
+  edit(input: Parameters<Workspace["edit"]>[0]) {
+    return this.#durableObjectStub.edit(input);
+  }
+
+  mkdir(...[path, opts]: Parameters<Workspace["mkdir"]>) {
+    return this.#durableObjectStub.mkdir(path, opts);
+  }
+
+  readDir(dir?: string) {
+    return this.#durableObjectStub.readDir(dir);
+  }
+
+  glob(pattern: string) {
+    return this.#durableObjectStub.glob(pattern);
+  }
+
+  rm(...[path, opts]: Parameters<Workspace["rm"]>) {
+    return this.#durableObjectStub.rm(path, opts);
+  }
+
+  cp(...[src, dest, opts]: Parameters<Workspace["cp"]>) {
+    return this.#durableObjectStub.cp(src, dest, opts);
+  }
+
+  mv(...[src, dest, opts]: Parameters<Workspace["mv"]>) {
+    return this.#durableObjectStub.mv(src, dest, opts);
+  }
+
+  stat(path: string) {
+    return this.#durableObjectStub.stat(path);
+  }
+
+  exists(path: string) {
+    return this.#durableObjectStub.exists(path);
+  }
+
+  get git() {
+    return new WorkspaceGitRpcTarget(this.props);
+  }
+}
+
+/**
+ * The `git` member of a workspace, mirroring `@cloudflare/shell`'s git
+ * command names so upstream docs apply. Push credentials are injected inside
+ * the workspace Durable Object (from the project repo's `gitAccess()`), so no
+ * token ever rides this surface.
+ */
+class WorkspaceGitRpcTarget extends RpcTarget implements WorkspaceGit {
+  async __describe() {
+    return describeNode({
+      instructions:
+        `Git over the workspace checkout at "${this.props.path}". Ordinary flow: add({ filepath: "." }) → commit({ message }) → push(). ` +
+        `push() publishes to the project repo branch "${workspaceBranchName(this.props.path)}" (this workspace's own branch — never main); credentials are automatic.`,
+      children: {
+        add: 'Stage a file ("." for everything).',
+        commit: "Commit staged changes ({ message, author? }).",
+        diff: "Changed files relative to HEAD.",
+        log: "Commit history ({ depth? }).",
+        push: "Push the workspace branch to the project repo ({ force? }).",
+        rm: "Stage a file deletion.",
+        status: "Staging state of every changed file.",
+      },
+      parent: "a workspace (workspace.git)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get #durableObjectStub() {
+    return env.WORKSPACE.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  status() {
+    return this.#durableObjectStub.gitStatus();
+  }
+
+  add(input: Parameters<WorkspaceGit["add"]>[0]) {
+    return this.#durableObjectStub.gitAdd(input);
+  }
+
+  rm(input: Parameters<WorkspaceGit["rm"]>[0]) {
+    return this.#durableObjectStub.gitRm(input);
+  }
+
+  commit(input: Parameters<WorkspaceGit["commit"]>[0]) {
+    return this.#durableObjectStub.gitCommit(input);
+  }
+
+  log(input?: Parameters<WorkspaceGit["log"]>[0]) {
+    return this.#durableObjectStub.gitLog(input);
+  }
+
+  diff() {
+    return this.#durableObjectStub.gitDiff();
+  }
+
+  push(input?: Parameters<WorkspaceGit["push"]>[0]) {
+    return this.#durableObjectStub.gitPush(input);
+  }
+}
+
 class SecretCollectionRpcTarget extends RpcTarget implements SecretCollection {
   async __describe() {
     return describeNode({
@@ -689,14 +951,18 @@ class SecretCollectionRpcTarget extends RpcTarget implements SecretCollection {
 
 class SecretRpcTarget extends RpcTarget implements Secret {
   async __describe() {
+    // The secret's self-report IS __describe (like every other node): the
+    // discovery node merged with the secret's public state (audit, egress,
+    // hasMaterial, refresh). The raw value is never part of it.
+    const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": describe() for metadata, update() to set, fetch() to use it in an egress request via placeholder substitution. The raw value is never returned.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
-        describe: "Metadata (exists, updatedAt) — never the value.",
         fetch: "Egress fetch with secret placeholders substituted server-side.",
-        update: "Set the value.",
+        update: "Set the value, egress URLs, and/or refresh strategy.",
       },
       parent: "itx.secrets.get(path)",
+      ...state,
     });
   }
 
@@ -712,10 +978,6 @@ class SecretRpcTarget extends RpcTarget implements Secret {
         path: normalizeSecretPath(this.props.path),
       }),
     );
-  }
-
-  describe() {
-    return this.durableObjectStub.describe();
   }
 
   fetch(request: Parameters<Secret["fetch"]>[0]) {
@@ -1641,10 +1903,11 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   async __describe() {
     return describeNode({
       instructions:
-        "An agent's web-chat door: sendMessage({ message, files? }) appends the agent's reply " +
-        "to its stream (what the user sees). `files` attaches generated files — base64 " +
-        "strings (itx.ai.run image output), Uint8Array, Blob, or a stream — which render " +
-        "inline in the chat and stay model-visible on later turns.",
+        "An agent's web-chat door: sendMessage(message, { files? }) appends the agent's reply " +
+        "to its stream (what the user sees). The message is a plain string; the optional " +
+        "second argument's `files` attaches generated files — base64 strings (itx.ai.run " +
+        "image output), Uint8Array, Blob, or a stream — which render inline in the chat " +
+        "and stay model-visible on later turns.",
       children: { sendMessage: "Say something to the user (optionally with file attachments)." },
       parent: "agent.chat / itx.chat (agent scopes only)",
     });
@@ -1663,21 +1926,21 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
     });
   }
 
-  async sendMessage(input: Parameters<AgentChat["sendMessage"]>[0]) {
-    const message = input.message.trim();
-    if (message === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
+  async sendMessage(...[message, options]: Parameters<AgentChat["sendMessage"]>) {
+    const trimmed = message.trim();
+    if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
-      input.files === undefined || input.files.length === 0
+      options?.files === undefined || options.files.length === 0
         ? undefined
         : await storeAgentFileAttachments({
             agentPath: this.props.path,
             config: parseConfig(env),
-            files: input.files,
+            files: options.files,
             projectId: this.props.projectId,
           });
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: { message, ...(files === undefined ? {} : { files }) },
+      payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
     });
     return event;
   }
@@ -2447,6 +2710,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   streams: "Project stream catalog: get(path), list().",
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
+  workspaces:
+    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the project repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
 };
 
 // The shortcut methods are children (callable members) but not capability
@@ -2727,6 +2992,13 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
+    });
+  }
+
+  get workspaces(): WorkspaceCollection {
+    return new WorkspaceCollectionRpcTarget({
+      auth: this.#props.auth,
       projectId: this.#props.projectId,
     });
   }

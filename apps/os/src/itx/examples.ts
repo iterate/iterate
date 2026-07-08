@@ -517,10 +517,10 @@ await secret.update({
 });
 
 // The secret processor folds the update asynchronously — poll describe().
-let described = await secret.describe();
+let described = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  described = await secret.describe();
+  described = await secret.__describe();
 }
 
 // Metadata only: hasMaterial, the egress allowlist, and the usage audit.
@@ -548,10 +548,10 @@ await secret.update({
 
 // update() is durable immediately, but the secret processor folds the stream
 // asynchronously. Wait until the request path can see the new material.
-let before = await secret.describe();
+let before = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  before = await secret.describe();
+  before = await secret.__describe();
 }
 
 const response = await itx.egress.fetch(
@@ -566,7 +566,7 @@ if (!response.ok) {
 }
 
 const body = await response.json();
-const after = await secret.describe();
+const after = await secret.__describe();
 const echoedSecret = body?.headers?.["x-itx-secret"];
 
 return {
@@ -830,6 +830,71 @@ return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo 
 `.trim(),
   },
   {
+    id: "github-backed-repo",
+    title: "Back a project repo with a real GitHub repository",
+    description:
+      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const connections = await itx.integrations.list();
+const github = connections.find((entry) => entry.integration === "github");
+if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
+
+const owner = vars.owner; // an org the GitHub App is installed on
+const repoName = vars.repo ?? "iterate-linked-repo-demo";
+if (!owner) return { error: "Pass vars.owner (the GitHub org)." };
+
+const repo = itx.repo; // or itx.repos.get("/repos/<path>") for a path-scoped repo
+const link = await repo.linkGithub({ connection: github.connection, owner, repo: repoName });
+// link.initialPush reports the seeding push; a commit now mirrors automatically:
+await repo.commitFiles({
+  message: "Hello from iterate",
+  changes: [{ path: "hello.md", content: "Mirrored to GitHub.\\n" }],
+});
+// Webhooks about the repository (pushes, PRs, issues) now land on the repo's
+// own stream as events.iterate.com/github/webhook-received — including the
+// echo of the mirror pushes themselves.
+const state = await repo.processor.snapshot();
+return { link, github: state.state.github, lastGithubPush: state.state.lastGithubPush };
+`.trim(),
+  },
+  {
+    id: "stream-cross-post-rule",
+    title: "Cross-post matching events between streams with a rule",
+    description:
+      'Streams have a built-in rule primitive: append events.iterate.com/stream/rule-configured with { ruleId, type: "cross-post", path, eventTypes, condition? } and every later matching event is copied to the target stream. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), rules never copy into a stream already on the chain (cycles are safe), and rule-removed deletes a rule.',
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const source = itx.streams.get(vars.source ?? "/examples/cross-post/source");
+const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
+
+await source.append({
+  type: "events.iterate.com/stream/rule-configured",
+  payload: {
+    ruleId: "copy-important",
+    type: "cross-post",
+    path: vars.target ?? "/examples/cross-post/target",
+    eventTypes: ["events.iterate.example/note"],
+    condition: 'payload.importance = "high"', // JSONata over the event; optional
+  },
+});
+
+await source.append(
+  { type: "events.iterate.example/note", payload: { importance: "low", text: "ignored" } },
+  { type: "events.iterate.example/note", payload: { importance: "high", text: "copied" } },
+);
+
+const copied = await target.waitForEvent({
+  eventTypes: ["events.iterate.example/note"],
+  afterOffset: 0,
+  timeoutMs: 10_000,
+});
+return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
+`.trim(),
+  },
+  {
     id: "gmail-search-inbox",
     title: "Search the inbox through the built-in Gmail integration",
     description:
@@ -901,10 +966,10 @@ await secret.update({
   egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
   material: vars.githubPat,
 });
-let described = await secret.describe();
+let described = await secret.__describe();
 for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 200));
-  described = await secret.describe();
+  described = await secret.__describe();
 }
 
 // 2. One durable mount makes GitHub part of the integrations collection. The

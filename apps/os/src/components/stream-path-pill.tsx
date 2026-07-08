@@ -1,22 +1,21 @@
 import { cn } from "@iterate-com/ui/lib/utils";
+import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 
 export function StreamPathPill({
   className,
-  onClick,
   streamPath,
-  title,
+  title = `${streamPath} — click or ⌘K to switch streams`,
 }: {
   className?: string;
-  onClick: () => void;
   streamPath: string;
-  title: string;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       aria-haspopup="dialog"
       title={title}
-      onClick={onClick}
+      onClick={() => openGlobalCommandPalette()}
       className={cn(
         "flex h-9 min-w-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 hover:bg-muted/70",
         className,

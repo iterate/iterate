@@ -16,8 +16,8 @@ await itx.secrets.get("/secrets/openai").update({
 ```
 
 Secret paths are normalized and must start with `/secrets/`. The public secret
-capability has `update`, `describe`, `fetch`, and `processor`, but no method
-that returns material. `describe()` reports metadata only: whether material is
+capability has `update`, `__describe`, `fetch`, and `processor`, but no method
+that returns material. `__describe()` reports metadata only: whether material is
 present, the egress allowlist, and usage audit counters.
 
 The implementation lives in:

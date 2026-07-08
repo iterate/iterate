@@ -14,7 +14,6 @@ import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
@@ -66,7 +65,6 @@ export function StreamViewHeader({
       <StreamPathPill
         streamPath={streamPath}
         title={`${streamPath} — click or ⌘K to switch streams`}
-        onClick={() => openGlobalCommandPalette()}
       />
 
       <div className="ml-auto flex items-center gap-3">
