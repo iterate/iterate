@@ -165,11 +165,11 @@ const worker = createWorker(async () => {
     options,
   );
   const languageService = env.languageService;
-  const keepDiagnostic = (diagnostic: ts.Diagnostic) =>
-    !IGNORED_DIAGNOSTIC_CODES.has(diagnostic.code);
   const getSemanticDiagnostics = languageService.getSemanticDiagnostics.bind(languageService);
   languageService.getSemanticDiagnostics = (fileName) =>
-    getSemanticDiagnostics(fileName).filter(keepDiagnostic);
+    getSemanticDiagnostics(fileName).filter(
+      (diagnostic) => !IGNORED_DIAGNOSTIC_CODES.has(diagnostic.code),
+    );
   return env;
 });
 
