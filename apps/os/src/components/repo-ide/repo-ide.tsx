@@ -121,7 +121,16 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             store.setWorking(move.to, move.entry);
             removePath(move.from);
           }
+          // Follow the rename with the selection — including a file OPEN
+          // INSIDE a renamed folder, which would otherwise show its old
+          // path's deletion state.
           if (selectedPath === fromPath) selectFile(toPath);
+          else if (
+            isFolder &&
+            selectedPath !== undefined &&
+            selectedPath.startsWith(`${fromPath}/`)
+          )
+            selectFile(`${toPath}${selectedPath.slice(fromPath.length)}`);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Could not rename.");
         }
@@ -154,16 +163,18 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       });
       return { plan, result };
     },
-    onSuccess: ({ plan, result }) => {
+    onSuccess: async ({ plan, result }) => {
       if (plan.mode === "everything") store.discardAll();
       else store.clearStaged(plan.paths);
       // HEAD moved: surviving working edits belong under the new oid's
-      // (localStorage) key, and the file list refetches; content queries key
-      // off the commitOid it reports.
-      store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
-      void queryClient.invalidateQueries({
+      // (localStorage) key. Migrate only AFTER the file-list refetch lands —
+      // until then the component still reads AND WRITES the old-oid store, so
+      // an earlier migrate would blank the visible working tree and lose any
+      // edits made while the commit was in flight.
+      await queryClient.invalidateQueries({
         queryKey: ["itx", "repo-files", projectId, repoPath],
       });
+      store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
       toast.success(
         result.noChanges
           ? "No changes to commit."
