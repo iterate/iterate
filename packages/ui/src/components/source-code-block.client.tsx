@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { basicSetup, EditorView } from "codemirror";
 import { json } from "@codemirror/lang-json";
+import { json5 } from "codemirror-json5";
 import { javascript } from "@codemirror/lang-javascript";
 import { yaml } from "@codemirror/lang-yaml";
 import { markdown } from "@codemirror/lang-markdown";
@@ -206,6 +207,7 @@ export type SourceCodeLanguage =
   | "typescript"
   | "javascript"
   | "json"
+  | "jsonc"
   | "yaml"
   | "markdown"
   | "html"
@@ -223,6 +225,11 @@ export function sourceCodeLanguageExtension(
       return javascript({ jsx: true });
     case "json":
       return json();
+    case "jsonc":
+      // JSON-with-comments (tsconfig & friends). The json5 grammar is a
+      // superset of jsonc, so comments and trailing commas parse cleanly;
+      // strict parse linting stays a caller concern, as with every language.
+      return json5();
     case "yaml":
       return yaml();
     case "markdown":

@@ -90,7 +90,8 @@ export function RepoEditorPane({
   // itself is fetched from schemastore/wherever by the browser and failure
   // just means no squigglies.
   const schemaLanguage =
-    kind.kind === "text" && (kind.language === "json" || kind.language === "yaml")
+    kind.kind === "text" &&
+    (kind.language === "json" || kind.language === "jsonc" || kind.language === "yaml")
       ? kind.language
       : null;
   const jsonSchema = useRepoFileJsonSchema({

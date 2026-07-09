@@ -18,7 +18,7 @@ const TEXT_LANGUAGES: Record<string, SourceCodeLanguage> = {
   html: "html",
   js: "javascript",
   json: "json",
-  jsonc: "json",
+  jsonc: "jsonc",
   jsx: "javascript",
   markdown: "markdown",
   md: "markdown",
@@ -48,6 +48,20 @@ const OPAQUE_BINARY_EXTENSIONS = new Set([
 ]);
 
 /**
+ * The `.json` files that allow comments and trailing commas by convention,
+ * even without a `.jsonc` extension: the tsconfig/jsconfig families (tsc
+ * itself parses them leniently; globs match schemastore's fileMatch) and
+ * VS Code's own config dir. Deliberately a small documented list — other
+ * comment-tolerant files in the wild (.babelrc, devcontainer.json, …) can
+ * join when someone actually hits them.
+ */
+function isJsoncByConvention(path: string, basename: string): boolean {
+  if (/^(tsconfig|jsconfig).*\.json$/.test(basename)) return true;
+  if (/(^|\/)\.vscode\/[^/]+\.json$/.test(path)) return true;
+  return false;
+}
+
+/**
  * How the repo IDE opens a path: in a CodeMirror editor (with which language),
  * an image/PDF renderer, or the generic binary fallback. Extension-driven —
  * repo files have no content-type channel.
@@ -65,6 +79,7 @@ export function repoFileKind(path: string): RepoFileKind {
   if (imageMimeType !== undefined) return { kind: "image", mimeType: imageMimeType };
   if (extension === "pdf") return { kind: "pdf" };
   if (OPAQUE_BINARY_EXTENSIONS.has(extension)) return { kind: "binary" };
+  if (isJsoncByConvention(path, basename)) return { kind: "text", language: "jsonc" };
   // Everything else opens as text — unknown extensions (Dockerfile, .env,
   // .gitignore, .toml) are overwhelmingly text in project repos.
   return { kind: "text", language: TEXT_LANGUAGES[extension] || "text" };

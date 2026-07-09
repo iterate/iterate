@@ -605,12 +605,18 @@ importers:
       codemirror-json-schema:
         specifier: 0.8.1
         version: 0.8.1(@codemirror/language@6.12.2)(@codemirror/lint@6.9.5)(@codemirror/state@6.5.4)(@codemirror/view@6.39.16)(@lezer/common@1.5.1)
+      codemirror-json5:
+        specifier: ^1.0.3
+        version: 1.0.3
       comlink:
         specifier: ^4.4.2
         version: 4.4.2
       croner:
         specifier: ^10.0.1
         version: 10.0.1
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(react@19.2.4)
@@ -1179,6 +1185,9 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      codemirror-json5:
+        specifier: ^1.0.3
+        version: 1.0.3
       embla-carousel-react:
         specifier: ^8.6.0
         version: 8.6.0(react@19.2.4)
@@ -19985,7 +19994,6 @@ snapshots:
       '@lezer/highlight': 1.2.3
       json5: 2.2.3
       lezer-json5: 2.0.2
-    optional: true
 
   codemirror@6.0.2:
     dependencies:
@@ -22279,7 +22287,6 @@ snapshots:
   lezer-json5@2.0.2:
     dependencies:
       '@lezer/lr': 1.4.8
-    optional: true
 
   libsql@0.5.29:
     dependencies:
