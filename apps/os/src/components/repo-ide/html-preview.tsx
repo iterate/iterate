@@ -1,7 +1,7 @@
 /**
- * The Preview half of the repo IDE's Code/Preview toggle for html files:
- * renders the current buffer (unsaved working-tree edits included) in a
- * sandboxed iframe.
+ * The Preview half of the repo IDE's Code/Preview toggle for html files
+ * (and .svg, whose raw markup an html document renders inline): renders the
+ * current buffer (unsaved working-tree edits included) in a sandboxed iframe.
  *
  * Sandbox stance: `allow-scripts` and NOTHING else — crucially no
  * `allow-same-origin`, so the document runs in an opaque origin and its

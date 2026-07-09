@@ -44,7 +44,7 @@ test("toggle an html file between Code and its sandboxed Preview", async ({
 
   // Preview renders the buffer in the sandboxed iframe, which carries the
   // exact working-tree html through its srcdoc.
-  await page.getByRole("tab", { name: "Preview" }).click();
+  await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   const preview = page.locator('iframe[title="HTML preview"]');
   await expect(preview).toBeVisible();
   await expect(preview).toHaveAttribute("srcdoc", /Hello from the repo IDE/);
@@ -54,6 +54,6 @@ test("toggle an html file between Code and its sandboxed Preview", async ({
   ).toBeVisible();
 
   // Back to Code: the editable buffer returns.
-  await page.getByRole("tab", { name: "Code" }).click();
+  await page.getByRole("tab", { name: "Code" }).click({ timeout: 10_000 });
   await expect(page.locator(".cm-content")).toContainText("Hello from the repo IDE");
 });

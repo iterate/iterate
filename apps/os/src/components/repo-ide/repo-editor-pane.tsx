@@ -49,8 +49,9 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
-  /** Markdown and html files: show the rendered preview (markdown HTML, or the
-   * sandboxed html iframe) instead of the editor. */
+  /** Markdown, html, and svg files: show the rendered preview (markdown HTML,
+   * or the sandboxed html iframe) instead of the editor — of the current buffer,
+   * or of the staged snapshot in the Index view. */
   previewOpen: boolean;
   onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
@@ -200,12 +201,20 @@ export function RepoEditorPane({
     entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
 
   if (stagedView && staged?.type === "write" && kind.kind === "text") {
+    // Same Code/Preview toggle as the working view, over the staged snapshot
+    // — the Index pseudo-file stays readonly either way.
+    const showStagedPreview = previewOpen && isPreviewablePath(path);
     return (
       <FileChrome
         path={path}
-        suffix="(Index)"
+        suffix={showStagedPreview ? "(Index Preview)" : "(Index)"}
         readonly
         status={status}
+        leading={
+          isPreviewablePath(path) ? (
+            <CodePreviewToggle preview={showStagedPreview} onChange={onTogglePreview} />
+          ) : undefined
+        }
         actions={
           <>
             <Button variant="secondary" size="sm" className="text-xs" disabled>
@@ -234,18 +243,26 @@ export function RepoEditorPane({
           </>
         }
       >
-        <SourceCodeBlock
-          key={`${path}:staged`}
-          className="min-h-0 flex-1"
-          plainChrome
-          showLineNumbers
-          editable={false}
-          wrapLongLines={false}
-          code={staged.content}
-          language={kind.language}
-          codeMirrorExtensions={stagedDiffExtensions}
-          onChange={() => {}}
-        />
+        {showStagedPreview ? (
+          kind.language === "markdown" ? (
+            <MarkdownPreview markdown={staged.content} />
+          ) : (
+            <HtmlPreview html={staged.content} />
+          )
+        ) : (
+          <SourceCodeBlock
+            key={`${path}:staged`}
+            className="min-h-0 flex-1"
+            plainChrome
+            showLineNumbers
+            editable={false}
+            wrapLongLines={false}
+            code={staged.content}
+            language={kind.language}
+            codeMirrorExtensions={stagedDiffExtensions}
+            onChange={() => {}}
+          />
+        )}
       </FileChrome>
     );
   }
@@ -257,9 +274,9 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
-    // Markdown and html files get a vscode-style Code | Preview toggle; the
-    // preview renders the CURRENT buffer (unsaved edits included). Diff wins if
-    // a hand-edited URL sets both `preview` and `diff` (the toggles keep them
+    // Markdown, html, and svg files get a vscode-style Code | Preview toggle;
+    // the preview renders the CURRENT buffer (unsaved edits included). Diff wins
+    // if a hand-edited URL sets both `preview` and `diff` (the toggles keep them
     // mutually exclusive, but honor that invariant here too) so the pane never
     // renders Preview while the header shows the Diff/"Working Tree" state.
     const showPreview = previewOpen && !diffOpen && isPreviewablePath(path);
