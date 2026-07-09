@@ -251,6 +251,17 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         updated_at text not null
       )
     `);
+    // `epoch` postdates the table (#1784 shipped without it, #1792 queries it)
+    // and `if not exists` never upgrades a live DO's copy — add it in place.
+    // Pre-existing rows get epoch 0, the same fence value fresh #1784 rows
+    // had, so their ack semantics are unchanged.
+    const hasEpochColumn =
+      this.sql
+        .exec("select 1 from pragma_table_info('subscriptions') where name = 'epoch'")
+        .toArray().length > 0;
+    if (!hasEpochColumn) {
+      this.sql.exec("alter table subscriptions add column epoch integer not null default 0");
+    }
   }
 
   #nextEpoch(): number {
