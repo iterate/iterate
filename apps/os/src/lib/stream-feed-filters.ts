@@ -1,25 +1,32 @@
-// Pure logic for the stream Feed tab's filter surface: which presets a stream
-// offers, how the URL-backed filters compile to SQL over the local feed_items
-// mirror, and how event types render. The React filter row lives in
-// ~/components/stream-feed-filters.tsx; this module is its testable core.
+// Pure logic for stream feed filter surfaces: feed-items presets, how
+// URL-backed filters compile to SQL over the local feed_items mirror, and how
+// event types / components render. Mode selection lives in stream-view-search.ts.
+//
+// Filter model (URL + mode presets):
+//   - `types`      — primary event types inside a feed item (group eventType
+//                    or singleton events[0].type)
+//   - `components` — feed_items.component values (group, stream.woken, …)
+//   - `q`/`from`/`to`/`preset` as before
+// A row matches when it satisfies ALL active constraints. Modes decide which
+// of these controls are shown (Pretty: search only; Pretty+raw / Raw: full).
 
 import type { SqlValue } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import type { StreamViewSearch } from "~/lib/stream-view-search.ts";
+import {
+  modeCapabilities,
+  streamViewMode,
+  type StreamViewSearch,
+} from "~/lib/stream-view-search.ts";
 
 /**
- * One named configuration of the Feed tab. The feed always renders a feed-item
- * collection from the local SQLite mirror — never the raw events table — and a
- * preset picks WHICH collection and how it is filtered:
- *   - `agent-chat` renders the agent_feed_items collection (the chat view);
- *   - `feed-items` renders the grouped feed_items collection, optionally
- *     filtered to one event-type prefix (the domain presets).
- * Presets are quick starts, not the whole filter surface: the filter row adds
- * free-form narrowing (text search, any-of event types, offset bounds).
+ * One named configuration of the feed-items collection. Modes that show raw
+ * feed_items pick a default; Pretty ignores these.
  */
-export type StreamFeedPreset = { id: string; label: string } & (
-  | { kind: "agent-chat" }
-  | { kind: "feed-items"; eventTypePrefix?: string }
-);
+export type StreamFeedPreset = { id: string; label: string } & {
+  kind: "feed-items";
+  eventTypePrefix?: string;
+  /** Optional default component allowlist encoded by this preset. */
+  components?: readonly string[];
+};
 
 const EVERYTHING_PRESET: StreamFeedPreset = {
   id: "everything",
@@ -27,7 +34,7 @@ const EVERYTHING_PRESET: StreamFeedPreset = {
   kind: "feed-items",
 };
 
-/** The domain-specific event-type prefix presets, keyed by stream-path prefix. */
+/** Domain-specific event-type prefix presets, keyed by stream-path prefix. */
 const DOMAIN_PRESETS: { pathPrefix: string; preset: StreamFeedPreset }[] = [
   {
     pathPrefix: "/agents/",
@@ -68,15 +75,12 @@ const DOMAIN_PRESETS: { pathPrefix: string; preset: StreamFeedPreset }[] = [
 ];
 
 /**
- * The presets available on a stream, in order — the FIRST one is the domain's
- * default. Agent streams default to the chat view; other domains default to
- * their own event family; everything else defaults to the unfiltered feed.
+ * Feed-items presets for Raw / Pretty+raw. FIRST is the domain default.
+ * On agent streams Pretty+raw defaults to Everything so all raw lines show;
+ * Raw mode still prefers the domain family first for focused debugging.
  */
 export function presetsForStream(streamPath: string): StreamFeedPreset[] {
   const presets: StreamFeedPreset[] = [];
-  if (streamPath.startsWith("/agents/")) {
-    presets.push({ id: "agent-chat", label: "Agent chat", kind: "agent-chat" });
-  }
   for (const { pathPrefix, preset } of DOMAIN_PRESETS) {
     if (streamPath.startsWith(pathPrefix)) presets.push(preset);
   }
@@ -85,51 +89,72 @@ export function presetsForStream(streamPath: string): StreamFeedPreset[] {
 }
 
 /**
- * Whether any feed filter deviates from the stream's defaults — drives the
- * "filters are hiding things" dot on the header's filter toggle, which must
- * signal even while the row itself is closed. Judges what the feed actually
- * RENDERS, not the raw URL: a stale/unknown preset id falls back to the
- * default (same resolution as the view), and an empty `types` array applies
- * no constraint — neither may light the dot. Event-type and offset filters
- * only narrow the feed-items collection, so on an agent-chat preset (which
- * ignores them) they don't count either.
+ * Default feed-items preset for a mode. Pretty+raw always starts unscoped
+ * (Everything) so the raw rail shows the full stream; Raw uses the domain default.
+ */
+export function defaultPresetForMode(
+  streamPath: string,
+  mode: ReturnType<typeof streamViewMode>,
+): StreamFeedPreset {
+  const presets = presetsForStream(streamPath);
+  if (mode === "pretty-raw") {
+    return presets.find((preset) => preset.id === "everything") ?? presets[presets.length - 1]!;
+  }
+  return presets[0]!;
+}
+
+/**
+ * Whether any feed filter deviates from the stream/mode defaults — drives the
+ * header filter-toggle dot.
  */
 export function feedFiltersActive(search: StreamViewSearch, streamPath: string): boolean {
-  const presets = presetsForStream(streamPath);
-  const activePreset = presets.find((preset) => preset.id === search.preset) ?? presets[0]!;
+  const mode = streamViewMode(search, streamPath);
+  const caps = modeCapabilities(search, streamPath);
+  const hasQuery = (search.q ?? "") !== "";
+  // Pretty+raw with raw rail turned off is a deliberate filter state.
+  const rawHidden = mode === "pretty-raw" && search.raw === false;
+
+  if (!caps.rawFeed && !rawHidden) {
+    return caps.search && hasQuery;
+  }
+
+  const defaultPreset = defaultPresetForMode(streamPath, mode);
+  const activePreset =
+    presetsForStream(streamPath).find((preset) => preset.id === search.preset) ?? defaultPreset;
+
   return (
-    activePreset.id !== presets[0]!.id ||
-    (search.q ?? "") !== "" ||
-    (activePreset.kind === "feed-items" &&
-      ((search.types?.length ?? 0) > 0 || search.from != null || search.to != null))
+    rawHidden ||
+    (caps.search && hasQuery) ||
+    activePreset.id !== defaultPreset.id ||
+    (caps.rawEventTypes && (search.types?.length ?? 0) > 0) ||
+    (caps.rawComponents && (search.components?.length ?? 0) > 0) ||
+    (caps.rawOffsets && (search.from != null || search.to != null))
   );
 }
 
 /**
- * The primary event type of a feed_items row — a group row's `data.eventType`,
- * a singleton's first event type. Every feed filter (preset prefix, exact
- * type) matches against this expression, entirely in SQL over the local mirror.
+ * Primary event type of a feed_items row — group `data.eventType` or a
+ * singleton's first event type.
  */
 export const FEED_TYPE_EXPRESSION = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type'))`;
 
 /**
- * All the ways the Feed tab narrows the feed_items collection. Every field is
- * URL-backed (see stream-view-search.ts) except `eventTypePrefix`, which comes
- * from the active preset.
+ * How the feed_items (Raw) collection is narrowed. Modes and URL params map
+ * into this; `eventTypePrefix` comes from the active preset, `components` and
+ * `eventTypes` from the filter panel.
  */
 export type FeedItemsFilterInput = {
-  /** Exact primary event types (any-of); null = all types. */
+  /** Exact primary event types (any-of); null = all. */
   eventTypes: readonly string[] | null;
-  /** The active preset's event-type family; null = unscoped. */
+  /** feed_items.component values (any-of); null = all. */
+  components: readonly string[] | null;
+  /** Active preset's event-type family; null = unscoped. */
   eventTypePrefix: string | null;
-  /** Substring match over the serialized feed-item payload. */
   searchQuery: string | null;
-  /** Inclusive raw-event offset bounds; a group matches when its range overlaps. */
   offsetFrom: number | null;
   offsetTo: number | null;
 };
 
-/** Composed WHERE fragment + params for the feed filters; null when unfiltered. */
 type FeedItemsFilter = { whereSql: string; params: SqlValue[] } | null;
 
 export function buildFeedItemsFilter(input: FeedItemsFilterInput): FeedItemsFilter {
@@ -143,12 +168,14 @@ export function buildFeedItemsFilter(input: FeedItemsFilterInput): FeedItemsFilt
     clauses.push(`${FEED_TYPE_EXPRESSION} IN (${input.eventTypes.map(() => "?").join(", ")})`);
     params.push(...input.eventTypes);
   }
+  if (input.components != null && input.components.length > 0) {
+    clauses.push(`component IN (${input.components.map(() => "?").join(", ")})`);
+    params.push(...input.components);
+  }
   if (input.searchQuery != null) {
     clauses.push(`json(data) LIKE ?`);
     params.push(`%${input.searchQuery}%`);
   }
-  // A group row spans [first_offset, last_offset]; it matches when that range
-  // overlaps the requested bounds so a partially-in-range group still shows.
   if (input.offsetFrom != null) {
     clauses.push(`last_offset >= ?`);
     params.push(input.offsetFrom);
@@ -161,7 +188,31 @@ export function buildFeedItemsFilter(input: FeedItemsFilterInput): FeedItemsFilt
   return { whereSql: clauses.join(" AND "), params };
 }
 
-/** `events.iterate.com/agent/input-added` → `agent/input-added` — the domain part carries the signal. */
+/** Resolve the effective feed_items filter from URL search + stream path + mode. */
+export function feedItemsFilterFromSearch(
+  search: StreamViewSearch,
+  streamPath: string,
+): FeedItemsFilterInput {
+  const mode = streamViewMode(search, streamPath);
+  const defaultPreset = defaultPresetForMode(streamPath, mode);
+  const activePreset =
+    presetsForStream(streamPath).find((preset) => preset.id === search.preset) ?? defaultPreset;
+  return {
+    eventTypes: search.types ?? null,
+    components: search.components ?? activePreset.components ?? null,
+    eventTypePrefix: activePreset.eventTypePrefix ?? null,
+    searchQuery: (search.q ?? "") === "" ? null : (search.q ?? null),
+    offsetFrom: search.from ?? null,
+    offsetTo: search.to ?? null,
+  };
+}
+
+/** `events.iterate.com/agent/input-added` → `agent/input-added` */
 export function shortEventType(type: string): string {
   return type.startsWith("events.iterate.com/") ? type.slice("events.iterate.com/".length) : type;
+}
+
+/** Shorten a feed_items.component for display. */
+export function shortComponent(component: string): string {
+  return component.startsWith("stream.") ? component.slice("stream.".length) : component;
 }
