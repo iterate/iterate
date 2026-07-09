@@ -88,6 +88,8 @@ const ScheduleEntry = z.looseObject({
   /** Offset of the `schedule-set` event that last defined this key (audit provenance). */
   definedAtOffset: z.number().int().nonnegative(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Stream path of the defining `schedule-set` event. Missing only on legacy snapshots. */
+  path: z.string().trim().min(1).optional(),
   /**
    * Epoch ms of the next due occurrence. Null once a one-shot has been
    * requested, or when a cron expression yields no future occurrence (including

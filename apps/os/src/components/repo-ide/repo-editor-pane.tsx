@@ -385,7 +385,9 @@ function CodePreviewToggle({
   );
 }
 
-function FileChrome({
+/** Shared editor-pane chrome (path header + status badge + actions slot) —
+ * exported for the sibling readonly commit-diff pane so every pane matches. */
+export function FileChrome({
   path,
   suffix,
   readonly = false,
@@ -428,7 +430,7 @@ function FileChrome({
   );
 }
 
-function EmptyPane({ label }: { label: string }) {
+export function EmptyPane({ label }: { label: string }) {
   return (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       {label}

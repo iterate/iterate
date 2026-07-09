@@ -14,7 +14,13 @@ const neverStream = new Proxy({} as Stream, {
 let nextOffset = 0;
 function event(type: string, payload: Record<string, unknown> = {}): StreamEvent {
   nextOffset += 1;
-  return { type, payload, createdAt: new Date(nextOffset).toISOString(), offset: nextOffset };
+  return {
+    type,
+    payload,
+    createdAt: new Date(nextOffset).toISOString(),
+    offset: nextOffset,
+    path: "/sandboxes/test",
+  };
 }
 
 function sandboxProcessor() {

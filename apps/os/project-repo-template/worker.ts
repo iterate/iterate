@@ -1,15 +1,7 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, ItxBinding, StreamEvent } from "./sdk.ts";
+import { IterateProjectWorker, type DynamicWorkerRef, type StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
 import { waitroseClient } from "./integrations/waitrose/client.ts";
-
-/** Bindings the platform supplies to every project worker. `ItxBinding`
- * (sdk.ts) documents the two channels: `get()` for capability method calls,
- * `fetch()` for HTTP into sibling workers. */
-type ProjectWorkerEnv = {
-  ITX: ItxBinding;
-};
 
 // The root project worker is a small ROUTER over the project's apps. Each app
 // is its own repo-backed dynamic worker built from this repo (multi-file
@@ -48,7 +40,7 @@ const APPS = {
   },
 } satisfies Record<string, DynamicWorkerRef>;
 
-export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
+export default class ProjectWorker extends IterateProjectWorker {
   async fetch(req: Request): Promise<Response> {
     const appSlug = req.headers.get("x-iterate-app");
     if (appSlug) {
@@ -97,8 +89,26 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     );
   }
 
-  processEvent(input: { event: StreamEvent }): void {
-    console.log("project worker processed", input.event.type);
+  override async processEvent(event: StreamEvent): Promise<void> {
+    // React to anything happening anywhere in the project: one `if` per
+    // reaction, keyed on event.path + event.type. Delivery is at-least-once,
+    // so anything a reaction appends carries an idempotency key.
+
+    // THIS WORKER configures new agents. When any stream under /agents/ is
+    // born (a web chat, the onboarding agent, a Slack thread, an email
+    // thread), the platform announces it on the project root stream and this
+    // reaction appends the agent's policy: system prompt, model/provider,
+    // capability mounts, boot context. `itx.agents.defaults.forPath` returns
+    // the platform's defaults as data — edit the result (or pass overrides:
+    // { systemPrompt, provider, model }) to change how YOUR agents behave.
+    if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
+      const childPath = event.payload?.childPath;
+      if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
+        const itx = await this.env.ITX.get();
+        const defaults = await itx.agents.defaults.forPath(childPath);
+        await itx.streams.get(childPath).append(...defaults.events);
+      }
+    }
   }
 
   /**

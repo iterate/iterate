@@ -84,6 +84,7 @@ function processEventHarness(state = projectState()) {
             ...ProjectProcessorContract.buildEvent(input),
             createdAt: "2026-01-01T00:00:01.000Z",
             offset: index + 2,
+            path: "/projects/test",
           }));
           appended.push(...(events as CustomDomainReduceInput["event"][]));
           return events;
