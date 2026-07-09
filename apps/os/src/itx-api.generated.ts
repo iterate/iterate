@@ -1862,6 +1862,7 @@ export type GithubSyncResult = {
  */
 export type RepoProcessorState = {
   artifactName: string | null;
+  createRequested: boolean;
   created: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;

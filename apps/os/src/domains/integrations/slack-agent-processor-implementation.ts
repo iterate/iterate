@@ -11,6 +11,11 @@
 // - Replay runs the same idempotency-keyed side effects as live delivery. The
 //   processor checkpoint is the guardrail; failed batches replay from the last
 //   fully processed offset.
+// - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
+//   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
+//   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
+//   status is repainted once per at-head batch from the latest lifecycle fact
+//   instead of once per event.
 //
 // Adaptation from legacy: the itx agent contract has no
 // `agent/status-updated` event. The Slack "is thinking..." status now keys off
@@ -22,7 +27,12 @@ import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { readRecord, readString, slackConnectionFromAgentPath } from "./utils.ts";
+import {
+  readRecord,
+  readString,
+  slackConnectionFromAgentPath,
+  webhookAckIsFresh,
+} from "./utils.ts";
 import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
@@ -35,6 +45,8 @@ export class SlackAgentProcessor extends StreamProcessor<
   SlackAgentProcessorContract,
   {
     callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+    /** Injectable clock for the acknowledgement freshness gates. */
+    now?: () => number;
     /** Downloads Slack-shared files into project file storage (see
      * storeSlackFilesForAgent in slack-api.ts). `storageKey` is stable per
      * webhook event so replays overwrite instead of duplicating. */
@@ -132,7 +144,7 @@ export class SlackAgentProcessor extends StreamProcessor<
             await appendAgentInput({
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             });
-            await this.#addEyesReactionForMessageTarget(target);
+            await this.#addEyesReactionForMessageTarget(target, event);
           });
           return;
         }
@@ -163,7 +175,7 @@ export class SlackAgentProcessor extends StreamProcessor<
                 executionId: `slack-bang-command-${event.offset}`,
               },
             });
-            await this.#addEyesReactionForMessageTarget(target);
+            await this.#addEyesReactionForMessageTarget(target, event);
           });
           return;
         }
@@ -191,40 +203,64 @@ export class SlackAgentProcessor extends StreamProcessor<
             }
           }
           await appendAgentInput(files == null ? {} : { files });
-          await this.#addEyesReactionForMessageTarget(target);
+          await this.#addEyesReactionForMessageTarget(target, event);
         });
         return;
       }
-      case "events.iterate.com/agent/llm-request-requested":
-      case "events.iterate.com/agent/llm-request-completed":
-      case "events.iterate.com/capability-host/script-execution-requested":
-      case "events.iterate.com/capability-host/script-execution-completed": {
-        const update = slackAgentStatusForEvent(event);
-        if (update == null || state.channel == null || state.threadTs == null) return;
-        const { channel, latestMessageTs, threadTs } = state;
-        blockProcessorWhile(async () => {
-          await this.#callSlackApi("assistant.threads.setStatus", {
-            channel_id: channel,
-            thread_ts: threadTs,
-            ...update.status,
-          });
-          if (update.clear && latestMessageTs != null) {
-            await this.#callSlackApi("reactions.remove", {
-              channel,
-              name: "eyes",
-              timestamp: latestMessageTs,
-            });
-          }
-        });
-        return;
-      }
+      // LLM/script lifecycle facts drive the assistant status, which is
+      // repainted once per batch in processEventBatch — nothing per event.
       default:
         return;
     }
   }
 
-  async #addEyesReactionForMessageTarget(target: SlackAgentTarget | null) {
+  /**
+   * The Slack assistant status is a REPAINT of current truth, not a per-event
+   * effect: the latest lifecycle fact in the batch wins and one setStatus
+   * paints it. Three gates make the lane refold-safe (and un-race per-event
+   * `blockProcessorWhile` closures, which run concurrently within a batch):
+   * only an at-head fold paints (a mid-catch-up batch's "current" is stale by
+   * construction), only a fresh fact paints (a refold's historical lifecycle
+   * facts must not touch months-old threads), and it paints at most once per
+   * batch. A crashed run's orphan settles via the provider reconcilers as a
+   * FRESH `llm-request-completed`, so a stuck "is thinking…" still clears.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    if (args.checkpointOffset < args.streamMaxOffset) return;
+    const latest = args.reducedEvents.findLast(
+      ({ event }) => slackAgentStatusForEvent(event) != null,
+    );
+    if (latest == null || !webhookAckIsFresh(latest.event, (this.deps.now ?? Date.now)())) return;
+    const update = slackAgentStatusForEvent(latest.event)!;
+    const { channel, latestMessageTs, threadTs } = args.state;
+    if (channel == null || threadTs == null) return;
+    args.blockProcessorWhile(async () => {
+      await this.#callSlackApi("assistant.threads.setStatus", {
+        channel_id: channel,
+        thread_ts: threadTs,
+        ...update.status,
+      });
+      if (update.clear && latestMessageTs != null) {
+        await this.#callSlackApi("reactions.remove", {
+          channel,
+          name: "eyes",
+          timestamp: latestMessageTs,
+        });
+      }
+    });
+  }
+
+  /** The 👀 ack means "your message was just picked up" — only fresh webhooks
+   * qualify (see WEBHOOK_ACK_FRESHNESS_MS for why stale ones must not). */
+  async #addEyesReactionForMessageTarget(
+    target: SlackAgentTarget | null,
+    event: { createdAt: string },
+  ) {
     if (target == null || target.isBotMessage || target.isReactionEvent) return;
+    if (!webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) return;
     await this.#callSlackApi("reactions.add", {
       channel: target.channel,
       name: "eyes",

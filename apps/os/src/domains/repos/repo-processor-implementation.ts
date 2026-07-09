@@ -27,6 +27,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     state,
   }: Parameters<StreamProcessor<RepoProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/repo/create-requested":
+        return { ...state, createRequested: true };
       case "events.iterate.com/repo/created":
         return {
           ...state,
@@ -83,7 +85,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     blockProcessorWhile,
     event,
     state,
-    append,
   }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type === "events.iterate.com/github/webhook-received") {
       // PR webhooks route to a per-PR agent stream, everything else (pushes,
@@ -126,12 +127,36 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     }
 
     if (event.type !== "events.iterate.com/repo/create-requested") return;
+    // Address validation stays per-event (a mis-addressed request is a loud
+    // error); the creation itself is reconciled from the at-head fold in
+    // processEventBatch.
     this.#assertOwnCreateRequest(event);
-    if (state.created) return;
+  }
 
-    blockProcessorWhile(async () => {
-      const payload = await this.deps.createRepoArtifact(event.payload);
-      await append({
+  /**
+   * Creation is an OBLIGATION reconciled from the at-head fold, never a
+   * per-event reaction: a journal refold (the normal aftermath of a
+   * state-schema deploy) replays `create-requested` with event-time state in
+   * which `created` is still false, but the at-head fold has already absorbed
+   * the journaled `repo/created` fact — so `createRepoArtifact`, whose seeding
+   * force-pushes the seed commit and would clobber user commits, provably
+   * never re-runs. No expiry on purpose: "this repo should exist" does not go
+   * stale, and the vendor call is idempotent (get-or-create + re-seed of a
+   * fresh repo folds to a no-op), so a create-succeeded/append-failed retry is
+   * safe.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    if (args.checkpointOffset < args.streamMaxOffset) return;
+    if (!args.state.createRequested || args.state.created) return;
+    args.blockProcessorWhile(async () => {
+      const payload = await this.deps.createRepoArtifact({
+        path: this.deps.path,
+        projectId: this.deps.projectId,
+      });
+      await args.append({
         type: "events.iterate.com/repo/created",
         idempotencyKey: `repo-created:${this.deps.projectId}:${this.deps.path}`,
         payload: {

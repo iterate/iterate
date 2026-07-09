@@ -56,7 +56,8 @@ Legitimate answers:
 
 - _"the reconciler, via journaled evidence"_ — the obligation pattern below;
 - _"nothing — the outcome genuinely doesn't matter"_ — telemetry, best-effort
-  UX touches (a Slack reaction).
+  UX touches (a Slack reaction; these must also be freshness-gated — see
+  refold safety below).
 
 A naked `runInBackground` around consequential work is the exact bug class
 behind the 2026-06-10 and 2026-07-07 production wedges.
@@ -121,6 +122,64 @@ how far your fold sits from the stream head) before starting anything.
   this pattern (and its timer is a droppable attempt: losing it costs
   latency, never the request, because the settle logic re-derives it from
   the fold).
+
+## Refold safety: the whole journal will be replayed at you
+
+The checkpoint is a disposable CACHE of the fold. Whenever a stored snapshot
+stops parsing against the current state schema — the **normal aftermath of
+deploying a state-shape change** — the processor discards it and refolds from
+offset 0 (`StreamProcessor.#loadState`). That means `processEvent` runs again
+for every historical event, with **event-time state**: at each event, `state`
+is the fold up to that offset, not current truth.
+
+Event-time state is therefore NOT a guard. `if (state.created) return` does
+not protect a refold: the `created` fact folds _later_ in the replay, so the
+vendor call re-fires against a repo that already exists — and the repo
+processor's seeding force-pushes the seed commit over whatever the user has
+committed since. That was a real latent bug; the same shape would have
+re-added 👀 reactions to every historical Slack message (a rate-limit
+crash-loop inside `blockProcessorWhile`, with reaction resurrection as the
+user-visible symptom).
+
+Every side effect in a `process*` hook must be one of exactly three shapes:
+
+1. **An append with a stable idempotency key.** Safe by construction: the
+   stream dedupes the replay. This is why the durable forwards (Slack
+   router → thread stream, repo → PR-agent stream) need no other gate — a
+   refold re-dials the appends and they all collapse.
+2. **An obligation reconciled from the AT-HEAD fold** (the pattern above).
+   Safe because the final fold has absorbed every journaled completion:
+   requested-and-completed pairs cancel out _before_ the reconciler acts.
+   `RepoProcessor.processEventBatch` is the minimal example — fold
+   `createRequested`, reconcile `createRequested && !created` at head.
+3. **An acknowledgement/cosmetic lane gated on FRESHNESS** — compare
+   `event.createdAt` against an injected `now`. Acks mean "your message was
+   just picked up"; they are only meaningful near arrival, so stale replays
+   (and late wakes) skip them. The Slack 👀 ack and the assistant-status
+   repaint are the references (`webhookAckIsFresh` in
+   `integrations/utils.ts`); the status lane is additionally
+   latest-fact-wins, painted at most once per at-head batch.
+
+Vendor work that is **idempotent-by-overwrite** inside a durable lane
+(re-downloading Slack-shared files to a per-event storage key) is acceptable:
+wasteful on refold, never wrong.
+
+### The refold test
+
+Every processor whose `process*` hooks touch a vendor must have one. It is a
+few lines, and it doubles as scenario 4 below:
+
+1. Run the normal live flow against an in-memory stream, vendor fakes
+   recording.
+2. Advance the injected clock past the freshness horizon.
+3. Construct a SECOND, fresh processor instance over the SAME stream and
+   deliver the whole journal from offset 0 — that IS a refold.
+4. Assert: the fresh instance's vendor fakes saw **zero** calls (make a
+   dangerous fake THROW, so reaching it fails loudly), the journal gained
+   **zero** events, and the refolded state equals the live instance's.
+
+References: the "refold: …" tests in `slack-processors.test.ts` (agent
+status/ack + router ack/forwards) and `pr-agent.test.ts` (repo creation).
 
 ## What the host gives you for free (and what it demands)
 
@@ -232,7 +291,8 @@ Scenarios every obligation-carrying processor should have (crib from
 2. eviction before any attempt → provably-never-ran work starts late (or
    expires);
 3. expired obligation → settled without the vendor ever being dialed;
-4. full-journal refold → completions dedupe, nothing re-executes;
+4. full-journal refold → completions dedupe, nothing re-executes (the refold
+   test above — required for every processor that touches a vendor);
 5. the crash-loop breaker engaging on your processor's poison shape;
 6. a failed started-append → nothing runs, nothing settles, the live-set is
    released, and a later batch retries the whole attempt.
@@ -248,5 +308,10 @@ Scenarios every obligation-carrying processor should have (crib from
       `createdAt + DEFAULT` fallback covers raw appends).
 - [ ] A failed started-append never settles and never leaks the live-set.
 - [ ] Injected `now` dep for anything clock-dependent.
+- [ ] Every vendor side effect is one of the three refold-safe shapes:
+      idempotency-keyed append, at-head fold reconciliation, or
+      freshness-gated ack — never guarded by event-time state alone.
+- [ ] The refold test: a fresh instance fed the full journal re-executes no
+      vendor work, appends nothing new, and converges to the same state.
 - [ ] Hosting DO wires `alarm()` (and alarm slices if it schedules).
 - [ ] Harness scenarios 1–6 above.
