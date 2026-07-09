@@ -203,14 +203,13 @@ export async function resetWorkerDurableObjects(input: {
     console.log(
       `DO reset: ${input.workerName} is on the declarative exports flow (API 100403) — parking via exports tombstones instead`,
     );
-    // CAUTION: this fallback cannot name the kept classes in `containers`
-    // metadata (wrangler-only path, no containers config without an image),
-    // so on an exports-flow worker it may strip their container-enablement
-    // — the same failure mode the raw upload above exists to avoid. No
-    // preview worker is on the exports flow today (they all carry legacy
-    // migration tags), so this stays theoretical; if it ever fires on a
-    // worker with container classes, expect to need the worker-delete
-    // repair afterwards.
+    // This fallback cannot name the kept classes in `containers` metadata
+    // (wrangler-only path, no containers config without an image). That is
+    // OK here: exports-mode uploads leave enablement alone (verified live
+    // 2026-07-09 — exports-parking preview-3 with stub exports and no
+    // containers field, then redeploying, kept its sandbox classes
+    // container-enabled and sandbox-exec e2e green). Only legacy-migrations
+    // uploads strip it, and those go through the raw upload above.
     const parkedDir = mkdtempSync(join(tmpdir(), "do-reset-"));
     try {
       writeFileSync(join(parkedDir, "worker.js"), parkedModuleWithKeptClasses);
