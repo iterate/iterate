@@ -110,10 +110,14 @@ export class OpenAiWsProcessor extends StreamProcessor<
   /**
    * Warm-instance transport state, not per-request state. Responses WebSocket
    * mode is a transport that can carry many `response.create` requests.
-   * `previousResponseId` is provider continuation data, not agent history.
+   * `previousResponse` is provider continuation data, not agent history —
+   * `mintedAtRequestOffset` records WHICH request produced it, so a
+   * history-reset landing after that point invalidates the provider-side
+   * chain (the stored conversation reflects the pre-reset history; continuing
+   * it would resurrect everything compaction just removed).
    */
   #connection: OpenAiWsConnection | null = null;
-  #previousResponseId: string | null = null;
+  #previousResponse: { id: string; mintedAtRequestOffset: number } | null = null;
 
   /**
    * Serializes LLM executions on this instance. Only executions queue behind
@@ -283,11 +287,25 @@ export class OpenAiWsProcessor extends StreamProcessor<
         }
         // Request-by-reference: the requested event carries no body; rebuild the
         // chat request from committed history up to the request's own offset.
-        const body = buildAgentLlmRequestBody({
-          events: await readAgentPromptEvents(this.stream),
-          llmRequestId,
-        });
-        const attemptedPreviousResponseId = this.#previousResponseId;
+        const events = await readAgentPromptEvents(this.stream);
+        const body = buildAgentLlmRequestBody({ events, llmRequestId });
+        // A history-reset at or after the response that minted the chain
+        // invalidates provider-side continuation: the stored conversation is
+        // the PRE-reset history, and the continuation lane only sends new
+        // messages — the compacted history would never reach the provider.
+        const lastHistoryResetOffset =
+          events.findLast(
+            (event) =>
+              event.type === "events.iterate.com/agent/history-reset" &&
+              event.offset <= llmRequestId,
+          )?.offset ?? 0;
+        if (
+          this.#previousResponse !== null &&
+          this.#previousResponse.mintedAtRequestOffset <= lastHistoryResetOffset
+        ) {
+          this.#previousResponse = null;
+        }
+        const attemptedPreviousResponseId = this.#previousResponse?.id ?? null;
         let completion;
         try {
           completion = await this.#withRequestDeadline(
@@ -302,7 +320,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
           if (attemptedPreviousResponseId === null || !isPreviousResponseNotFoundError(error)) {
             throw error;
           }
-          this.#previousResponseId = null;
+          this.#previousResponse = null;
           completion = await this.#withRequestDeadline(
             this.#createAndConsumeResponse({
               idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
@@ -326,7 +344,12 @@ export class OpenAiWsProcessor extends StreamProcessor<
             idempotencyKey: `openai-ws/agent-output-added@${llmRequestId}`,
             payload: { content: completion.text, llmRequestId },
           });
-          if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
+          if (completion.responseId !== undefined) {
+            this.#previousResponse = {
+              id: completion.responseId,
+              mintedAtRequestOffset: llmRequestId,
+            };
+          }
         }
 
         await this.#appendCompletion({ durationMs, llmRequestId, model, result: providerResult });
@@ -525,7 +548,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
         // short (max_output_tokens, content filter). Keeping the partial text
         // would hand the agent a prefix of a script — fail the request
         // instead so it retries like any other provider failure.
-        this.#previousResponseId = null;
+        this.#previousResponse = null;
         const reason = parsed.data.response?.incomplete_details?.reason;
         throw new Error(
           `OpenAI response ended incomplete${reason === undefined ? "" : ` (${reason})`}; discarding partial output.`,
@@ -535,7 +558,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
       if (parsed.data.type === "response.failed" || parsed.data.type === "error") {
         // A failed response invalidates provider-side continuation but not the
         // socket; the connection stays cached for the next request.
-        this.#previousResponseId = null;
+        this.#previousResponse = null;
         throw new Error(parsed.data.error?.message ?? "OpenAI WebSocket request failed.");
       }
     }
@@ -557,7 +580,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
   #markConnectionClosed(closedConnection: OpenAiWsConnection) {
     if (this.#connection !== closedConnection) return;
     this.#connection = null;
-    this.#previousResponseId = null;
+    this.#previousResponse = null;
   }
 
   async #isRequestStillCurrent(input: { llmRequestId: number }) {

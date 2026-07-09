@@ -1320,6 +1320,55 @@ describe("context window compaction mechanics (openai-ws)", () => {
     expect(output?.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
   });
 
+  it("drops provider-side continuation after a history-reset", async () => {
+    // The Responses continuation lane (previous_response_id) references the
+    // provider's stored conversation — the PRE-reset history. Continuing it
+    // after a reset would resurrect everything compaction just removed, so
+    // the request after a reset must send the full (compacted) input.
+    const stream = new MemoryStream();
+    const socket = contextWindowLimitedSocket();
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => socket,
+    });
+    const cursors = new Map<object, number>();
+
+    // Turn 1 succeeds and mints a provider-side continuation id.
+    await stream.append(...openAiWsRequestEvents("first ask"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors });
+    const firstCompleted = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    expect(firstCompleted.payload).toMatchObject({ result: { status: "success" } });
+
+    // Userspace compaction replaces the history...
+    await stream.append({
+      type: "events.iterate.com/agent/history-reset",
+      idempotencyKey: "compaction/history-reset@99",
+      payload: {
+        systemPrompt: "You are a helpful assistant.",
+        history: [{ role: "user", content: "[Earlier history was compacted. Summary:] ..." }],
+      },
+    });
+    // ...so turn 2 must NOT continue the pre-reset provider chain.
+    await stream.append(...openAiWsRequestEvents("second ask", "llm-request:2"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors });
+    await stream.waitForEvent({
+      afterOffset: firstCompleted.offset,
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    expect(socket.sent).toHaveLength(2);
+    expect(socket.sent[0]).not.toHaveProperty("previous_response_id");
+    expect(socket.sent[1]).not.toHaveProperty("previous_response_id");
+    const secondRequest = JSON.stringify(socket.sent[1]);
+    expect(secondRequest).toContain("history was compacted");
+    expect(secondRequest).toContain("second ask");
+  });
+
   it("normalizes provider usage into token-usage-reported and tallies it in agent state", async () => {
     const stream = new MemoryStream();
     const openAiWs = new OpenAiWsProcessor({
