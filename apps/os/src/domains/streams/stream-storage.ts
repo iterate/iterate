@@ -20,6 +20,7 @@
 // Durable Object's append commit point assigns offsets, reduces state, and
 // persists the batch in one await-free turn.
 
+import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { StreamEvent } from "./schemas.ts";
 import { StreamEvent as StreamEventSchema } from "./schemas.ts";
 
@@ -233,15 +234,20 @@ export type SubscriptionCursorStore = {
 
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
-  /** Monotonic within this instance; wall-clock floor covers restarts. */
-  #lastEpoch = 0;
-
-  constructor(readonly sql: SqlStorage) {
-    this.sql.exec(`
-      -- Delivery cursors for durable subscriptions (the spine's rows). One row
-      -- per subscriptionKey; created on subscription-configured, dropped on
-      -- subscription-removed. See stream-subscribers.ts for the state machine.
-      create table if not exists subscriptions (
+  /**
+   * Inline sqlfu config for the delivery cursors table (the spine's rows —
+   * one per subscriptionKey; created on subscription-configured, dropped on
+   * subscription-removed; state machine in stream-subscribers.ts). Migrations
+   * run per Durable Object instance from the constructor: a deploy updates
+   * the Worker, not any live DO's private SQLite, so each object reconciles
+   * its own copy against this history on startup (bookkept in that object's
+   * `sqlfu_migrations` table). Applied migration contents are checksummed —
+   * edit history only by APPENDING a migration, never by rewriting one.
+   */
+  static db = defineConfig({
+    // The desired schema now (`sqlfu draft` diffs new migrations against it).
+    definitions: sql`
+      create table subscriptions (
         subscription_key text primary key,
         acked_offset integer not null,
         attempt integer not null default 0,
@@ -249,19 +255,69 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         last_error text,
         epoch integer not null default 0,
         updated_at text not null
-      )
-    `);
-    // `epoch` postdates the table (#1784 shipped without it, #1792 queries it)
-    // and `if not exists` never upgrades a live DO's copy — add it in place.
-    // Pre-existing rows get epoch 0, the same fence value fresh #1784 rows
-    // had, so their ack semantics are unchanged.
-    const hasEpochColumn =
-      this.sql
-        .exec("select 1 from pragma_table_info('subscriptions') where name = 'epoch'")
-        .toArray().length > 0;
-    if (!hasEpochColumn) {
-      this.sql.exec("alter table subscriptions add column epoch integer not null default 0");
-    }
+      );
+    `,
+    migrations: [
+      {
+        // The #1784 table, verbatim. `if not exists` is load-bearing: live DOs
+        // created their table from raw constructor DDL before sqlfu owned it,
+        // so this migration adopts an existing pre-epoch table as readily as
+        // it creates a fresh one.
+        name: "20260709000001_create_subscriptions",
+        content: sql`
+          create table if not exists subscriptions (
+            subscription_key text primary key,
+            acked_offset integer not null,
+            attempt integer not null default 0,
+            next_attempt_at integer,
+            last_error text,
+            updated_at text not null
+          );
+        `,
+      },
+      {
+        // `epoch` postdates the table (#1784 shipped without it, #1792 queries
+        // it). This is a rebuild rather than `alter table add column` because
+        // the migration meets THREE live shapes with empty sqlfu history: no
+        // table (migration 1 just created it), the pre-epoch #1784 table, and
+        // the with-epoch table #1792-era constructors created — a plain ALTER
+        // would throw "duplicate column name" on the last one. Rows and
+        // cursor progress are preserved; epoch restarts at 0 (the fence value
+        // fresh #1784 rows had). Resetting a with-epoch table's fences is
+        // safe here: this runs in the DO constructor, and no in-flight
+        // delivery (the only reader of a stale epoch) survives a DO restart.
+        name: "20260709000002_add_epoch",
+        content: sql`
+          alter table subscriptions rename to subscriptions_pre_epoch;
+          create table subscriptions (
+            subscription_key text primary key,
+            acked_offset integer not null,
+            attempt integer not null default 0,
+            next_attempt_at integer,
+            last_error text,
+            epoch integer not null default 0,
+            updated_at text not null
+          );
+          insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at)
+          select subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at
+          from subscriptions_pre_epoch;
+          drop table subscriptions_pre_epoch;
+        `,
+      },
+    ],
+    queries: {},
+  });
+
+  /** Monotonic within this instance; wall-clock floor covers restarts. */
+  #lastEpoch = 0;
+
+  constructor(readonly sql: SqlStorage) {
+    // {sql} without transactionSync: this store only holds SqlStorage. That
+    // forgoes sqlfu's per-migration transaction, which is fine here — the
+    // constructor is await-free, and Durable Object SQLite commits all writes
+    // in one event-loop task atomically, so a crash mid-migration cannot
+    // persist a half-applied state.
+    SqliteSubscriptionCursorStore.db(createDurableObjectClient({ sql })).migrate();
   }
 
   #nextEpoch(): number {
