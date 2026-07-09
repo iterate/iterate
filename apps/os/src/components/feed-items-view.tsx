@@ -1,15 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDownIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@iterate-com/ui/components/dropdown-menu";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { Centered } from "~/components/centered.tsx";
@@ -17,7 +7,6 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import {
   buildFeedItemsFilter,
-  FEED_TYPE_EXPRESSION,
   shortEventType,
   type FeedItemsFilterInput,
 } from "~/lib/stream-feed-filters.ts";
@@ -272,115 +261,4 @@ function parseFeedItemData(raw: string): FeedItemData | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Any-of event-type filter for the feed-items presets: a roomy two-column grid
- * of checkboxes, one per distinct primary event type currently in the local
- * mirror (scoped to the active preset's prefix so the offered types can
- * actually match), sorted alphabetically by display name and annotated with
- * per-type event counts.
- */
-export function FeedEventTypesFilter({
-  database,
-  eventTypePrefix,
-  onChange,
-  value,
-}: {
-  database: StreamBrowserDatabase;
-  eventTypePrefix: string | null;
-  onChange: (eventTypes: string[] | null) => void;
-  value: readonly string[] | null;
-}) {
-  const filter = buildFeedItemsFilter({
-    eventTypePrefix,
-    eventTypes: null,
-    searchQuery: null,
-    offsetFrom: null,
-    offsetTo: null,
-  });
-  const typesResult = useStreamQuery(
-    database,
-    `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
-     FROM feed_items ${filter == null ? "" : `WHERE ${filter.whereSql}`}
-     GROUP BY event_type ORDER BY event_type`,
-    filter?.params ?? [],
-  );
-  const types = typesResult.data.flatMap((row) =>
-    typeof row.event_type === "string"
-      ? [{ count: Number(row.total ?? 0), type: row.event_type }]
-      : [],
-  );
-  const selected = value ?? [];
-  // Stale URL values (hand-edited, or events not mirrored yet) must still
-  // render as selections so they can be unchecked. Sort the merged set by the
-  // displayed short name so the two-column grid reads alphabetically (the SQL's
-  // ORDER BY is on the full type; the stale entries are appended out of band).
-  const staleSelections = selected.filter((type) => !types.some((entry) => entry.type === type));
-  const options = [...staleSelections.map((type) => ({ count: 0, type })), ...types].sort((a, b) =>
-    shortEventType(a.type).localeCompare(shortEventType(b.type)),
-  );
-
-  function toggle(type: string, checked: boolean) {
-    const next = checked ? [...selected, type] : selected.filter((entry) => entry !== type);
-    onChange(next.length === 0 ? null : next);
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button
-            variant="outline"
-            size="sm"
-            className="max-w-56 font-mono text-xs font-normal"
-            data-testid="stream-feed-event-type"
-          />
-        }
-      >
-        <span className="truncate">
-          {selected.length === 0
-            ? "All event types"
-            : selected.length === 1
-              ? shortEventType(selected[0]!)
-              : `${selected.length} event types`}
-        </span>
-        <ChevronDownIcon className="size-3 text-muted-foreground" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-[min(90vw,34rem)] max-w-[calc(100vw-2rem)]">
-        <div className="grid max-h-96 grid-cols-2 gap-x-1 overflow-y-auto">
-          {options.length === 0 ? (
-            <p className="col-span-2 px-2 py-1.5 text-xs text-muted-foreground">
-              No event types in the mirror yet.
-            </p>
-          ) : (
-            options.map((entry) => (
-              <DropdownMenuCheckboxItem
-                key={entry.type}
-                checked={selected.includes(entry.type)}
-                closeOnClick={false}
-                onCheckedChange={(checked) => toggle(entry.type, checked)}
-                className="min-w-0 font-mono text-xs"
-              >
-                <span className="min-w-0 flex-1 truncate" title={shortEventType(entry.type)}>
-                  {shortEventType(entry.type)}
-                </span>
-                <span className="shrink-0 text-muted-foreground">
-                  {entry.count.toLocaleString()}
-                </span>
-              </DropdownMenuCheckboxItem>
-            ))
-          )}
-        </div>
-        {selected.length > 0 ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-xs" onClick={() => onChange(null)}>
-              Clear selection
-            </DropdownMenuItem>
-          </>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
 }

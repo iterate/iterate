@@ -13,7 +13,7 @@ import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
@@ -276,7 +276,7 @@ export function StreamSwitcherDialog({
                       className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
                       data-testid="stream-switcher-last-active"
                     >
-                      {formatRelativeTime(row.lastActivityAt, now)}
+                      {formatTimeAgo(row.lastActivityAt, now)}
                     </span>
                     <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground/60">
                       {row.eventCount}

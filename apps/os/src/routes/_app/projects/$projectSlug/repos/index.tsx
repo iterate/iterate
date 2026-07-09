@@ -27,7 +27,7 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -271,7 +271,7 @@ function ProjectReposIndexContent() {
                           </Link>
                         </TableCell>
                         <TableCell className="w-40 text-muted-foreground">
-                          {formatRelativeTime(repo.createdAt)}
+                          {formatTimeAgo(repo.createdAt)}
                         </TableCell>
                         <TableCell className="w-32">
                           {artifactDashboardUrl ? (

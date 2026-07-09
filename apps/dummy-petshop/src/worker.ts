@@ -529,17 +529,29 @@ async function deliverWebhook(input: {
   secret: string;
   payload: unknown;
   signatureHeader?: string;
-}): Promise<{ url: string; status: number; signature: string; payload: string }> {
+}): Promise<{ url: string; status: number; signature: string; payload: string; error?: string }> {
   const body = JSON.stringify(input.payload);
   const signature = `sha256=${await hmacSha256Hex(input.secret, body)}`;
   const signatureHeader = input.signatureHeader ?? "x-petshop-signature-256";
+  let error: string | undefined;
   const response = await fetch(input.url, {
     method: "POST",
     headers: { "content-type": "application/json", [signatureHeader]: signature },
     body,
     signal: AbortSignal.timeout(10_000),
-  }).catch(() => null);
-  return { url: input.url, status: response?.status ?? 0, signature, payload: body };
+  }).catch((cause: unknown) => {
+    // status 0 = the fetch itself failed; carry WHY (a bare 0 made transient
+    // CI loopback failures undiagnosable).
+    error = cause instanceof Error ? (cause.cause ?? cause).toString() : String(cause);
+    return null;
+  });
+  return {
+    url: input.url,
+    status: response?.status ?? 0,
+    signature,
+    payload: body,
+    ...(error === undefined ? {} : { error }),
+  };
 }
 
 async function backdoor(key: string, request: Request, deps: PetshopDeps): Promise<Response> {

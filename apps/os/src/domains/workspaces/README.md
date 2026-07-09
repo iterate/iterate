@@ -7,9 +7,11 @@ repo's main branch, invalidated by the repo's head cursor (one cheap
 freely ditchable via `reset()`, it's just a cache). Every other workspace is a
 copy-on-write overlay over it: writes stay local, deletes leave whiteout rows,
 missing reads fall through to latest main, and `git.commit({ message })`
-publishes the merged view as one snapshot commit on the workspace's own branch
-(`workspaces/<path>`) — never main. See `workspace-durable-object.ts` for the
-full semantics.
+commits the workspace's changes straight to the config repo's MAIN branch via
+the Repo DO's own `commitFiles` lane (head cache, worker rebuilds, and GitHub
+mirroring all fire as for a direct repo commit), then clears the overlay so it
+mirrors the new main. There are no workspace branches: commit = live on main.
+See `workspace-durable-object.ts` for the full semantics.
 
 ## Agreed next steps (ALL landing on PR #1804, per Jonas)
 
@@ -24,9 +26,9 @@ full semantics.
 3. **Multi-repo overlays**: every agent workspace sees ALL config repos at
    their repo paths — copy-on-write, fall-through per subtree to that repo's
    cache. Repos live at arbitrary paths, so the router longest-prefix-matches
-   an injected repo list (= project processor state's `repos`, served via `projectProcessorState(projectId)` — see rpc-targets.ts ~992); default route is the config repo at "/". Publish
-   routes per mount: changes under a mounted repo commit to THAT repo's
-   `workspaces/<path>` branch. Per-file git laziness is impossible
+   an injected repo list (= project processor state's `repos`, served via `projectProcessorState(projectId)` — see rpc-targets.ts ~992); default route is the config repo at "/". Commit
+   routes per mount: changes under a mounted repo commit to THAT repo's main
+   via its own `commitFiles` lane. Per-file git laziness is impossible
    (isomorphic-git has no partial clone) — laziness lives at the cache layer.
 
 ## Direction of travel (deliberately not built yet)
@@ -54,18 +56,17 @@ R2Bucket(...), "/project": GitHubRepo(...) }`). Our parent fall-through is,
 - **Sandbox mounting via git refs.** `cloudflare/artifact-fs` (a container-side
   FUSE daemon; lazily-hydrating blobless clones — a different layer, it can
   never run in a DO) mounts any git ref into a sandbox, with a proven
-  sandbox-sdk integration. Our snapshot-publish branches are git refs, so "a
-  published workspace branch is the mount seam" — keep publish-to-branch a
-  first-class verb.
+  sandbox-sdk integration. Workspace commits land on main, so main is the
+  mount seam.
 - **Overlay reconciliation.** artifact-fs pins a base snapshot generation and,
   when the base moves, keeps a dirty overlay entry iff its recorded
   `SourceOID` still matches the new base. We deliberately track NO per-file
   source oid: our overlays pin per-path by shadowing, our root has no local
   edits by definition, and "rebase a dirty overlay onto new main" — if ever
-  needed — is a git merge at publish time, not per-file bookkeeping.
+  needed — is a git merge at commit time, not per-file bookkeeping.
 - **Workspace-per-branch caches.** The root-workspace pattern generalizes to a
   ditchable cache DO per `{repo, branch}` should anything need fast reads of
   non-main branches.
 
-No stream processor here on purpose: workspaces are storage with a publish
-verb, not event consumers; publishes already surface through the repos domain.
+No stream processor here on purpose: workspaces are storage with a commit
+verb, not event consumers; commits already surface through the repos domain.
