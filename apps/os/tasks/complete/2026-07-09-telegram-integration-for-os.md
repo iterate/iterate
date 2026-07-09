@@ -513,6 +513,15 @@ gate, not authz.
     the same snippet with the other stream's path.
   - The two new event-type constants live on the contracts, not utils.ts
     (contract catalogs need literal keys; knip flagged the unused mirrors).
+- 2026-07-09: URL substitution ratcheted to the PATH segment only (Misha's
+  review call): a placeholder in the query/fragment/userinfo/host now throws
+  `secret_reference_outside_url_path` at the substitution layer (naming the
+  part) instead of silently passing the literal placeholder to the provider.
+  The request-level reference SCAN still covers the whole URL on purpose — a
+  query-only placeholder must route to the Secret DO to be rejected loudly
+  there. ADR 0005 + design docs reworded from "envelope (headers + URL)" to
+  "headers + URL path, never query/body". Telegram behavior unchanged (its
+  placeholder is in the path — the point of the ratchet).
 - 2026-07-09: Part 3 (steal-with-confirm) landed, straight after Misha hit
   the dead end live. connectTelegram answers a ConnectTelegramResult union;
   the dashboard's steal dialog derives entirely from the mutation's
