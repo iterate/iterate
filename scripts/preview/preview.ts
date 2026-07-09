@@ -3377,6 +3377,16 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
+  // Slots whose erase already failed this run. A free-but-unerasable slot
+  // comes straight back from the semaphore after we release it, so without
+  // a pause the loop hot-cycles the same broken slot (observed 2026-07-09:
+  // three unerasable slots, ~6s per lap, 150+ laps burning the entire wait
+  // budget while spamming the log). Erase is expected to self-heal now
+  // (do-reset resurrects unlisted classes), so a repeat failure means the
+  // slot needs a human/agent — pause to let other slots free up instead of
+  // thrashing, and say so once.
+  const eraseFailuresBySlug = new Map<string, number>();
+  const brokenSlotPauseMs = 30_000;
 
   for (;;) {
     attempt += 1;
@@ -3406,6 +3416,19 @@ async function acquireAnyEnvironmentConfigLease(input: {
       if (Date.now() >= deadline) {
         throw new Error(
           `Could not hand ${input.holder} a clean slot: erasing ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+        );
+      }
+      const eraseFailures = (eraseFailuresBySlug.get(acquired.slug) ?? 0) + 1;
+      eraseFailuresBySlug.set(acquired.slug, eraseFailures);
+      if (eraseFailures === 2) {
+        logPreview(
+          `${acquired.slug} failed erase twice — it needs repair (scripts/lib/do-reset.ts header has the recipe). ` +
+            `Pausing ${brokenSlotPauseMs / 1000}s between further attempts instead of hot-cycling it.`,
+        );
+      }
+      if (eraseFailures >= 2) {
+        await new Promise((res) =>
+          setTimeout(res, Math.min(brokenSlotPauseMs, Math.max(0, deadline - Date.now()))),
         );
       }
       continue;
