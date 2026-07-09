@@ -13,6 +13,8 @@ class MemoryStream implements Stream {
     return { instructions: `in-memory stream ${this.path}`, types: "", children: {} };
   }
 
+  async kill(): Promise<void> {}
+
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     return inputs.map((input) => {
       const existing =

@@ -83,6 +83,11 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     return `workspace ${this.#name.projectId}:${this.#name.path}`;
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   // -- clone-on-first-touch gate ------------------------------------------
 
   // In-flight clone, shared by every concurrent first call. Reset on failure

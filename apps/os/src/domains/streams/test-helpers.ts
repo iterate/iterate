@@ -31,6 +31,8 @@ export class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
+  async kill(): Promise<void> {}
+
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     const appended = inputs.map((input) => {
       const existing =
