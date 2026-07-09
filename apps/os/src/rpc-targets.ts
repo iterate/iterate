@@ -202,6 +202,8 @@ import type {
 import type { SecretDescription, SecretUpdateInput } from "./domains/secrets/types.ts";
 import type {
   GetProcessorRuntimeState,
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -213,6 +215,9 @@ import type {
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
+import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
+import type { LiveUpdate } from "./lib/live-state/protocol.ts";
+import type { LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
@@ -3852,6 +3857,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** The project's live state — its reduced processor state (plus a streams index). See {@link LiveStateRpc}. */
+  get live(): LiveStateRpc<ProjectProcessorState> {
+    return new LiveStateRelayRpcTarget<ProjectProcessorState>(
+      () =>
+        this.durableObjectStub as unknown as {
+          live: PromiseLike<LiveStateRpc<ProjectProcessorState>>;
+        },
+    );
+  }
+
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
     return new AiRpcTarget();
@@ -4788,6 +4803,90 @@ class ProcessorStateSubscriptionRpcTarget extends IterateRpcRelay<"ProcessorStat
 
   [Symbol.dispose](): void {
     this.#handle.unsubscribe();
+  }
+}
+
+/**
+ * DO-side RpcTarget over a host's live-state engine — the READ-ONLY surface a
+ * `.live` node exposes to clients: `getState()` one-shot + `subscribe()` live.
+ * (Writes — `setState`/`assign` — stay on the engine, server-side only.) Each
+ * call first seeds the engine from committed processor state, so the first paint
+ * is never stale after a DO restart.
+ */
+export class LiveStateRpcTarget<State = unknown>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
+{
+  readonly #host: Pick<StreamProcessorHost, "live" | "refreshLiveState">;
+
+  constructor(host: Pick<StreamProcessorHost, "live" | "refreshLiveState">) {
+    super();
+    this.#host = host;
+  }
+
+  async getState(): Promise<State> {
+    await this.#host.refreshLiveState();
+    return this.#host.live.getState() as State;
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    await this.#host.refreshLiveState();
+    // The engine holds an untyped state bag; the node asserts its own shape.
+    const handle = this.#host.live.subscribe(
+      onUpdate as (update: LiveUpdate<Record<string, unknown>>) => unknown,
+    );
+    return new LiveStateSubscriptionRpcTarget(handle);
+  }
+}
+
+/** RPC ownership handle for one live-state subscription — the `.live` twin of {@link ProcessorStateSubscriptionRpcTarget}. */
+class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscriptionHandle"> {
+  readonly #handle: LiveStateSubscription;
+
+  constructor(handle: LiveStateSubscription) {
+    super();
+    this.#handle = handle;
+  }
+
+  ping() {
+    return this.#handle.ping();
+  }
+
+  unsubscribe() {
+    this.#handle.unsubscribe();
+  }
+
+  [Symbol.dispose](): void {
+    this.#handle.unsubscribe();
+  }
+}
+
+/**
+ * Isolate-side relay for a DO-hosted `.live` node — awaits the DO stub's `.live`
+ * property (a Workers RPC property read can't be pipelined through) then
+ * forwards. Mirrors {@link ProcessorRelayRpcTarget}.
+ */
+class LiveStateRelayRpcTarget<State>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
+{
+  readonly #stub: () => { live: PromiseLike<LiveStateRpc<State>> };
+
+  constructor(stub: () => { live: PromiseLike<LiveStateRpc<State>> }) {
+    super();
+    this.#stub = stub;
+  }
+
+  async getState(): Promise<State> {
+    return await (await this.#stub().live).getState();
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return await (await this.#stub().live).subscribe(onUpdate);
   }
 }
 

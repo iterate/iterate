@@ -5,6 +5,7 @@
  * contract and the server-side host/subscriber machinery build against.
  */
 import type { StreamEvent } from "./schemas.ts";
+import type { LiveUpdate } from "../../lib/live-state/protocol.ts";
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
@@ -75,6 +76,29 @@ export interface StreamProcessorRpc<State = unknown> {
   ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+}
+
+/**
+ * Live handle for one live-state subscription. Same contract as
+ * {@link ProcessorStateSubscriptionHandle}: `ping()` reports liveness (and the
+ * call rejects when the hosting incarnation is gone), `unsubscribe()` closes it.
+ */
+export type LiveStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
+/**
+ * A node's live state — a source-agnostic reactive value. `getState()` reads it
+ * once; `subscribe()` opens a channel that pushes a full snapshot then minimal
+ * diffs (see `lib/live-state`), which the React `useLiveState` hook reassembles
+ * so components pick only the slice they render. ANY RpcTarget can expose one:
+ * a Durable Object over its folded state, or a stateless worker over state it
+ * computes or fetches.
+ */
+export interface LiveStateRpc<State = unknown> {
+  getState(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
 }
 
 /**

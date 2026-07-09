@@ -287,6 +287,9 @@ export abstract class StreamProcessor<
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
   readonly #stateChangeSubscriptions = new Set<StateChangeSubscription<ProcessorState<Contract>>>();
+  readonly #stateChangeObservers = new Set<
+    (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void
+  >();
   readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
@@ -737,6 +740,26 @@ export abstract class StreamProcessor<
     }
   }
 
+  /**
+   * The current reduced state, synchronously (the schema default until the first
+   * load). Lets a host assemble its live state without an async hop.
+   */
+  get currentState(): ProcessorState<Contract> {
+    return this.#getState();
+  }
+
+  /**
+   * Observe reduced-state changes IN-PROCESS. Unlike `onStateChange`, the
+   * observer is a local function (the host wires it to refresh its live-state
+   * engine), not a retained RPC stub. Returns an unsubscribe.
+   */
+  observeStateChanges(
+    observer: (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void,
+  ): () => void {
+    this.#stateChangeObservers.add(observer);
+    return () => void this.#stateChangeObservers.delete(observer);
+  }
+
   #notifyStateChange(snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>): void {
     for (const subscription of [...this.#stateChangeSubscriptions]) {
       try {
@@ -744,6 +767,13 @@ export abstract class StreamProcessor<
       } catch (error) {
         // deliver() already dropped the subscription on a synchronous throw.
         console.error("stream processor state change callback failed", error);
+      }
+    }
+    for (const observer of [...this.#stateChangeObservers]) {
+      try {
+        observer(snapshot);
+      } catch (error) {
+        console.error("stream processor state-change observer failed", error);
       }
     }
   }

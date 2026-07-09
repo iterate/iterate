@@ -62,6 +62,7 @@ import type {
   StreamSubscriberWakeResponse,
 } from "./rpc-types.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
+import { LiveState } from "../../lib/live-state/engine.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 
@@ -110,6 +111,10 @@ export type AnyHostedProcessor = {
   }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
+  /** The current reduced state, synchronously — feeds live-state assembly without an async hop. */
+  currentState: unknown;
+  /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
+  observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void;
 };
 
 type HostedEntry = {
@@ -120,6 +125,15 @@ type HostedEntry = {
 
 export type StreamProcessorHost = {
   readonly stream: Stream;
+  /** The node's live-state engine; a `.live` RpcTarget exposes getState()/subscribe() over it. */
+  readonly live: LiveState<Record<string, unknown>>;
+  /**
+   * Load every hosted processor's checkpoint and reassemble the live state, so
+   * the first `.live` read/subscription reflects committed writes;
+   * `observeStateChanges` keeps it fresh after. Also call it after mutating a
+   * non-processor live-state input (e.g. the streams index).
+   */
+  refreshLiveState(): Promise<void>;
   /**
    * Register a processor under its contract slug. The builder receives the
    * host-provided base deps (checkpoint storage in DO KV keyed by the slug and
@@ -182,6 +196,13 @@ export function createStreamProcessorHost(
     now?: () => number;
     /** Catch-up read page size; tests shrink it to exercise paging. */
     catchUpPageSize?: number;
+    /**
+     * Assemble this node's live state (see `LiveState`). Called on every hosted
+     * processor's state change and on `refreshLiveState`. Omit and the live
+     * state is the primary (first-registered) processor's reduced state; provide
+     * it to project a redacted view or fold in extras (e.g. a streams index).
+     */
+    getLiveState?: () => Record<string, unknown>;
   },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
@@ -351,8 +372,23 @@ export function createStreamProcessorHost(
     }
   }
 
+  // The node's live-state engine. Seeded empty; assembled from processor state
+  // on the first `refreshLiveState` and kept fresh by each processor's observer.
+  const live = new LiveState<Record<string, unknown>>({});
+  function assembleLive(): void {
+    const primary = [...entries.values()][0]?.processor.currentState;
+    live.setState(options.getLiveState?.() ?? (primary as Record<string, unknown>) ?? {});
+  }
+
   return {
     stream: options.stream,
+    live,
+    async refreshLiveState() {
+      await Promise.all(
+        [...entries.values()].map((entry) => entry.processor.snapshot().catch(() => undefined)),
+      );
+      assembleLive();
+    },
     add(build) {
       // The registry name is the processor's contract slug, which only exists
       // after the builder runs; the checkpoint-storage deps close over it
@@ -385,6 +421,8 @@ export function createStreamProcessorHost(
       }
       registeredSlug = processor.contract.slug;
       entries.set(registeredSlug, { processor, ingestChain: Promise.resolve() });
+      // Any processor's reduced-state change reassembles the node's live state.
+      processor.observeStateChanges(() => assembleLive());
       return processor;
     },
 

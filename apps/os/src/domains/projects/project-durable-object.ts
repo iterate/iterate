@@ -4,6 +4,7 @@ import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
+  LiveStateRpcTarget,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -160,6 +161,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // delivery is lagging or a wake was dropped.
       catchUpBeforeSnapshot: () => this.#processorHost.catchUp(ProjectProcessorContract.slug),
     });
+  }
+
+  /** The project's live state — the read/subscribe surface behind `itx.live`. */
+  get live() {
+    return new LiveStateRpcTarget(this.#processorHost);
   }
 
   async fetch(request: Request): Promise<Response> {

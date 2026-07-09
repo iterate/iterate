@@ -100,6 +100,8 @@ export interface Project {
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
+  /** The project's live state — its reduced processor state (plus a streams index). See {@link LiveStateRpc}. */
+  live: LiveStateRpc<ProjectProcessorState>;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -240,6 +242,19 @@ export interface ProjectCollection {
    * and is the default for non-user admin principals, which have no claims.
    */
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
+}
+
+/**
+ * A node's live state — a source-agnostic reactive value. `getState()` reads it
+ * once; `subscribe()` opens a channel that pushes a full snapshot then minimal
+ * diffs (see `lib/live-state`), which the React `useLiveState` hook reassembles
+ * so components pick only the slice they render. ANY RpcTarget can expose one:
+ * a Durable Object over its folded state, or a stateless worker over state it
+ * computes or fetches.
+ */
+export interface LiveStateRpc<State = unknown> {
+  getState(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
@@ -1483,6 +1498,30 @@ export type StreamSubscriberWakeResponse = {
   getRuntimeState?: GetProcessorRuntimeState;
 };
 
+/**
+ * One message pushed down a live-state subscription. The first is always a
+ * `snapshot` (a resync sends a fresh one); every message after carries only the
+ * diff from revision `from` to `to`. Revisions are monotonic for the life of one
+ * subscription, so a gap (`from` ≠ the client's revision) means a message was
+ * missed and the client should resubscribe.
+ *
+ * `State` is asserted by the caller of `useLiveState`, exactly as `useItxState`
+ * asserted its processor-state type — the wire itself is structure-agnostic.
+ */
+export type LiveUpdate<State = unknown> =
+  | { type: "snapshot"; revision: number; state: State }
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+
+/**
+ * Live handle for one live-state subscription. Same contract as
+ * {@link ProcessorStateSubscriptionHandle}: `ping()` reports liveness (and the
+ * call rejects when the hosting incarnation is gone), `unsubscribe()` closes it.
+ */
+export type LiveStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
 export type CfMarkdownConversionArgs =
   | []
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
@@ -2101,6 +2140,20 @@ export type ProcessorStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
 };
+
+/**
+ * A structural patch turning a previous JSON value into the next one. Two
+ * shapes, discriminated by whether the `set` key is present:
+ * - `{ set }` — replace this position wholesale. Used for primitives, arrays
+ *   (treated as opaque leaves, never diffed positionally), `null`, type changes,
+ *   and newly-added object keys.
+ * - `{ fields?, drop? }` — descend into a plain object: `fields` maps each
+ *   changed key to its own patch; `drop` lists keys that disappeared. At least
+ *   one is present (an empty descend never gets emitted).
+ */
+export type LiveStatePatch =
+  | { set: unknown }
+  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
