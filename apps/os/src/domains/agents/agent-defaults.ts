@@ -225,9 +225,12 @@ export function agentDefaultsForPath(input: {
   agentPath: string;
   projectId: string;
   overrides?: AgentDefaultsOverrides;
+  /** Deployment-level default model (config.defaultAgentModel) — falls back
+   * to the platform DEFAULT_AGENT_MODEL. Overrides still win. */
+  defaultModel?: string;
 }): AgentDefaultPolicy {
   const { agentPath, projectId } = input;
-  const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
+  const model = input.overrides?.model ?? input.defaultModel ?? DEFAULT_AGENT_MODEL;
   const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
 
   const events: AgentPolicyEventInput[] = [
