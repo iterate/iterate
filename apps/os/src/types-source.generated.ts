@@ -1567,7 +1567,14 @@ export type StreamEvent = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -1993,7 +2000,14 @@ export type StreamEventInput = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;

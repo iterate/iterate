@@ -83,6 +83,7 @@ export function processCustomDomainEvent({
   blockProcessorWhile,
   customDomains,
   event,
+  idempotencyKey,
   projectId,
   state,
 }: {
@@ -90,6 +91,8 @@ export function processCustomDomainEvent({
   blockProcessorWhile: ProjectProcessEventArgs["blockProcessorWhile"];
   customDomains?: ProjectCustomDomainDeps;
   event: ProjectProcessEventArgs["event"];
+  /** The host processor's `idempotencyKey`, pre-bound to `event`. */
+  idempotencyKey: (key: string) => string;
   projectId: string;
   state: ProjectProcessEventArgs["state"];
 }): boolean {
@@ -99,7 +102,7 @@ export function processCustomDomainEvent({
       blockProcessorWhile(async () => {
         await appendCustomDomainObservation({
           append,
-          eventOffset: event.offset,
+          idempotencyKey,
           hostname: event.payload.hostname,
           operation: async () => {
             const provisioner = assertCustomDomainProvisioner(customDomains);
@@ -140,13 +143,13 @@ export function processCustomDomainEvent({
           });
           await append({
             type: "events.iterate.com/project/custom-domain-removed",
-            idempotencyKey: `project/custom-domain-removed:${projectId}:${event.offset}`,
+            idempotencyKey: idempotencyKey("custom-domain-removed"),
             payload: { hostname },
           });
         } catch (error) {
           await append({
             type: "events.iterate.com/project/custom-domain-provision-failed",
-            idempotencyKey: `project/custom-domain-remove-failed:${projectId}:${event.offset}`,
+            idempotencyKey: idempotencyKey("custom-domain-remove-failed"),
             payload: { error: errorMessage(error), hostname },
           });
         }
@@ -175,8 +178,9 @@ function projectRecordFromState(
 
 async function appendCustomDomainObservation(input: {
   append: (...input: EmittedInput<typeof ProjectProcessorContract>[]) => Promise<StreamEvent[]>;
-  eventOffset: number;
   hostname: string;
+  /** The host processor's `idempotencyKey`, pre-bound to the triggering event. */
+  idempotencyKey: (key: string) => string;
   operation: () => Promise<ProjectCustomDomainCloudflareSnapshot>;
   projectId: string;
 }): Promise<void> {
@@ -184,13 +188,13 @@ async function appendCustomDomainObservation(input: {
     const snapshot = await input.operation();
     await input.append({
       type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-      idempotencyKey: `project/custom-domain-observed:${input.projectId}:${input.eventOffset}`,
+      idempotencyKey: input.idempotencyKey("custom-domain-observed"),
       payload: snapshot,
     });
   } catch (error) {
     await input.append({
       type: "events.iterate.com/project/custom-domain-provision-failed",
-      idempotencyKey: `project/custom-domain-failed:${input.projectId}:${input.eventOffset}`,
+      idempotencyKey: input.idempotencyKey("custom-domain-failed"),
       payload: { error: errorMessage(error), hostname: input.hostname },
     });
   }

@@ -19,6 +19,9 @@ import {
  */
 type BrowserProcessorConstructorArgs<State> = {
   stream: Stream;
+  /** The mirrored stream's identity (StreamProcessor base deps). */
+  path: string;
+  projectId: string;
   sql: SqlClient;
 } & Required<StreamProcessorStateStorage<State>>;
 
@@ -71,7 +74,7 @@ export function useStreamProcessorStore<State>(input: {
         schemaVersion,
         tables: tablesKey === "" ? [] : tablesKey.split(","),
         ...(resetOnSchemaVersionChange == null ? {} : { resetOnSchemaVersionChange }),
-        createProcessor({ stream, sql, subscriptionKey }) {
+        createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
           const storage = browserProcessorStateStorage<State>({
             sql,
             processorSlug: slug,
@@ -79,6 +82,8 @@ export function useStreamProcessorStore<State>(input: {
           });
           return new Processor({
             stream,
+            path,
+            projectId,
             sql,
             readState: storage.readState,
             writeState: storage.writeState,

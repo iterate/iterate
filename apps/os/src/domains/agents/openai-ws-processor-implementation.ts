@@ -236,9 +236,9 @@ export class OpenAiWsProcessor extends StreamProcessor<
       // the whole attempt. The outer finally still releases the live-set
       // entry either way (a leaked entry would make the reconciler skip this
       // id for the rest of the incarnation).
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/openai-ws/llm-request-started",
-        idempotencyKey: `openai-ws/llm-request-started@${llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`llm-request-started@${llmRequestId}`),
         payload: { llmRequestId, model },
       });
       try {
@@ -287,9 +287,9 @@ export class OpenAiWsProcessor extends StreamProcessor<
         };
 
         if (await this.#isRequestStillCurrent({ llmRequestId })) {
-          await this.stream.append({
+          await this.append({
             type: "events.iterate.com/agent/output-added",
-            idempotencyKey: `openai-ws/agent-output-added@${llmRequestId}`,
+            idempotencyKey: this.idempotencyKey(`agent-output-added@${llmRequestId}`),
             payload: { content: completion.text, llmRequestId },
           });
           if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
@@ -321,10 +321,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
       | { status: "success"; rawResponse?: unknown; usage?: unknown }
       | { status: "failure"; error: { message: string }; rawResponse?: unknown };
   }): Promise<void> {
-    await this.stream.append(
+    await this.append(
       {
         type: "events.iterate.com/openai-ws/llm-request-completed",
-        idempotencyKey: `openai-ws/provider-completed@${input.llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`provider-completed@${input.llmRequestId}`),
         payload: {
           durationMs: input.durationMs,
           llmRequestId: input.llmRequestId,
@@ -333,7 +333,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: `openai-ws/agent-completed@${input.llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`agent-completed@${input.llmRequestId}`),
         payload: {
           durationMs: input.durationMs,
           llmRequestId: input.llmRequestId,
@@ -425,12 +425,13 @@ export class OpenAiWsProcessor extends StreamProcessor<
         throw error;
       }
 
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/openai-ws/llm-response-chunk",
-        idempotencyKey:
+        idempotencyKey: this.idempotencyKey(
           input.idempotencyScope === undefined
-            ? `openai-ws/llm-response-chunk@${llmRequestId}:${sequence}`
-            : `openai-ws/llm-response-chunk@${llmRequestId}:${input.idempotencyScope}:${sequence}`,
+            ? `llm-response-chunk@${llmRequestId}:${sequence}`
+            : `llm-response-chunk@${llmRequestId}:${input.idempotencyScope}:${sequence}`,
+        ),
         payload: { chunk, llmRequestId, sequence },
       });
       sequence += 1;

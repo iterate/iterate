@@ -93,7 +93,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
@@ -121,6 +121,8 @@ describe("minimal web-chat agent processors", () => {
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       writeWorkspaceFile: async (input) => {
         writes.push(input);
       },
@@ -158,6 +160,8 @@ describe("minimal web-chat agent processors", () => {
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       writeWorkspaceFile: async (input) => {
         writes.push(input);
       },
@@ -181,6 +185,8 @@ describe("minimal web-chat agent processors", () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       writeWorkspaceFile: async () => {
         throw new Error("workspace unavailable");
       },
@@ -204,6 +210,8 @@ describe("minimal web-chat agent processors", () => {
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       writeWorkspaceFile: async (input) => {
         writes.push(input);
       },
@@ -250,7 +258,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("feeds a thrown script error back as input", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -268,7 +276,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -304,6 +312,8 @@ describe("minimal web-chat agent processors", () => {
     });
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       readState: async () => ({ offset: 1, state }),
     });
 
@@ -334,9 +344,11 @@ describe("minimal web-chat agent processors", () => {
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cloudflareAi = new CloudflareAiProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       ai: {
         async run(_model, body) {
           aiCalls.push(body);
@@ -397,7 +409,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("extracts the whole script when a string literal embeds a markdown fence", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
 
     // Mirrors a prd incident (agents/web/2026-07-09t14-21-45-359z): a chat
     // message formatted as markdown puts ``` inside the script's string
@@ -421,7 +433,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
     const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
 
@@ -444,7 +456,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("coalesces multiple triggering inputs delivered in one batch into one LLM request", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append(
       {
@@ -473,7 +485,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("coalesces triggering inputs even when delivery chunks them across batches", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append(
       {
@@ -509,7 +521,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("coalesces multiple MCP-origin user messages replayed through the cold session backlog", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -544,9 +556,11 @@ describe("minimal web-chat agent processors", () => {
     const firstCallInFlight = new Promise<void>((resolve) => {
       resolveFirstCall = resolve;
     });
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cloudflareAi = new CloudflareAiProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       ai: {
         async run(_model, body) {
           aiCalls.push(body);
@@ -626,6 +640,8 @@ describe("minimal web-chat agent processors", () => {
     });
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       readState: async () => ({ offset: 2, state: stuckState }),
     });
     // New event arrives after restart — triggers recovery
@@ -645,6 +661,8 @@ describe("minimal web-chat agent processors", () => {
     const stream = new MemoryStream();
     const cloudflareAi = new CloudflareAiProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       ai: {
         async run() {
           return sseStream(
@@ -723,6 +741,8 @@ describe("minimal web-chat agent processors", () => {
     const sockets: FakeResponsesWebSocket[] = [];
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => {
         const socket = fakeResponsesWebSocket(() => [
@@ -778,6 +798,8 @@ describe("minimal web-chat agent processors", () => {
     const stream = new MemoryStream();
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () =>
         fakeResponsesWebSocket(() => [
@@ -822,6 +844,8 @@ describe("minimal web-chat agent processors", () => {
     let responseCreateCount = 0;
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => {
         const socket = fakeResponsesWebSocket(() => {
@@ -888,6 +912,8 @@ describe("minimal web-chat agent processors", () => {
     let dialed = 0;
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => {
         dialed += 1;
@@ -917,6 +943,8 @@ describe("minimal web-chat agent processors", () => {
     const stream = new MemoryStream();
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: null,
       createResponsesWebSocketClient: async () => {
         throw new Error("should not dial without a key");
@@ -945,7 +973,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("turns a failed LLM request into an error input and schedules a retry", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
@@ -991,7 +1019,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("stops auto-retrying after three consecutive failures", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
@@ -1110,6 +1138,8 @@ describe("minimal web-chat agent processors", () => {
     // Incarnation 2: fresh processor (empty #liveExecutions), catching up.
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => {
         throw new Error("should not dial during orphan recovery");
@@ -1202,7 +1232,7 @@ describe("file attachments in the LLM request", () => {
 
   it("reflects sent-message attachments back into model-visible history", async () => {
     const stream = new MemoryStream();
-    const processor = new AgentProcessor({ stream });
+    const processor = new AgentProcessor({ stream, path: stream.path, projectId: null });
     await stream.append({
       type: "events.iterate.com/agents/web-message-sent",
       payload: { message: "Here is your cat!", files: [attachment] },

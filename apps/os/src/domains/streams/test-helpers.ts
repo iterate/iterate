@@ -271,6 +271,8 @@ export function createProcessorHostHarness<
     }) as unknown as Stream;
     host = createStreamProcessorHost(fakeDurableObjectState(store), {
       stream: fencedStream,
+      path: stream.path,
+      projectId: null,
       version:
         (typeof options.version === "function" ? options.version() : options.version) ?? "v-test",
       now: () => clock.now,

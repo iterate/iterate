@@ -109,7 +109,7 @@ export class EmailAgentProcessor extends StreamProcessor<
       }
       await append({
         type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `email-agent:received-to-agent-input:${event.offset}`,
+        idempotencyKey: this.idempotencyKey("received-to-agent-input", event),
         payload: {
           content: inboundEmailAgentInput(event.payload),
           ...(files == null || files.length === 0 ? {} : { files }),

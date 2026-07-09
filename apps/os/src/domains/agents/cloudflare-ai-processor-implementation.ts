@@ -144,9 +144,9 @@ export class CloudflareAiProcessor extends StreamProcessor<
       // Started-evidence outside the inner try — see the openai-ws sibling:
       // a failed append means the vendor was never dialed, no completion may
       // land, and the finally must still release the live-set entry.
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/cloudflare-ai/llm-request-started",
-        idempotencyKey: `cloudflare-ai/llm-request-started@${llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`llm-request-started@${llmRequestId}`),
         payload: {
           llmRequestId,
           model,
@@ -181,9 +181,9 @@ export class CloudflareAiProcessor extends StreamProcessor<
         );
 
         if (await this.#isRequestStillCurrent({ llmRequestId })) {
-          await this.stream.append({
+          await this.append({
             type: "events.iterate.com/agent/output-added",
-            idempotencyKey: `cloudflare-ai/agent-output-added@${llmRequestId}`,
+            idempotencyKey: this.idempotencyKey(`agent-output-added@${llmRequestId}`),
             payload: { content: completion.text, llmRequestId },
           });
         }
@@ -222,10 +222,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
       | { status: "success"; rawResponse?: unknown; usage?: unknown }
       | { status: "failure"; error: { message: string }; rawResponse?: unknown };
   }): Promise<void> {
-    await this.stream.append(
+    await this.append(
       {
         type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-        idempotencyKey: `cloudflare-ai/provider-completed@${input.llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`provider-completed@${input.llmRequestId}`),
         payload: {
           durationMs: input.durationMs,
           llmRequestId: input.llmRequestId,
@@ -234,7 +234,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: `cloudflare-ai/agent-completed@${input.llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`agent-completed@${input.llmRequestId}`),
         payload: {
           durationMs: input.durationMs,
           llmRequestId: input.llmRequestId,
@@ -259,9 +259,9 @@ export class CloudflareAiProcessor extends StreamProcessor<
     const handleChunk = async (chunk: unknown) => {
       text += extractChunkText(chunk);
       usage = extractUsage(chunk) ?? usage;
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        idempotencyKey: `cloudflare-ai/llm-response-chunk@${input.llmRequestId}:${sequence}`,
+        idempotencyKey: this.idempotencyKey(`llm-response-chunk@${input.llmRequestId}:${sequence}`),
         payload: {
           chunk: jsonCompatible(chunk),
           llmRequestId: input.llmRequestId,

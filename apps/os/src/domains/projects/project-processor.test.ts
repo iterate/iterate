@@ -7,7 +7,10 @@ import { ProjectProcessor } from "./project-processor-implementation.ts";
 class MemoryStream implements Stream {
   events: StreamEvent[] = [];
 
-  constructor(readonly path: string) {}
+  constructor(
+    readonly network: MemoryStreamNetwork,
+    readonly path: string,
+  ) {}
 
   async __describe() {
     return { instructions: `in-memory stream ${this.path}`, types: "", children: {} };
@@ -35,8 +38,8 @@ class MemoryStream implements Stream {
     });
   }
 
-  at(): Stream {
-    return this;
+  at(path: string): Stream {
+    return this.network.get(path);
   }
 
   async getEvent(
@@ -121,7 +124,7 @@ class MemoryStreamNetwork {
   get(path: string): MemoryStream {
     let stream = this.streams.get(path);
     if (stream === undefined) {
-      stream = new MemoryStream(path);
+      stream = new MemoryStream(this, path);
       this.streams.set(path, stream);
     }
     return stream;
@@ -153,6 +156,8 @@ function makeHarness() {
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
     stream: network.get("/"),
+    path: "/",
+    projectId: "prj_test",
     itx,
   });
   return { network, processor };

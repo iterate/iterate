@@ -96,6 +96,7 @@ export class TelegramProcessor extends StreamProcessor<
   }
 
   protected override processEvent({
+    appendTo,
     blockProcessorWhile,
     event,
     state,
@@ -150,7 +151,7 @@ export class TelegramProcessor extends StreamProcessor<
     // it lands; the idempotency key derives from the source event, so the
     // replay dedupes instead of double-forwarding.
     blockProcessorWhile(async () => {
-      await this.stream.at(streamPath).append({
+      await appendTo(streamPath, {
         type: "events.iterate.com/telegram/webhook-received",
         idempotencyKey: `telegram:forward-webhook:${event.offset}`,
         payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },

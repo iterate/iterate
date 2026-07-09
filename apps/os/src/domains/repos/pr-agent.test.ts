@@ -197,11 +197,11 @@ function pullRequestBody(input: {
 function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
   return new RepoProcessor({
     stream,
+    path,
+    projectId: "prj_1",
     createRepoArtifact: async () => {
       throw new Error("not under test");
     },
-    path,
-    projectId: "prj_1",
   });
 }
 
@@ -410,7 +410,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
     );
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({
-      idempotencyKey: "repo-created:prj_1:/repos/config",
+      idempotencyKey: "repo/created",
       payload: { ...CREATED_ARTIFACT, path: "/repos/config", projectId: "prj_1" },
     });
 
@@ -490,7 +490,7 @@ describe("PrAgentProcessor (transcriber)", () => {
   it("transcribes the route fact into silent context naming the reply door", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream });
+    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(ROUTE_EVENT);
@@ -509,7 +509,7 @@ describe("PrAgentProcessor (transcriber)", () => {
   it("triggers a turn only for human comments that mention the agent", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream });
+    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -570,7 +570,7 @@ describe("PrAgentProcessor (transcriber)", () => {
   it("gates triggers on action, mention boundary, and PR-description mentions", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream });
+    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -631,7 +631,7 @@ describe("PrAgentProcessor (transcriber)", () => {
   it("a relink's fresh route fact produces a fresh, corrected route-context input", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream });
+    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(ROUTE_EVENT, {
