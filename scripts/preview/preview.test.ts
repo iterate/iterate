@@ -79,8 +79,9 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
-    // The preview lifecycle is one Depot CI workflow; a change to it triggers
-    // a full-fleet preview and must be mirrored in that file's own paths list.
+    // The preview deploy + e2e lifecycle is one Depot CI workflow (cleanup
+    // has its own, with mirrored paths); a change to it triggers a full-fleet
+    // preview and must be mirrored in that file's own paths list.
     expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
     // Dependency manifests can change every app's build output; a diff that
     // touches only them must select the full fleet, not "no apps affected"
