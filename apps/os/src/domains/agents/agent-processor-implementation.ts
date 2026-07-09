@@ -562,9 +562,9 @@ async function spillScriptResult(input: {
   text: string;
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
 }): Promise<string> {
-  // The agent's documented publish flow is `git.add({ filepath: "." })` —
-  // without this nested ignore every spill would ride along into workspace
-  // commits (isomorphic-git's add respects .gitignore).
+  // Workspace publishes commit every non-ignored local file — without this
+  // nested ignore every spill would ride along into workspace snapshot
+  // commits (the overlay publish honors .gitignore).
   await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
   const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
   await input.writeWorkspaceFile({ content: input.text, path });

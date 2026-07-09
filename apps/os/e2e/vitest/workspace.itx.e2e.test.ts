@@ -3,7 +3,7 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 describe("itx workspaces", () => {
-  test("a workspace clones the project repo, edits privately, and pushes its own branch", async () => {
+  test("the root workspace mirrors main; overlays fall through, shadow, delete, and publish", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -11,10 +11,11 @@ describe("itx workspaces", () => {
     });
     using project = itx.projects.create({ slug: `workspace-${crypto.randomUUID()}` });
 
-    // The workspace clones from the project repo, which seeds asynchronously
-    // after project creation — wait for the seed so the clone has a source.
-    // readFile THROWS (not null) until the repo artifact exists, so swallow
-    // errors while polling; cold slots can take a while to seed.
+    // The root workspace materializes from the project repo, which seeds
+    // asynchronously after project creation — wait for the seed so the
+    // materialization has a source. readFile THROWS (not null) until the repo
+    // artifact exists, so swallow errors while polling; cold slots can take a
+    // while to seed.
     await waitForCondition(
       async () => {
         const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
@@ -23,18 +24,39 @@ describe("itx workspaces", () => {
       { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
     );
 
+    // -- the root workspace: read-only, always latest main --------------------
+
+    using root = project.workspaces.get("/");
+    const rootPackageJson = await root.readFile("/package.json");
+    expect(rootPackageJson).not.toBeNull();
+    await expect(root.writeFile("/notes/nope.md", "x")).rejects.toThrow(/read-only/);
+
     const workspacePath = `/workspaces/agents/e2e-${crypto.randomUUID()}`;
     using workspace = project.workspaces.get(workspacePath);
 
-    // Reads block until the clone completes; content proves it is the
-    // project repo checkout, .git proves it is a real git working tree.
+    // -- fall-through reads: no clone, instantly the repo's latest main -------
+
+    // A brand-new overlay reads main through the root without any clone;
+    // content proves the fall-through, not a local copy.
     const seededPackageJson = await workspace.readFile("/package.json");
-    expect(seededPackageJson).not.toBeNull();
-    expect(await workspace.exists("/.git")).toBe(true);
+    expect(seededPackageJson).toBe(rootPackageJson);
     const rootEntries = await workspace.readDir("/");
     expect(rootEntries.map((entry) => entry.name)).toContain("worker.ts");
+    // The parent's .git is platform plumbing — masked from overlays.
+    expect(await workspace.exists("/.git")).toBe(false);
+    expect(rootEntries.map((entry) => entry.name)).not.toContain(".git");
 
-    // Write + exact-string edit are workspace-local (working tree only).
+    // A commit to main is visible through the overlay immediately (the repo's
+    // read-your-write boundary feeds the root's head check).
+    await project.repo.commitFiles({
+      message: "e2e: main moves under the overlay",
+      changes: [{ path: "docs/freshness.md", content: "fresh off main" }],
+    });
+    expect(await workspace.readFile("/docs/freshness.md")).toBe("fresh off main");
+
+    // -- local writes shadow; deletes whiteout -------------------------------
+
+    // Write + exact-string edit are workspace-local (private overlay).
     await workspace.writeFile("/notes/e2e.md", "workspace hello");
     const edited = await workspace.edit({
       path: "/notes/e2e.md",
@@ -43,37 +65,54 @@ describe("itx workspaces", () => {
     });
     expect(edited).toEqual({ occurrenceCount: 1, path: "/notes/e2e.md" });
     expect(await workspace.readFile("/notes/e2e.md")).toBe("workspace hello world");
-    // The seeded repo is untouched by workspace writes until a push.
+    // The seeded repo is untouched by workspace writes until a publish.
     expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();
 
-    // .git is readable but platform-managed: writes are rejected (this is
-    // also what keeps push credentials pinned to the clone-time remote).
+    // Editing a fallen-through file copies it up: private to this overlay.
+    await workspace.appendFile("/docs/freshness.md", " + overlay addendum");
+    expect(await workspace.readFile("/docs/freshness.md")).toBe(
+      "fresh off main + overlay addendum",
+    );
+    expect(await root.readFile("/docs/freshness.md")).toBe("fresh off main");
+
+    // Deleting a parent file leaves a whiteout: gone here, intact on main.
+    expect(await workspace.deleteFile("/worker.ts")).toBe(true);
+    expect(await workspace.readFile("/worker.ts")).toBeNull();
+    expect(await workspace.exists("/worker.ts")).toBe(false);
+    expect((await workspace.readDir("/")).map((entry) => entry.name)).not.toContain("worker.ts");
+    expect(await root.exists("/worker.ts")).toBe(true);
+
+    // .git stays reserved: writes are rejected (platform-managed name).
     await expect(workspace.writeFile("/.git/config", "[remote]")).rejects.toThrow(/not writable/);
     await expect(workspace.rm("/", { recursive: true })).rejects.toThrow(/not writable/);
 
-    // Ordinary git flow publishes to the workspace's own branch.
+    // -- publish: one snapshot commit on the workspace's own branch -----------
+
     const status = await workspace.git.status();
-    expect(status.map((entry) => entry.filepath)).toContain("notes/e2e.md");
-    // Unstaged changes alone are not committable — no empty commits.
-    await expect(workspace.git.commit({ message: "premature" })).rejects.toThrow(/Nothing staged/);
-    await workspace.git.add({ filepath: "." });
-    const commit = await workspace.git.commit({ message: "e2e workspace commit" });
-    expect(commit.oid).toMatch(/^[0-9a-f]{40}$/);
-    const pushed = await workspace.git.push();
-    expect(pushed).toEqual({ branch: workspacePath.slice(1), ok: true });
-    const [head] = await workspace.git.log({ depth: 1 });
-    expect(head?.oid).toBe(commit.oid);
+    expect(status).toContainEqual({ change: "added", path: "/notes/e2e.md" });
+    expect(status).toContainEqual({ change: "modified", path: "/docs/freshness.md" });
+    expect(status).toContainEqual({ change: "deleted", path: "/worker.ts" });
 
-    // The push went to the workspace branch, not main.
+    const published = await workspace.git.commit({ message: "e2e workspace publish" });
+    expect(published.branch).toBe(workspacePath.slice(1));
+    expect(published.commitOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(published.changedPaths).toContain("/notes/e2e.md");
+    expect(published.changedPaths).toContain("/worker.ts");
+    const [head] = await workspace.git.log({ limit: 1 });
+    expect(head?.oid).toBe(published.commitOid);
+
+    // The publish went to the workspace branch, not main.
     expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();
+    expect(await project.repo.readFile({ path: "worker.ts" })).not.toBeNull();
 
-    // A second workspace is a fully independent checkout.
+    // An empty overlay has nothing to publish.
     using other = project.workspaces.get(`/workspaces/agents/e2e-${crypto.randomUUID()}`);
     expect(await other.readFile("/notes/e2e.md")).toBeNull();
+    await expect(other.git.commit({ message: "premature" })).rejects.toThrow(/Nothing to publish/);
 
     // -- itx.files <-> workspace: the two file domains compose through bytes.
 
-    // files -> workspace: pull a stored file into the checkout. (files.put
+    // files -> workspace: pull a stored file into the overlay. (files.put
     // string data must be base64, so plain text goes in as encoded bytes.)
     await project.files
       .get("/e2e/transfer.txt")
@@ -84,18 +123,18 @@ describe("itx workspaces", () => {
     );
     expect(await workspace.readFile("/imported/transfer.txt")).toBe("born in itx.files");
 
-    // workspace -> files: publish a checkout file and mint a signed URL.
+    // workspace -> files: publish a fallen-through file and mint a signed URL.
     const packageJsonBytes = await workspace.readFileBytes("/package.json");
     expect(packageJsonBytes).not.toBeNull();
-    const published = await project.files.get("/e2e/package-from-workspace.json").put({
+    const publishedFile = await project.files.get("/e2e/package-from-workspace.json").put({
       contentType: "application/json",
       data: packageJsonBytes!,
     });
-    expect(published).toMatchObject({
+    expect(publishedFile).toMatchObject({
       contentType: "application/json",
       path: "/e2e/package-from-workspace.json",
     });
-    expect(published.size).toBeGreaterThan(0);
+    expect(publishedFile.size).toBeGreaterThan(0);
     expect(await project.files.get("/e2e/package-from-workspace.json").url()).toContain(
       "iterate-files--",
     );

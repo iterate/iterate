@@ -68,16 +68,16 @@ write them for the stranger who finds your capability there.
 const session = await itx.extend({ name: "review-run" }); // or { path: "/runs/42" }
 
 await session.provideCapability({
-  path: ["workspace", "gitPush"],
-  instructions: "gitPush waits for human approval; everything else is the real workspace.",
-  capability: approvalGate, // async (input) => { await approve(input); return itx.workspace.gitPush(input); }
+  path: ["workspace", "git", "commit"],
+  instructions: "publishing waits for human approval; everything else is the real workspace.",
+  capability: approvalGate, // async (input) => { await approve(input); return itx.workspace.git.commit(input); }
 });
 ```
 
 `extend()` mints a cheap child context — itself a stream coordinate: a path
 you choose, or a generated `/itx/<id>` catch-all (extending an existing path
 is get-or-create). The shadow lives at a PATH:
-`session.workspace.gitPush(...)` hits the gate, while
+`session.workspace.git.commit(...)` hits the gate, while
 `session.workspace.readFile(...)` misses the child's table and falls through
 the chain to the inherited workspace — prototype semantics, per method.
 `session.super` is the handle on the unshadowed parent — the middleware

@@ -804,16 +804,19 @@ export interface DynamicWorkerCollection {
 /**
  * Catalog of durable workspaces within one project.
  *
- * A workspace is addressed by its FULL path, which always lives under
- * \`/workspaces/\` — the same domain-prefix convention as \`/sandboxes/...\` and
- * \`/repos/...\`: an agent's workspace is the agent path under the prefix
- * (\`/workspaces/agents/...\`, exposed as \`itx.workspace\` in that agent's
- * scope), and standalone workspaces live under \`/workspaces/<anything>\`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * \`get("/")\` is the project's ROOT workspace: a read-only, always-fresh
+ * materialization of the project repo's main branch. Every other workspace is
+ * addressed by its FULL path under \`/workspaces/\` — the same domain-prefix
+ * convention as \`/sandboxes/...\` and \`/repos/...\`: an agent's workspace is
+ * the agent path under the prefix (\`/workspaces/agents/...\`, exposed as
+ * \`itx.workspace\` in that agent's scope), and standalone workspaces live
+ * under \`/workspaces/<anything>\`. Non-root workspaces are OVERLAYS over the
+ * root: writes stay local, missing reads fall through to latest main — no
+ * clone, usable instantly.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
   get(path: string): Workspace;
 }
 
@@ -1046,14 +1049,15 @@ export interface Secret {
 
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at \`/\` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. \`git\` publishes commits to the workspace's
- * own branch in the project repo (\`workspaces/<path>\`), never to main.
+ * Object (no container, always warm). The root workspace (\`"/"\`) is the
+ * read-only, always-fresh materialization of the project repo's main branch.
+ * Every other workspace is an OVERLAY over the root: reads see latest main
+ * until a local write shadows a path, writes and deletes stay private, and
+ * there is no clone — a new workspace is usable instantly. \`git\` publishes
+ * the overlay as snapshot commits on the workspace's own branch in the
+ * project repo (\`workspaces/<path>\`), never to main.
  *
- * Constraints: the \`.git\` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the \`git\` methods). Large files
+ * Constraints: the \`.git\` name is reserved (platform-managed). Large files
  * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
@@ -1067,11 +1071,14 @@ export interface Workspace {
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
   /**
-   * Wipe the checkout and re-clone the project repo on the next call — the
-   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
-   * commits survive on the workspace branch).
+   * Wipe the workspace back to pristine: the local layer and every deletion
+   * vanish, leaving a clean view of latest main (on the root, the next read
+   * re-materializes). Unpublished work is LOST (published snapshots survive
+   * on the workspace branch).
    */
   reset(): Promise<void>;
+  /** Every file path in the merged view (local layer over latest main), sorted. */
+  listAllFiles(): Promise<string[]>;
   writeFile(path: string, content: string): Promise<void>;
   writeFileBytes(path: string, data: Uint8Array): Promise<void>;
   appendFile(path: string, content: string): Promise<void>;
@@ -1143,30 +1150,25 @@ export interface CfVideosCapability {
 }
 
 /**
- * Git operations over a workspace's checkout, mirroring \`@cloudflare/shell\`'s
- * git command names so upstream docs apply. The workflow is ordinary git:
- * \`add({ filepath: "." })\` stages everything, \`commit({ message })\` commits,
- * \`push()\` publishes to the workspace's own branch in the project repo.
- * Push credentials are injected inside the workspace Durable Object (from the
- * project repo's \`gitAccess()\`), so no token ever rides this surface.
+ * The publish surface of an overlay workspace. There is no staging area and
+ * no separate push: \`commit({ message })\` snapshots the whole merged view
+ * (latest main + the local layer, minus deletions and \`.gitignore\`d paths)
+ * as ONE commit force-pushed to the workspace's own branch in the project
+ * repo. Push credentials are injected inside the workspace Durable Object
+ * (from the project repo's \`gitAccess()\`), so no token ever rides this
+ * surface.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
-  /** Staging state of every changed file. */
-  status(): Promise<WorkspaceGitStatusEntry[]>;
-  /** Stage a file (\`filepath: "."\` stages everything). */
-  add(input: { filepath: string }): Promise<{ added: string }>;
-  /** Stage a file deletion. */
-  rm(input: { filepath: string }): Promise<{ removed: string }>;
+  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
+  status(): Promise<WorkspaceChange[]>;
+  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
-  }): Promise<{ message: string; oid: string }>;
-  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]>;
-  /** Changed files in the working tree relative to HEAD. */
-  diff(): Promise<{ filepath: string; status: string }[]>;
-  /** Push the workspace branch to the project repo. */
-  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }>;
+  }): Promise<WorkspacePublishResult>;
+  /** Published snapshots of this workspace, newest first. */
+  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -2350,25 +2352,32 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** One file's staging state returned by \`WorkspaceGit.status\`. */
-export type WorkspaceGitStatusEntry = {
-  filepath: string;
-  /** HEAD status: 0=absent, 1=present. */
-  head: number;
-  /** Stage status: 0=absent, 1=identical, 2=modified, 3=added. */
-  stage: number;
-  /** Human-readable status (e.g. "modified", "added"). */
-  status: string;
-  /** Workdir status: 0=absent, 1=identical, 2=modified. */
-  workdir: number;
+/**
+ * One overlay change returned by \`WorkspaceGit.status\`: a local file that
+ * shadows a parent file ("modified"), one the parent does not have ("added"),
+ * or a parent file hidden by a local delete ("deleted"). "modified" means
+ * shadowed, not necessarily different — the overlay never diffs content.
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
 };
 
-/** One commit returned by \`WorkspaceGit.log\`. */
+/** Result of \`WorkspaceGit.commit\` — the published snapshot. */
+export type WorkspacePublishResult = {
+  branch: string;
+  /** Paths committed (after .gitignore filtering) plus deletions applied. */
+  changedPaths: string[];
+  commitOid: string;
+};
+
+/** One commit returned by \`WorkspaceGit.log\` (the workspace branch's history). */
 export type WorkspaceGitLogEntry = {
-  author: { email: string; name: string; timestamp: number };
+  author: { email: string; name: string };
   message: string;
   oid: string;
-  parent: string[];
+  /** Epoch milliseconds. */
+  timestamp: number;
 };
 
 export type CfImageTransformOptions = { [x: string]: unknown };
