@@ -15,6 +15,8 @@ import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
 import { mintProjectFileUrl } from "../files/project-files.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
@@ -34,7 +36,23 @@ export class AgentDurableObject extends DurableObject<Env> {
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
   });
-  readonly #agentProcessor = this.#processorHost.add((deps) => new AgentProcessor(deps));
+  readonly #agentProcessor = this.#processorHost.add(
+    (deps) =>
+      new AgentProcessor({
+        ...deps,
+        // Oversized script results spill into the agent's OWN workspace (the
+        // same checkout itx.workspace resolves to), so the model can page
+        // through the file instead of blowing its context window. The first
+        // write on a fresh workspace waits for the repo clone.
+        writeWorkspaceFile: ({ content, path }) =>
+          this.env.WORKSPACE.getByName(
+            DurableObjectNameCodec.stringify({
+              path: agentWorkspacePath(this.#name.path),
+              projectId: this.#name.projectId,
+            }),
+          ).writeFile(path, content),
+      }),
+  );
   readonly cloudflareAiProcessor = this.#processorHost.add(
     (deps) =>
       new CloudflareAiProcessor({

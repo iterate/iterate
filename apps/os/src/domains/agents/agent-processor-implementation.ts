@@ -11,7 +11,18 @@ import {
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
-export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
+/**
+ * Host-provided deps beyond the stream plumbing. `writeWorkspaceFile` writes
+ * one file into THIS agent's own workspace (the same checkout `itx.workspace`
+ * resolves to) so oversized script results can spill to a file the model pages
+ * through with plain JavaScript. Optional: without it (bare test hosts),
+ * oversized results fall back to inline truncation.
+ */
+export type AgentProcessorDeps = {
+  writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
+};
+
+export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
 
@@ -116,18 +127,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
         });
         return;
       case "events.iterate.com/capability-host/script-execution-completed": {
-        const content = scriptResultAgentInput(event);
-        if (content === null) return;
-        blockProcessorWhile(() =>
-          append({
+        // Rendering may spill an oversized result into the agent's workspace
+        // first (a durable write that can wait on the checkout's first-use
+        // clone), so the whole render-then-append runs inside the blocking
+        // section — the input must not land before the file it references.
+        blockProcessorWhile(async () => {
+          const content = await scriptResultAgentInput(event, this.deps.writeWorkspaceFile);
+          if (content === null) return;
+          await append({
             type: "events.iterate.com/agent/input-added",
             idempotencyKey: `agent/render-script-result@${event.offset}`,
             payload: {
               content,
               llmRequestPolicy: { behaviour: "after-current-request" },
             },
-          }),
-        );
+          });
+        });
         return;
       }
       // A failed request must never brick the stream: the error becomes a
@@ -477,19 +492,44 @@ const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 //   e.g. Slack bang commands — journal on the same stream);
 // - a script that returned undefined and did not throw produces nothing.
 //   Returning no value is how an agent ends its turn.
-function scriptResultAgentInput(
+async function scriptResultAgentInput(
   event: Extract<
     AgentConsumedEvent,
     { type: "events.iterate.com/capability-host/script-execution-completed" }
   >,
-): string | null {
+  writeWorkspaceFile: AgentProcessorDeps["writeWorkspaceFile"],
+): Promise<string | null> {
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
   if (payload.error !== undefined) {
     return `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\``;
   }
   if (payload.result === undefined) return null;
-  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(stringifyScriptResult(payload.result))}\n\`\`\``;
+  const text = stringifyScriptResult(payload.result);
+  if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
+    try {
+      const spill = await spillScriptResult({
+        executionId: payload.executionId,
+        text,
+        writeWorkspaceFile,
+      });
+      return [
+        "Your script returned:",
+        "```json",
+        text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT),
+        "```",
+        spillNotice({ spill, totalChars: text.length }),
+      ].join("\n");
+    } catch (error) {
+      // Spilling is best effort: a workspace that cannot clone or write must
+      // not lose the result entirely — fall through to inline truncation.
+      console.error("[agent] failed to spill oversized script result to workspace", {
+        error,
+        executionId: payload.executionId,
+      });
+    }
+  }
+  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(text)}\n\`\`\``;
 }
 
 function stringifyScriptResult(result: unknown): string {
@@ -505,6 +545,97 @@ const SCRIPT_RESULT_HISTORY_LIMIT = 30_000;
 function truncateScriptResult(text: string): string {
   if (text.length <= SCRIPT_RESULT_HISTORY_LIMIT) return text;
   return `${text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
+}
+
+/**
+ * Where oversized script results land inside the agent's workspace checkout:
+ * scratch files for the model to page through with itx.workspace, never meant
+ * to be committed. One file per execution, so replays overwrite idempotently.
+ */
+const SCRIPT_RESULT_SPILL_DIR = "/script-results";
+
+/**
+ * A spilled file must stay under the workspace per-file cap (1.5MB of UTF-8 —
+ * see MAX_FILE_BYTES in workspace-durable-object.ts) with headroom. A single
+ * file is used when the whole text encodes under this; otherwise the text
+ * splits into parts of SCRIPT_RESULT_SPILL_PART_CHARS chars, sized so even
+ * all-3-byte chars cannot overflow a file.
+ */
+const SCRIPT_RESULT_SPILL_FILE_BYTES = 1_400_000;
+const SCRIPT_RESULT_SPILL_PART_CHARS = 450_000;
+
+/** Beyond this many parts (~9M chars) the tail is dropped, and the notice says so. */
+const SCRIPT_RESULT_SPILL_MAX_PARTS = 20;
+
+/** What a spill wrote: the workspace paths and how much of the text they hold. */
+type ScriptResultSpill = { paths: string[]; savedChars: number };
+
+async function spillScriptResult(input: {
+  executionId: string;
+  text: string;
+  writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
+}): Promise<ScriptResultSpill> {
+  const base = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+  // UTF-8 bytes ≥ UTF-16 code units, so a text already over the byte cap in
+  // chars skips the (allocating) encode check entirely.
+  if (
+    input.text.length <= SCRIPT_RESULT_SPILL_FILE_BYTES &&
+    new TextEncoder().encode(input.text).byteLength <= SCRIPT_RESULT_SPILL_FILE_BYTES
+  ) {
+    const path = `${base}.json`;
+    await input.writeWorkspaceFile({ content: input.text, path });
+    return { paths: [path], savedChars: input.text.length };
+  }
+  const paths: string[] = [];
+  let savedChars = 0;
+  while (savedChars < input.text.length && paths.length < SCRIPT_RESULT_SPILL_MAX_PARTS) {
+    let end = Math.min(savedChars + SCRIPT_RESULT_SPILL_PART_CHARS, input.text.length);
+    // Never split a surrogate pair across two files.
+    const lastCode = input.text.charCodeAt(end - 1);
+    if (end < input.text.length && lastCode >= 0xd800 && lastCode <= 0xdbff) end += 1;
+    const path = `${base}.part${paths.length + 1}.json`;
+    await input.writeWorkspaceFile({ content: input.text.slice(savedChars, end), path });
+    paths.push(path);
+    savedChars = end;
+  }
+  return { paths, savedChars };
+}
+
+/**
+ * The model-facing text after a truncated preview: where the full result
+ * lives and a concrete next-script recipe for paging it, so the model reads
+ * the file with plain JavaScript instead of re-running the expensive fetch.
+ */
+function spillNotice(input: { spill: ScriptResultSpill; totalChars: number }): string {
+  const { paths, savedChars } = input.spill;
+  const dropped =
+    savedChars < input.totalChars
+      ? ` Only the first ${savedChars.toLocaleString("en-US")} chars fit the spill cap — the tail was dropped, so the saved text is NOT complete JSON: search it as text (regex/indexOf) instead of JSON.parse, and return less next time (slice arrays, pick fields).`
+      : "";
+  if (paths.length === 1) {
+    return [
+      `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(paths[0])} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
+      "```js",
+      "async (itx) => {",
+      `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(paths[0])}));`,
+      "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+      "}",
+      "```" + dropped,
+    ].join("\n");
+  }
+  return [
+    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace, split across ${paths.length} files (workspace files cap at 1.5MB):`,
+    ...paths.map((path) => `- ${JSON.stringify(path)}`),
+    "Don't re-fetch; read and concatenate them with plain JavaScript in your next script, e.g.:",
+    "```js",
+    "async (itx) => {",
+    `  const paths = ${JSON.stringify(paths)};`,
+    "  const parts = await Promise.all(paths.map((p) => itx.workspace.readFile(p)));",
+    '  const data = JSON.parse(parts.join(""));',
+    "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+    "}",
+    "```" + dropped,
+  ].join("\n");
 }
 
 function extractAsyncJsSnippet(content: string): string | null {
