@@ -27,12 +27,6 @@ const RECENT_WINDOW_MS = 5 * 60_000;
 // lets quiet streams age out of the recent window without a reopen.
 const CLOCK_TICK_MS = 5_000;
 
-// How long a row stays highlighted after its stream was touched.
-const FLASH_MS = 1_200;
-
-// Stable empty map so clearing flashes on close never causes a render loop.
-const NO_FLASHES: ReadonlyMap<string, number> = new Map();
-
 // The destination input prefills with the parent of the current stream, so the
 // default action creates a *sibling* (type a leaf, hit Create). Keep typing
 // past another "/" to go deeper, or edit the prefix to land anywhere.
@@ -104,8 +98,8 @@ function MatchedStreamPath({ path, query }: { path: string; query: string }) {
  *
  * The list wears its liveness: rows are newest-first (labelled), every row shows
  * how long ago its stream was last active (ticking while open), and a stream
- * touched while you watch FLASHES as it jumps — reordering reads as activity,
- * not as rows teleporting.
+ * touched while you watch FLASHES as it jumps (a keyed remount replays a
+ * one-shot CSS fade) — reordering reads as activity, not as rows teleporting.
  *
  * The dialog takes a FIXED two-thirds of the viewport; the list/tree scrolls
  * inside it, so navigating never resizes or re-centers the dialog.
@@ -171,49 +165,6 @@ export function StreamSwitcherDialog({
     { address: { projectId: scope }, enabled: liveIndex },
   );
   const query = destination.trim().replace(/^\/+/, "").toLowerCase();
-
-  // FLASH freshly-touched streams: the list is sorted by last activity, so a
-  // touched stream JUMPS — the flash is what makes that jump legible instead of
-  // rows silently teleporting. Each live push is diffed against the previous
-  // one's activity times; changed (or brand-new) paths glow for FLASH_MS.
-  // The baseline resets on open so the first paint never flashes everything.
-  const [flashUntil, setFlashUntil] = useState<ReadonlyMap<string, number>>(NO_FLASHES);
-  const lastSeenActivityRef = useRef<Record<string, string> | null>(null);
-  useEffect(() => {
-    if (!open || streamsIndex.value === undefined) {
-      lastSeenActivityRef.current = null;
-      setFlashUntil(NO_FLASHES);
-      return;
-    }
-    const rows = Object.values(streamsIndex.value);
-    const baseline = lastSeenActivityRef.current;
-    lastSeenActivityRef.current = Object.fromEntries(
-      rows.map((row) => [row.path, row.lastActivityAt]),
-    );
-    if (baseline === null) return; // first paint after open: nothing "changed" yet
-    const touchedPaths = rows
-      .filter((row) => baseline[row.path] !== row.lastActivityAt) // new rows flash too
-      .map((row) => row.path);
-    if (touchedPaths.length === 0) return;
-    const deadline = Date.now() + FLASH_MS;
-    setFlashUntil((current) => {
-      const next = new Map(current);
-      for (const path of touchedPaths) next.set(path, deadline);
-      return next;
-    });
-    // Deliberately NOT cleaned up: each batch's prune must fire even when the
-    // next push re-runs this effect first — a cleanup would keep cancelling
-    // the prune under a steady push stream and expired flashes would glow
-    // forever. Prunes are idempotent (drop only past-deadline entries), and a
-    // prune landing after close/unmount is a no-op.
-    setTimeout(() => {
-      setFlashUntil((current) => {
-        const cutoff = Date.now();
-        const next = new Map([...current].filter(([, until]) => until > cutoff));
-        return next.size === current.size ? current : next;
-      });
-    }, FLASH_MS + 50);
-  }, [open, streamsIndex.value]);
   // Default view (untouched): streams active in the last few minutes — ⌘K, glance,
   // jump. Start typing and it becomes a substring search over the whole index.
   // Either way the list is most-recent-first, and an empty result falls through to
@@ -297,7 +248,12 @@ export function StreamSwitcherDialog({
               </li>
               {matches.map((row, index) => (
                 <li key={row.path} role="presentation">
+                  {/* Keyed by activity: a touch remounts the button, replaying
+                      the one-shot stream-flash fade (see styles.css) — pure
+                      CSS, no flash bookkeeping. Rows also flash once on open,
+                      which reads as "this list is fresh". */}
                   <button
+                    key={row.lastActivityAt}
                     ref={index === selected ? selectedRef : undefined}
                     id={`stream-switcher-option-${index}`}
                     type="button"
@@ -306,13 +262,8 @@ export function StreamSwitcherDialog({
                     title={row.path}
                     aria-selected={index === selected}
                     data-selected={index === selected || undefined}
-                    data-flashing={flashUntil.has(row.path) || undefined}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-700 ${
-                      index === selected
-                        ? "bg-accent"
-                        : flashUntil.has(row.path)
-                          ? "bg-yellow-200/60 dark:bg-yellow-500/20"
-                          : "hover:bg-accent/70"
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left animate-[stream-flash_1.2s_ease-out] ${
+                      index === selected ? "bg-accent" : "hover:bg-accent/70"
                     }`}
                     onMouseMove={() => setSelectedIndex(index)}
                     onClick={() => openStream(row.path)}
