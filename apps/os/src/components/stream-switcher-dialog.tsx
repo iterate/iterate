@@ -9,10 +9,12 @@ import {
 } from "@iterate-com/ui/components/dialog";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
+import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
 // segments separated by single slashes, no trailing slash.
@@ -62,6 +64,23 @@ export function StreamSwitcherDialog({
   const [destination, setDestination] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // The whole streams index, live, in ONE subscription — so typing filters it in
+  // memory (most-recently-active first) instead of waking a Durable Object per
+  // node. That is the "⌘K, type, see" path; an empty query falls back to the
+  // browsable tree. (In a non-project context the index is empty → tree.)
+  const streamsIndex = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.streamsIndex,
+  );
+  const query = destination.trim().replace(/^\/+/, "").toLowerCase();
+  const matches =
+    query === "" || streamsIndex.value === undefined
+      ? []
+      : Object.values(streamsIndex.value)
+          .filter((row) => row.path.toLowerCase().includes(query))
+          .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
+          .slice(0, 50);
+
   // Opening seeds the path field for a sibling with the cursor placed after
   // the trailing slash, ready for the leaf. (The tree seeds its own expansion
   // from currentPath; Radix unmounts the content on close, so each open
@@ -94,14 +113,37 @@ export function StreamSwitcherDialog({
           <p className="font-mono text-xs text-muted-foreground">{currentPath}</p>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <StreamTree
-            // Fresh expansion state (ancestors of the current stream) per open.
-            key={`${scope}:${currentPath}`}
-            currentPath={currentPath}
-            onOpenPath={openStream}
-            scope={scope}
-            source={navigator.source}
-          />
+          {matches.length > 0 ? (
+            <ul className="flex flex-col gap-0.5" data-testid="stream-switcher-matches">
+              {matches.map((row) => (
+                <li key={row.path}>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/70"
+                    onClick={() => openStream(row.path)}
+                  >
+                    <EventsStreamPathLabel
+                      path={row.path}
+                      label={row.path.split("/").at(-1) ?? row.path}
+                      className="min-w-0"
+                    />
+                    <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                      {row.eventCount}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <StreamTree
+              // Fresh expansion state (ancestors of the current stream) per open.
+              key={`${scope}:${currentPath}`}
+              currentPath={currentPath}
+              onOpenPath={openStream}
+              scope={scope}
+              source={navigator.source}
+            />
+          )}
         </div>
         <div className="shrink-0 border-t pt-3">
           <form
