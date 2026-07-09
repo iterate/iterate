@@ -179,8 +179,8 @@ export interface Project {
    * per-event work (policy, metrics, indexing feeds) can join the same
    * ordered, checkpointed delivery — with one rule when it does: platform
    * steps must be idempotent and must never throw; only the worker delegation
-   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
-   * such steps until a real second consumer earns its place.
+   * may reject into the spine's retry/park machinery. The streams index is the
+   * first such step (see `#indexStreamActivity`).
    *
    * Same trust model as `worker.processEventBatch` itself: any project
    * principal may call it.
@@ -1386,9 +1386,10 @@ export type ProjectProcessorState = {
 export type ProjectLiveState = {
   /** Event-sourced project facts, folded by the project processor — one source among several. */
   reduced: ProjectProcessorState;
+  /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
+  streamsIndex: Record<string, StreamIndexRow>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number; lastActor: string | null };
-  // streamsIndex arrives with StreamDatabase — a top-level PEER, never nested under the processor fold.
 };
 
 /** Capability recipe accepted by `provideCapability`. */
@@ -1557,6 +1558,19 @@ export type LiveUpdate<State = unknown> =
 export type LiveStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
+};
+
+/** One row of the streams index: a stream and its activity, for the ⌘K list and recency sort. */
+export type StreamIndexRow = {
+  path: string;
+  /** First time we saw the stream (its earliest observed activity). */
+  createdAt: string;
+  /** Most recent activity — the recency sort key. Monotonic (never moves backwards). */
+  lastActivityAt: string;
+  /** Type of the most recent event. */
+  lastType: string;
+  /** How many events we've observed on the stream. */
+  eventCount: number;
 };
 
 export type CfMarkdownConversionArgs =

@@ -4099,14 +4099,36 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * per-event work (policy, metrics, indexing feeds) can join the same
    * ordered, checkpointed delivery — with one rule when it does: platform
    * steps must be idempotent and must never throw; only the worker delegation
-   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
-   * such steps until a real second consumer earns its place.
+   * may reject into the spine's retry/park machinery. The streams index is the
+   * first such step (see `#indexStreamActivity`).
    *
    * Same trust model as `worker.processEventBatch` itself: any project
    * principal may call it.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    this.#indexStreamActivity(batch);
     return this.worker.processEventBatch(batch);
+  }
+
+  /**
+   * Platform step: record the batch's stream in the project's streams index (a
+   * peer slice of `itx.live` — see StreamDatabase). Idempotent (`touch` only
+   * advances recency) and MUST NOT throw — a fire-and-forget dial into the
+   * project DO whose failure the next batch self-heals. Only the worker
+   * delegation above may reject into the spine's retry.
+   */
+  #indexStreamActivity(batch: StreamPushEventBatch): void {
+    const last = batch.events.at(-1);
+    if (last === undefined) return;
+    void Promise.resolve(
+      (
+        this.durableObjectStub as unknown as {
+          touchStreamActivity(path: string, at: string, type: string, count: number): Promise<void>;
+        }
+      ).touchStreamActivity(batch.path, last.createdAt, last.type, batch.events.length),
+    ).catch(() => {
+      // Recency self-heals from the next batch; never surface into worker delivery.
+    });
   }
 
   /**

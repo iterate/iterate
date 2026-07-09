@@ -48,6 +48,10 @@ function ProjectReactivityContent() {
     (itx) => itx.live,
     (state) => state.reduced,
   );
+  const streamsIndex = useLiveState(
+    (itx) => itx.live,
+    (state) => state.streamsIndex,
+  );
   const events = useReactivityTestStream();
 
   const [incrementing, setIncrementing] = useState(false);
@@ -72,7 +76,8 @@ function ProjectReactivityContent() {
   };
 
   const created = reduced.value === undefined ? "unknown" : String(reduced.value.created);
-  const streamCount = reduced.value === undefined ? "-" : String(reduced.value.streams.length);
+  const indexedCount =
+    streamsIndex.value === undefined ? "-" : String(Object.keys(streamsIndex.value).length);
 
   return (
     <section className="min-h-0 flex-1 overflow-auto p-4">
@@ -129,10 +134,10 @@ function ProjectReactivityContent() {
           {/* PROJECT STATE: the processor's fold, one slice of itx.live. */}
           <MetricPanel
             icon={<ActivityIcon aria-hidden="true" data-icon="icon" />}
-            label="Project streams"
+            label="Indexed streams"
             detail={`created: ${created}`}
-            value={streamCount}
-            testId="reactivity-stream-count"
+            value={indexedCount}
+            testId="reactivity-index-count"
           />
         </div>
 
@@ -164,7 +169,11 @@ function ProjectReactivityContent() {
 
         <JsonPanel
           title="itx.live (project live state)"
-          value={{ reduced: reduced.value, liveDemo: counter.value }}
+          value={{
+            reduced: reduced.value,
+            streamsIndex: streamsIndex.value,
+            liveDemo: counter.value,
+          }}
         />
       </div>
     </section>

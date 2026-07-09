@@ -33,6 +33,7 @@ import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
+import { StreamDatabase } from "./stream-database.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
@@ -43,6 +44,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // shared-engine case — and dogfoods the `getLiveState` fold the streams index
   // will use.
   #liveDemo: { count: number; lastActor: string | null } = { count: 0, lastActor: null };
+  // The project's streams index — a materialized view in the DO's own SQLite,
+  // touched from the processEventBatch fan-in (see touchStreamActivity).
+  readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -53,12 +57,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
     // `itx.live` = the project's composite live state (see ProjectLiveState):
-    // the processor's fold is ONE peer slice, alongside the demo counter (and,
-    // soon, the streams index the DO keeps in SQLite).
-    getLiveState: () => ({
-      reduced: this.#projectProcessor.currentState,
-      liveDemo: this.#liveDemo,
-    }),
+    // the processor's fold is ONE peer slice, alongside the streams index the DO
+    // keeps in SQLite and the demo counter.
+    getLiveState: () => {
+      const reduced = this.#projectProcessor.currentState;
+      this.#streamDatabase.ensureSeeded(reduced.streams);
+      return { reduced, streamsIndex: this.#streamDatabase.all(), liveDemo: this.#liveDemo };
+    },
   });
   readonly #projectProcessor = this.#processorHost.add(
     (deps) =>
@@ -184,6 +189,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
   incrementLiveDemo(actor?: string): void {
     this.#liveDemo = { count: this.#liveDemo.count + 1, lastActor: actor ?? null };
     this.#processorHost.live.assign({ liveDemo: this.#liveDemo });
+  }
+
+  /**
+   * Record stream activity in the index and push it to `itx.live`. Called from
+   * the project's `processEventBatch` fan-in (every project-scoped stream's
+   * events flow through it). Idempotent — `StreamDatabase.touch` only advances
+   * recency — so a redelivered batch is harmless.
+   */
+  touchStreamActivity(path: string, at: string, type: string, count: number): void {
+    this.#streamDatabase.touch(path, at, type, count);
+    this.#processorHost.live.assign({ streamsIndex: this.#streamDatabase.all() });
   }
 
   async fetch(request: Request): Promise<Response> {

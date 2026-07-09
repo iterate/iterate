@@ -81,3 +81,36 @@ test("itx.liveDemo.ticker (stateless, no Durable Object) advances over time", as
   expect(track.patchCount()).toBeGreaterThan(0); // it advanced via diffs, not re-snapshots
   expect(await subscription.ping()).toBe(true);
 });
+
+test("itx.live indexes stream activity as a peer slice", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({ slug: `live-index-${RUN_SUFFIX}-${marker}` });
+  await project.__describe();
+
+  const track = trackLiveState<ProjectLiveState>();
+  using subscription = await project.live.subscribe(track.onUpdate);
+  await waitForCondition(() => track.state() !== undefined, {
+    description: "the initial snapshot",
+  });
+
+  // Appending to a new stream flows through processEventBatch → the streams
+  // index (a peer slice of itx.live, nothing to do with the processor fold).
+  const streamPath = `/e2e/live-index/${marker}`;
+  await project.streams.get(streamPath).append({
+    type: "events.iterate.test/live-index",
+    payload: { marker },
+  });
+  await waitForCondition(() => track.state()?.streamsIndex?.[streamPath] !== undefined, {
+    description: () =>
+      `the new stream in the index (have ${Object.keys(track.state()?.streamsIndex ?? {}).length})`,
+    timeoutMs: 30_000,
+  });
+  expect(track.state()!.streamsIndex[streamPath]).toMatchObject({
+    path: streamPath,
+    eventCount: expect.any(Number),
+    lastActivityAt: expect.any(String),
+  });
+  expect(await subscription.ping()).toBe(true);
+});

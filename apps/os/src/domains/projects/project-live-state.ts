@@ -1,4 +1,5 @@
 import type { ProjectProcessorState } from "./project-processor-contract.ts";
+import type { StreamIndexRow } from "./stream-database.ts";
 
 /**
  * The project's LIVE state — what `itx.live` exposes and the dashboard renders.
@@ -17,7 +18,8 @@ import type { ProjectProcessorState } from "./project-processor-contract.ts";
 export type ProjectLiveState = {
   /** Event-sourced project facts, folded by the project processor — one source among several. */
   reduced: ProjectProcessorState;
+  /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
+  streamsIndex: Record<string, StreamIndexRow>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number; lastActor: string | null };
-  // streamsIndex arrives with StreamDatabase — a top-level PEER, never nested under the processor fold.
 };
