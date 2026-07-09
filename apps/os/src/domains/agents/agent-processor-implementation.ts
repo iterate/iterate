@@ -400,17 +400,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         role: message.role,
         content: flattenMessageToText(message),
       }));
-      const raw = await this.deps.ai.run(model, { messages, stream: true });
-      const completion =
-        raw instanceof ReadableStream
-          ? await this.#consumeStream({ body: raw, llmRequestId })
-          : {
-              text: extractAssistantText(raw),
-              rawResponse: jsonCompatible(raw),
-              usage: extractUsage(raw),
-            };
+      // Wall-clock cap so a hung binding cannot hold #liveLlmExecutions until
+      // the 30-minute agent backstop — same horizon as request intent expiry.
+      const completion = await this.#withLlmAttemptDeadline(
+        (async () => {
+          const raw = await this.deps.ai!.run(model, { messages, stream: true });
+          return raw instanceof ReadableStream
+            ? await this.#consumeStream({ body: raw, llmRequestId })
+            : {
+                text: extractAssistantText(raw),
+                rawResponse: jsonCompatible(raw),
+                usage: extractUsage(raw),
+              };
+        })(),
+      );
 
-      const durationMs = Date.now() - startedAt;
+      const durationMs = this.#now() - startedAt;
       const result = {
         status: "success" as const,
         rawResponse: completion.rawResponse,
@@ -435,7 +440,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         type: "events.iterate.com/agent/llm-request-completed",
         idempotencyKey: `agent/llm-request-completed@${llmRequestId}`,
         payload: {
-          durationMs: Date.now() - startedAt,
+          durationMs: this.#now() - startedAt,
           llmRequestId,
           result: {
             status: "failure",
@@ -443,6 +448,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           },
         },
       });
+    }
+  }
+
+  /** Caps one AI.run + stream drain so a wedged binding releases the live set. */
+  async #withLlmAttemptDeadline<T>(work: Promise<T>): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_resolve, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                `LLM attempt timed out after ${DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS / 60_000} minutes.`,
+              ),
+            );
+          }, DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
 
