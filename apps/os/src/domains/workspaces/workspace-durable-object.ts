@@ -152,15 +152,26 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
         return null;
       });
     if (head === null || this.ctx.storage.kv.get(ROOT_HEAD_KEY) === head.commitOid) return;
-    this.#rootRefresh ??= this.#materializeRoot().finally(() => {
+    this.#rootRefresh ??= this.#materializeRoot(head.commitOid).finally(() => {
       this.#rootRefresh = undefined;
     });
     await this.#rootRefresh;
   }
 
-  async #materializeRoot(): Promise<void> {
+  /**
+   * Wipe and re-clone main, retrying until the clone observes AT LEAST
+   * `expectedHead`. The Artifacts remote is eventually consistent — a clone
+   * right after a push can serve the previous HEAD (the same trap the Repo
+   * DO's own clone lanes guard with `repo-pushed-head`), and the head cursor
+   * that triggered this refresh comes from the commit's read-your-write
+   * boundary, so serving anything older would hand a post-commit reader
+   * pre-commit content. A clone that is merely DIFFERENT after the retries
+   * (main moved again mid-refresh) is recorded as-is — the next read's
+   * cursor comparison repairs the lag.
+   */
+  async #materializeRoot(expectedHead: string): Promise<void> {
     const repo = await this.#projectRepoStub().gitAccess();
-    for (let attempt = 1; ; attempt++) {
+    for (let attempt = 1, staleAttempt = 1; ; ) {
       // A previous attempt may have died mid-checkout; start from empty so
       // isomorphic-git never sees a half-written .git.
       await this.#wipeFilesystem();
@@ -173,18 +184,26 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
           username: "x",
           password: repo.token,
         });
-        break;
       } catch (error) {
         if (attempt >= CLONE_ATTEMPTS) throw error;
         console.warn(`root workspace clone attempt ${attempt} failed, retrying: ${String(error)}`);
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        attempt++;
+        continue;
       }
+      const [head] = await this.#git.log({ depth: 1 });
+      if (!head) throw new Error("Root workspace clone has no commits.");
+      if (head.oid !== expectedHead && staleAttempt <= 5) {
+        console.warn(
+          `root workspace clone is behind the head cursor (saw ${head.oid}, expected ${expectedHead}); retry ${staleAttempt}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500 * staleAttempt));
+        staleAttempt++;
+        continue;
+      }
+      this.ctx.storage.kv.put(ROOT_HEAD_KEY, head.oid);
+      return;
     }
-    const [head] = await this.#git.log({ depth: 1 });
-    if (!head) throw new Error("Root workspace clone has no commits.");
-    // Record what was ACTUALLY cloned (main may have moved past the head that
-    // triggered this refresh) — the next read's comparison repairs any lag.
-    this.ctx.storage.kv.put(ROOT_HEAD_KEY, head.oid);
   }
 
   // -- OVERLAY mode: local layer + fall-through ------------------------------
