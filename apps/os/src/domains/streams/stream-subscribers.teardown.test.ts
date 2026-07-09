@@ -116,7 +116,10 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, limit }) =>
-        log.filter((event) => event.offset > afterOffset).slice(0, limit),
+        log
+          .filter((event) => event.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
       coreState: () =>
         CoreProcessorContract.stateSchema.parse({
           projectId: "p1",

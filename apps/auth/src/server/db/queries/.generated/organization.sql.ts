@@ -354,6 +354,7 @@ SELECT id
 FROM invitation
 WHERE organizationId = ?
   AND email = ?
+  AND status = 'pending'
 LIMIT 1;
 `.trim();
 const getInviteByOrganizationAndEmailQuery = (params: getInviteByOrganizationAndEmail.Params) => ({
@@ -456,6 +457,7 @@ FROM invitation i
 JOIN organization o ON o.id = i.organizationId
 JOIN user u ON u.id = i.inviterId
 WHERE i.organizationId = ?
+  AND i.status = 'pending'
 ORDER BY i.createdAt DESC,
   i.email ASC;
 `.trim();

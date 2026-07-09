@@ -173,11 +173,10 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(tree.paths).toEqual(
     expect.arrayContaining([
       "worker.ts",
+      "sdk.ts",
       "apps/hello/worker.ts",
       "apps/counter/worker.ts",
       "package.json",
-      "sdk.ts",
-      "slack.config.ts",
     ]),
   );
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();

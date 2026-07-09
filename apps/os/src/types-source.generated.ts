@@ -824,7 +824,8 @@ export interface WorkspaceCollection {
  * workers should be typed by callers through \`workers.get<T>(ref)\`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * \`invokeCapability\` in userspace and every dotted call — including any
- * nested \`slack.*\` Web API family — is one RPC.
+ * nested surface a userland getter hands back (the seeded \`slack\` and
+ * \`waitrose\` getters, an SDK client you add) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -1192,8 +1193,8 @@ export interface WorkspaceGit {
  * the host — worker code never picks its own project.
  *
  * @public — not reachable from the /api entrypoint walk; published for
- * project-worker code, which imports it from the project repo's sdk.ts copy
- * of this contract.
+ * project-worker code, which imports it from its \`iterate\` devDependency's
+ * \`iterate/sdk\` export (re-exported by the seeded sdk.ts).
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
@@ -1497,7 +1498,12 @@ export type AgentProcessorState = {
   llmProviderConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number }
+    | {
+        phase: "requested";
+        llmRequestId: number;
+        requestedAt?: number | undefined;
+        provider?: "cloudflare-ai" | "openai-ws" | undefined;
+      }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -1861,6 +1867,7 @@ export type GithubSyncResult = {
  */
 export type RepoProcessorState = {
   artifactName: string | null;
+  createRequested: boolean;
   created: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;

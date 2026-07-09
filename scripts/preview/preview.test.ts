@@ -17,7 +17,9 @@ const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
   claimEnvironmentConfigLease,
+  describeForcePushCompareHazard,
   evaluateCloudflareZoneCheck,
+  explainPreviewTestSkip,
   holderPullRequestUrl,
   reassertEnvironmentConfigLease,
   resolveSlotWaitTotalMs,
@@ -30,6 +32,7 @@ const {
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
   syncPreviewInventory,
@@ -76,8 +79,9 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
-    // The preview lifecycle is one Depot CI workflow; a change to it triggers
-    // a full-fleet preview and must be mirrored in that file's own paths list.
+    // The preview deploy + e2e lifecycle is one Depot CI workflow (cleanup
+    // has its own, with mirrored paths); a change to it triggers a full-fleet
+    // preview and must be mirrored in that file's own paths list.
     expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
     // Dependency manifests can change every app's build output; a diff that
     // touches only them must select the full fleet, not "no apps affected"
@@ -389,6 +393,246 @@ describe("preview retry selection", () => {
         pullRequestHeadSha: "current-head",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("preview deploy selection", () => {
+  const currentHead = "current-head";
+  const selectionInput = {
+    githubToken: "test-token",
+    pullRequestBaseSha: "base-sha",
+    pullRequestHeadSha: currentHead,
+    pullRequestNumber: 1793,
+    repositoryFullName: "iterate/iterate",
+  };
+
+  function recordedApp(
+    slug: string,
+    displayName: string,
+    overrides: Partial<CloudflarePreviewAppEntry> = {},
+  ) {
+    return CloudflarePreviewAppEntry.parse({
+      appDisplayName: displayName,
+      appSlug: slug,
+      headSha: currentHead,
+      publicUrl: `https://${slug}.iterate-preview-7.com`,
+      shortSha: "current",
+      status: "deployed",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      ...overrides,
+    });
+  }
+
+  const everythingServing = async () => ({ ok: true, detail: "HTTP 200" });
+  const compareMustNotRun = async (): Promise<never> => {
+    throw new Error("compare must not be called for an unchanged head");
+  };
+
+  it("selects nothing when the head is unchanged, every app is green, and every app is serving", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: { os: recordedApp("os", "OS"), auth: recordedApp("auth", "Auth") },
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: compareMustNotRun,
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps).toEqual([]);
+  });
+
+  it("self-heals an erased slot: a parked recorded-green app is redeployed with its dependencies", async () => {
+    // Live incident (PR #1793 on preview-7, 2026-07-09): e2e failed with
+    // "no such column: epoch", the documented remedy `erase-data` parked the
+    // os worker (503) and wiped auth's D1 (OAuth clients), but os and auth
+    // were recorded green — so the retry redeployed only the failed app and
+    // every sign-in-dependent spec then failed on a slot with no OAuth
+    // clients until auth was redeployed by hand. The probe catches the parked
+    // os worker, and dependency expansion brings auth (which re-seeds its
+    // OAuth clients on deploy) along.
+    const probedUrls: string[] = [];
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {
+          os: recordedApp("os", "OS"),
+          auth: recordedApp("auth", "Auth"),
+          "streams-example-app": recordedApp("streams-example-app", "Streams Example App", {
+            status: "tests-failed",
+          }),
+        },
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: compareMustNotRun,
+      probeAppServing: async (url) => {
+        probedUrls.push(url.toString());
+        return url.hostname.startsWith("os.")
+          ? { ok: false, detail: "HTTP 503" }
+          : { ok: true, detail: "HTTP 200" };
+      },
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "streams-example-app"]);
+    // Only the green claims get probed — the failed app is already selected
+    // for retry — and each app is probed on its own readiness path.
+    expect(probedUrls).toEqual([
+      "https://os.iterate-preview-7.com/api/health",
+      "https://auth.iterate-preview-7.com/api/auth/ok",
+    ]);
+  });
+
+  it("retries failed apps even when the push's diff does not touch them", async () => {
+    // A slot whose deploy failed at an old head must not stay wedged just
+    // because the next push's diff selects other apps.
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {
+          os: recordedApp("os", "OS", {
+            headSha: "old-head",
+            shortSha: "oldhead",
+            status: "deploy-failed",
+          }),
+        },
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async (basehead) => {
+        expect(basehead).toBe(`old-head...${currentHead}`);
+        return { status: "ahead", changedFilenames: ["apps/semaphore/src/index.ts"] };
+      },
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth"]);
+  });
+
+  it("deploys the full fleet when the compare 404s because a force-push rewrote the deployed head away", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {
+          os: recordedApp("os", "OS", { headSha: "rewritten-away-head", shortSha: "rewritt" }),
+        },
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => {
+        throw Object.assign(new Error("Not Found"), { status: 404 });
+      },
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+  });
+
+  it("deploys the full fleet when the deployed head is no longer an ancestor of the current head", async () => {
+    // A diverged (or behind) compare diffs from the merge base and cannot see
+    // changes that existed only on the deployed side — which the slot still
+    // runs. An empty file list here must not read as "nothing affected".
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {
+          os: recordedApp("os", "OS", { headSha: "diverged-head", shortSha: "diverge" }),
+        },
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({ status: "diverged", changedFilenames: [] }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+  });
+
+  it("propagates non-404 compare failures instead of guessing a selection", async () => {
+    await expect(
+      selectPreviewAppsForPullRequest({
+        ...selectionInput,
+        previousState: {
+          apps: {
+            os: recordedApp("os", "OS", { headSha: "old-head", shortSha: "oldhead" }),
+          },
+          environmentConfigLease: null,
+          notice: null,
+        },
+        fetchCompare: async () => {
+          throw Object.assign(new Error("Server Error"), { status: 500 });
+        },
+        probeAppServing: everythingServing,
+      }),
+    ).rejects.toThrow("Server Error");
+  });
+});
+
+describe("describeForcePushCompareHazard", () => {
+  it("trusts the normal push shapes", () => {
+    expect(describeForcePushCompareHazard("ahead")).toBeNull();
+    expect(describeForcePushCompareHazard("identical")).toBeNull();
+  });
+
+  it("flags rewritten history as untrustworthy for diffing", () => {
+    expect(describeForcePushCompareHazard("diverged")).toContain("not an ancestor");
+    expect(describeForcePushCompareHazard("behind")).toContain("not an ancestor");
+  });
+});
+
+describe("preview test skip verdicts", () => {
+  const recordedApps = {
+    os: CloudflarePreviewAppEntry.parse({
+      appDisplayName: "OS",
+      appSlug: "os",
+      headSha: "old-head",
+      shortSha: "oldhead",
+      status: "deployed",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+    }),
+  };
+
+  it("skips green when deploy would select nothing for this head", () => {
+    const skip = explainPreviewTestSkip({
+      appsDeployWouldSelect: [],
+      pullRequestHeadSha: "current-head",
+      recordedApps,
+    });
+
+    expect(skip.verdict).toBe("nothing-changed");
+    expect(skip.notice).toContain("nothing app-affecting changed");
+    expect(skip.notice).toContain("still stand");
+  });
+
+  it("fails loudly when apps are recorded at a stale head", () => {
+    // A push that races between the deploy and test steps (or a deploy that
+    // died before recording) leaves the recorded apps at an old head; a green
+    // "deploy + e2e" would then describe a commit that never ran.
+    const skip = explainPreviewTestSkip({
+      appsDeployWouldSelect: ["os", "auth"],
+      pullRequestHeadSha: "current-head",
+      recordedApps,
+    });
+
+    expect(skip.verdict).toBe("stale-head");
+    expect(skip.notice).toContain("refused to skip");
+    expect(skip.notice).toContain("os, auth");
+    expect(skip.notice).toContain("E2e was NOT run");
+    expect(skip.notice).toContain(
+      "os: deployed, head oldhead (stale — deploy has not run for the current head)",
+    );
+  });
+
+  it("fails loudly when nothing is recorded at all but deploy would select apps", () => {
+    const skip = explainPreviewTestSkip({
+      appsDeployWouldSelect: ["os"],
+      pullRequestHeadSha: "current-head",
+      recordedApps: {},
+    });
+
+    expect(skip.verdict).toBe("stale-head");
+    expect(skip.notice).toContain("No apps are recorded at all");
   });
 });
 

@@ -123,10 +123,9 @@ export default async function deploy(
       }
     },
     // The env-shaped vars ride the build environment because Vite statically
-    // inlines them into the client bundle (vite.config.ts's __AUTH_APP_ORIGIN__
-    // define; auth-plugins.ts isProduction reads import.meta.env.VITE_APP_STAGE)
-    // — the runtime bindings alone can't reach it.
-    buildEnv: (ctx) => ({ VITE_APP_STAGE: ctx.name, ...envShapedVars(ctx.env) }),
+    // inlines the origin into the client bundle (vite.config.ts's
+    // __AUTH_APP_ORIGIN__ define) — the runtime bindings alone can't reach it.
+    buildEnv: (ctx) => envShapedVars(ctx.env),
     smokes: (env) => [
       {
         url: `${env.authBaseUrl}/api/auth/jwks`,

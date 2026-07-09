@@ -168,7 +168,9 @@ move to a Workers RPC binding — see the note under "The three surfaces".)
   password signup is disabled.
   `APP_CONFIG_SIGNUP_ALLOWLIST` gates who may sign up;
   `APP_CONFIG_ADMIN_ALLOWLIST` (default `*@nustom.com`) promotes matching emails
-  to platform admin. The full model is documented in
+  to platform admin. `APP_CONFIG_FIXED_TEST_OTP_ENABLED` controls the fixed
+  `424242` OTP for `+test@nustom.com` automation addresses; production sets it
+  to false in `envs.ts`. The full model is documented in
   `src/server/platform-admin.ts`.
 - **Organizations & projects** live in auth's D1 and are the durable source of
   truth. OS keeps per-environment rows and re-adopts from auth after a reset;

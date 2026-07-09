@@ -68,11 +68,12 @@ export async function deploy(
     /**
      * Deploy every preview app regardless of the diff. Diff selection only
      * redeploys apps affected since their LAST DEPLOYED head, so unaffected
-     * apps keep an older recorded head and the test lane then skips them
-     * ("stale — deploy has not run for the current head yet"). A caller that
-     * needs the whole fleet testable at the current head — the flake-hunt
-     * marathon preflight — uses this to reunify the fleet explicitly instead
-     * of relying on the commit happening to touch a fleet-shared path.
+     * apps keep an older recorded head and the test lane leaves them out of
+     * its testable set (stale — deploy has not run for the current head). A
+     * caller that needs the whole fleet testable at the current head — the
+     * flake-hunt marathon preflight — uses this to reunify the fleet
+     * explicitly instead of relying on the commit happening to touch a
+     * fleet-shared path.
      */
     allApps?: boolean;
     /**
@@ -158,7 +159,7 @@ export async function deploy(
 
   if (selectedApps.length === 0) {
     logPreview(
-      "nothing to deploy: no preview apps are affected by this diff and no failed apps need a retry — leaving lease and PR body untouched",
+      "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and PR body untouched",
     );
     return {
       ok: true,
@@ -260,7 +261,15 @@ export async function deploy(
       async (app) => {
         return await deployPreviewAppWithStatus({
           app,
-          commandEnvironment: runtime.commandEnvironment,
+          commandEnvironment: {
+            ...runtime.commandEnvironment,
+            // apps/os/scripts/deploy.ts turns this into
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
+            // preview install this head's pkg.pr.new `iterate` build, not
+            // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
+            // targets, while the sha pins the exact build this deploy shipped.
+            PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
+          },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
           pullRequestHeadSha: context.pullRequestHeadSha,
@@ -350,18 +359,33 @@ export async function test(options: PullRequestCommandOptions = {}) {
     .filter((app): app is PreviewAppRuntime => app != null);
 
   if (testableApps.length === 0) {
-    logPreview(
-      [
-        "no apps are testable for this head sha — skipping tests. Recorded app states:",
-        ...Object.values(current.state.apps).map(
-          (entry) =>
-            `  ${entry.appSlug}: ${entry.status}, head ${entry.shortSha ?? "?"}${entry.headSha !== context.pullRequestHeadSha ? " (stale — deploy has not run for the current head yet)" : ""}`,
-        ),
-      ].join("\n"),
-    );
+    // No app is recorded at this head — but "skip green" is only honest when
+    // nothing app-affecting changed since the last fully tested deploy.
+    // Recompute the exact selection deploy would make for the current head to
+    // tell that case apart from a stale recorded state (a push raced the
+    // deploy step, or deploy died before recording); see
+    // explainPreviewTestSkip.
+    const appsDeployWouldSelect = await selectPreviewAppsForPullRequest({
+      ...context,
+      previousState: current.state,
+    });
+    const skip = explainPreviewTestSkip({
+      appsDeployWouldSelect: appsDeployWouldSelect.map((app) => app.slug),
+      pullRequestHeadSha: context.pullRequestHeadSha,
+      recordedApps: current.state.apps,
+    });
+    logPreview(skip.notice);
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      notice: skip.notice,
+    }));
+    if (skip.verdict === "stale-head") {
+      throw new Error(skip.notice);
+    }
     return {
       ok: true,
       skipped: true,
+      skippedReason: skip.verdict,
       state: current.state,
     };
   }
@@ -1138,9 +1162,10 @@ export const cloudflareAppSharedPaths = [
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
-  // The preview deploy + e2e + cleanup lifecycle is one Depot CI workflow.
-  // Keep this in sync with that file's own `on.pull_request.paths` list: a
-  // change to the workflow (or the shared preview orchestration) triggers a
+  // The preview deploy + e2e lifecycle is one Depot CI workflow; cleanup on
+  // close lives in cloudflare-preview-cleanup.yml, which mirrors the same
+  // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
+  // a change to the workflow (or the shared preview orchestration) triggers a
   // full-fleet preview.
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,
@@ -3810,6 +3835,138 @@ async function reassertEnvironmentConfigLease(input: {
   };
 }
 
+/**
+ * The slice of GitHub's compare API the deploy selection needs: the compare
+ * status plus the changed filenames. Injectable so unit tests can drive
+ * force-push shapes (404s, diverged history) without a network.
+ */
+type PreviewCompareFetcher = (basehead: string) => Promise<{
+  status: string;
+  changedFilenames: string[];
+}>;
+
+/** The real {@link PreviewCompareFetcher}: GitHub's compare API behind the transient-failure retry. */
+function makeGithubCompareFetcher(input: {
+  githubToken: string;
+  repositoryFullName: string;
+}): PreviewCompareFetcher {
+  const octokit = new Octokit({ auth: input.githubToken });
+  const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
+  return async (basehead) => {
+    const comparison = await withGithubRetry("compareCommits", () =>
+      octokit.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead }),
+    );
+    return {
+      status: comparison.data.status,
+      changedFilenames:
+        comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [],
+    };
+  };
+}
+
+/**
+ * GitHub's three-dot compare diffs the head against the MERGE BASE of the two
+ * commits, not against the base commit itself. When the previously deployed
+ * head is an ancestor of the current head ("ahead" — the normal push), that
+ * is exactly the diff we want. After a force-push that rewrites history the
+ * deployed head is no longer an ancestor ("diverged") — or the new head is an
+ * ancestor of the deployed one ("behind", a straight rollback) — and the file
+ * list misses every change that existed only on the deployed side. The slot
+ * still RUNS that code, so apps it touched need a redeploy the diff would
+ * never select. Returns the reason to deploy the whole fleet instead, or null
+ * when the diff is trustworthy. Over-deploying is idempotent and costs
+ * minutes; under-deploying strands force-pushed-away code on the slot.
+ */
+function describeForcePushCompareHazard(status: string): string | null {
+  if (status === "ahead" || status === "identical") {
+    return null;
+  }
+
+  return `compare status "${status}" means the last deployed head is not an ancestor of the current head (force-push or rollback), so the file diff cannot see changes that existed only on the deployed side`;
+}
+
+/** GitHub compare 404s when a force-push rewrote the base commit out of the PR's history. */
+function isGithubNotFoundError(error: unknown) {
+  return (error as { status?: unknown } | null)?.status === 404;
+}
+
+/**
+ * One cheap "is this app actually serving?" check against a readiness URL.
+ * Returns ok=false with a detail string instead of throwing, so callers treat
+ * every failure mode (503, DNS, timeout) uniformly as "not serving".
+ */
+type PreviewAppServingProbe = (url: URL) => Promise<{ ok: boolean; detail: string }>;
+
+/** Deadline for one {@link PreviewAppServingProbe} GET — a healthy app answers in well under a second. */
+const previewServingProbeTimeoutMs = 15_000;
+
+/** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
+async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const status = await fetchReadinessStatus(
+      url,
+      AbortSignal.timeout(previewServingProbeTimeoutMs),
+    );
+    return { ok: status >= 200 && status < 300, detail: `HTTP ${status}` };
+  } catch (error) {
+    return { ok: false, detail: formatPreviewErrorMessage(error) };
+  }
+}
+
+/**
+ * Recorded-green apps ("deployed"/"awaiting-tests") whose deployment is no
+ * longer actually serving. A green row is normally trustworthy — but an
+ * erase-data on the slot (the documented remedy when merged-main lands a
+ * non-migratable schema change) parks the os worker behind a 503 and wipes
+ * the slot's shared data WITHOUT touching the recorded PR-body state. Trusting
+ * the stale green rows then redeploys only the failed apps and leaves the slot
+ * half-dead: observed 2026-07-09 on preview-7 (PR #1793), where e2e failed
+ * with "no such column: epoch", the erase parked os and emptied auth's D1
+ * (OAuth clients), and the retry — os and auth both recorded green — never
+ * redeployed either; auth had to be redeployed by hand. Probing each green
+ * app's readiness URL once makes erase + re-run self-healing: the parked app
+ * fails its probe, joins the retry selection, and pulls its dependencies
+ * (auth, whose OAuth-client seed lives in the wiped D1) along via
+ * expandPreviewDependencies.
+ */
+async function selectRecordedGreenAppsNotServing(params: {
+  alreadySelectedSlugs: ReadonlySet<CloudflarePreviewAppSlugType>;
+  previousState: CloudflarePreviewState;
+  probeAppServing: PreviewAppServingProbe;
+}): Promise<CloudflarePreviewAppSlugType[]> {
+  const notServing: CloudflarePreviewAppSlugType[] = [];
+  for (const entry of Object.values(params.previousState.apps)) {
+    const app = cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType];
+    if (
+      app == null ||
+      params.alreadySelectedSlugs.has(app.slug) ||
+      !entry.publicUrl ||
+      !["awaiting-tests", "deployed"].includes(entry.status)
+    ) {
+      continue;
+    }
+
+    const probeFailures: string[] = [];
+    for (const url of resolvePreviewReadinessUrls({
+      publicUrl: entry.publicUrl,
+      readyUrlPath: app.previewReadyUrlPath,
+    })) {
+      const probe = await params.probeAppServing(url);
+      if (!probe.ok) {
+        probeFailures.push(`${url} answered ${probe.detail}`);
+      }
+    }
+    if (probeFailures.length > 0) {
+      logPreview(
+        `app ${app.slug} selected: recorded ${entry.status} but not actually serving (${probeFailures.join("; ")}) — the slot was likely erased since that deploy`,
+      );
+      notServing.push(app.slug);
+    }
+  }
+
+  return notServing;
+}
+
 async function selectPreviewAppsForPullRequest(input: {
   githubToken: string;
   previousState: CloudflarePreviewState;
@@ -3817,56 +3974,84 @@ async function selectPreviewAppsForPullRequest(input: {
   pullRequestHeadSha: string;
   pullRequestNumber: number;
   repositoryFullName: string;
+  /** Injectable for tests; defaults to {@link makeGithubCompareFetcher}. */
+  fetchCompare?: PreviewCompareFetcher;
+  /** Injectable for tests; defaults to {@link probePreviewAppServingOnce}. */
+  probeAppServing?: PreviewAppServingProbe;
 }) {
+  const fetchCompare = input.fetchCompare ?? makeGithubCompareFetcher(input);
+  const probeAppServing = input.probeAppServing ?? probePreviewAppServingOnce;
+
+  // Failed recorded state is retried on EVERY path — not only when the head
+  // is unchanged. A push whose diff misses the failed apps must not leave
+  // them wedged (see the comment in selectPreviewAppsNeedingRetry).
+  const retryApps = selectPreviewAppsNeedingRetry({
+    previousState: input.previousState,
+    pullRequestHeadSha: input.pullRequestHeadSha,
+  });
+
   const compareBaseSha = resolvePreviewCompareBaseSha(input);
-  if (!compareBaseSha) {
-    return [];
-  }
+  const diffSelectedSlugs: CloudflarePreviewAppSlugType[] = [];
   if (compareBaseSha === input.pullRequestHeadSha) {
-    const retryApps = selectPreviewAppsNeedingRetry({
-      previousState: input.previousState,
-      pullRequestHeadSha: input.pullRequestHeadSha,
-    });
     logPreview(
       retryApps.length > 0
         ? `head sha unchanged since the last run — retrying apps that didn't reach a green state: ${retryApps.map((app) => app.slug).join(", ")}`
         : "head sha unchanged since the last run and every app finished — nothing to retry",
     );
-    return retryApps;
-  }
-
-  const octokit = new Octokit({ auth: input.githubToken });
-  const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
-  const comparison = await withGithubRetry("compareCommits", () =>
-    octokit.rest.repos.compareCommitsWithBasehead({
-      owner,
-      repo,
-      basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
-    }),
-  );
-  const changedFiles =
-    comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
-  logPreview(
-    `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${changedFiles.length} changed files)`,
-  );
-
-  const sharedPathHit = changedFiles.find((filename) =>
-    matchesPreviewPath(filename, cloudflarePreviewSharedPaths),
-  );
-  if (sharedPathHit) {
-    logPreview(
-      `shared preview infrastructure changed (${sharedPathHit}) — deploying ALL preview apps`,
-    );
-    return Object.values(cloudflarePreviewApps);
-  }
-
-  const selectedSlugs = new Set<CloudflarePreviewAppSlugType>();
-  for (const app of Object.values(cloudflarePreviewApps)) {
-    const hit = changedFiles.find((filename) => matchesPreviewPath(filename, app.paths));
-    if (hit) {
-      logPreview(`app ${app.slug} selected: ${hit} changed`);
-      selectedSlugs.add(app.slug);
+  } else {
+    let compared: Awaited<ReturnType<PreviewCompareFetcher>>;
+    try {
+      compared = await fetchCompare(`${compareBaseSha}...${input.pullRequestHeadSha}`);
+    } catch (error) {
+      if (!isGithubNotFoundError(error)) {
+        throw error;
+      }
+      logPreview(
+        `compare ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} returned 404 — a force-push rewrote the last deployed head out of history, so no diff can be trusted; deploying ALL preview apps`,
+      );
+      return Object.values(cloudflarePreviewApps);
     }
+
+    const compareHazard = describeForcePushCompareHazard(compared.status);
+    if (compareHazard) {
+      logPreview(`${compareHazard} — deploying ALL preview apps`);
+      return Object.values(cloudflarePreviewApps);
+    }
+    logPreview(
+      `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${compared.changedFilenames.length} changed files)`,
+    );
+
+    const sharedPathHit = compared.changedFilenames.find((filename) =>
+      matchesPreviewPath(filename, cloudflarePreviewSharedPaths),
+    );
+    if (sharedPathHit) {
+      logPreview(
+        `shared preview infrastructure changed (${sharedPathHit}) — deploying ALL preview apps`,
+      );
+      return Object.values(cloudflarePreviewApps);
+    }
+
+    for (const app of Object.values(cloudflarePreviewApps)) {
+      const hit = compared.changedFilenames.find((filename) =>
+        matchesPreviewPath(filename, app.paths),
+      );
+      if (hit) {
+        logPreview(`app ${app.slug} selected: ${hit} changed`);
+        diffSelectedSlugs.push(app.slug);
+      }
+    }
+  }
+
+  const selectedSlugs = new Set<CloudflarePreviewAppSlugType>([
+    ...diffSelectedSlugs,
+    ...retryApps.map((app) => app.slug),
+  ]);
+  for (const slug of await selectRecordedGreenAppsNotServing({
+    alreadySelectedSlugs: selectedSlugs,
+    previousState: input.previousState,
+    probeAppServing,
+  })) {
+    selectedSlugs.add(slug);
   }
 
   const expanded = expandPreviewDependencies([...selectedSlugs]);
@@ -3877,6 +4062,57 @@ async function selectPreviewAppsForPullRequest(input: {
   }
 
   return expanded.map((slug) => cloudflarePreviewApps[slug]);
+}
+
+/**
+ * Verdict for a `preview test` run that found no recorded app at the PR's
+ * current head. Two very different situations look identical in the recorded
+ * state, because deploy's diff selection deliberately leaves unaffected apps
+ * recorded at older heads:
+ *
+ * - "nothing-changed": nothing app-affecting changed since the last fully
+ *   tested deploy, so the recorded results still describe the code under
+ *   review and a green skip is honest;
+ * - "stale-head": deploy has not recorded the current head's apps (a push
+ *   raced between the deploy and test steps, or deploy died before
+ *   recording), so the slot does not run the head being reported on and a
+ *   green check would lie — observed as a hazard on preview-7 (PR #1793,
+ *   2026-07-09), where a green "deploy + e2e" could stand on a slot that had
+ *   run nothing.
+ *
+ * The discriminator is the selection deploy itself would make for this head:
+ * if deploy would select apps, the recorded state is stale and the run must
+ * fail loudly. The workflow-level cancel-in-progress means a superseding run
+ * for the newer push is usually already queued, so the loud failure is cheap
+ * and honest.
+ */
+function explainPreviewTestSkip(params: {
+  appsDeployWouldSelect: readonly string[];
+  pullRequestHeadSha: string;
+  recordedApps: CloudflarePreviewState["apps"];
+}): { verdict: "nothing-changed"; notice: string } | { verdict: "stale-head"; notice: string } {
+  const shortHeadSha = params.pullRequestHeadSha.slice(0, 7);
+  if (params.appsDeployWouldSelect.length === 0) {
+    return {
+      verdict: "nothing-changed",
+      notice: `Preview e2e skipped for head ${shortHeadSha}: nothing app-affecting changed since the last fully tested deploy, so the recorded results below still stand.`,
+    };
+  }
+
+  const recordedRows = Object.values(params.recordedApps).map(
+    (entry) =>
+      `  ${entry.appSlug}: ${entry.status}, head ${entry.shortSha ?? "?"}${entry.headSha === params.pullRequestHeadSha ? "" : " (stale — deploy has not run for the current head)"}`,
+  );
+  return {
+    verdict: "stale-head",
+    notice: [
+      `Preview e2e refused to skip for head ${shortHeadSha}: deploy has not recorded ${params.appsDeployWouldSelect.join(", ")} at this head, so a green result would describe a different commit. E2e was NOT run.`,
+      ...(recordedRows.length > 0
+        ? ["Recorded app states:", ...recordedRows]
+        : ["No apps are recorded at all."]),
+      "A push likely raced the deploy step, or deploy failed before recording. A superseding run usually follows automatically; if none does, re-run the Cloudflare Previews workflow (preview deploy + test).",
+    ].join("\n"),
+  };
 }
 
 function selectPreviewAppsNeedingRetry(params: {
@@ -4125,7 +4361,9 @@ export const previewInternals = {
   classifyLeaseForReclaim,
   decideDraftPreviewPolicy,
   describeEnvironmentConfigLeases,
+  describeForcePushCompareHazard,
   evaluateCloudflareZoneCheck,
+  explainPreviewTestSkip,
   holderPullRequestUrl,
   pullRequestHolder,
   reassertEnvironmentConfigLease,
@@ -4142,6 +4380,7 @@ export const previewInternals = {
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
   syncPreviewInventory,

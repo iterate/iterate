@@ -308,7 +308,14 @@ export async function ensureContainerClasses(input: {
     `container-class bootstrap: ${input.workerName} is missing ${missing.join(", ")} — ` +
       `legacy-creating them container-enabled before the exports deploy`,
   );
-  const stubExports = missing
+  // The upload replaces the whole worker script, so it must keep exporting
+  // every class existing Durable Objects depend on — the API rejects a
+  // script that drops one (error 10064). Stub the live classes alongside
+  // the missing ones (a live worker gaining new container classes is the
+  // normal case, e.g. a preview slot first deploying a branch that adds
+  // one); the next real deploy restores the real implementations.
+  const stubExports = [...missing, ...live.map((namespace) => namespace.className)]
+    .sort()
     .map((className) => `export class ${className} { constructor() {} }`)
     .join("\n");
   const form = new FormData();
