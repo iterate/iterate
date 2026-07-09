@@ -156,6 +156,7 @@ export function AddRepoFromGithub({
           </DialogHeader>
           <AddRepoFromGithubWizard
             connections={connections}
+            projectId={projectId}
             existingRepoPaths={existingRepoPaths}
             onAdded={(path) => {
               setOpen(false);
@@ -170,10 +171,12 @@ export function AddRepoFromGithub({
 
 function AddRepoFromGithubWizard({
   connections,
+  projectId,
   existingRepoPaths,
   onAdded,
 }: {
   connections: string[];
+  projectId: string;
   existingRepoPaths: string[] | undefined;
   onAdded: (path: string) => void;
 }) {
@@ -320,6 +323,7 @@ function AddRepoFromGithubWizard({
         >
           <InstallationRepoList
             connection={connection}
+            projectId={projectId}
             filter={filter}
             selected={selected}
             onSelect={(repo) => {
@@ -383,17 +387,21 @@ function AddRepoFromGithubWizard({
 
 function InstallationRepoList({
   connection,
+  projectId,
   filter,
   selected,
   onSelect,
 }: {
   connection: string;
+  projectId: string;
   filter: string;
   selected: InstallationRepo | null;
   onSelect: (repo: InstallationRepo) => void;
 }) {
   const { error, repos, totalCount } = useItxQuery({
-    key: ["github-installation-repos", connection],
+    // Keyed by project AND connection: the query cache is app-wide, and two
+    // projects can hold same-named connections to different installations.
+    key: ["github-installation-repos", projectId, connection],
     query: (itx) => listInstallationRepos(itx, connection),
   });
   const visible = useMemo(() => {
