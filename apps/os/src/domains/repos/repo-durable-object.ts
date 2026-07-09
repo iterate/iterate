@@ -6,7 +6,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -31,7 +31,14 @@ import type {
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { diffFileMaps } from "./line-diff.ts";
-import { CONFIG_REPO_PATH, RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
+import {
+  CONFIG_REPO_PATH,
+  RepoArtifactNameCodec,
+  RepoNotSeededError,
+  base64ToBytes,
+  bytesToBase64,
+  classifyRepoAccessError,
+} from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -91,6 +98,11 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   get processor() {
     return new StreamProcessorRpcTarget(this.#repoProcessor);
+  }
+
+  /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
+  get liveState() {
+    return new LiveStateRpcTarget(this.#host);
   }
 
   /**
@@ -203,9 +215,13 @@ export class RepoDurableObject extends DurableObject<Env> {
         // branch tip. Project repos are small; correctness beats depth tuning.
         const filesystem = new InMemoryFs();
         const git = createGit(filesystem, REPO_DIR);
-        await git.clone({ branch, url: repo.remote, ...credentials });
+        try {
+          await git.clone({ branch, url: repo.remote, ...credentials });
+        } catch (error) {
+          throw classifyRepoAccessError(error);
+        }
         const [branchHead] = await git.log({ depth: 1 });
-        if (!branchHead) throw new Error("Repo has no commits.");
+        if (!branchHead) throw new RepoNotSeededError("Repo has no commits.");
         try {
           await git.checkout({ ref: input.commitOid, force: true });
         } catch (error) {
@@ -233,15 +249,19 @@ export class RepoDurableObject extends DurableObject<Env> {
     const clone = async () => {
       const filesystem = new InMemoryFs();
       const git = createGit(filesystem, REPO_DIR);
-      await git.clone({
-        branch,
-        ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
-        singleBranch: true,
-        url: repo.remote,
-        ...credentials,
-      });
+      try {
+        await git.clone({
+          branch,
+          ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
+          singleBranch: true,
+          url: repo.remote,
+          ...credentials,
+        });
+      } catch (error) {
+        throw classifyRepoAccessError(error);
+      }
       const [head] = await git.log({ depth: 1 });
-      if (!head) throw new Error("Repo has no commits.");
+      if (!head) throw new RepoNotSeededError("Repo has no commits.");
       return { filesystem, git, head };
     };
 
@@ -997,7 +1017,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.#artifactTokenPromise ??= artifactToken(this.requireArtifacts(), artifactName).catch(
       (error: unknown) => {
         this.#artifactTokenPromise = undefined;
-        throw error;
+        // A missing Artifacts repo is the pre-seed window (createArtifactRepo
+        // hasn't run), the same "not ready yet" every unseeded clone signals.
+        throw classifyRepoAccessError(error);
       },
     );
     return {

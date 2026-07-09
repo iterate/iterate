@@ -67,18 +67,11 @@ function counter() {
   return new CounterProcessor({ stream: neverStream, path: "/tests/counter", projectId: null });
 }
 
-describe("StreamProcessor.onStateChange", () => {
-  it("pushes the current checkpoint snapshot immediately on subscribe", async () => {
+describe("StreamProcessor.observeStateChanges", () => {
+  it("notifies the observer with the new snapshot after every state-changing batch", async () => {
     const processor = counter();
-    const pushes: unknown[] = [];
-    await processor.onStateChange((snapshot) => void pushes.push(snapshot));
-    expect(pushes).toEqual([{ offset: 0, state: { count: 0 } }]);
-  });
-
-  it("pushes { offset, state } after every checkpointed batch that changed state", async () => {
-    const processor = counter();
-    const pushes: { offset: number; state: { count: number } }[] = [];
-    await processor.onStateChange((snapshot) => void pushes.push(snapshot));
+    const snapshots: { offset: number; state: { count: number } }[] = [];
+    processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await processor.ingest({ events: [incrementedEvent(2)], streamMaxOffset: 1 });
     await processor.ingest({
@@ -86,116 +79,35 @@ describe("StreamProcessor.onStateChange", () => {
       streamMaxOffset: 3,
     });
 
-    expect(pushes).toEqual([
-      { offset: 0, state: { count: 0 } },
+    expect(snapshots).toEqual([
       { offset: 1, state: { count: 2 } },
       { offset: 3, state: { count: 10 } },
     ]);
   });
 
-  it("advances the checkpoint through non-consumed events without pushing", async () => {
+  it("does not notify when a batch leaves state unchanged", async () => {
     const processor = counter();
-    const pushes: unknown[] = [];
-    await processor.onStateChange((snapshot) => void pushes.push(snapshot));
+    const snapshots: unknown[] = [];
+    processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await processor.ingest({ events: [unrelatedEvent()], streamMaxOffset: 1 });
 
-    expect(pushes).toHaveLength(1);
+    expect(snapshots).toHaveLength(0);
     await expect(processor.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
   });
 
-  it("unsubscribe stops pushes and isLive reports the drop", async () => {
+  it("stops notifying after unsubscribe; currentState reflects the fold", async () => {
     const processor = counter();
-    const pushes: unknown[] = [];
-    const handle = await processor.onStateChange((snapshot) => void pushes.push(snapshot));
-
-    expect(handle.isLive()).toBe(true);
-    handle.unsubscribe();
-    expect(handle.isLive()).toBe(false);
+    const snapshots: unknown[] = [];
+    const unsubscribe = processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-    expect(pushes).toHaveLength(1);
-  });
+    expect(snapshots).toHaveLength(1);
+    expect(processor.currentState).toEqual({ count: 1 });
 
-  // NOTE: callbacks in these tests count calls manually instead of via vi.fn —
-  // the processor DISPOSES a dropped callback (releasing the RPC stub), and
-  // vitest mocks implement Symbol.dispose as mockRestore, which wipes the call
-  // record the moment the (correct) disposal happens.
-  it("a synchronously throwing callback rejects the subscribe and registers nothing", async () => {
-    const processor = counter();
-    let calls = 0;
-    const cb = () => {
-      calls += 1;
-      throw new Error("broken stub");
-    };
-    await expect(processor.onStateChange(cb)).rejects.toThrow("broken stub");
-    expect(calls).toBe(1);
-
-    // Nothing registered: the next state change must not call it again.
-    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-    expect(calls).toBe(1);
-  });
-
-  it("an async delivery rejection drops the subscription (dead remotes self-prune)", async () => {
-    const processor = counter();
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      let calls = 0;
-      const handle = await processor.onStateChange(() => {
-        calls += 1;
-        // The initial push succeeds; every later delivery rejects, the way a
-        // dead capnweb/Workers RPC stub rejects every call.
-        return calls === 1 ? undefined : Promise.reject(new Error("stub is broken"));
-      });
-
-      await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-      // The rejection is observed asynchronously.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(handle.isLive()).toBe(false);
-      await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 2 });
-      expect(calls).toBe(2);
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it("a transport onRpcBroken signal drops the subscription", async () => {
-    const processor = counter();
-    let broken: ((error: unknown) => void) | undefined;
-    let calls = 0;
-    const cb = Object.assign(() => void (calls += 1), {
-      onRpcBroken(register: (error: unknown) => void) {
-        broken = register;
-      },
-    });
-
-    const handle = await processor.onStateChange(cb);
-    expect(handle.isLive()).toBe(true);
-    expect(calls).toBe(1);
-
-    broken?.(new Error("session lost"));
-    expect(handle.isLive()).toBe(false);
-
-    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-    expect(calls).toBe(1);
-  });
-
-  it("dup()s a retainable callback and disposes the duplicate on unsubscribe", async () => {
-    const processor = counter();
-    const dispose = vi.fn();
-    const duplicate = Object.assign(vi.fn(), { [Symbol.dispose]: dispose });
-    const cb = Object.assign(vi.fn(), { dup: () => duplicate });
-
-    const handle = await processor.onStateChange(cb);
-    expect(duplicate).toHaveBeenCalledTimes(1); // deliveries go to the duplicate
-    expect(cb).not.toHaveBeenCalled();
-
-    handle.unsubscribe();
-    expect(dispose).toHaveBeenCalledTimes(1);
-
-    handle.unsubscribe(); // idempotent: a second call must not double-dispose
-    expect(dispose).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 2 });
+    expect(snapshots).toHaveLength(1);
   });
 });
 

@@ -3,9 +3,19 @@ import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
-export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
+export const DEFAULT_AGENT_MODEL = "openai/gpt-5.5";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
+
+/**
+ * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
+ * capped at 6× base — 10s, 20s, 60s. Without it a provider blip returning
+ * instant errors (2026-07-09 prd: Workers AI 8008s in ~90ms) burns the whole
+ * retry budget inside one second and the turn dies before the blip clears.
+ * Rides the scheduled event's debounceMs, so it is derived from the fold
+ * (consecutiveLlmFailures) and deterministic under refold.
+ */
+export const AGENT_LLM_RETRY_BACKOFF_BASE_MS = 10_000;
 
 /**
  * Two horizons in one constant, deliberately equal:
@@ -401,7 +411,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "Agent birth applies the platform default model unless something already chose one.",
           payload: {
             ifUnset: true,
-            model: "@cf/moonshotai/kimi-k2.7-code",
+            model: "openai/gpt-5.5",
           },
         },
         {
@@ -423,7 +433,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "A user input triggered a request, debounced 250ms so rapid-fire inputs collapse into one turn.",
           payload: {
             debounceMs: 250,
-            model: "@cf/moonshotai/kimi-k2.7-code",
+            model: "openai/gpt-5.5",
             requestId: "llm-request:gen-3",
           },
         },
@@ -445,7 +455,7 @@ export const AgentProcessorContract = defineProcessorContract({
           description:
             "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestOffset the processor answers to.",
           payload: {
-            model: "@cf/moonshotai/kimi-k2.7-code",
+            model: "openai/gpt-5.5",
             requestId: "llm-request:gen-3",
           },
         },
@@ -460,7 +470,7 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description: "The agent picks up a prepared request and dials the AI binding.",
-          payload: { llmRequestOffset: 57, model: "@cf/moonshotai/kimi-k2.7-code" },
+          payload: { llmRequestOffset: 57, model: "openai/gpt-5.5" },
         },
       ],
     },

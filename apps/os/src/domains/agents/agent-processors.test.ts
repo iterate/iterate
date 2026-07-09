@@ -13,10 +13,7 @@ import {
 } from "./agent-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
-function agentRequestEvents(
-  content: string,
-  model = "@cf/moonshotai/kimi-k2.7-code",
-): StreamEventInput[] {
+function agentRequestEvents(content: string, model = "openai/gpt-5.5"): StreamEventInput[] {
   return [
     {
       type: "events.iterate.com/agent/input-added",
@@ -586,7 +583,7 @@ describe("minimal web-chat agent processors", () => {
         type: "events.iterate.com/agent/llm-request-scheduled",
         payload: {
           debounceMs: 250,
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "openai/gpt-5.5",
           requestId: "llm-request:1",
         },
       },
@@ -657,14 +654,14 @@ describe("minimal web-chat agent processors", () => {
         type: "events.iterate.com/agent/llm-request-scheduled",
         payload: {
           debounceMs: 0,
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "openai/gpt-5.5",
           requestId: "llm-request:1",
         },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: {
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "openai/gpt-5.5",
           requestId: "llm-request:1",
         },
       },
@@ -773,7 +770,7 @@ describe("minimal web-chat agent processors", () => {
     expect(reduceAgentEvents(stream.events)).toMatchObject({ autonomousTurnCount: 1 });
   });
 
-  it("stops auto-retrying after three consecutive failures", async () => {
+  it("stops auto-retrying after three consecutive failures, with backoff between retries", async () => {
     const stream = new MemoryStream();
     let boom = 0;
     const agent = new AgentProcessor({
@@ -786,6 +783,9 @@ describe("minimal web-chat agent processors", () => {
           throw new Error(`boom ${boom}`);
         },
       },
+      // Milliseconds instead of the production 10s base, so the retry loop
+      // (which waits out each backoff for real) runs inside the test deadline.
+      llmRetryBackoffBaseMs: 8,
     });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
@@ -848,6 +848,9 @@ describe("minimal web-chat agent processors", () => {
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
     );
     expect(scheduled).toHaveLength(3); // seed + two auto-retries, nothing after the cap
+    // Retries space out exponentially (base × 2^(n-1) rides the debounce);
+    // the 2026-07-09 prd incident burned all retries in ~1s of instant 8008s.
+    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 266]);
   });
 
   it("resets the consecutive failure counter after a successful request", async () => {
@@ -877,6 +880,52 @@ describe("minimal web-chat agent processors", () => {
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 2 });
 
     await stream.append(...failureTurn(7, { status: "success" }));
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
+  });
+
+  it("resets the consecutive failure counter on a fresh user message, not on loop inputs", async () => {
+    // Regression for the 2026-07-09 prd Telegram outage tail: a provider blip
+    // burned the retry budget, and the user's NEXT message ("hi?") inherited
+    // the stale counter — one attempt, then "retries stopped". A user trigger
+    // is a fresh turn and must get the full retry budget.
+    const failure = (base: number): StreamEventInput[] => [
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: { debounceMs: 0, model: "gpt-5.5", requestId: `llm-request:${base}` },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-5.5", requestId: `llm-request:${base}` },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 1,
+          llmRequestOffset: base + 1,
+          result: { status: "failure", error: { message: "boom" } },
+        },
+      },
+    ];
+    const stream = new MemoryStream();
+    await stream.append(...failure(1), ...failure(4));
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 2 });
+
+    // A loop-generated input (a rendered failure notice) keeps the counter.
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-llm-failure@/agents/x:5",
+      payload: {
+        content: "Your LLM request failed",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+    expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 2 });
+
+    // A user-triggered input resets it.
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: { content: "hi?", llmRequestPolicy: { behaviour: "after-current-request" } },
+    });
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
   });
 
