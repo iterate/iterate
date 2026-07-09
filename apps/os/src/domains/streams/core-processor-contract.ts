@@ -50,7 +50,11 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 // - 12: dead derived state deleted — `processorsBySlug` (written on every
 //      connect fold, read by nothing; announcements live on presence facts)
 //      and `metadata` + its `metadata-updated` event (no appender, no reader).
-export const CORE_STATE_VERSION = 12;
+// - 13: seek verbs orthogonalized — `subscription-resumed` loses `afterOffset`
+//      (resume = pure un-park at the cursor where delivery stopped);
+//      `subscription-cursor-set` is the one and only seek. A redrive is two
+//      facts (cursor-set + resumed), each honest about what it did.
+export const CORE_STATE_VERSION = 13;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -501,10 +505,9 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-resumed": {
       description:
-        "Operator/agent verb: un-parks a subscription and kicks delivery. Optionally moves the cursor (`afterOffset`, exclusive) in the same act — the redrive.",
+        "Operator/agent verb: un-parks a subscription and kicks delivery, resuming at the cursor where it stopped. Moving the cursor is a different act with its own fact — append `subscription-cursor-set` first for a redrive (skip past a bad offset, replay a window).",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
-        afterOffset: z.number().int().min(0).optional(),
       }),
       examples: [
         {
@@ -512,16 +515,11 @@ export const CoreProcessorContract = defineProcessorContract({
             "Un-parks a subscription after the receiver recovered; delivery resumes from the cursor where it stopped.",
           payload: { subscriptionKey: "ops-webhook" },
         },
-        {
-          description:
-            "The redrive: un-parks the project worker feed and moves the cursor past a bad offset in the same act.",
-          payload: { subscriptionKey: "project-worker", afterOffset: 1874 },
-        },
       ],
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
-        "Operator/agent verb: explicitly seeks a push subscription's cursor (exclusive afterOffset semantics: 0 replays everything). The audited form of replay — the cursor row itself is storage, but moving it deliberately is a fact.",
+        "Operator/agent verb: THE seek — explicitly moves a push subscription's cursor (exclusive afterOffset semantics: 0 replays everything). The audited form of replay — the cursor row itself is storage, but moving it deliberately is a fact. For a parked subscription, follow with `subscription-resumed` to restart delivery.",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),

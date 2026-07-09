@@ -194,11 +194,17 @@ function makeHarness() {
     },
   };
 
+  let storageReads = 0;
   const subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
-      readEvents: ({ afterOffset, limit }) =>
-        log.filter((event) => event.offset > afterOffset).slice(0, limit),
+      readEvents: ({ afterOffset, limit }) => {
+        storageReads += 1;
+        return log
+          .filter((event) => event.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+      },
       coreState: (): CoreProcessorState =>
         CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
@@ -249,6 +255,7 @@ function makeHarness() {
     log,
     settle,
     append: (...events: StreamEvent[]) => log.push(...events),
+    storageReads: () => storageReads,
     now: () => now,
     advanceTo: (ms: number) => {
       now = ms;
@@ -482,7 +489,7 @@ describe("StreamSubscribers", () => {
     expect(h.configured["k"].parkedAtOffset).toBe(0);
   });
 
-  it("e. resume: onResumed retries immediately; onResumed with afterOffset seeks the cursor", async () => {
+  it("e. resume: onResumed retries immediately; a redrive is cursor-set then resume", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"), evt(2, "b"));
@@ -504,8 +511,10 @@ describe("StreamSubscribers", () => {
     expect(h.pushes.at(-1)?.attempt).toBe(1);
     expect(h.row("k")).toMatchObject({ ackedOffset: 2, attempt: 0, nextAttemptAt: null });
 
-    // Resume with afterOffset is the redrive: the cursor seeks first.
-    h.subscribers.onResumed("k", 0);
+    // The redrive is two facts, each honest about what it did: cursor-set is
+    // THE seek, resume is a pure un-park (v13 orthogonalization).
+    h.subscribers.onCursorSet("k", 0);
+    h.subscribers.onResumed("k");
     await h.settle();
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS + 2);
     expect(h.pushes.at(-1)?.events.map((event) => event.offset)).toEqual([1, 2]);
@@ -1148,5 +1157,40 @@ describe("StreamSubscribers", () => {
     expect(conditionFacts).toHaveLength(1);
     expect(conditionFacts[0]!.idempotencyKey).toBe("selector-condition-failed:k:1");
     expect(h.row("k")?.ackedOffset).toBe(2);
+  });
+
+  it("w. live-tail fast path: a caught-up drain consumes the handed-over tail without a storage read", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+
+    // Append hands the freshly committed events to wake() — the tailing drain
+    // (cursor 0, tail starts at offset 1) must deliver them without ever
+    // touching hooks.readEvents... except for the one catch-up read that
+    // proves it drained to the tail (the loop's final "caught up" probe reads
+    // an empty window THROUGH the tail check, which self-disqualifies there).
+    const fresh = [evt(1, "a"), evt(2, "b")];
+    h.append(...fresh);
+    h.subscribers.wake(fresh.map((event) => ({ event, byteLength: 64 })));
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1, 2]);
+    expect(h.row("k")?.ackedOffset).toBe(2);
+    // Exactly one storage read: the empty caught-up probe after the tail was
+    // consumed. The delivered batch itself came from the handed-over events.
+    expect(h.storageReads()).toBe(1);
+
+    // A STALE tail self-disqualifies by offset: the next append reaches the
+    // drain without a handover (offset 3 ≠ stale tail's first offset 1), so
+    // the batch falls back to a storage read. Correctness never depends on
+    // tail freshness.
+    h.append(evt(3, "c"));
+    const readsBefore = h.storageReads();
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[1]!.events.map((event) => event.offset)).toEqual([3]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+    expect(h.storageReads()).toBeGreaterThan(readsBefore);
   });
 });
