@@ -291,7 +291,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 expandedOid={expandedCommitOid}
                 selectedPath={selectedPath}
                 onExpand={(oid) => patchSearch({ commit: oid })}
-                onOpenFile={(path) => patchSearch({ file: path })}
+                onOpenFile={selectFile}
               />
             </Suspense>
           ) : gh ? (
