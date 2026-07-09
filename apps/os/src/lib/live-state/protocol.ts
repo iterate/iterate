@@ -29,8 +29,8 @@ export type LiveStatePatch =
  * subscription, so a gap (`from` ≠ the client's revision) means a message was
  * missed and the client should resubscribe.
  *
- * `State` is asserted by the caller of `useLiveState`, exactly as `useItxState`
- * asserted its processor-state type — the wire itself is structure-agnostic.
+ * `State` is asserted by the caller of `useLiveState` — the wire itself is
+ * structure-agnostic.
  */
 export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }

@@ -28,22 +28,6 @@ export type ProcessorSnapshot<State> = {
 };
 
 /**
- * Live handle for one `onStateChange` subscription.
- *
- * `ping()` is the liveness probe: `true` while the subscription is still
- * registered on the live processor, `false` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, `false` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
- */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
-
-/**
  * A processor node that is also its HOST's wake-mode delivery door. This is
  * what the domain surfaces expose (`itx.agents.get(path).processor`,
  * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
@@ -64,16 +48,6 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
-   * commit pushes and `snapshot()` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }

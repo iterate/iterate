@@ -1014,16 +1014,6 @@ export interface Stream {
 
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
-   * commit pushes and `snapshot()` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
@@ -2170,30 +2160,14 @@ export type ProcessorSnapshot<State> = {
 };
 
 /**
- * Live handle for one `onStateChange` subscription.
- *
- * `ping()` is the liveness probe: `true` while the subscription is still
- * registered on the live processor, `false` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, `false` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
- */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
-
-/**
  * One message pushed down a live-state subscription. The first is always a
  * `snapshot` (a resync sends a fresh one); every message after carries only the
  * diff from revision `from` to `to`. Revisions are monotonic for the life of one
  * subscription, so a gap (`from` ≠ the client's revision) means a message was
  * missed and the client should resubscribe.
  *
- * `State` is asserted by the caller of `useLiveState`, exactly as `useItxState`
- * asserted its processor-state type — the wire itself is structure-agnostic.
+ * `State` is asserted by the caller of `useLiveState` — the wire itself is
+ * structure-agnostic.
  */
 export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }

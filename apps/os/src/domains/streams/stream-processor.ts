@@ -1,7 +1,6 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
-import { disposeIgnoredRpcResult, isThenable } from "../../lib/rpc/retain.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
 import {
@@ -173,37 +172,6 @@ export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & 
   snapshot: StreamProcessorSnapshot<State>;
 };
 
-/** Callback registered via `onStateChange`; may be a remote RPC stub. */
-type StateChangeCallback<State> = (snapshot: StreamProcessorSnapshot<State>) => unknown;
-/** A state-change callback after retention: disposal releases the duplicated stub. */
-type RetainedStateChangeCallback<State> = StateChangeCallback<State> &
-  Disposable & {
-    onRpcBroken?(callback: (error: unknown) => void): void;
-  };
-
-/**
- * One registered `onStateChange` subscriber. `deliver` pushes a checkpoint
- * snapshot into the retained callback and observes the result; `drop` removes
- * the subscription and releases the retained stub. All removal paths (explicit
- * unsubscribe, sync throw, async delivery rejection, transport brokenness) go
- * through `drop`, so membership in the subscription set is the single source
- * of truth that `ping()` reports to clients.
- */
-type StateChangeSubscription<State> = {
-  deliver(snapshot: StreamProcessorSnapshot<State>): void;
-  drop(): void;
-};
-
-/**
- * In-process handle returned by `StreamProcessor.onStateChange`.
- * `unsubscribe()` (or disposal) drops the subscription; `isLive()` backs the
- * RPC facade's `ping()`.
- */
-export type StreamProcessorStateSubscriptionHandle = Disposable & {
-  isLive(): boolean;
-  unsubscribe(): void;
-};
-
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
  *  when a delivered event matches, and an optional timeout handle to clear on
  *  resolution (so a satisfied waiter never later rejects). */
@@ -286,7 +254,6 @@ export abstract class StreamProcessor<
   readonly #writeState: (
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
-  readonly #stateChangeSubscriptions = new Set<StateChangeSubscription<ProcessorState<Contract>>>();
   readonly #stateChangeObservers = new Set<
     (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void
   >();
@@ -342,65 +309,6 @@ export abstract class StreamProcessor<
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
-  }
-
-  async onStateChange(
-    cb: StateChangeCallback<ProcessorState<Contract>>,
-  ): Promise<StreamProcessorStateSubscriptionHandle> {
-    await this.#loadState();
-    const retained = retainStateChangeCallback(cb);
-    const subscriptions = this.#stateChangeSubscriptions;
-    const subscription: StateChangeSubscription<ProcessorState<Contract>> = {
-      deliver(snapshot) {
-        let result: unknown;
-        try {
-          result = retained(snapshot);
-        } catch (error) {
-          // A disposed/broken stub can throw synchronously at call time.
-          subscription.drop();
-          throw error;
-        }
-        if (isThenable(result)) {
-          // Delivery stays fire-and-forget, but the rejection must be
-          // observed: a dead remote rejects every push, and swallowing that
-          // would keep the dead callback registered (and its ping() lying)
-          // forever. State pushes coalesce to one per checkpointed batch, so
-          // the resolve frame per push is affordable — unlike the per-event
-          // stream fast path (see retainProcessEventBatch).
-          void Promise.resolve(result)
-            .then(undefined, (error: unknown) => {
-              if (!subscriptions.has(subscription)) return;
-              console.error(
-                "stream processor state change delivery failed; dropping subscription",
-                error,
-              );
-              subscription.drop();
-            })
-            .finally(() => disposeIgnoredRpcResult(result));
-          return;
-        }
-        disposeIgnoredRpcResult(result);
-      },
-      drop() {
-        if (!subscriptions.delete(subscription)) return;
-        retained[Symbol.dispose]();
-      },
-    };
-    subscriptions.add(subscription);
-    // Transport-level death signal, best-effort (see retainStateChangeCallback
-    // on why registration is defensive): the delivery-rejection path above is
-    // the guaranteed cleanup; this one is just earlier when available.
-    retained.onRpcBroken?.(() => subscription.drop());
-
-    // The initial push: current state IS the first paint. A synchronously
-    // failing callback never becomes a subscription (deliver dropped it).
-    subscription.deliver({ offset: this.#checkpointOffset, state: this.#getState() });
-
-    return {
-      isLive: () => subscriptions.has(subscription),
-      unsubscribe: () => subscription.drop(),
-      [Symbol.dispose]: () => subscription.drop(),
-    };
   }
 
   /**
@@ -749,9 +657,9 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * Observe reduced-state changes IN-PROCESS. Unlike `onStateChange`, the
-   * observer is a local function (the host wires it to refresh its live-state
-   * engine), not a retained RPC stub. Returns an unsubscribe.
+   * Observe reduced-state changes IN-PROCESS: the observer is a local function
+   * (the host wires it to refresh its live-state engine), not a retained RPC
+   * stub. Returns an unsubscribe.
    */
   observeStateChanges(
     observer: (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void,
@@ -761,14 +669,6 @@ export abstract class StreamProcessor<
   }
 
   #notifyStateChange(snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>): void {
-    for (const subscription of [...this.#stateChangeSubscriptions]) {
-      try {
-        subscription.deliver(snapshot);
-      } catch (error) {
-        // deliver() already dropped the subscription on a synchronous throw.
-        console.error("stream processor state change callback failed", error);
-      }
-    }
     for (const observer of [...this.#stateChangeObservers]) {
       try {
         observer(snapshot);
@@ -838,45 +738,4 @@ export abstract class StreamProcessor<
     this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
     return this.#state;
   }
-}
-
-function retainStateChangeCallback<State>(
-  cb: StateChangeCallback<State>,
-): RetainedStateChangeCallback<State> {
-  const retainable = cb as StateChangeCallback<State> &
-    Partial<Disposable> & {
-      dup?(): RetainedStateChangeCallback<State>;
-      onRpcBroken?(callback: (error: unknown) => void): void;
-    };
-  const retained = retainable.dup?.() ?? retainable;
-  const dispose = retained[Symbol.dispose]?.bind(retained);
-  const wrapped: RetainedStateChangeCallback<State> = Object.assign(
-    (snapshot: StreamProcessorSnapshot<State>) => retained(snapshot),
-    {
-      [Symbol.dispose]() {
-        dispose?.();
-      },
-    },
-  );
-  // Same defensive wiring as retainProcessEventBatch (stream-connections.ts):
-  // Cap'n Web stubs intercept onRpcBroken locally but expose no own property
-  // descriptors, and a Workers RPC property access can fabricate a pipelined
-  // method that rejects at call time — so wire whatever the stub claims to
-  // have and swallow registration failures.
-  const onRpcBroken = retained.onRpcBroken;
-  if (typeof onRpcBroken === "function") {
-    wrapped.onRpcBroken = (brokenCallback: (error: unknown) => void) => {
-      try {
-        const result = onRpcBroken.call(retained, brokenCallback) as unknown;
-        if (isThenable(result)) {
-          void Promise.resolve(result).catch(() => {
-            // Pipelined fake: the remote has no onRpcBroken method.
-          });
-        }
-      } catch {
-        // Registration is best-effort.
-      }
-    };
-  }
-  return wrapped;
 }

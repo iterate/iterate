@@ -17,11 +17,11 @@
  *                                                            server-push subscription: reconnect,
  *                                                            liveness watchdog, re-subscribe, retry —
  *                                                            see its docstring)
- *   5. LIVE STATE       → useItxState((itx) => itx.processor)
- *                                                           (the React spelling of
- *                                                            itx.processor.onStateChange(setState):
- *                                                            the initial push is the first paint, every
- *                                                            state change repaints — see its docstring)
+ *   5. LIVE STATE       → useLiveState((itx) => itx.liveState, selector)
+ *                                                           (subscribe to any `.liveState` node; the
+ *                                                            server pushes a snapshot then minimal
+ *                                                            diffs and the selector picks the slice you
+ *                                                            render — see its docstring)
  *
  *   (useItxEffect — the reconnect-aware raw effect — is the internal foundation
  *   under the live hooks; it stops being module-private the day a consumer
@@ -85,7 +85,7 @@ import {
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { LiveStateRpc, ProcessorSnapshot } from "../domains/streams/rpc-types.ts";
+import type { LiveStateRpc } from "../domains/streams/rpc-types.ts";
 import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
 import { applyPatch } from "../lib/live-state/diff.ts";
 import type { LiveUpdate } from "../lib/live-state/protocol.ts";
@@ -403,17 +403,16 @@ export function useItxQuery<T>({
  * just that widget and never suspends the page.
  *
  * Subscribe to live pushes:
- *   const [state, setState] = useState<ProjectState>();
  *   useItxEffect((itx) => {
- *     const sub = itx.project.onStateChange(setState); // server now pushes to setState
- *     return () => sub[Symbol.dispose]();              // dispose = tell the server to stop
+ *     const sub = itx.streams.get("/logs").subscribe({ processEventBatch });
+ *     return () => sub.unsubscribe();                 // tell the server to stop
  *   }, []);
  *
  * Async setup (await, then subscribe) — same hook, no extra ceremony:
  *   useItxEffect(async (itx) => {
  *     const cfg = await itx.project.getConfig();
- *     const sub = itx.project.onStateChange((s) => setState({ ...s, cfg }));
- *     return () => sub[Symbol.dispose]();
+ *     const sub = await itx.streams.get("/logs").subscribe({ processEventBatch: onBatch(cfg) });
+ *     return () => sub.unsubscribe();
  *   }, []);
  *
  * The callback may be sync OR async; you don't pick. An async setup's late cleanup
@@ -551,7 +550,7 @@ function watchItxSubscription(
 
 /**
  * The live handle shape every itx subscription API returns — `Stream.subscribe`
- * and `StreamProcessorRpc.onStateChange` both hand back `ping()` + `unsubscribe()`.
+ * and `LiveStateRpc.subscribe` both hand back `ping()` + `unsubscribe()`.
  */
 export type ItxLiveSubscriptionHandle = {
   ping(): boolean | Promise<boolean>;
@@ -669,65 +668,6 @@ export function useItxSubscription(
       setEpoch((current) => current + 1);
     },
   };
-}
-
-/**
- * THE page-data primitive: live reduced state from a stream processor. The
- * callsite spells the whole subscription — nothing is called on your behalf:
- *
- *   const { state } = useItxState((itx, setState) => itx.processor.onStateChange(setState), []);
- *   // state.secrets / state.repos / state.agents re-render as events land
- *
- * The hook only owns what a callsite can't: the state cell (`setState` is a
- * plain setter EXCEPT it commits offset-monotonically, so a straggler push
- * from a dying subscription can never roll state backwards) and
- * {@link useItxSubscription}'s recovery. No cache keys, no query client, no
- * separate initial fetch: `onStateChange` delivers the current checkpoint
- * immediately (the server's initial push IS the first paint) and every state
- * change after; mutations need no invalidation.
- *
- * `state` is `undefined` between mount and the initial push (one round trip
- * on a warm socket); render a loading row for that window. Anything the
- * subscribe closure captures that points the hook at a DIFFERENT processor
- * (a secret path, a repo path) goes in `deps` — a deps change re-subscribes
- * AND drops the held snapshot, so offsets from unrelated processors are
- * never compared.
- */
-export function useItxState<State>(
-  subscribe: (
-    itx: ItxHandle,
-    setState: (snapshot: ProcessorSnapshot<State>) => void,
-  ) => Promise<ItxLiveSubscriptionHandle>,
-  deps: unknown[] = [],
-): {
-  state: State | undefined;
-  offset: number | undefined;
-  status: ItxSubscriptionStatus;
-  error?: string;
-  refresh: () => void;
-} {
-  const [snapshot, setSnapshot] = useState<ProcessorSnapshot<State>>();
-
-  // deps change = this hook now points at a different processor: the old
-  // snapshot must not survive (its offsets are meaningless against the new
-  // processor's). Recovery re-subscribes (same processor) keep the snapshot —
-  // they come from useItxSubscription's internal epoch, not from deps.
-  useEffect(() => {
-    return () => setSnapshot(undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
-  }, deps);
-
-  const subscription = useItxSubscription(
-    (itx) =>
-      subscribe(itx, (pushed) => {
-        setSnapshot((previous) =>
-          previous !== undefined && previous.offset >= pushed.offset ? previous : pushed,
-        );
-      }),
-    deps,
-  );
-
-  return { state: snapshot?.state, offset: snapshot?.offset, ...subscription };
 }
 
 /** A tiny per-mount store holding the reassembled live value. `useSyncExternalStore`

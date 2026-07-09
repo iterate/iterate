@@ -145,7 +145,6 @@ import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
   StreamProcessor,
   StreamProcessorContract,
-  StreamProcessorStateSubscriptionHandle,
 } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
@@ -4658,21 +4657,6 @@ export class StreamProcessorRpcTarget<
     };
   }
 
-  async onStateChange(cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown) {
-    // Without a projection the remote callback goes straight to the processor,
-    // keeping full stub retention. With one, deliveries pass through a
-    // projecting wrapper that forwards the WHOLE retention surface — dup (so
-    // the processor's retain duplicates the underlying remote stub, not the
-    // wrapper), disposal, and onRpcBroken — so a projected subscription lives
-    // exactly as long as an unprojected one.
-    const publicState = this.#publicState;
-    const target =
-      publicState === undefined
-        ? (cb as (snapshot: ProcessorSnapshot<ProcessorState<Contract>>) => unknown)
-        : projectStateChangeCallback(cb, publicState);
-    return new ProcessorStateSubscriptionRpcTarget(await this.#processor.onStateChange(target));
-  }
-
   waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
     return this.#processor.waitUntilEvent(input);
   }
@@ -4776,10 +4760,6 @@ class ProcessorRelayRpcTarget<State>
     return await (await this.#processor()).getRuntimeState();
   }
 
-  async onStateChange(cb: (snapshot: ProcessorSnapshot<State>) => unknown) {
-    return await (await this.#processor()).onStateChange(cb);
-  }
-
   async waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
     return await (await this.#processor()).waitUntilEvent(input);
   }
@@ -4792,72 +4772,6 @@ class ProcessorRelayRpcTarget<State>
       throw new Error("wakeStreamSubscriber is dialed by stream delivery spines, not sessions");
     }
     return this.#host().wakeStreamSubscriber(request);
-  }
-}
-
-/**
- * Wrap a state-change callback so every delivery is projected through
- * `publicState`, WITHOUT losing the callback's RPC retention surface: `dup()`
- * duplicates the underlying remote stub (re-wrapped, so the duplicate projects
- * too), disposal releases it, and `onRpcBroken` forwards. This is what lets
- * `StreamProcessor.onStateChange`'s retain machinery treat a projected remote
- * callback exactly like a bare one.
- */
-function projectStateChangeCallback<InternalState, PublicState>(
-  cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown,
-  publicState: (state: InternalState) => PublicState,
-): (snapshot: ProcessorSnapshot<InternalState>) => unknown {
-  const retainable = cb as typeof cb &
-    Partial<Disposable> & {
-      dup?(): typeof cb;
-      onRpcBroken?(handler: (error: unknown) => void): void;
-    };
-  return Object.assign(
-    (snapshot: ProcessorSnapshot<InternalState>) =>
-      cb({ offset: snapshot.offset, state: publicState(snapshot.state) }),
-    {
-      ...(typeof retainable.dup === "function"
-        ? { dup: () => projectStateChangeCallback(retainable.dup!.call(retainable), publicState) }
-        : {}),
-      ...(typeof retainable.onRpcBroken === "function"
-        ? {
-            onRpcBroken: (handler: (error: unknown) => void) =>
-              retainable.onRpcBroken!.call(retainable, handler),
-          }
-        : {}),
-      [Symbol.dispose]: () => {
-        retainable[Symbol.dispose]?.();
-      },
-    },
-  );
-}
-
-/**
- * RPC ownership handle for one `onStateChange` subscription — the processor
- * counterpart of {@link StreamSubscriptionRpcTarget}. `unsubscribe()` is the
- * explicit domain operation, disposal is the scoped cleanup path, and `ping()`
- * reports whether the subscription is still registered on the live processor
- * (a dead Durable Object incarnation makes the call itself reject — both
- * signals tell the client to re-subscribe).
- */
-class ProcessorStateSubscriptionRpcTarget extends IterateRpcRelay<"ProcessorStateSubscriptionHandle"> {
-  readonly #handle: StreamProcessorStateSubscriptionHandle;
-
-  constructor(handle: StreamProcessorStateSubscriptionHandle) {
-    super();
-    this.#handle = handle;
-  }
-
-  ping() {
-    return this.#handle.isLive();
-  }
-
-  unsubscribe() {
-    this.#handle.unsubscribe();
-  }
-
-  [Symbol.dispose](): void {
-    this.#handle.unsubscribe();
   }
 }
 
