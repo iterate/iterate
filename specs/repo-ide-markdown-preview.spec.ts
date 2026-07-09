@@ -28,11 +28,12 @@ test("toggle a markdown file between Code and its rendered Preview", async ({
   await expect(page.locator(".cm-content")).toContainText("# ");
 
   // Preview renders the markdown: the `# Heading` becomes a real <h1>, with no
-  // literal `#` in the rendered output.
-  await page.getByRole("button", { name: "Preview" }).click();
+  // literal `#` in the rendered output. The Code | Preview toggle is a base-ui
+  // Tabs pair, so the triggers carry role="tab".
+  await page.getByRole("tab", { name: "Preview" }).click();
   await expect(page.getByRole("heading").first()).toBeVisible();
 
   // Back to Code: the editable source (with the `#` markers) returns.
-  await page.getByRole("button", { name: "Code" }).click();
+  await page.getByRole("tab", { name: "Code" }).click();
   await expect(page.locator(".cm-content")).toContainText("# ");
 });
