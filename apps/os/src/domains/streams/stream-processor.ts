@@ -557,6 +557,10 @@ export abstract class StreamProcessor<
     await this.#writeState({ offset: checkpointOffset, state });
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
+    // The state now reflects a folded journal prefix — which is what isLoaded
+    // asserts. This is how a processor whose checkpoint was DISCARDED at load
+    // (schema mismatch) becomes loaded again: the refold lands here.
+    this.#hasLoaded = true;
     if (!Object.is(previousState, state)) {
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
@@ -683,13 +687,27 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * Whether the checkpoint has been read (found, found-invalid, or found absent)
-   * — i.e. `currentState` reflects the last ingested fold rather than the schema
-   * default. Hosts gate synchronous live-state assembly on it: assembling a cold
-   * processor's default would push patches that wipe real facts to subscribers.
+   * Whether `currentState` IS the fold rather than the schema default. Hosts
+   * gate live-state assembly on it: assembling a cold processor's default would
+   * push patches that wipe real facts to subscribers. True after a checkpoint
+   * loads cleanly (or was found absent on a fresh processor), after any ingested
+   * batch (the state then reflects the journal prefix), or via {@link markLoaded}.
+   * A checkpoint DISCARDED at load (schema mismatch after a state-shape deploy)
+   * leaves this false — the state is the default with a refold pending, exactly
+   * what the gate exists to keep away from subscribers.
    */
   get isLoaded(): boolean {
     return this.#hasLoaded;
+  }
+
+  /**
+   * The host's confirmation that the journal has been folded through head, for
+   * the one case ingest can't cover: a clean catch-up that delivered ZERO
+   * batches. Then whatever `currentState` is — including the schema default
+   * over an empty journal — is by construction the fold.
+   */
+  markLoaded(): void {
+    this.#hasLoaded = true;
   }
 
   /**
@@ -739,7 +757,10 @@ export abstract class StreamProcessor<
       await this.prepare();
       const snapshot = await this.#readState();
       if (snapshot === undefined) {
+        // Fresh processor, no checkpoint: nothing has been observed yet, so
+        // the schema default IS the fold of the (empty) delivered prefix.
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        this.#hasLoaded = true;
         return;
       }
       // The checkpoint is a disposable CACHE of the fold (see
@@ -757,21 +778,22 @@ export abstract class StreamProcessor<
           parsed.error,
         );
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        // Deliberately NOT loaded: the state is the schema default with a
+        // refold pending — exactly what the isLoaded gate keeps away from
+        // live-state subscribers. The refold flips it: ingest (a replayed
+        // delivery or the host's catch-up), or the host's zero-batch
+        // {@link markLoaded} confirmation.
         return;
       }
       this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
-    })().then(
-      () => {
-        this.#hasLoaded = true; // every success path above: currentState is now the fold
-      },
-      (error: unknown) => {
-        // Clear the memoized load so a later batch retries the snapshot read
-        // instead of replaying this rejection forever.
-        this.#loaded = undefined;
-        throw error;
-      },
-    );
+      this.#hasLoaded = true;
+    })().catch((error: unknown) => {
+      // Clear the memoized load so a later batch retries the snapshot read
+      // instead of replaying this rejection forever.
+      this.#loaded = undefined;
+      throw error;
+    });
     await this.#loaded;
   }
 

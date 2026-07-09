@@ -370,6 +370,58 @@ describe("live-state assembly", () => {
     expect(h.host.live.getState()).not.toEqual({ pings: 0 });
     await vi.waitFor(() => expect(h.host.live.getState()).toEqual({ pings: 1 }));
   });
+
+  it("a checkpoint DISCARDED at load (schema mismatch) refolds from the journal before publishing", async () => {
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new CountingRecorder(RecorderA, deps)) }),
+    });
+    await h.stream.append({ type: PING, payload: {} });
+    await h.deliverAll();
+    expect(h.host.live.getState()).toEqual({ pings: 1 });
+
+    h.crash();
+    // The aftermath of a state-shape deploy: the stored checkpoint no longer
+    // fits the schema. Load discards it — and must NOT treat the resulting
+    // schema default as the fold (isLoaded stays false until the refold).
+    h.store.kv.set(`stream-processor:${RecorderA.slug}:snapshot`, {
+      offset: 1,
+      state: { pings: "corrupt" },
+    });
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // The read lane (liveState.get/subscribe): load, catch the discarded
+      // processor up from the journal, then assemble — never the default.
+      await h.host.loadAndRefreshLive();
+      expect(h.host.live.getState()).toEqual({ pings: 1 });
+      expect(h.processors.a.isLoaded).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("a discarded checkpoint over an EMPTY journal still becomes loaded (zero-batch catch-up)", async () => {
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new CountingRecorder(RecorderA, deps)) }),
+    });
+    // Nothing ever appended; only a corrupt checkpoint exists. The catch-up
+    // delivers zero batches, so only the host's markLoaded confirmation can
+    // flip the gate — without it, liveState would serve the {} seed forever.
+    h.store.kv.set(`stream-processor:${RecorderA.slug}:snapshot`, {
+      offset: 0,
+      state: { pings: "corrupt" },
+    });
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await h.host.loadAndRefreshLive();
+      // The schema default IS the fold of an empty journal — published, not wedged.
+      expect(h.host.live.getState()).toEqual({ pings: 0 });
+      expect(h.processors.a.isLoaded).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });
 
 /** Drain the microtask queue a few turns so serialized alarm writes land. */

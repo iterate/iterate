@@ -113,8 +113,10 @@ export type AnyHostedProcessor = {
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
   /** The current reduced state, synchronously — feeds live-state assembly without an async hop. */
   currentState: unknown;
-  /** Whether the checkpoint has been read, i.e. `currentState` is the fold and not the schema default. */
+  /** Whether `currentState` is the fold and not the schema default (see StreamProcessor.isLoaded). */
   readonly isLoaded: boolean;
+  /** Host confirmation that the journal is folded through head (the zero-batch catch-up case). */
+  markLoaded(): void;
   /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
   observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void;
 };
@@ -378,6 +380,12 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         });
         events = lookahead;
       }
+      // Folded through head as of this read. Ingest already marks itself
+      // loaded per batch; this covers the one case it can't — a clean
+      // catch-up that delivered ZERO batches (e.g. a discarded checkpoint
+      // over an empty journal), where the current state — even the schema
+      // default — is by construction the fold.
+      entry.processor.markLoaded();
     } catch (error) {
       if (opts.rethrow) throw error;
       console.error(
@@ -409,10 +417,20 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
     await Promise.all(
       [...entries.values()].map((entry) => entry.processor.snapshot().catch(() => undefined)),
     );
-    // A checkpoint read that still failed leaves that processor unloaded:
-    // KEEP the last assembled state rather than publishing defaults as facts
-    // (the failed snapshot() already cleared its memo, so the next refresh —
-    // or the storage-failure DO restart — retries the load).
+    // Still-unloaded after the snapshot read = a checkpoint DISCARDED at load
+    // (schema mismatch after a state-shape deploy): the fold must come from
+    // the journal. Catch up exactly those processors — so one stale
+    // checkpoint never blocks the peer slices assembled in getLiveState —
+    // and a clean catch-up marks even an empty journal loaded.
+    await Promise.all(
+      [...entries.entries()]
+        .filter(([, entry]) => !entry.processor.isLoaded)
+        .map(([name]) => catchUpInternal(name, { rethrow: false })),
+    );
+    // A processor that STILL isn't loaded (storage/read failures all the way
+    // down): KEEP the last assembled state rather than publishing defaults as
+    // facts — the failed loads cleared their memos, so the next refresh (or
+    // the storage-failure DO restart) retries.
     if ([...entries.values()].some((entry) => !entry.processor.isLoaded)) return;
     assembleLive();
   }
