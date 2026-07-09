@@ -42,6 +42,7 @@ import {
 } from "./oauth-state.ts";
 import {
   appendConnectionDirectoryEvent,
+  appendConnectionDirectoryEvents,
   integrationStreamStub,
   lookupConnectionClaim,
   streamEventsNewestFirst,
@@ -300,8 +301,14 @@ async function recordConnection(input: {
   };
   /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
-   * route inbound events (D4). */
-  directoryClaim?: { externalId: string };
+   * route inbound events (D4). `unclaimFirst` names a claim being MOVED from
+   * (telegram's steal): its unclaim commits in the SAME directory append as
+   * the new claim, so live inbound traffic never observes an unclaimed window
+   * (the door would ACK-and-drop, and Telegram never retries an ACK). */
+  directoryClaim?: {
+    externalId: string;
+    unclaimFirst?: { connection: string; projectId: string };
+  };
 }): Promise<void> {
   const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
   for (const secret of input.secrets) {
@@ -330,13 +337,26 @@ async function recordConnection(input: {
     input.connectedEvent,
   );
   if (input.directoryClaim) {
-    await appendConnectionDirectoryEvent({
-      claimed: true,
-      connection: input.connection,
-      externalId: input.directoryClaim.externalId,
-      projectId: input.projectId,
-      slug: input.slug,
-    });
+    await appendConnectionDirectoryEvents([
+      ...(input.directoryClaim.unclaimFirst
+        ? [
+            {
+              claimed: false,
+              connection: input.directoryClaim.unclaimFirst.connection,
+              externalId: input.directoryClaim.externalId,
+              projectId: input.directoryClaim.unclaimFirst.projectId,
+              slug: input.slug,
+            },
+          ]
+        : []),
+      {
+        claimed: true,
+        connection: input.connection,
+        externalId: input.directoryClaim.externalId,
+        projectId: input.projectId,
+        slug: input.slug,
+      },
+    ]);
   }
 }
 
@@ -670,9 +690,12 @@ export async function connectTelegram(input: {
     return { botUsername: bot.username ?? null, error: "telegram_bot_already_claimed", ok: false };
   }
   if (foreignClaim !== null) {
-    // Dispossess BEFORE claiming: the old project's stored token becomes
-    // unusable (egress emptied), its dashboard shows disconnected, and its
-    // directory claim clears so the new claim below is the only live one.
+    // Dispossess the old project's STORAGE first: its stored token becomes
+    // unusable (egress emptied) and its dashboard shows disconnected. Its
+    // directory claim deliberately stays live here — recordConnection below
+    // swaps it for the new claim in ONE atomic directory append, so a bot
+    // with live traffic never has an unclaimed window (the door would
+    // ACK-and-drop, and Telegram never retries an ACK).
     await recordDisconnection({
       connection: foreignClaim.connection,
       disconnectedEvent: {
@@ -691,7 +714,6 @@ export async function connectTelegram(input: {
       projectId: foreignClaim.projectId,
       secretPath: telegramBotTokenSecretPath(foreignClaim.connection),
       slug: "telegram",
-      unclaimExternalId: bot.id,
     });
   }
 
@@ -703,32 +725,13 @@ export async function connectTelegram(input: {
     (foreignClaim === null ? existingClaim?.connection : undefined) ??
     (sanitizeConnectionName(bot.username ?? "") || `bot-${sanitizeConnectionName(bot.id)}`);
 
-  // Point the bot at this deployment BEFORE recording anything: a failed
-  // setWebhook leaves no half-connected state behind.
-  const secretToken = await telegramWebhookSecretToken({
-    botId: bot.id,
-    keyMaterial: itxEnv.SECRET_ENCRYPTION_KEY,
-  });
-  await callTelegramWithToken({
-    apiBaseUrl,
-    body: {
-      secret_token: secretToken,
-      url: `${baseUrl}/api/integrations/telegram/webhook/${bot.id}`,
-    },
-    botToken,
-    method: "setWebhook",
-  });
-  // Advertise /new in the chat's `/` command menu (the session-rotation verb
-  // the telegram router understands). Same strictness as setWebhook — a token
-  // that can set a webhook can set commands; already-connected bots pick the
-  // menu up on reconnect.
-  await callTelegramWithToken({
-    apiBaseUrl,
-    body: { commands: [{ command: "new", description: "Start a fresh thread" }] },
-    botToken,
-    method: "setMyCommands",
-  });
-
+  // Record BEFORE setWebhook — claim-first, so no update can arrive at the
+  // door before its claim exists. A fresh bot has no traffic until setWebhook
+  // registers, and a stolen bot's traffic keeps routing (old claim, then the
+  // atomic swap) the whole way through; an update landing between the claim
+  // and setWebhook simply routes to the just-recorded connection. The old
+  // order (setWebhook first) had a real loss window on steal: claim-less
+  // updates are ACK-200-dropped and Telegram never retries an ACK.
   await recordConnection({
     connection,
     projectId: input.projectId,
@@ -759,8 +762,69 @@ export async function connectTelegram(input: {
       processor: ["integrations", "telegram", connection, "processor"],
       processorSlug: TelegramProcessorContract.slug,
     },
-    directoryClaim: { externalId: bot.id },
+    directoryClaim: {
+      externalId: bot.id,
+      ...(foreignClaim === null
+        ? {}
+        : {
+            unclaimFirst: {
+              connection: foreignClaim.connection,
+              projectId: foreignClaim.projectId,
+            },
+          }),
+    },
   });
+
+  try {
+    const secretToken = await telegramWebhookSecretToken({
+      botId: bot.id,
+      keyMaterial: itxEnv.SECRET_ENCRYPTION_KEY,
+    });
+    await callTelegramWithToken({
+      apiBaseUrl,
+      body: {
+        secret_token: secretToken,
+        url: `${baseUrl}/api/integrations/telegram/webhook/${bot.id}`,
+      },
+      botToken,
+      method: "setWebhook",
+    });
+    // Advertise /new in the chat's `/` command menu (the session-rotation verb
+    // the telegram router understands). Same strictness as setWebhook — a
+    // token that can set a webhook can set commands; already-connected bots
+    // pick the menu up on reconnect.
+    await callTelegramWithToken({
+      apiBaseUrl,
+      body: { commands: [{ command: "new", description: "Start a fresh thread" }] },
+      botToken,
+      method: "setMyCommands",
+    });
+  } catch (error) {
+    // Roll the just-recorded connection back (best-effort) so the dashboard
+    // never shows a half-connected bot whose webhook was never registered; a
+    // retry re-runs cleanly (the reconnect path reuses the connection name).
+    // Steal note: the OLD project is not restored — its token was already
+    // bricked above and re-claiming it would resurrect a connection whose
+    // secret is dead; the truthful state is "nobody holds the bot, retry".
+    await recordDisconnection({
+      connection,
+      disconnectedEvent: {
+        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        payload: {
+          botId: bot.id,
+          connection,
+          externalId: bot.id,
+          projectId: input.projectId,
+          reason: "webhook-registration-failed",
+        },
+      },
+      projectId: input.projectId,
+      secretPath: telegramBotTokenSecretPath(connection),
+      slug: "telegram",
+      unclaimExternalId: bot.id,
+    }).catch(() => null);
+    throw error;
+  }
 
   return { botId: bot.id, botUsername: bot.username ?? null, connection, ok: true };
 }

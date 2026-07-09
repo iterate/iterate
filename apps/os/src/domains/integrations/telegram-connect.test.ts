@@ -24,6 +24,10 @@ import { parseConfig } from "~/config.ts";
 const network = vi.hoisted(() => {
   type StoredEvent = { idempotencyKey?: string; offset: number; payload: unknown; type: string };
   const streams = new Map<string, StoredEvent[]>();
+  // One entry per append CALL: which stream, which event types — so tests can
+  // assert atomicity (e.g. the steal's [unclaim, claim] committing as one
+  // directory append, never two).
+  const appendBatches: Array<{ name: string; types: string[] }> = [];
   const secrets = new Map<
     string,
     { egress?: { urls: string[] }; material?: unknown; refresh?: unknown }
@@ -50,6 +54,7 @@ const network = vi.hoisted(() => {
           async append(
             ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
           ) {
+            appendBatches.push({ name, types: inputs.map((input) => input.type) });
             return inputs.map((input) => {
               const existing =
                 input.idempotencyKey === undefined
@@ -78,7 +83,9 @@ const network = vi.hoisted(() => {
     reset() {
       streams.clear();
       secrets.clear();
+      appendBatches.length = 0;
     },
+    appendBatches,
     secrets,
     streams,
   };
@@ -123,7 +130,18 @@ describe("connectTelegram", () => {
   });
 
   test("valid token: getMe names the connection, setWebhook gets the derived secret token, storage records everything", async () => {
-    await using api = await startFakeTelegramApi();
+    // Claim-first ordering: by the time Telegram is told about the webhook,
+    // the directory claim must already exist — an update arriving the instant
+    // registration completes has a claim to route on (the door ACK-drops
+    // unclaimed bots, and Telegram never retries an ACK).
+    let claimedAtSetWebhookTime: number | undefined;
+    await using api = await startFakeTelegramApi({
+      onSetWebhook: () => {
+        claimedAtSetWebhookTime = directoryEvents().filter(
+          (event) => event.type === CONNECTION_CLAIMED_EVENT_TYPE,
+        ).length;
+      },
+    });
 
     const result = await connectTelegram({
       botToken: BOT_TOKEN,
@@ -145,6 +163,7 @@ describe("connectTelegram", () => {
       `/bot${BOT_TOKEN}/setWebhook`,
       `/bot${BOT_TOKEN}/setMyCommands`,
     ]);
+    expect(claimedAtSetWebhookTime).toBe(1);
     expect(api.requests[1]!.body).toEqual({
       secret_token: await telegramWebhookSecretToken({
         botId: BOT_ID,
@@ -313,6 +332,20 @@ describe("connectTelegram", () => {
       CONNECTION_UNCLAIMED_EVENT_TYPE,
       CONNECTION_CLAIMED_EVENT_TYPE,
     ]);
+    // The swap is ATOMIC: old-unclaim + new-claim in ONE directory append —
+    // a stolen bot has live traffic throughout, and any window between the
+    // two would ACK-and-drop updates that Telegram never retries.
+    const directoryName = DurableObjectNameCodec.stringify(
+      { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+      { allowNullProjectId: true },
+    );
+    const swapBatch = network.appendBatches.find(
+      (batch) =>
+        batch.name === directoryName && batch.types.includes(CONNECTION_UNCLAIMED_EVENT_TYPE),
+    );
+    expect(swapBatch).toMatchObject({
+      types: [CONNECTION_UNCLAIMED_EVENT_TYPE, CONNECTION_CLAIMED_EVENT_TYPE],
+    });
     expect(directory?.at(-1)).toMatchObject({
       payload: { connection: "mishashelperbot", externalId: BOT_ID, projectId: PROJECT_ID },
     });
@@ -340,6 +373,40 @@ describe("connectTelegram", () => {
       projectId: PROJECT_ID,
     });
     expect(result).toMatchObject({ connection: "my-old-name", ok: true });
+  });
+
+  test("a setWebhook failure rolls the fresh connect back: no claim, disconnected status, bricked secret", async () => {
+    await using api = await startFakeTelegramApi({ failSetWebhook: true });
+
+    await expect(
+      connectTelegram({ botToken: BOT_TOKEN, config: config(api.baseUrl), projectId: PROJECT_ID }),
+    ).rejects.toThrow(/setWebhook failed: webhook set refused/);
+
+    // Claim-first means the claim exists before setWebhook; the rollback
+    // unclaims it, so the fold nets to nobody holding the bot and a retry
+    // re-runs cleanly.
+    expect(directoryEvents().map((event) => event.type)).toEqual([
+      CONNECTION_CLAIMED_EVENT_TYPE,
+      CONNECTION_UNCLAIMED_EVENT_TYPE,
+    ]);
+    // The dashboard sees reality (never a half-connected bot whose webhook
+    // was never registered)…
+    expect(
+      await getConnectionStatus({
+        connection: "mishashelperbot",
+        projectId: PROJECT_ID,
+        provider: "telegram",
+      }),
+    ).toMatchObject({ connected: false });
+    // …and the stored token is unusable.
+    expect(
+      network.secrets.get(
+        DurableObjectNameCodec.stringify({
+          projectId: PROJECT_ID,
+          path: telegramBotTokenSecretPath("mishashelperbot"),
+        }),
+      ),
+    ).toMatchObject({ egress: { urls: [] } });
   });
 });
 
@@ -455,6 +522,18 @@ function config(apiBaseUrl: string) {
   });
 }
 
+/** The deployment-wide directory stream's events, as stored by the fake. */
+function directoryEvents() {
+  return (
+    network.streams.get(
+      DurableObjectNameCodec.stringify(
+        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { allowNullProjectId: true },
+      ),
+    ) ?? []
+  );
+}
+
 async function seedDirectoryClaim(input: { connection: string; projectId: string }) {
   await network.STREAM.getByName(
     DurableObjectNameCodec.stringify(
@@ -473,8 +552,12 @@ async function seedDirectoryClaim(input: { connection: string; projectId: string
 }
 
 /** A controllable fake Telegram Bot API: real HTTP, one valid token, records
- * every request. `await using` closes it when the test scope exits. */
-async function startFakeTelegramApi() {
+ * every request. `onSetWebhook` observes state AT registration time (the
+ * claim-first ordering proof); `failSetWebhook` simulates Telegram refusing
+ * the webhook. `await using` closes it when the test scope exits. */
+async function startFakeTelegramApi(
+  options: { failSetWebhook?: boolean; onSetWebhook?: () => void } = {},
+) {
   const requests: Array<{ body: Record<string, unknown>; path: string }> = [];
   const server = createServer((request, response) => {
     let raw = "";
@@ -504,6 +587,10 @@ async function startFakeTelegramApi() {
         return respond(200, { ok: true, result: true });
       }
       if (path.endsWith("/setWebhook")) {
+        options.onSetWebhook?.();
+        if (options.failSetWebhook === true) {
+          return respond(500, { ok: false, description: "webhook set refused" });
+        }
         return respond(200, { ok: true, result: true, description: "Webhook was set" });
       }
       respond(404, { ok: false, description: "Not Found" });

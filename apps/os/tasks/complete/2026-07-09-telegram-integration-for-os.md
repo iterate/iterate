@@ -513,6 +513,22 @@ gate, not authz.
     the same snippet with the other stream's path.
   - The two new event-type constants live on the contracts, not utils.ts
     (contract catalogs need literal keys; knip flagged the unused mirrors).
+- 2026-07-09: two more bugbot findings folded in (both real):
+  - Journaled sends are THREAD-BOUND: payload-supplied
+    chat_id/message_thread_id are stripped and the stream-path identity is
+    forced (forced, not rejected — a permanently-invalid request must not
+    wedge the obligation retry loop). Provenance, not capability: the
+    message-sent claim records the stream as the message's thread.
+  - connectTelegram is CLAIM-FIRST: recordConnection (secret + facts + arm +
+    directory claim) now precedes setWebhook/setMyCommands, so no inbound
+    update can ever hit the door unclaimed (ACK-200-drop, never retried).
+    setWebhook failure rolls the fresh connection back (best-effort
+    recordDisconnection) so the dashboard never shows a half-connected bot.
+    Steal's directory swap is ATOMIC: recordConnection's directoryClaim
+    gained `unclaimFirst`, batching [unclaim old, claim new] into ONE
+    directory append (new appendConnectionDirectoryEvents batch variant) — a
+    stolen bot has live traffic throughout, so the unclaimed window had to
+    go entirely, not shrink.
 - 2026-07-09: URL substitution ratcheted to the PATH segment only (Misha's
   review call): a placeholder in the query/fragment/userinfo/host now throws
   `secret_reference_outside_url_path` at the substitution layer (naming the
