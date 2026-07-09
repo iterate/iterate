@@ -1087,6 +1087,103 @@ describe("minimal web-chat agent processors", () => {
   });
 });
 
+describe("context window compaction (openai-ws)", () => {
+  // OpenAI's Responses API rejects a request whose input exceeds the model's
+  // context window with a context_length_exceeded error instead of answering.
+  // The fake socket mirrors that contract: any response.create estimated past
+  // the window fails, anything smaller succeeds. The processor is expected to
+  // get an over-window history through to a successful completion anyway — by
+  // compacting what it sends, not by failing the request.
+  //
+  // RED until compaction exists. Once green here, port the same test to the
+  // cloudflare-ai sibling processor.
+  const FAKE_CONTEXT_WINDOW_TOKENS = 200_000;
+  // The ~4-chars-per-token heuristic; plenty for a threshold mock.
+  const estimateRequestTokens = (request: unknown) => Math.ceil(JSON.stringify(request).length / 4);
+
+  function contextWindowLimitedSocket(): FakeResponsesWebSocket {
+    return fakeResponsesWebSocket((request) => {
+      if (estimateRequestTokens(request) > FAKE_CONTEXT_WINDOW_TOKENS) {
+        return [
+          {
+            type: "error",
+            error: {
+              code: "context_length_exceeded",
+              message:
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            },
+          },
+        ];
+      }
+      return [
+        { type: "response.output_text.delta", delta: "```js\nasync (itx) => {}\n```" },
+        {
+          type: "response.completed",
+          response: { id: "resp_fits", usage: { total_tokens: 42 } },
+        },
+      ];
+    });
+  }
+
+  it("completes a request over an over-window history by compacting instead of failing", async () => {
+    const stream = new MemoryStream();
+    const socket = contextWindowLimitedSocket();
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => socket,
+      readStreamEvents: () => stream.getEvents(),
+    });
+
+    // ~100 conversation turns of ~6k chars per message ≈ 1.2M chars ≈ 300k
+    // estimated tokens — well past the fake 200k window.
+    const filler = "All work and no compaction makes the context window overflow. ".repeat(96);
+    const history: StreamEventInput[] = Array.from({ length: 100 }).flatMap(
+      (_, turn): StreamEventInput[] => [
+        {
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content: `[turn ${turn}] ${filler}`,
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          },
+        },
+        {
+          type: "events.iterate.com/agent/output-added",
+          payload: { content: `[ack ${turn}] ${filler}` },
+        },
+      ],
+    );
+    await stream.append(...history);
+    await stream.append(...openAiWsRequestEvents("are you still with me?"));
+
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    const completed = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    // Today the processor sends the whole history verbatim, the provider
+    // rejects it, and this completion is a context_length_exceeded failure.
+    expect(completed.payload).toMatchObject({
+      provider: "openai-ws",
+      result: { status: "success" },
+    });
+    // The request that succeeded must actually have fit the window...
+    const finalRequest = socket.sent.at(-1);
+    expect(estimateRequestTokens(finalRequest)).toBeLessThanOrEqual(FAKE_CONTEXT_WINDOW_TOKENS);
+    // ...while still carrying the newest user message: compaction drops or
+    // summarizes the OLD end of history, never the live question.
+    expect(JSON.stringify(finalRequest)).toContain("are you still with me?");
+    // And the agent got a usable turn out of it.
+    const output = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/output-added" &&
+        (event.payload as { llmRequestId?: number }).llmRequestId !== undefined,
+    );
+    expect(output?.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
+  });
+});
+
 describe("file attachments in the LLM request", () => {
   const attachment = {
     contentType: "image/png",
