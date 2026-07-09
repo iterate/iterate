@@ -158,7 +158,7 @@ export interface Project {
   schedulers: SchedulerCollection;
   /** Secret catalog by path. */
   secrets: SecretCollection;
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for `repos.get("/repos/config")`. */
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
@@ -827,11 +827,11 @@ export interface DynamicWorkerCollection {
  * `/repos/...`: an agent's workspace is the agent path under the prefix
  * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
  * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * Getting a workspace is cheap; the first call on it clones the config repo.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path (clones the config repo on first use). */
   get(path: string): Workspace;
 }
 
@@ -1069,10 +1069,11 @@ export interface Secret {
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
  * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at `/` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. `git` publishes commits to the workspace's
- * own branch in the project repo (`workspaces/<path>`), never to main.
+ * the config repo at `/repos/config` — every call waits for that clone, so a
+ * read that returns proves the checkout exists. Read, write, and edit files
+ * freely; nothing is shared until pushed. `git` publishes commits to the
+ * workspace's own branch in the config repo (`workspaces/<path>`), never to
+ * main.
  *
  * Constraints: the `.git` directory is platform-managed — read it if you
  * like, but writes there are rejected (use the `git` methods). Large files

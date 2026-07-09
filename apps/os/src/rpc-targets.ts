@@ -60,7 +60,7 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { defaultProjectWorkerRef, PROJECT_REPO_PATH } from "./domains/repos/utils.ts";
+import { CONFIG_REPO_PATH, defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -799,7 +799,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
-      parent: "repos.get(path); the project repo is itx.repo",
+      parent: "repos.get(path); the project's config repo (/repos/config) is itx.repo",
     });
   }
 
@@ -1275,14 +1275,14 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
  * `/repos/...`: an agent's workspace is the agent path under the prefix
  * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
  * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * Getting a workspace is cheap; the first call on it clones the config repo.
  */
 class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the project repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
-      children: { get: "The workspace at a path (clones the project repo on first use)." },
+        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the config repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+      children: { get: "The workspace at a path (clones the config repo on first use)." },
       parent: "a project itx (itx.workspaces)",
     });
   }
@@ -1292,7 +1292,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path (clones the config repo on first use). */
   get(path: string): WorkspaceRpcTarget {
     return new WorkspaceRpcTarget({
       auth: this.props.auth,
@@ -1305,10 +1305,11 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
  * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at `/` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. `git` publishes commits to the workspace's
- * own branch in the project repo (`workspaces/<path>`), never to main.
+ * the config repo at `/repos/config` — every call waits for that clone, so a
+ * read that returns proves the checkout exists. Read, write, and edit files
+ * freely; nothing is shared until pushed. `git` publishes commits to the
+ * workspace's own branch in the config repo (`workspaces/<path>`), never to
+ * main.
  *
  * Constraints: the `.git` directory is platform-managed — read it if you
  * like, but writes there are rejected (use the `git` methods). Large files
@@ -3261,6 +3262,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       projectId: args.projectId,
     });
 
+    // The config repo (its processor subscription, its cross-post rule onto
+    // `/`, and its create request) is armed by the project processor's
+    // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
     const appendRootEvents = () =>
       stream.append(
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
@@ -3270,14 +3274,6 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           }),
           processor: ["processor"],
           processorSlug: ProjectProcessorContract.slug,
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: PROJECT_REPO_PATH,
-          }),
-          processor: ["repos", ["get", PROJECT_REPO_PATH], "processor"],
-          processorSlug: RepoProcessorContract.slug,
         }),
         {
           type: "events.iterate.com/project/create-requested",
@@ -3323,7 +3319,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               },
             )
             .then(() => undefined);
-    const [[, , createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
+    const [[, createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
       Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether
@@ -3693,7 +3689,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
-  repo: "The project repo at /repos/project.",
+  repo: "The project's config repo at /repos/config.",
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
@@ -3706,7 +3702,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the project repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
+    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the config repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
 };
 
 // The shortcut methods are children (callable members) but not capability
@@ -4025,11 +4021,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for `repos.get("/repos/config")`. */
   get repo(): RepoRpcTarget {
     return new RepoRpcTarget({
       auth: this.#props.auth,
-      path: PROJECT_REPO_PATH,
+      path: CONFIG_REPO_PATH,
       projectId: this.#props.projectId,
     });
   }

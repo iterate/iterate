@@ -1,4 +1,4 @@
-# Iterate project repo
+# Iterate config repo
 
 This repo is seeded at project creation by the repo stream processor.
 

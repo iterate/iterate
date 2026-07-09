@@ -148,9 +148,8 @@ export async function resetWorkerDurableObjects(input: {
   // create missing container classes container-enabled. A worker already on
   // exports rejects the legacy upload with API 100403 — fall back to
   // `exports` tombstones (kept container classes then need live entries and
-  // stub code exports; legacy mode needs neither, untouched classes just
-  // persist). From a temp dir so the generated config never dirties the
-  // repo tree.
+  // stub code exports). From a temp dir so the generated config never
+  // dirties the repo tree.
   const parkedDir = mkdtempSync(join(tmpdir(), "do-reset-"));
   try {
     const shared = {
@@ -162,8 +161,19 @@ export async function resetWorkerDurableObjects(input: {
       workers_dev: false,
     };
     const parkedModule = readFileSync(PARKED_WORKER_MODULE, "utf8");
+    // Kept container classes are stub-exported in BOTH lanes: a kept class
+    // with LIVE Durable Objects makes Cloudflare reject any script version
+    // that drops its export (error 10064, live-hit on preview-8 2026-07-09
+    // once real sandboxes existed in a slot at erase time), and the legacy
+    // migrations lane is no exception. The stubs orphan the instances (the
+    // stated posture for kept classes) without tearing down their
+    // container-enabled namespaces.
+    const stubExports = kept
+      .map((className) => `export class ${className} { constructor() {} }`)
+      .join("\n");
+    const parkedWorker = kept.length === 0 ? parkedModule : `${parkedModule}\n${stubExports}\n`;
 
-    writeFileSync(join(parkedDir, "worker.js"), parkedModule);
+    writeFileSync(join(parkedDir, "worker.js"), parkedWorker);
     writeFileSync(
       join(parkedDir, "wrangler.json"),
       JSON.stringify({
@@ -188,10 +198,7 @@ export async function resetWorkerDurableObjects(input: {
       console.log(
         `DO reset: ${input.workerName} is on the declarative exports flow (API 100403) — parking via exports tombstones instead`,
       );
-      const stubExports = kept
-        .map((className) => `export class ${className} { constructor() {} }`)
-        .join("\n");
-      writeFileSync(join(parkedDir, "worker.js"), `${parkedModule}\n${stubExports}\n`);
+      // worker.js already carries the stub exports; only the config changes.
       writeFileSync(
         join(parkedDir, "wrangler.json"),
         JSON.stringify({
