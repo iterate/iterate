@@ -1020,6 +1020,10 @@ class MemoryStream implements Stream {
 
   async kill(): Promise<void> {}
 
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
+  }
+
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
