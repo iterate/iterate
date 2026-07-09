@@ -8,6 +8,10 @@ LIMIT 1;
 INSERT INTO organization (id, name, slug, logo, createdAt, metadata)
 VALUES (:id, :name, :slug, :logo, :createdAt, :metadata);
 
+/** @name insertOrganizationIfMissing */
+INSERT OR IGNORE INTO organization (id, name, slug, logo, createdAt, metadata)
+VALUES (:id, :name, :slug, :logo, :createdAt, :metadata);
+
 /** @name updateOrganizationNameById */
 UPDATE organization
 SET name = :name
@@ -26,6 +30,10 @@ LIMIT 1;
 
 /** @name insertMembership */
 INSERT INTO member (id, organizationId, userId, role, createdAt)
+VALUES (:id, :organizationId, :userId, :role, :createdAt);
+
+/** @name insertMembershipIfMissing */
+INSERT OR IGNORE INTO member (id, organizationId, userId, role, createdAt)
 VALUES (:id, :organizationId, :userId, :role, :createdAt);
 
 /** @name updateMembershipRoleByOrganizationAndUserId */

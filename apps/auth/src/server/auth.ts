@@ -5,6 +5,8 @@ import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/share
 import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
+import { db } from "./db/index.ts";
+import { ensureIterateOrganizationMembershipForNustomUserId } from "./organization-auto-join.ts";
 
 const LOCAL_OAUTH_CLIENT_ORIGINS = [
   "http://localhost:6274",
@@ -100,6 +102,13 @@ export const auth = betterAuth({
               image: user.image || generateDefaultAvatar(email),
             },
           };
+        },
+      },
+    },
+    session: {
+      create: {
+        after: async (session) => {
+          await ensureIterateOrganizationMembershipForNustomUserId(db, session.userId);
         },
       },
     },

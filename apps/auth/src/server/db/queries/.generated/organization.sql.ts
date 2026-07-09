@@ -62,6 +62,37 @@ export namespace insertOrganization {
   };
 }
 
+const insertOrganizationIfMissingSql = `
+INSERT OR IGNORE INTO organization (id, name, slug, logo, createdAt, metadata)
+VALUES (?, ?, ?, ?, ?, ?);
+`.trim();
+const insertOrganizationIfMissingQuery = (params: insertOrganizationIfMissing.Params) => ({
+  name: "insertOrganizationIfMissing",
+  sql: insertOrganizationIfMissingSql,
+  args: [params.id, params.name, params.slug, params.logo, params.createdAt, params.metadata],
+});
+
+export const insertOrganizationIfMissing = Object.assign(
+  async function insertOrganizationIfMissing(
+    client: Client,
+    params: insertOrganizationIfMissing.Params,
+  ) {
+    return client.run(insertOrganizationIfMissingQuery(params));
+  },
+  { sql: insertOrganizationIfMissingSql, query: insertOrganizationIfMissingQuery },
+);
+
+export namespace insertOrganizationIfMissing {
+  export type Params = {
+    id: string;
+    name: string;
+    slug: string;
+    logo: string | null;
+    createdAt: number;
+    metadata: string | null;
+  };
+}
+
 const updateOrganizationNameByIdSql = `
 UPDATE organization
 SET name = ?
@@ -181,6 +212,36 @@ export const insertMembership = Object.assign(
 );
 
 export namespace insertMembership {
+  export type Params = {
+    id: string;
+    organizationId: string;
+    userId: string;
+    role: string;
+    createdAt: number;
+  };
+}
+
+const insertMembershipIfMissingSql = `
+INSERT OR IGNORE INTO member (id, organizationId, userId, role, createdAt)
+VALUES (?, ?, ?, ?, ?);
+`.trim();
+const insertMembershipIfMissingQuery = (params: insertMembershipIfMissing.Params) => ({
+  name: "insertMembershipIfMissing",
+  sql: insertMembershipIfMissingSql,
+  args: [params.id, params.organizationId, params.userId, params.role, params.createdAt],
+});
+
+export const insertMembershipIfMissing = Object.assign(
+  async function insertMembershipIfMissing(
+    client: Client,
+    params: insertMembershipIfMissing.Params,
+  ) {
+    return client.run(insertMembershipIfMissingQuery(params));
+  },
+  { sql: insertMembershipIfMissingSql, query: insertMembershipIfMissingQuery },
+);
+
+export namespace insertMembershipIfMissing {
   export type Params = {
     id: string;
     organizationId: string;

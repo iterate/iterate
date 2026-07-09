@@ -38,6 +38,8 @@ create index "member_organizationId_idx" on "member" ("organizationId");
 
 create index "member_userId_idx" on "member" ("userId");
 
+create unique index "member_organizationId_userId_uidx" on "member" ("organizationId", "userId");
+
 create index "invitation_organizationId_idx" on "invitation" ("organizationId");
 
 create index "invitation_email_idx" on "invitation" ("email");

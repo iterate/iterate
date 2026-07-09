@@ -29,6 +29,7 @@ import {
   parseOAuthProjectSelectionReferenceId,
 } from "../../oauth-project-selection.ts";
 import { isPlatformAdminUser } from "../../platform-admin.ts";
+import { ensureIterateOrganizationMembershipForNustomUser } from "../../organization-auto-join.ts";
 import {
   generateId,
   toMembershipRole,
@@ -85,6 +86,10 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
           id: existing.id,
         },
       );
+      await ensureIterateOrganizationMembershipForNustomUser(context.db, {
+        id: existing.id,
+        email: normalizedEmail,
+      });
 
       return toUserRecord({
         ...existing,
@@ -104,6 +109,10 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
       role: "user",
       createdAt: now,
       updatedAt: now,
+    });
+    await ensureIterateOrganizationMembershipForNustomUser(context.db, {
+      id,
+      email: normalizedEmail,
     });
 
     return toUserRecord({
