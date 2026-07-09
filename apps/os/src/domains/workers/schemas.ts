@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { StreamEventBatch } from "../streams/rpc-types.ts";
+import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -226,7 +226,7 @@ export interface ProjectWorker {
    * stream only advances its checkpoint when this resolves; throwing means
    * the whole batch is redelivered later.
    */
-  processEventBatch(batch: StreamEventBatch): Promise<void>;
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 

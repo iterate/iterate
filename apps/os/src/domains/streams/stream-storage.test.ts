@@ -158,3 +158,53 @@ describe("reconcileSubscriptionCursorRows", () => {
     });
   });
 });
+
+describe("SqliteSubscriptionCursorStore epoch fencing", () => {
+  function makeStore() {
+    return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+  }
+
+  it("acks fenced on a stale epoch no-op; unfenced acks still land", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const before = store.get("k")!;
+
+    store.setCursor("k", 2); // the seek bumps the epoch
+    const after = store.get("k")!;
+    expect(after.epoch).toBeGreaterThan(before.epoch);
+
+    // The in-flight delivery captured the PRE-seek epoch: its ack must not
+    // clobber the seek.
+    store.ack("k", 100, before.epoch);
+    expect(store.get("k")!.ackedOffset).toBe(2);
+
+    // A delivery that read the post-seek row acks normally.
+    store.ack("k", 5, after.epoch);
+    expect(store.get("k")!.ackedOffset).toBe(5);
+  });
+
+  it("remove+recreate mints a fresh epoch, so a dead subscription's ack cannot land", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const oldEpoch = store.get("k")!.epoch;
+    store.delete("k");
+    store.ensure("k", 0); // recreate with deliver:"all" semantics
+    expect(store.get("k")!.epoch).toBeGreaterThan(oldEpoch);
+
+    store.ack("k", 100, oldEpoch); // the removed receiver's in-flight ack
+    expect(store.get("k")!.ackedOffset).toBe(0); // full history still owed
+  });
+
+  it("advanceWatermark keeps the failure streak but clears the retry schedule", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    store.nack("k", { attempt: 3, nextAttemptAt: 12345, error: "ingest failing" });
+
+    store.advanceWatermark("k", 7);
+    const row = store.get("k")!;
+    expect(row.ackedOffset).toBe(7);
+    expect(row.attempt).toBe(3); // a reachable host is not a healthy one
+    expect(row.lastError).toBe("ingest failing");
+    expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
+  });
+});

@@ -29,7 +29,6 @@ import {
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
   type CoreProcessorState,
-  type LiveStreamSubscriberDescriptor,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 
@@ -74,13 +73,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
-   * All delivery machinery — live connections for every lane plus the durable
-   * spine (cursor rows, pokes, push drains, retry/park) — lives in
-   * `stream-subscribers.ts`. This class only wires its ports to real storage
-   * and transports and decides policy (who may subscribe, what a config event
-   * means, which facts to append).
-   */
-  /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
    * because the core-state rebuild path also reconciles these rows against
    * the freshly folded config — see #readCoreProcessorState.
@@ -109,6 +101,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
       },
       now: () => Date.now(),
+      random: () => Math.random(),
       armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
@@ -140,7 +133,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+            delivery: { mode: "push", expression: ["processEventBatch"] },
             // Everything, from the beginning: the worker sees the stream's
             // full history once it first builds. No default selector —
             // selection is the worker's own code (or a same-key override).
@@ -159,14 +152,25 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** The DO alarm: the spine's durable retry timer. */
   alarm(): void {
+    this.#alarmArmedForMs = null;
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
   }
 
+  /**
+   * The earliest alarm time armed this incarnation, tracked in memory so two
+   * concurrent arms can't race each other through the async getAlarm/setAlarm
+   * pair (both observing null and the LATER one winning). Reset when the
+   * alarm fires; a stale-low value merely re-arms an already-set time.
+   */
+  #alarmArmedForMs: number | null = null;
+
   /** Move the DO alarm earlier, never later (many rows share one alarm). */
   async #armAlarmNoLaterThan(atMs: number): Promise<void> {
+    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
+    this.#alarmArmedForMs = atMs;
     try {
       const current = await this.ctx.storage.getAlarm();
       if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
@@ -214,7 +218,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // body against the contract schema, which has no `offset` key, so leaving
       // it attached made every asserted append of a core policy event fail with
       // a spurious "Unrecognized key: offset" instead of performing the assertion.
-      const { offset: expectedOffset, ...body } = StreamAppendInput.strict().parse(eventInput);
+      const { offset: expectedOffset, ...body } = StreamAppendInput.parse(eventInput);
 
       if (body.idempotencyKey !== undefined) {
         // Same-batch idempotency should behave like already-persisted idempotency.
@@ -508,14 +512,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         };
       }
 
-      case "events.iterate.com/stream/metadata-updated": {
-        const event = parse("events.iterate.com/stream/metadata-updated", args.event);
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: { ...next, metadata: event.payload.metadata },
-        });
-      }
-
       case "events.iterate.com/stream/configured": {
         const event = parse("events.iterate.com/stream/configured", args.event);
         const circuitBreaker = event.payload.config.circuitBreaker;
@@ -546,18 +542,6 @@ export class StreamDurableObject extends DurableObject<Env> {
             },
           },
         };
-        // A processor announcement on the connect event feeds the stream's
-        // contract documentation registry (`processorsBySlug`).
-        const announcement = subscriber?.processor?.announcement;
-        if (announcement !== undefined) {
-          next = {
-            ...next,
-            processorsBySlug: {
-              ...next.processorsBySlug,
-              [announcement.slug]: { announcedAtOffset: event.offset, announcement },
-            },
-          };
-        }
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
       }
 
@@ -579,7 +563,14 @@ export class StreamDurableObject extends DurableObject<Env> {
             ...next,
             configuredSubscribersByKey: {
               ...next.configuredSubscribersByKey,
-              [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+              [event.payload.subscriptionKey]: {
+                latestConfiguredEvent: {
+                  offset: event.offset,
+                  type: event.type,
+                  payload: event.payload,
+                  createdAt: event.createdAt,
+                },
+              },
             },
           },
         });
@@ -784,7 +775,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#runInBackground(async () => {
       await Promise.all(
         ancestorPaths.map((ancestorPath) =>
-          this.appendToStreamPath(ancestorPath, {
+          this.#appendToStreamPath(ancestorPath, {
             type: "events.iterate.com/stream/child-stream-created",
             idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
             payload: { childPath: path },
@@ -819,7 +810,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     ).append(...events);
   }
 
-  appendToStreamPath(path: string, ...events: StreamEventInput[]) {
+  #appendToStreamPath(path: string, ...events: StreamEventInput[]) {
     return this.#appendToStreamCoordinate({ path, projectId: this.name.projectId }, ...events);
   }
 
@@ -876,23 +867,38 @@ export class StreamDurableObject extends DurableObject<Env> {
     return state;
   }
 
+  #stateVersionWritten = false;
+
   #writeCoreProcessorState(state: CoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
-    this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
+    // The version is a constant per deploy; re-putting it on every append is
+    // pure write amplification. Once per incarnation is exactly as durable.
+    if (!this.#stateVersionWritten) {
+      this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
+      this.#stateVersionWritten = true;
+    }
   }
 
   /** Fold any event-log rows past the checkpoint into the state (no side effects). */
   #catchUpCoreProcessorState(state: CoreProcessorState): CoreProcessorState {
     const highestOffset = this.#log.highestOffset();
     let next = state;
-    if (highestOffset <= next.maxOffset) return next;
-    for (const event of this.#log.getRange({
-      afterOffset: next.maxOffset,
-      beforeOffset: highestOffset + 1,
-      limit: highestOffset - next.maxOffset,
-    })) {
-      if (event.offset <= next.maxOffset) continue;
-      next = this.#reduce({ event, state: next }, "replay");
+    // PAGED, never one monolithic read: this is also the version-bump rebuild
+    // path (replay from offset 0), and a capture stream's full log
+    // materialized into one array can exceed the DO's 128MB heap — an OOM in
+    // the CONSTRUCTOR, i.e. a stream bricked on every wake. The fold is
+    // incremental; only the read needed paging.
+    while (next.maxOffset < highestOffset) {
+      const page = this.#log.getRange({
+        afterOffset: next.maxOffset,
+        beforeOffset: highestOffset + 1,
+        limit: 500,
+      });
+      if (page.length === 0) break;
+      for (const event of page) {
+        if (event.offset <= next.maxOffset) continue;
+        next = this.#reduce({ event, state: next }, "replay");
+      }
     }
     return next;
   }
@@ -943,6 +949,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
       throw new Error(`subscriptionKey "${subscriptionKey}" is reserved for a durable subscriber`);
     }
+    if (
+      args.replayAfterOffset !== undefined &&
+      (!Number.isInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+    ) {
+      // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
+      // an unvalidated cursor produces a live-looking subscription that
+      // silently delivers nothing forever.
+      throw new Error(`replayAfterOffset must be a non-negative integer`);
+    }
 
     // Validate the caller-supplied descriptor at the boundary. The public
     // `Stream.subscribe` contract types `subscriber` as `unknown`, so without
@@ -951,12 +966,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     // append is wrapped in a catch-and-log, so the connection would already be
     // live and delivering with NO entry on the presence roster — the runtime
     // connection table and its event-sourced mirror would silently disagree.
-    // Parsing the serializable projection here rejects the subscribe call before
-    // any connection is registered; the live `getRuntimeState` capability is not
-    // part of the serializable descriptor and is passed through separately.
-    const subscriber = args.subscriber as LiveStreamSubscriberDescriptor | undefined;
+    // The live `getRuntimeState` capability rides as a SIBLING argument (the
+    // same position the wake handshake gives it), never inside the descriptor.
     const presence =
-      subscriber === undefined ? undefined : StreamSubscriberDescriptorSchema.parse(subscriber);
+      args.subscriber === undefined
+        ? undefined
+        : StreamSubscriberDescriptorSchema.parse(args.subscriber);
 
     // One filter shape everywhere: `eventTypes` is sugar for the selector's
     // type list (compileEventSelector also validates any condition upfront).
@@ -972,7 +987,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       selector,
       events: args.events,
       presence,
-      getRuntimeState: subscriber?.processor?.getRuntimeState,
+      getRuntimeState: args.getRuntimeState,
     });
 
     return new StreamSubscriptionRpcTarget({
@@ -1104,9 +1119,11 @@ export class StreamDurableObject extends DurableObject<Env> {
  * What `append` accepts over the wire: a public event input plus the optional
  * `offset` optimistic-concurrency assertion (split off before validation).
  */
+// Built ONCE: constructing a zod schema per appended event cost ~20µs/event
+// inside the synchronous commit turn (~50x the hoisted parse).
 const StreamAppendInput = StreamEventInputSchema.extend({
   offset: z.number().int().nonnegative().optional(),
-});
+}).strict();
 
 /**
  * One committed event with the core state before and after reducing it — what
@@ -1118,27 +1135,6 @@ type ReducedCoreEvent = {
   previousState: CoreProcessorState;
   state: CoreProcessorState;
 };
-
-/**
- * Builds the durable desired-state record the core reducer stores for
- * configured subscriptions and cross-post rules: the latest committed
- * configuration event, verbatim. Generic so the stored record keeps the
- * event's literal `type` (the state schema requires it).
- */
-function latestConfiguredEvent<
-  Event extends Pick<StreamEvent, "offset" | "type" | "payload" | "createdAt">,
->(
-  event: Event,
-): { latestConfiguredEvent: Pick<Event, "offset" | "type" | "payload" | "createdAt"> } {
-  return {
-    latestConfiguredEvent: {
-      offset: event.offset,
-      type: event.type,
-      payload: event.payload,
-      createdAt: event.createdAt,
-    } as Pick<Event, "offset" | "type" | "payload" | "createdAt">,
-  };
-}
 
 function resetCircuitBreaker(
   circuitBreaker: CoreProcessorState["circuitBreaker"],

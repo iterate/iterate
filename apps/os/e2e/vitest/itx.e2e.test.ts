@@ -2591,7 +2591,7 @@ describe("itx", () => {
     await secondSubscription.unsubscribe();
   });
 
-  test("Cap'n Web nested subscriber processor callbacks survive the stateless Worker proxy", async () => {
+  test("Cap'n Web subscriber runtime-state callbacks survive the stateless Worker proxy", async () => {
     const marker = crypto.randomUUID();
     const streamPath = `/capnweb-subscribe-nested-${marker}`;
     const subscriptionKey = `capnweb-nested-${marker}`;
@@ -2605,6 +2605,14 @@ describe("itx", () => {
     using stream = project.streams.get(streamPath);
     using subscription = await stream.subscribe({
       processEventBatch: () => {},
+      // The live callback rides as a SIBLING of the descriptor: `subscriber`
+      // is validated, serialized data (the presence fact) and cannot carry
+      // functions. The probe still crosses session → stateless Worker proxy →
+      // stream DO as a function-valued member of a plain-object argument.
+      getRuntimeState: () => ({
+        runtime: { marker },
+        snapshot: { offset: 123, state: { marker } },
+      }),
       subscriber: {
         description: "minimal-itx-v4 e2e nested subscriber callback forwarding probe",
         processor: {
@@ -2616,10 +2624,6 @@ describe("itx", () => {
             slug: "minimal-itx-v4.e2e.nested-callback-probe",
             version: "0.1.0",
           },
-          getRuntimeState: () => ({
-            runtime: { marker },
-            snapshot: { offset: 123, state: { marker } },
-          }),
         },
       },
       subscriptionKey,
@@ -2630,7 +2634,7 @@ describe("itx", () => {
         const state = await stream.getProcessorRuntimeState({ subscriptionKey });
         return state?.runtime?.marker === marker && state.snapshot.offset === 123;
       },
-      { description: "nested getRuntimeState callback after subscribe returned" },
+      { description: "getRuntimeState callback after subscribe returned" },
     );
 
     await subscription.unsubscribe();

@@ -51,6 +51,13 @@ type RetainedRpcCallback<T extends (...args: any[]) => unknown> = T &
 export type RetainedProcessEventBatch = ((batch: Parameters<ProcessEventBatch>[0]) => void) &
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
+    /**
+     * Dispatched-but-unsettled deliveries (durable lane only, where results
+     * are pulled). Idle teardown consults this: a sink with an unsettled
+     * batch belongs to a wedged subscriber, and its watermark must not be
+     * advanced as if the batch were digested.
+     */
+    pendingDeliveries?(): number;
   };
 
 function retainRpcCallback<T extends (...args: any[]) => unknown>(
@@ -89,6 +96,7 @@ export function retainProcessEventBatch(
   const retained = retainRpcCallback(processEventBatch);
   const dispose = retained[Symbol.dispose]?.bind(retained);
   const onDeliveryError = opts.onDeliveryError;
+  let pendingDeliveries = 0;
   const callback: RetainedProcessEventBatch = Object.assign(
     (batch: Parameters<ProcessEventBatch>[0]) => {
       let result: unknown;
@@ -105,14 +113,19 @@ export function retainProcessEventBatch(
         // every call, and swallowing that left broken connections in place
         // forever. Dispose only after settle; disposing before the result is
         // pulled opts out of observing the rejection signal this path needs.
+        pendingDeliveries += 1;
         void Promise.resolve(result)
           .then(undefined, (error: unknown) => onDeliveryError(error))
-          .finally(() => disposeIgnoredRpcResult(result));
+          .finally(() => {
+            pendingDeliveries -= 1;
+            disposeIgnoredRpcResult(result);
+          });
         return;
       }
       disposeIgnoredRpcResult(result);
     },
     {
+      pendingDeliveries: () => pendingDeliveries,
       [Symbol.dispose]() {
         try {
           dispose?.();
@@ -253,9 +266,10 @@ export function createSubscriberDial(deps: {
 
     /**
      * One push delivery: evaluate the expression to a sink and invoke it with
-     * the batch — `["worker", "processEventBatch"]` reaches the project
-     * worker and `["streams", ["get", path], "ingest"]` reaches a sibling
-     * stream through exactly the calls ordinary user code would make. The
+     * the batch — `["processEventBatch"]` reaches the project root's own
+     * dispatch point (which delegates to the project worker) and
+     * `["streams", ["get", path], "ingest"]` reaches a sibling stream —
+     * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
      * retry/park machine.
      */
@@ -334,9 +348,19 @@ function toInvocation(expression: ItxExpression, payload: unknown): ItxExpressio
  */
 function parseWakeHandshake(value: unknown): StreamSubscriberWakeResponse {
   const candidate = value as Partial<StreamSubscriberWakeResponse> | null | undefined;
-  if (typeof candidate?.checkpointOffset !== "number" || typeof candidate.sink !== "function") {
+  if (
+    // A non-integer/NaN/negative checkpoint from a misbehaving (possibly
+    // userspace) wake target would flow into the pump cursor and the
+    // watermark row, where NaN binds as SQL NULL and produces a
+    // live-looking subscription that silently delivers nothing forever.
+    // Reject it here so it surfaces as an ordinary delivery failure
+    // (backoff → park).
+    !Number.isInteger(candidate?.checkpointOffset) ||
+    (candidate!.checkpointOffset as number) < 0 ||
+    typeof candidate!.sink !== "function"
+  ) {
     throw new Error(
-      "wake expression did not resolve to a wake handshake ({ checkpointOffset, sink })",
+      "wake expression did not resolve to a wake handshake ({ checkpointOffset: int >= 0, sink })",
     );
   }
   return candidate as StreamSubscriberWakeResponse;
