@@ -14,8 +14,8 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 const AGENT_PATH = "/agents/e2e-script-spill";
 
 test(
-  "an oversized script result spills to a workspace file the agent can page through",
-  { timeout: 180_000 },
+  "a 10MB script result spills to a workspace file the agent can page through",
+  { timeout: 240_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "script-spill" });
     using agent = handle.agent(AGENT_PATH);
@@ -34,12 +34,14 @@ test(
       { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
     );
 
-    // Well past the 30k-char context limit AND past the workspace's 1.5MB
-    // inline threshold, so this also proves the R2 spillover lane end to end
-    // (on pre-R2 deployments a write this size was rejected outright). The
-    // marker sits in the tail — the part the pre-spill behavior threw away.
+    // 10MB: well past the 30k-char context limit AND far past the workspace's
+    // 1.5MB inline threshold, so this proves the R2 spillover lane end to end
+    // — journal append, agent-DO→workspace-DO RPC transfer, R2 put, and the
+    // full readback an agent script would do (on pre-R2 deployments a write
+    // this size was rejected outright). The marker sits in the tail — the
+    // part the pre-spill behavior threw away.
     const marker = crypto.randomUUID();
-    const result = { blob: "x".repeat(2_500_000), marker };
+    const result = { blob: "x".repeat(10_000_000), marker };
     await agent.stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:1", result },
@@ -51,11 +53,13 @@ test(
     let content = "";
     await waitForCondition(
       async () => {
-        const events = await agent.stream.getEvents({ limit: 500 });
-        const input = events.find(
-          (event) =>
-            event.type === "events.iterate.com/agent/input-added" &&
-            String(event.payload?.content ?? "").includes("saved in your workspace"),
+        // Type-filtered so the poll never re-downloads the 10MB completion event.
+        const events = await agent.stream.getEvents({
+          eventTypes: ["events.iterate.com/agent/input-added"],
+          limit: 500,
+        });
+        const input = events.find((event) =>
+          String(event.payload?.content ?? "").includes("saved in your workspace"),
         );
         content = String(input?.payload?.content ?? "");
         return content !== "";
@@ -71,10 +75,15 @@ test(
     expect(content.length).toBeLessThan(35_000);
 
     // The file holds the COMPLETE serialized result, marker and all — the
-    // exact bytes the model's next-turn readFile sees.
+    // exact bytes the model's next-turn readFile sees. Sized assertions, not
+    // toEqual, so a failure doesn't print a 10MB diff.
     using workspace = itx.workspaces.get(`/workspaces${AGENT_PATH}`);
     const spilled = await workspace.readFile(referencedPath!);
+    const expected = JSON.stringify(result, null, 2);
     expect(spilled).not.toBeNull();
-    expect(JSON.parse(spilled!)).toEqual(result);
+    expect(spilled!.length).toBe(expected.length);
+    const parsed = JSON.parse(spilled!) as typeof result;
+    expect(parsed.marker).toBe(marker);
+    expect(parsed.blob.length).toBe(10_000_000);
   },
 );
