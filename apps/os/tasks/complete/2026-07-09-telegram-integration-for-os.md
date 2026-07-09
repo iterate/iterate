@@ -1,5 +1,5 @@
 ---
-state: in-progress
+state: done
 priority: high
 size: large
 dependsOn: []
@@ -21,12 +21,14 @@ webhook door (plus the ingress lane fix), router + agent processors, itx
 dispatch + `connectTelegram` verb, system prompt via agent-defaults,
 dashboard card, four new test files.
 
-Part 2 (threading — spec below, bundled into the same PR at Misha's request)
-is implemented and unit-green: `/new` session rotation (+ setMyCommands +
-fixed ack + trailing text), reply_to as a router-resolved agent hint, and the
-`send-requested`/`message-sent` journaled-send pair with the deterministic
-reply_to_message_id rule. Remaining: the phone-side Part 2 manual test
-against the preview (steps 6–9 of the manual plan).
+Parts 2 and 3 (threading + steal-with-confirm, bundled into the same PR at
+Misha's request) are implemented, CI-green, and deployed to preview-2: `/new`
+session rotation (+ setMyCommands + fixed ack + trailing text), reply_to as a
+router-resolved agent hint, the `send-requested`/`message-sent`
+journaled-send pair with the deterministic reply_to_message_id rule, and
+`connectTelegram({ steal })` with the dashboard confirm dialog. PR marked
+ready for review 2026-07-09 at Misha's request; phone-side spot checks of
+Parts 2–3 can happen on the preview or post-merge.
 
 ## Objective
 
