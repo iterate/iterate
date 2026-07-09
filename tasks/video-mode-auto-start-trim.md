@@ -74,5 +74,3 @@ middlewright default can follow as a proper upstream change.
   attachment-upload flow (drag the file into the PR editor →
   `user-attachments/assets/...` URL) renders an inline video player, so we can
   attach a real video. Convert the webm→mp4 for the widest GitHub support.
-  </content>
-  </invoke>
