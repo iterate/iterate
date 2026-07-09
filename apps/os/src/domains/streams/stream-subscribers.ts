@@ -331,10 +331,14 @@ export class StreamSubscribers {
     this.#pokesInFlight.add(subscriptionKey);
     const work = (async () => {
       try {
-        const response = await withDeliveryTimeout(
-          this.#hooks.dial.poke(target, request),
-          `poke ${subscriptionKey}`,
-        );
+        // A poke that outlives its timeout still eventually settles with a
+        // RETAINED sink; dropping that undisposed would leak a session-pinning
+        // stub on exactly the wedged-subscriber occasions the timeout exists
+        // for. The late-settle hook disposes it (thermo round 2, blocker 4b).
+        const pokePromise = this.#hooks.dial.poke(target, request);
+        const response = await withDeliveryTimeout(pokePromise, `poke ${subscriptionKey}`, {
+          onLateResolve: (late) => late.sink[Symbol.dispose](),
+        });
         const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
         if (
           current === undefined ||
@@ -342,12 +346,25 @@ export class StreamSubscribers {
           current.latestConfiguredEvent.payload.delivery.mode !== "wake"
         ) {
           response.sink[Symbol.dispose]();
+          // The fence dropped a stale poke, but the CURRENT config (if any) is
+          // still owed delivery and nothing else re-reconciles until the next
+          // append — a liveness gap on quiet streams (round 2). Re-reconcile
+          // once this poke's in-flight reservation clears below.
+          queueMicrotask(() => this.wake());
           return;
         }
-        const presence =
-          response.subscriber === undefined
-            ? undefined
-            : StreamSubscriberDescriptorSchema.parse(response.subscriber);
+        let presence: StreamSubscriberDescriptor | undefined;
+        try {
+          presence =
+            response.subscriber === undefined
+              ? undefined
+              : StreamSubscriberDescriptorSchema.parse(response.subscriber);
+        } catch (error) {
+          // Reject the malformed descriptor WITHOUT leaking the sink retained
+          // moments earlier (round-1 finding 4.2 / round-2 blocker 4a).
+          response.sink[Symbol.dispose]();
+          throw error;
+        }
         // The announcement's consumes list is the wake-mode selector: the
         // stream only delivers event types the processor consumes, exactly as
         // the old subscribe-back handshake did.
@@ -778,9 +795,10 @@ export class StreamSubscribers {
           payload: { subscriptionKey, reason },
         });
         // A dead durable connection makes its watermark decisive again. Only
-        // genuinely-broken closes re-reconcile: "idle" pre-advances the
-        // watermark (see runIdleTeardownNow) so reconcile stays a no-op, and
-        // "replaced"/"subscription-removed" closes are already mid-flow.
+        // genuinely-broken closes re-reconcile: idle teardown suppresses
+        // reconcile for its turn and advances watermarks itself (see
+        // runIdleTeardownNow), and "replaced"/"subscription-removed" closes
+        // are already mid-flow.
         if (reason === "rpc-broken" || reason === "delivery-failed") {
           this.wake();
         }
@@ -929,16 +947,37 @@ export class StreamSubscribers {
  */
 const DELIVERY_TIMEOUT_MS = 60_000;
 
-async function withDeliveryTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+async function withDeliveryTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  opts: {
+    /** Runs iff the underlying promise RESOLVES after the timeout already won
+     * the race — the caller's chance to dispose late-arriving resources. */
+    onLateResolve?: (value: T) => void;
+  } = {},
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  if (opts.onLateResolve !== undefined) {
+    const onLateResolve = opts.onLateResolve;
+    void promise.then(
+      (value) => {
+        if (timedOut) onLateResolve(value);
+      },
+      () => {
+        // Late rejections have nothing to dispose; the race already surfaced
+        // a failure to the caller.
+      },
+    );
+  }
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} timed out after ${DELIVERY_TIMEOUT_MS}ms`)),
-          DELIVERY_TIMEOUT_MS,
-        );
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`${label} timed out after ${DELIVERY_TIMEOUT_MS}ms`));
+        }, DELIVERY_TIMEOUT_MS);
       }),
     ]);
   } finally {

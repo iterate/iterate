@@ -120,6 +120,7 @@ import type {
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
+import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -444,7 +445,24 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle> {
-    return this.durableObjectStub.subscribe(args);
+    // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
+    // and invokes the delivery callback over Workers RPC, and Workers RPC
+    // always ships a call result — so if the DO's calls were forwarded
+    // straight through to the subscriber's Cap'n Web stub, this worker would
+    // have to PULL the subscriber's resolution to produce that result,
+    // putting one subscriber-originated resolve frame per batch on the socket
+    // (live-proven against a preview deployment; see stream-wire.e2e.test.ts).
+    // Terminating the call HERE keeps the subscriber leg one-way: the
+    // forwarder invokes the subscriber's stub and disposes the result
+    // unpulled, and the DO's Workers RPC result is the forwarder's own
+    // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
+    // disposes a session's exports when the session ends, which is exactly an
+    // ephemeral subscription's lifetime.
+    const forward = retainProcessEventBatch(args.processEventBatch);
+    return this.durableObjectStub.subscribe({
+      ...args,
+      processEventBatch: (batch) => void forward(batch),
+    });
   }
 
   /**
@@ -463,7 +481,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     subscriptionKey: string;
     deliveryId: string;
     attempt: number;
-    configuredEvent: StreamEvent;
+    configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
   }): Promise<void> {
     // Only the platform's own delivery spine dials ingest: it arrives through
     // a push expression evaluated against the project's trusted itx root. A

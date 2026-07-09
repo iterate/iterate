@@ -188,7 +188,8 @@ harmless).
 
 Both sides still hibernate: the stream severs idle durable connections with
 an in-memory timer (never an alarm — the retained stubs it tears down die
-with the incarnation anyway), pre-advancing the watermark so teardown doesn't
+with the incarnation anyway), suppressing reconcile for the teardown turn and
+advancing watermarks past its own disconnect facts so teardown doesn't
 immediately re-poke. The spine's RETRY alarm is the opposite case on purpose:
 its state is durable rows, so waking a hibernated DO is exactly the point.
 

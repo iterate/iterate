@@ -245,7 +245,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       const previousState = workingState;
-      workingState = this.#reduce({ event: committed, state: previousState });
+      workingState = this.#reduce({ event: committed, state: previousState }, "append");
 
       // Core side effects are deferred until after the commit below: they can
       // call back into stream runtime state, so running them mid-batch would
@@ -404,13 +404,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   // validated at the trust boundary (the KV read and event-log recovery path
   // both parse). Re-validating the growing record fields on every append was
   // quadratic work for no added safety.
-  #reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
-    // Replay resilience (the #1714 parse-poison posture): a core event that no
-    // longer parses — a pre-v10 config shape replayed during a state rebuild,
-    // or a hand-corrupted row — folds as INERT (counters + breaker only)
-    // instead of throwing, which would brick the stream's constructor forever.
-    // New appends never take this path: #validateAppend strict-parses config
-    // events BEFORE they commit.
+  /**
+   * `mode` decides what a fold failure means. On the APPEND path a parse
+   * failure must THROW — the fold is part of the pre-commit gate for every
+   * core event #validateAppend does not special-case, and swallowing it would
+   * let malformed facts commit (thermo round 2, blocker 2: live-proven on
+   * preview). On the REPLAY path (state rebuild from the log) the same
+   * failure folds as INERT — counters + breaker only — because the event is
+   * already durable and throwing would brick the constructor forever (the
+   * #1714 parse-poison posture; pre-v10 journal shapes are the expected case).
+   */
+  #reduce(
+    args: { event: StreamEvent; state: CoreProcessorState },
+    mode: "append" | "replay",
+  ): CoreProcessorState {
+    if (mode === "append") return this.#reduceCore(args);
     try {
       return this.#reduceCore(args);
     } catch (error) {
@@ -899,7 +907,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       limit: highestOffset - next.maxOffset,
     })) {
       if (event.offset <= next.maxOffset) continue;
-      next = this.#reduce({ event, state: next });
+      next = this.#reduce({ event, state: next }, "replay");
     }
     return next;
   }

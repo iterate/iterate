@@ -123,7 +123,6 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
   z.strictObject({ mode: z.literal("push"), expression: ItxExpression }),
 ]);
 
-
 /**
  * Initial cursor for a push subscription. `"new"` pins to the configuring
  * event's own offset — deterministic under log replay, no clock — and is the
@@ -147,7 +146,6 @@ export type DeliverPolicy = z.infer<typeof DeliverPolicy>;
  * everything after it (the project worker feed).
  */
 const OnPoisonPolicy = z.enum(["park", "skip"]);
-
 
 // Payloads shared between the event catalog below and the reduced-state
 // records that store the latest committed configuration event, so the two can

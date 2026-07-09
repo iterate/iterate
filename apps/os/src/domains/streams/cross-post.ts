@@ -27,9 +27,7 @@ import type { StreamPushEventBatch } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { compileJsonataExpression } from "./event-selector.ts";
 
-type CrossPostProvenanceChain = NonNullable<
-  NonNullable<StreamEvent["source"]>["crossPostedFrom"]
->;
+type CrossPostProvenanceChain = NonNullable<NonNullable<StreamEvent["source"]>["crossPostedFrom"]>;
 
 /**
  * Backstop cap on a cross-post provenance chain. The structural cycle guard

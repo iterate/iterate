@@ -225,15 +225,25 @@ export function createSubscriberDial(deps: {
       if (projectId === null) {
         throw new Error("push subscriptions require a project-scoped stream");
       }
+      // The expression's final step MUST be a property step naming the sink
+      // method; the dial turns it into a CALL step so the invocation happens
+      // receiver-bound on the remote side. Reading the method as a property
+      // and applying it locally worked in-process but DETACHED the method from
+      // `this` across the real loopback RPC hop on deployed workerd (thermo
+      // round 2, blocker 1: every ingest delivery failed with
+      // "Cannot read properties of undefined (reading 'auth')").
+      const tail = expression.at(-1);
+      if (typeof tail !== "string") {
+        throw new Error(
+          "push subscription expression must end in a property step naming the sink method",
+        );
+      }
+      const invocation: ItxExpression = [...expression.slice(0, -1), [tail, batch]];
       const binding = itxLoopbackStub(deps.exports, { projectId, path: "/" });
       try {
         const itx = await binding.get();
         try {
-          const { receiver, value } = await evaluateItxExpression(itx, expression);
-          if (typeof value !== "function") {
-            throw new Error("push subscription expression did not resolve to a callable sink");
-          }
-          await Reflect.apply(value, receiver, [batch]);
+          await evaluateItxExpression(itx, invocation);
         } finally {
           (itx as Partial<Disposable>)?.[Symbol.dispose]?.();
         }

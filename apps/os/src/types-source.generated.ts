@@ -908,7 +908,7 @@ export interface Stream {
     subscriptionKey: string;
     deliveryId: string;
     attempt: number;
-    configuredEvent: StreamEvent;
+    configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
   }): Promise<void>;
   /**
    * "When events matching this land HERE, post them onto stream \`path\`" — the
