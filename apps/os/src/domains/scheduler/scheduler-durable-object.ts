@@ -131,6 +131,11 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   get processor() {
     return new StreamProcessorRpcTarget(this.#schedulerProcessor);
   }

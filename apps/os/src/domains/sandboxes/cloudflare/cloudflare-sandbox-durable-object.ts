@@ -276,6 +276,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     return this.#identity().projectId;
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   /**
    * Create the sandbox: write the durable record that makes it exist. The
    * instance type is validated against THIS class (the collection routed here

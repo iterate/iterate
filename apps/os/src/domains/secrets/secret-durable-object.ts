@@ -68,6 +68,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     return this.#processorHost.handleAlarm();
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   get processor() {
     return new StreamProcessorRpcTarget(this.#secretProcessor, {
       catchUpBeforeSnapshot: () => this.#processorHost.catchUp(SecretProcessorContract.slug),
