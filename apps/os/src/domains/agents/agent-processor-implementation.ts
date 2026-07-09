@@ -20,6 +20,7 @@ import { cachedEventSchema, getConsumedEventDefinition } from "../streams/proces
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
+  AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
@@ -48,11 +49,15 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   truncation.
  * - `now` is the injected clock (expiry stamps, durations, backstop deadline);
  *   defaults to Date.now.
+ * - `llmRetryBackoffBaseMs` scales the failure-retry backoff (default
+ *   AGENT_LLM_RETRY_BACKOFF_BASE_MS); tests shrink it so retry loops run in
+ *   milliseconds.
  */
 type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
+  llmRetryBackoffBaseMs?: number;
 };
 
 /** Page size for full-journal reads (prompt building, currency checks). */
@@ -70,6 +75,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
+  }
+
+  /** Retry spacing after n consecutive LLM failures: 0 for a fresh turn, then
+   * base × 2^(n-1) capped at 6× base (10s, 20s, 60s at the default base) — see
+   * AGENT_LLM_RETRY_BACKOFF_BASE_MS for why instant retries are worse than
+   * none. Pure in the fold's terms, so re-derived schedules agree. */
+  #llmRetryBackoffMs(state: AgentState): number {
+    if (state.consecutiveLlmFailures <= 0) return 0;
+    const base = this.deps.llmRetryBackoffBaseMs ?? AGENT_LLM_RETRY_BACKOFF_BASE_MS;
+    return Math.min(base * 2 ** (state.consecutiveLlmFailures - 1), base * 6);
   }
 
   // ---------------------------------------------------------------------------
@@ -410,7 +425,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           `llm-request-scheduled@generation:${state.requestGeneration}`,
         ),
         payload: {
-          debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+          debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS + this.#llmRetryBackoffMs(state),
           model: state.llmConfig.model,
           requestId: `llm-request:gen-${state.requestGeneration}`,
         },
@@ -658,6 +673,10 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: triggerSource === null ? state.pendingTriggerOffset : event.offset,
         pendingTriggerSource: triggerSource === null ? state.pendingTriggerSource : triggerSource,
         autonomousTurnCount: triggerSource === "user" ? 0 : state.autonomousTurnCount,
+        // A fresh user message is a fresh turn: it must get the full retry
+        // budget (and no stale backoff), not one attempt because an earlier
+        // turn burned the counter during a provider blip.
+        consecutiveLlmFailures: triggerSource === "user" ? 0 : state.consecutiveLlmFailures,
       };
     }
     case "events.iterate.com/agent/output-added":
