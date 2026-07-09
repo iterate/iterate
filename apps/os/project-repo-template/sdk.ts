@@ -171,6 +171,24 @@ export interface Project {
   /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
+   * "The project processes this event batch" — the first-party dispatch point
+   * every project-scoped stream's birth-certificate feed names
+   * (`expression: ["processEventBatch"]`). Today it delegates verbatim to the
+   * repo-backed project worker; it exists so the persisted expression names
+   * the INTENT rather than the implementation. That indirection is the
+   * platform's adaptation point: envelope evolution happens here in
+   * deployment code instead of by patching user repos, and future first-party
+   * per-event work (policy, metrics, indexing feeds) can join the same
+   * ordered, checkpointed delivery — with one rule when it does: platform
+   * steps must be idempotent and must never throw; only the worker delegation
+   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
+   * such steps until a real second consumer earns its place.
+   *
+   * Same trust model as `worker.processEventBatch` itself: any project
+   * principal may call it.
+   */
+  processEventBatch(batch: StreamEventBatch): Promise<void>;
+  /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
    * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
@@ -1338,6 +1356,20 @@ export type RevokeCapabilityInput = {
  */
 export type OpenApiRpc = object;
 
+/**
+ * Batch delivered to stream processors and live subscribers.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
+};
+
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
 
@@ -1853,20 +1885,6 @@ export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorker
 export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
-};
-
-/**
- * Batch delivered to stream processors and live subscribers.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
- */
-export type StreamEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  state: unknown;
 };
 
 export type StreamEventInput = {

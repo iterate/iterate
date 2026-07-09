@@ -91,7 +91,8 @@ export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
  *   watermark (poke coalescing + lag); the subscriber's checkpoint is the
  *   truth.
  * - `push`: the subscriber is a stateless effect named by the expression
- *   (`["worker", "processEventBatch"]`, `["streams", ["get", path],
+ *   (`["processEventBatch"]` — the project root's own dispatch point the
+ *   birth-certificate worker feed names, `["streams", ["get", path],
  *   "ingest"]`, …). The stream owns the AUTHORITATIVE cursor, dials the
  *   expression fresh per batch, and advances only on a successful awaited
  *   call.

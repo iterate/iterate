@@ -253,9 +253,10 @@ export function createSubscriberDial(deps: {
 
     /**
      * One push delivery: evaluate the expression to a sink and invoke it with
-     * the batch — `["worker", "processEventBatch"]` reaches the project
-     * worker and `["streams", ["get", path], "ingest"]` reaches a sibling
-     * stream through exactly the calls ordinary user code would make. The
+     * the batch — `["processEventBatch"]` reaches the project root's own
+     * dispatch point (which delegates to the project worker) and
+     * `["streams", ["get", path], "ingest"]` reaches a sibling stream —
+     * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
      * retry/park machine.
      */

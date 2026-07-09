@@ -100,7 +100,8 @@ lives with whoever owns the state it must be transactionally consistent
 with**. Wake and push share ONE addressing grammar: a persisted itx
 expression naming the method to invoke on the ordinary domain surface
 (`["agents", ["get", path], "processor", "wakeStreamSubscriber"]`,
-`["worker", "processEventBatch"]`, `["streams", ["get", path], "ingest"]`);
+`["processEventBatch"]` — the project root's own dispatch point, which
+delegates to the project worker — `["streams", ["get", path], "ingest"]`);
 webhook is the same cursor machinery pointed at plain HTTP:
 
 |                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                  | durable `webhook`                                |
@@ -223,7 +224,7 @@ certificate — `created (1)`, `subscription-configured (2)`, `woken (3)`:
 
 ```ts
 { subscriptionKey: "project-worker",
-  delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+  delivery: { mode: "push", expression: ["processEventBatch"] },
   deliver: "all",      // the worker sees full history once it first builds
   onPoison: "skip" }   // one bad event must not silence the feed
 ```

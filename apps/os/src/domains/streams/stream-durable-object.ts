@@ -140,7 +140,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+            delivery: { mode: "push", expression: ["processEventBatch"] },
             // Everything, from the beginning: the worker sees the stream's
             // full history once it first builds. No default selector —
             // selection is the worker's own code (or a same-key override).
