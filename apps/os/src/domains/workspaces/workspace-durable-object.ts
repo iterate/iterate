@@ -85,6 +85,11 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
       : `workspace ${this.#name.projectId}:${this.#name.path} (overlay over "/")`;
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   #projectRepoStub() {
     return this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({

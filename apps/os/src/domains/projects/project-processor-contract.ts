@@ -83,6 +83,26 @@ export const ProjectProcessorContract = defineProcessorContract({
          * project state (e.g. the inbound email sender allowlist). */
         creatorEmail: z.string().optional(),
       }),
+      examples: [
+        {
+          description:
+            "A dashboard signup created the project: onboarding starts and the creator's email seeds the inbound-email sender allowlist.",
+          payload: {
+            onboardingActive: true,
+            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
+            slug: "acme-inc",
+            creatorEmail: "jane@acme-inc.com",
+          },
+        },
+        {
+          description:
+            "An admin/CLI create: no creating user, so no onboarding and no allowlist seed.",
+          payload: {
+            projectId: "prj_01jzq8t2m5xcnd4w9e6b3vf7kp",
+            slug: "acme-staging",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/created": {
       description: "The project root was created.",
@@ -90,34 +110,118 @@ export const ProjectProcessorContract = defineProcessorContract({
         projectId: z.string(),
         slug: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "The bootstrap saga finished: the root repo exists and the project worker answered its probe.",
+          payload: {
+            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
+            slug: "acme-inc",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/onboarding-completed": {
       description: "The project owner completed the onboarding agent flow.",
       payloadSchema: z.object({
         agentPath: z.string(),
       }),
+      examples: [
+        {
+          description: "The onboarding agent marked its flow done for the project owner.",
+          payload: {
+            agentPath: "/agents/onboarding",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/custom-domain-add-requested": {
       description: "A custom domain should be provisioned and routed to this project.",
       payloadSchema: z.object({
         hostname: z.string(),
       }),
+      examples: [
+        {
+          description: "The owner asked to serve the project on their own domain.",
+          payload: {
+            hostname: "app.acme-inc.com",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/custom-domain-refresh-requested": {
       description: "Refresh Cloudflare status for a custom domain.",
       payloadSchema: z.object({
         hostname: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "A dashboard refresh re-polls Cloudflare while the domain is pending validation.",
+          payload: {
+            hostname: "app.acme-inc.com",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/custom-domain-remove-requested": {
       description: "A custom domain should be removed from this project.",
       payloadSchema: z.object({
         hostname: z.string(),
       }),
+      examples: [
+        {
+          description: "The owner asked to detach their domain from the project.",
+          payload: {
+            hostname: "app.acme-inc.com",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/custom-domain-cloudflare-observed": {
       description: "Cloudflare custom-hostname status observed for a project custom domain.",
       payloadSchema: ProjectCustomDomainCloudflareSnapshot,
+      examples: [
+        {
+          description:
+            "First observation after provisioning: certificate validation is pending, so the owner still has DNS records to create.",
+          payload: {
+            cloudflareHostnameId: "0d89c70d-ad9f-4843-b99f-6cc0252067e9",
+            error: null,
+            hostname: "app.acme-inc.com",
+            hostnameStatus: "pending",
+            ownershipVerification: {
+              name: "_cf-custom-hostname.app.acme-inc.com",
+              value: "5cc07c04-ea62-4a5d-b4b0-069bc47533f8",
+            },
+            sslStatus: "pending_validation",
+            status: "pending_validation",
+            validationRecords: [
+              {
+                name: "_acme-challenge.app.acme-inc.com",
+                status: "pending",
+                value: "ca3-f8e2b4c9d1a04e7f9b6c3d2e1f0a5b4c",
+              },
+            ],
+            wildcard: true,
+          },
+        },
+        {
+          description:
+            "A later refresh observed the hostname and certificate both active: the domain now routes to the project.",
+          payload: {
+            cloudflareHostnameId: "0d89c70d-ad9f-4843-b99f-6cc0252067e9",
+            error: null,
+            hostname: "app.acme-inc.com",
+            hostnameStatus: "active",
+            ownershipVerification: null,
+            sslStatus: "active",
+            status: "active",
+            validationRecords: [],
+            wildcard: true,
+          },
+        },
+      ],
     },
     "events.iterate.com/project/custom-domain-provision-failed": {
       description: "Custom-domain provisioning failed before an observed Cloudflare status.",
@@ -125,12 +229,31 @@ export const ProjectProcessorContract = defineProcessorContract({
         error: z.string(),
         hostname: z.string(),
       }),
+      examples: [
+        {
+          description: "Cloudflare rejected the custom-hostname create call.",
+          payload: {
+            error:
+              "Cloudflare /zones/f1e2d3c4b5a69788c9d0e1f2a3b4c5d6/custom_hostnames failed with 409: Duplicate custom hostname found.",
+            hostname: "app.acme-inc.com",
+          },
+        },
+      ],
     },
     "events.iterate.com/project/custom-domain-removed": {
       description: "A custom domain was removed from Cloudflare and routing KV.",
       payloadSchema: z.object({
         hostname: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "The remove request completed: Cloudflare and routing KV no longer know the hostname.",
+          payload: {
+            hostname: "app.acme-inc.com",
+          },
+        },
+      ],
     },
   },
   consumes: [

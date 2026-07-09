@@ -4,6 +4,10 @@ Owner doctrine, recorded 2026-06-11 during the itx address-unification
 review. This is the way to design ANY durable domain object on this
 platform — agents, contexts, app canvases, whatever comes next.
 
+For the practical half — side-effect guarantees, the obligation/reconciler
+pattern, eviction recovery, staleness policy, and the node test harness —
+see [Writing and testing stream processors](writing-stream-processors.md).
+
 ## Creation is an event. The journal begins with its own birth certificate.
 
 A durable thing's existence is not configuration — it is the FIRST EVENT

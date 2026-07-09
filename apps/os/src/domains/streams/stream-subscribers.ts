@@ -50,7 +50,7 @@ import type {
 } from "./core-processor-contract.ts";
 import { StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema } from "./core-processor-contract.ts";
 import { compileEventSelector, type CompiledEventSelector } from "./event-selector.ts";
-import type { SubscriptionCursorStore } from "./stream-storage.ts";
+import type { SizedStreamEvent, SubscriptionCursorStore } from "./stream-storage.ts";
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
@@ -164,8 +164,12 @@ export type SubscriberDial = {
 
 /** The policy/storage seams the owning Stream Durable Object provides. */
 type StreamSubscribersHooks = {
-  /** Synchronous committed-event range read from stream storage. */
-  readEvents(args: { afterOffset: number; limit: number }): StreamEvent[];
+  /**
+   * Synchronous committed-event range read from stream storage, sized: each
+   * event arrives with its serialized byte length so batch construction can
+   * enforce the byte cap without re-stringifying what storage just parsed.
+   */
+  readEvents(args: { afterOffset: number; limit: number }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
   /** The spine's durable cursor rows (SQLite next to the event log). */
@@ -233,11 +237,27 @@ export class StreamSubscribers {
   // ===========================================================================
 
   /**
+   * The just-committed events of the most recent append, handed over by the
+   * commit path so caught-up pumps and drains consume them directly instead
+   * of re-reading (and re-parsing) them from SQLite once per delivery lane.
+   * Correctness is offset-gated, never freshness-gated: `#readBatch` uses the
+   * tail only when its first offset is exactly `afterOffset + 1`, so a stale
+   * tail (more appends since, a rewound cursor) either still IS the right
+   * contiguous window or self-disqualifies and falls back to storage.
+   */
+  #freshTail: SizedStreamEvent[] = [];
+
+  /**
    * Re-arm every live connection's pump and reconcile durable subscriptions
    * (poke lagging wake subscribers without a connection, drain lagging push
    * subscriptions that are due). Never throws; never blocks the append.
+   *
+   * `freshTail` is the live-tail fast path: append passes what it just
+   * committed (already sized by the log write) so tailing consumers skip the
+   * storage round trip.
    */
-  wake(): void {
+  wake(freshTail?: SizedStreamEvent[]): void {
+    if (freshTail !== undefined && freshTail.length > 0) this.#freshTail = freshTail;
     for (const connection of this.#connections.values()) connection.wake();
     if (this.#tearingDown) return;
     try {
@@ -310,6 +330,11 @@ export class StreamSubscribers {
       const row = this.#hooks.store.get(subscriptionKey);
       if (row === undefined) continue; // unreachable after ensure; defensive
       if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
+      // "Caught up" trusts the monotonic watermark. A subscriber that
+      // discarded its checkpoint (schema-change refold) and lost its
+      // connection mid-replay parks here at a partial refold until the next
+      // append or dial moves the head — self-healing, but slow on a quiet
+      // stream; the subscriber's own keepalive covers the DO-death variant.
       if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
 
       if (config.delivery.mode === "wake") {
@@ -446,10 +471,21 @@ export class StreamSubscribers {
           if (row === undefined) return;
           if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) return;
 
-          const limit = Math.min(
-            this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT,
-            DELIVERY_BATCH_LIMIT,
-          );
+          // Webhook mode IS the push drain pinned to batch size 1: external
+          // receivers get single-event POSTs, each ack covers exactly one
+          // offset (mid-batch resume for free), the poison machinery always
+          // sees the true delivery unit (bisecting is structurally moot), and
+          // the per-iteration staleness checks above run per EVENT — a
+          // removed/replaced webhook can never keep POSTing a stale batch to
+          // the old URL. The cost is one row/config re-read per event on a
+          // backlog, noise against the HTTP POST itself.
+          const limit =
+            config.delivery.mode === "webhook"
+              ? 1
+              : Math.min(
+                  this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT,
+                  DELIVERY_BATCH_LIMIT,
+                );
           const events = this.#readBatch(row.ackedOffset, limit);
           const lastOffset = events.at(-1)?.offset;
           if (lastOffset === undefined) return; // caught up
@@ -473,77 +509,38 @@ export class StreamSubscribers {
             payload: entry.latestConfiguredEvent.payload,
           };
 
-          if (config.delivery.mode === "webhook") {
-            if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
-            // Webhook delivery is per EVENT on the same cursor machinery: each
-            // 2xx acks that single offset, so a failure mid-batch resumes at
-            // the exact event that failed. The poison machinery sees the true
-            // delivery unit (one event), which makes bisecting moot — a
-            // webhook "batch" is already its own poison isolate.
-            const url = config.delivery.url;
-            for (const event of matched) {
-              // Re-check the config per EVENT: the outer loop's staleness
-              // checks run per batch, and a removed/replaced webhook must not
-              // keep POSTing the rest of a 100-event batch to the old URL.
-              const currentEntry =
-                this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
-              if (
-                currentEntry === undefined ||
-                currentEntry.parkedAtOffset !== undefined ||
-                currentEntry.latestConfiguredEvent.offset !== entry.latestConfiguredEvent.offset
-              ) {
-                return; // whatever changed it already re-reconciled
-              }
-              const attempt = (this.#hooks.store.get(subscriptionKey)?.attempt ?? 0) + 1;
-              try {
-                await withDeliveryTimeout(
-                  this.#hooks.dial.webhook(url, {
-                    projectId: state.projectId,
-                    path: state.path,
-                    event,
-                    subscriptionKey,
-                    deliveryId: deliveryId(subscriptionKey, event.offset, event.offset),
-                    attempt,
-                    configuredEvent,
-                  }),
-                  `webhook ${subscriptionKey}`,
-                );
-              } catch (error) {
-                // "continue" = confirmed poison stepped over (and acked);
-                // "stop" = backed off or parked — the alarm/resume owns the
-                // future, and everything delivered so far is already acked.
-                if (
-                  this.#onPushFailure({ subscriptionKey, config, matched: [event], error }) ===
-                  "continue"
-                ) {
-                  continue;
-                }
-                return;
-              }
-              this.#hooks.store.ack(subscriptionKey, event.offset, row.epoch);
-              this.#consecutiveSkips.delete(subscriptionKey);
-            }
-            // Cover any trailing non-matching events the selector skipped.
-            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
-            continue;
-          }
-
-          const batch: StreamPushEventBatch = {
-            projectId: state.projectId,
-            path: state.path,
-            events: matched,
-            streamMaxOffset: state.maxOffset,
-            subscriptionKey,
-            deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
-            attempt: row.attempt + 1,
-            configuredEvent,
-          };
-
           try {
-            await withDeliveryTimeout(
-              this.#hooks.dial.push(config.delivery.expression, batch),
-              `push ${subscriptionKey}`,
-            );
+            if (config.delivery.mode === "webhook") {
+              if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
+              await withDeliveryTimeout(
+                this.#hooks.dial.webhook(config.delivery.url, {
+                  projectId: state.projectId,
+                  path: state.path,
+                  // Exactly one: the batch-limit-1 read above IS webhook mode.
+                  event: matched[0]!,
+                  subscriptionKey,
+                  deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
+                  attempt: row.attempt + 1,
+                  configuredEvent,
+                }),
+                `webhook ${subscriptionKey}`,
+              );
+            } else {
+              const batch: StreamPushEventBatch = {
+                projectId: state.projectId,
+                path: state.path,
+                events: matched,
+                streamMaxOffset: state.maxOffset,
+                subscriptionKey,
+                deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
+                attempt: row.attempt + 1,
+                configuredEvent,
+              };
+              await withDeliveryTimeout(
+                this.#hooks.dial.push(config.delivery.expression, batch),
+                `push ${subscriptionKey}`,
+              );
+            }
           } catch (error) {
             // "continue" = the failure handler already moved the goalposts
             // (halved the bisect window or stepped over confirmed poison) and
@@ -554,11 +551,11 @@ export class StreamSubscribers {
             }
             return;
           }
-          // Fenced on the epoch read above: a seek (cursor-set, resume-with-
-          // offset, replacement deliver, remove+recreate) that landed while
-          // this delivery was in flight bumped the epoch, and this ack no-ops
-          // instead of clobbering it — the next iteration re-reads the row
-          // and drains from wherever the seek pointed.
+          // Fenced on the epoch read above: a seek (cursor-set, replacement
+          // deliver, remove+recreate) that landed while this delivery was in
+          // flight bumped the epoch, and this ack no-ops instead of
+          // clobbering it — the next iteration re-reads the row and drains
+          // from wherever the seek pointed.
           this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
@@ -574,16 +571,29 @@ export class StreamSubscribers {
     );
   }
 
-  /** Read up to `limit` events after `afterOffset`, shrinking under the byte cap. */
+  /**
+   * Read up to `limit` events after `afterOffset`, shrinking under the byte
+   * cap. A reader positioned exactly at the last commit's tail consumes the
+   * handed-over fresh events instead of re-reading them from SQLite — the
+   * committed objects are byte-for-byte what a read-back would parse (append
+   * strict-parses the body and stamps `path` before commit).
+   */
   #readBatch(afterOffset: number, limit: number): StreamEvent[] {
-    const events = this.#hooks.readEvents({ afterOffset, limit });
-    if (events.length <= 1) return events;
+    const sized =
+      this.#freshTail[0]?.event.offset === afterOffset + 1
+        ? this.#freshTail.length > limit
+          ? this.#freshTail.slice(0, limit)
+          : this.#freshTail
+        : this.#hooks.readEvents({ afterOffset, limit });
+    if (sized.length <= 1) return sized.map((entry) => entry.event);
     let bytes = 0;
-    for (let index = 0; index < events.length; index += 1) {
-      bytes += JSON.stringify(events[index]).length;
-      if (bytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) return events.slice(0, index);
+    for (let index = 0; index < sized.length; index += 1) {
+      bytes += sized[index]!.byteLength;
+      if (bytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) {
+        return sized.slice(0, index).map((entry) => entry.event);
+      }
     }
-    return events;
+    return sized.map((entry) => entry.event);
   }
 
   /**
@@ -794,14 +804,15 @@ export class StreamSubscribers {
     this.wake();
   }
 
-  /** A `subscription-resumed` fact committed: un-park (the fold already cleared it) and kick. */
-  onResumed(subscriptionKey: string, afterOffset?: number): void {
-    if (afterOffset !== undefined) {
-      this.#hooks.store.setCursor(subscriptionKey, afterOffset);
-    } else {
-      const row = this.#hooks.store.get(subscriptionKey);
-      if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
-    }
+  /**
+   * A `subscription-resumed` fact committed: un-park (the fold already
+   * cleared it), clear the backoff/failure streak, and kick. Resume is a PURE
+   * un-park — moving the cursor is `subscription-cursor-set`'s job, its own
+   * fact; a redrive appends both.
+   */
+  onResumed(subscriptionKey: string): void {
+    const row = this.#hooks.store.get(subscriptionKey);
+    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
     this.wake();

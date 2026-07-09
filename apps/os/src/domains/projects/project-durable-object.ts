@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
@@ -42,6 +42,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    version: workerVersion(this.env),
   });
   readonly #projectProcessor = this.#processorHost.add(
     (deps) =>
@@ -111,6 +112,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#processorHost.handleAlarm();
+  }
+
   get emailProcessor() {
     return new StreamProcessorRpcTarget(this.#emailProcessor, {
       // The ingress door reads the sender allowlist from this snapshot; it
@@ -125,6 +131,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
       name: this.ctx.id.name!,
     };
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {

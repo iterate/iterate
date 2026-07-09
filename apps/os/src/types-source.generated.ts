@@ -101,6 +101,8 @@ export interface Project {
   __describe(): Promise<ProjectDescription>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
+  /** Abort this Project Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** The project stream processor (snapshot/state; \`state.created\` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** Workers AI: run(model, body), models(). */
@@ -322,6 +324,8 @@ export interface Agent {
   }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /** Includes \`whoami\` (\`"agent <projectId>:<agentPath>"\`), \`projectId\`, \`agentPath\`. */
   __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;
+  /** Abort this Agent Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
@@ -373,6 +377,8 @@ export interface CapabilityHost {
     executionId: string;
     result: unknown;
   }>;
+  /** Abort this Capability Host Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
 }
 
 /** Catalog of capability scopes within one project (\`itx.capabilityHosts\`). */
@@ -692,6 +698,8 @@ export interface Scheduler {
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as \`skipped\`. */
   cancel(key: string): Promise<void>;
+  /** Abort this Scheduler Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   list(): Promise<ScheduleView[]>;
   /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */
   trigger(key: string): Promise<{ executionId: string }>;
@@ -720,6 +728,8 @@ export interface Repo {
   create(): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
+  /** Abort this Repo Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** Commit a batch of file changes; use \`edit\` for a targeted single-string replacement. */
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   /**
@@ -905,6 +915,8 @@ export interface Stream {
       >;
     };
   }>;
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /**
    * Live EPHEMERAL event delivery: \`processEventBatch\` is called for every
    * committed batch (optionally replayed from \`replayAfterOffset\`); returns an
@@ -1041,6 +1053,8 @@ export interface Secret {
   __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
+  /** Abort this Secret Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** Set the secret material and/or its egress allowlist. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
@@ -1066,6 +1080,8 @@ export interface Workspace {
   __describe(): Promise<Description>;
   /** Workspace identity string (debug). */
   whoami(): Promise<string>;
+  /** Abort this Workspace Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null>;
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
@@ -1390,8 +1406,12 @@ export type StreamPushEventBatch = {
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
-/** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
-export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
+  Disposable & {
+    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
+    kill(): Promise<void>;
+  };
 
 /** One entry of a session's project catalog (\`session.projects.list()\`). */
 export type ProjectListEntry = {
@@ -1507,7 +1527,12 @@ export type AgentProcessorState = {
   llmProviderConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number }
+    | {
+        phase: "requested";
+        llmRequestId: number;
+        requestedAt?: number | undefined;
+        provider?: "cloudflare-ai" | "openai-ws" | undefined;
+      }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -1718,7 +1743,8 @@ export type SandboxInstanceType =
  *   anything since the last snapshot.
  * - \`start()\` boots the container now instead of lazily; \`sleep()\` snapshots
  *   and tears down now instead of waiting for \`sleepAfter\` (the SDK's
- *   \`stop()\` forwards to it); \`destroy()\` is permanent — the name is retired.
+ *   \`stop()\` forwards to it); \`kill()\` aborts the Durable Object incarnation;
+ *   \`destroy()\` is permanent — the name is retired.
  * - \`__describe()\` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - \`setEnvVars(vars)\` is DURABLE here (persisted, re-applied every start,
@@ -1729,7 +1755,10 @@ export type SandboxInstanceType =
  * - \`mountBucket\` and \`exposePort\` are unavailable (they throw): /workspace
  *   snapshots cover persistence, and \`tunnels\` covers public URLs.
  */
-export type CloudflareSandbox = object;
+export type CloudflareSandbox = object & {
+  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
+};
 
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {
@@ -1871,6 +1900,7 @@ export type GithubSyncResult = {
  */
 export type RepoProcessorState = {
   artifactName: string | null;
+  createRequested: boolean;
   created: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;

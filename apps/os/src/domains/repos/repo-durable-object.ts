@@ -8,7 +8,7 @@ import type {
 } from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
@@ -63,6 +63,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    version: workerVersion(this.env),
   });
   readonly #repoProcessor = this.#host.add(
     (deps) =>
@@ -76,6 +77,16 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#host.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#host.handleAlarm();
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {

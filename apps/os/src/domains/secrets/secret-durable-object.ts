@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -50,6 +50,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    version: workerVersion(this.env),
   });
   readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
@@ -60,6 +61,16 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#processorHost.handleAlarm();
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {

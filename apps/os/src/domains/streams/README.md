@@ -139,7 +139,8 @@ log):
     │  failure                              ▲ │ backoff min(30m, 1s·2^n) ±20% jitter,
     └───────────▶ retrying ─────────────────┘ │ one DO alarm = MIN(next_attempt_at)
                                               ▼
-                              parked ── subscription-resumed {afterOffset?} ──▶ active
+                              parked ── subscription-resumed ──▶ active
+                              (a redrive appends cursor-set first — resume is a pure un-park)
 ```
 
 Doctrine, worth memorizing:
@@ -242,6 +243,7 @@ at-least-once redelivery a no-op.
 export class RepoDurableObject extends DurableObject<Env> {
   readonly #host = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({ auth, projectId, path }),
+    version: workerVersion(this.env),
   });
   readonly #repoProcessor = this.#host.add((deps) => new RepoProcessor({ ...deps, github }));
 

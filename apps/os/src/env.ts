@@ -123,6 +123,14 @@ export interface Env {
    * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
    */
   FILES_BUCKET: R2Bucket;
+  /**
+   * Deploy identity (wrangler `version_metadata` binding). The stream
+   * processor hosts' crash-loop breaker keys its backoff budget on the version
+   * id so a fresh deploy — the usual antidote to a deterministic crash loop —
+   * retries immediately instead of waiting out the plateau. Optional because
+   * local dev may not provide it; read through {@link workerVersion}.
+   */
+  CF_VERSION_METADATA?: { id: string; tag?: string };
   SCHEDULER: DurableObjectNamespace<
     import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
   >;
@@ -141,3 +149,9 @@ export interface Env {
 }
 
 export const itxEnv = workerEnv as unknown as Env;
+
+/** The deploy's version id, for the processor hosts' crash-loop breaker.
+ * "unversioned" in environments without the version_metadata binding. */
+export function workerVersion(env: Env): string {
+  return env.CF_VERSION_METADATA?.id ?? "unversioned";
+}

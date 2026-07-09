@@ -6,7 +6,9 @@ export const auth = betterAuth({
   baseURL: "http://localhost:3000",
   secret: "secret",
   plugins: getAuthPlugins({
+    authAppOrigin: "http://localhost:3000",
     emailOtpEnabled: false,
+    fixedTestOtpEnabled: false,
     emailBinding: undefined,
     emailSenderDomain: "",
   }),

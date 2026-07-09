@@ -44,6 +44,8 @@ class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
+  async kill(): Promise<void> {}
+
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
@@ -364,6 +366,112 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(network.streams.size).toBe(1);
+  });
+});
+
+describe("RepoProcessor create lane (creation as an at-head obligation)", () => {
+  const CREATED_ARTIFACT = {
+    artifactName: "prj_1--Lw",
+    defaultBranch: "main",
+    remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--Lw.git",
+  };
+
+  function newCreatingRepoProcessor(stream: MemoryStream, createCalls: unknown[]) {
+    return new RepoProcessor({
+      stream,
+      createRepoArtifact: async (input) => {
+        createCalls.push(input);
+        return CREATED_ARTIFACT;
+      },
+      path: "/",
+      projectId: "prj_1",
+    });
+  }
+
+  const CREATE_REQUESTED = {
+    type: "events.iterate.com/repo/create-requested" as const,
+    payload: { projectId: "prj_1", path: "/" },
+  };
+
+  it("creates the artifact once at head and journals repo/created", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/");
+    const createCalls: unknown[] = [];
+    const processor = newCreatingRepoProcessor(stream, createCalls);
+    const cursors = new Map<object, number>();
+
+    await stream.append(CREATE_REQUESTED);
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(createCalls).toEqual([{ path: "/", projectId: "prj_1" }]);
+    const created = stream.events.filter(
+      (event) => event.type === "events.iterate.com/repo/created",
+    );
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      idempotencyKey: "repo-created:prj_1:/",
+      payload: { ...CREATED_ARTIFACT, path: "/", projectId: "prj_1" },
+    });
+
+    // The self-appended created fact folds on the next delivery (offset order
+    // guarantees it precedes anything later), closing the obligation: the
+    // reconciler runs again at head and provably does not re-create.
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(processor.state).toMatchObject({ createRequested: true, created: true });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("defers creation while the fold is behind the head, then creates once caught up", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/");
+    const createCalls: unknown[] = [];
+    const processor = newCreatingRepoProcessor(stream, createCalls);
+
+    const [requested, linked] = await stream.append(CREATE_REQUESTED, {
+      type: "events.iterate.com/repo/github-link-configured",
+      payload: GITHUB_LINK,
+    });
+
+    // A mid-catch-up batch (streamMaxOffset past its own tail, the catch-up
+    // pager's lookahead shape) must not act: the not-yet-folded remainder may
+    // contain the repo/created fact.
+    await processor.ingest({ events: [requested!], streamMaxOffset: 2 });
+    expect(createCalls).toHaveLength(0);
+
+    await processor.ingest({ events: [linked!], streamMaxOffset: 2 });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("refold: a journal that already contains repo/created never re-creates", async () => {
+    // THE refold test (docs/writing-stream-processors.md, "Refold safety"):
+    // re-running createRepoArtifact would force-push the seed commit over
+    // whatever the user has committed since, so the fake here THROWS — the
+    // reconciler must never reach it when the at-head fold shows `created`.
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/");
+    const createCalls: unknown[] = [];
+    const processor = newCreatingRepoProcessor(stream, createCalls);
+    const cursors = new Map<object, number>();
+
+    await stream.append(CREATE_REQUESTED);
+    await deliverNewEvents({ cursors, processor, stream });
+    // Fold the self-appended created fact so the live state is settled.
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(createCalls).toHaveLength(1);
+    const journalBeforeRefold = stream.events.length;
+
+    const refolded = new RepoProcessor({
+      stream,
+      createRepoArtifact: async () => {
+        throw new Error("refold must not re-create an existing repo");
+      },
+      path: "/",
+      projectId: "prj_1",
+    });
+    await deliverNewEvents({ cursors, processor: refolded, stream });
+
+    expect(stream.events).toHaveLength(journalBeforeRefold);
+    expect(refolded.state).toEqual(processor.state);
   });
 });
 
