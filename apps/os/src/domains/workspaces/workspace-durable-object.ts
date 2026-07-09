@@ -3,7 +3,7 @@ import { Workspace, WorkspaceFileSystem } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { PROJECT_REPO_PATH } from "../repos/utils.ts";
+import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import type {
   EditWorkspaceFileInput,
@@ -41,7 +41,7 @@ class UnboundedWorkspace extends Workspace {
 /**
  * A durable workspace: a private virtual filesystem living in this Durable
  * Object's SQLite storage (via `@cloudflare/shell`'s `Workspace`), seeded on
- * first touch with a clone of the project repo and carrying a full `.git` so
+ * first touch with a clone of the config repo and carrying a full `.git` so
  * ordinary git operations work against it.
  *
  * Truth lives in the filesystem; git is the sync mechanism. Every public
@@ -83,10 +83,15 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     return `workspace ${this.#name.projectId}:${this.#name.path}`;
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   // -- clone-on-first-touch gate ------------------------------------------
 
   // In-flight clone, shared by every concurrent first call. Reset on failure
-  // so the next call retries (the common transient: the project repo is still
+  // so the next call retries (the common transient: the config repo is still
   // seeding). Once the sentinel is durably set the promise is never consulted.
   #clonePromise: Promise<void> | undefined;
 
@@ -106,7 +111,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
       .gitAccess()
       .catch((error: unknown) => {
         throw new Error(
-          `Workspace clone source is not available (the project repo may still be seeding; retry shortly): ${String(error)}`,
+          `Workspace clone source is not available (the config repo may still be seeding; retry shortly): ${String(error)}`,
         );
       });
     for (let attempt = 1; ; attempt++) {
@@ -147,7 +152,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
 
   /**
    * Wipe the filesystem and clear the clone sentinel so the next call
-   * re-clones the project repo. Uncommitted (unpushed) work is lost — this is
+   * re-clones the config repo. Uncommitted (unpushed) work is lost — this is
    * the escape hatch for a wedged checkout, not an undo button.
    */
   async reset(): Promise<void> {
@@ -163,7 +168,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
   #projectRepoStub() {
     return this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
-        path: PROJECT_REPO_PATH,
+        path: CONFIG_REPO_PATH,
         projectId: this.#name.projectId,
       }),
     );
@@ -360,7 +365,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Push this workspace's branch to the project repo. The write token comes
+   * Push this workspace's branch to the config repo. The write token comes
    * from the Repo Durable Object per push (it caches the token per isolate)
    * and never rides a public return value. The push resolves "origin" from
    * `.git/config`, which is safe ONLY because the `.git` write guard makes

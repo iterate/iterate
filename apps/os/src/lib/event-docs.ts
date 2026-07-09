@@ -3,6 +3,8 @@ import { AgentProcessorContract } from "~/domains/agents/agent-processor-contrac
 import { CapabilityHostProcessorContract } from "~/domains/capability-host/capability-host-processor-contract.ts";
 import { SlackAgentProcessorContract } from "~/domains/integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "~/domains/integrations/slack-processor-contract.ts";
+import { TelegramAgentProcessorContract } from "~/domains/integrations/telegram-agent-processor-contract.ts";
+import { TelegramProcessorContract } from "~/domains/integrations/telegram-processor-contract.ts";
 import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
 import { RepoProcessorContract } from "~/domains/repos/repo-processor-contract.ts";
 import { SandboxProcessorContract } from "~/domains/sandboxes/sandbox-processor-contract.ts";
@@ -41,6 +43,8 @@ const processorContracts = [
   SandboxProcessorContract,
   SlackProcessorContract,
   SlackAgentProcessorContract,
+  TelegramProcessorContract,
+  TelegramAgentProcessorContract,
   BrowserRawEventsContract,
   BrowserEventFeedContract,
 ] as const satisfies readonly ProcessorContractForDocs[];

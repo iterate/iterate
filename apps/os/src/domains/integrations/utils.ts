@@ -2,6 +2,7 @@
 // path helpers ARE the address model: /integrations/{slug}/{connection} and
 // its projections (thread paths, secret paths, connection-from-path).
 
+import { computeHmacHex } from "../secrets/utils.ts";
 import type { BuiltinIntegrationSlug } from "./types.ts";
 
 /**
@@ -29,6 +30,7 @@ export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set([
   "slack",
   "google",
   "github",
+  "telegram",
 ]);
 
 /** Type-guard view of {@link BUILTIN_INTEGRATION_SLUGS}: narrows an arbitrary
@@ -47,6 +49,13 @@ export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconn
 export const GITHUB_CONNECTED_EVENT_TYPE = "events.iterate.com/github/connected";
 export const GITHUB_DISCONNECTED_EVENT_TYPE = "events.iterate.com/github/disconnected";
 export const GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/github/webhook-received";
+
+export const TELEGRAM_CONNECTED_EVENT_TYPE = "events.iterate.com/telegram/connected";
+export const TELEGRAM_DISCONNECTED_EVENT_TYPE = "events.iterate.com/telegram/disconnected";
+export const TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/telegram/webhook-received";
+// The journaled-send pair (`telegram/send-requested` → `telegram/message-sent`)
+// is declared on the telegram processor contracts, not here: contract event
+// catalogs need literal keys, and no door-side code composes those strings.
 
 /**
  * How old a webhook may be and still deserve its user-visible acknowledgement
@@ -162,6 +171,88 @@ export const GITHUB_CONNECTION_EGRESS_URLS = [
   "https://uploads.github.com",
   "https://objects.githubusercontent.com",
 ];
+
+/** Itx secret Durable Object path holding one Telegram connection's bot token. */
+export function telegramBotTokenSecretPath(connection: string): string {
+  return `/secrets/integrations/telegram/${connection}/bot-token`;
+}
+
+/**
+ * The stateless `X-Telegram-Bot-Api-Secret-Token` for one bot's webhook,
+ * derived from the deployment's SECRET_ENCRYPTION_KEY — same spirit as
+ * oauth-state.ts. Both halves compute it independently: the connect flow
+ * passes it to `setWebhook`, the webhook door verifies the header against it.
+ * Nothing is stored and no new deployment secret exists (previews work with
+ * zero config changes). Hex output satisfies Telegram's 1–256 chars of
+ * `[A-Za-z0-9_-]`.
+ */
+export function telegramWebhookSecretToken(input: {
+  botId: string;
+  keyMaterial: string;
+}): Promise<string> {
+  return computeHmacHex({ key: input.keyMaterial, payload: `telegram-webhook:${input.botId}` });
+}
+
+/**
+ * The routed agent stream path for one Telegram chat of one named connection:
+ * `/agents/telegram/{connection}/chat-{chatId}`, plus a `/topic-{threadId}`
+ * segment for forum supergroup topics. Chat ids are Telegram-issued integers
+ * (negative for groups/channels) used verbatim — the sign is significant
+ * (chat 42 and group -42 must not collide), and digits/minus are already safe
+ * path characters, so no sanitization.
+ */
+export function telegramChatStreamPath(input: {
+  chatId: string;
+  connection: string;
+  messageThreadId?: string;
+  /** The `/new` session start, as unix seconds (the /new message's `date`).
+   * Omitted = session zero: the bare chat path, which is exactly the v1
+   * shape, so chats keep their history until their first `/new`. */
+  session?: string;
+}): string {
+  const base = `/agents/telegram/${input.connection}/chat-${input.chatId}`;
+  const topical =
+    input.messageThreadId === undefined ? base : `${base}/topic-${input.messageThreadId}`;
+  return input.session === undefined ? topical : `${topical}/session-${input.session}`;
+}
+
+/**
+ * Connection segment of a routed Telegram agent path
+ * (`/agents/telegram/{connection}/chat-{chatId}[/topic-{threadId}]`), or null
+ * when the path is not a connection-qualified Telegram agent path.
+ */
+export function telegramConnectionFromAgentPath(agentPath: string): string | null {
+  const segments = agentPath.split("/");
+  if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
+    return segments[3] || null;
+  }
+  return null;
+}
+
+/** Chat id of a routed Telegram agent path (the `chat-{chatId}` segment), or
+ * null. The id is what `sendMessage({ chat_id })` wants — the agent's system
+ * prompt embeds it so replies need no payload spelunking. */
+export function telegramChatIdFromAgentPath(agentPath: string): string | null {
+  const segments = agentPath.split("/");
+  if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
+    const chatSegment = segments[4]!;
+    if (chatSegment.startsWith("chat-")) return chatSegment.slice("chat-".length) || null;
+  }
+  return null;
+}
+
+/** Forum topic id of a routed Telegram agent path (the optional
+ * `topic-{threadId}` segment after the chat segment), or null. The journaled
+ * send effect passes it back as `message_thread_id` so replies land in the
+ * right topic. */
+export function telegramTopicIdFromAgentPath(agentPath: string): string | null {
+  const segments = agentPath.split("/");
+  if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "telegram") {
+    const topicSegment = segments[5]!;
+    if (topicSegment.startsWith("topic-")) return topicSegment.slice("topic-".length) || null;
+  }
+  return null;
+}
 
 /**
  * The routed agent stream path for one Slack thread of one named connection.

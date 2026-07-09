@@ -101,6 +101,8 @@ export interface Project {
   __describe(): Promise<ProjectDescription>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
+  /** Abort this Project Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** The project stream processor (snapshot/state; \`state.created\` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** Workers AI: run(model, body), models(). */
@@ -161,7 +163,7 @@ export interface Project {
   schedulers: SchedulerCollection;
   /** Secret catalog by path. */
   secrets: SecretCollection;
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for \`repos.get("/repos/config")\`. */
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
@@ -322,6 +324,8 @@ export interface Agent {
   }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /** Includes \`whoami\` (\`"agent <projectId>:<agentPath>"\`), \`projectId\`, \`agentPath\`. */
   __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;
+  /** Abort this Agent Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
@@ -373,6 +377,8 @@ export interface CapabilityHost {
     executionId: string;
     result: unknown;
   }>;
+  /** Abort this Capability Host Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
 }
 
 /** Catalog of capability scopes within one project (\`itx.capabilityHosts\`). */
@@ -563,6 +569,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        connectTelegram: string;
         disconnect: string;
         getConnection: string;
         github: string;
@@ -571,6 +578,7 @@ export interface ProjectIntegrations {
         parallel: string;
         slack: string;
         startOAuthFlow: string;
+        telegram: string;
       };
       parent: string;
     }
@@ -580,10 +588,21 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * \`ok: false, error: "telegram_bot_already_claimed"\` arm so the caller can
+   * confirm and retry with \`steal: true\` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
+   */
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -595,7 +614,7 @@ export interface ProjectIntegrations {
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
@@ -692,6 +711,8 @@ export interface Scheduler {
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as \`skipped\`. */
   cancel(key: string): Promise<void>;
+  /** Abort this Scheduler Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   list(): Promise<ScheduleView[]>;
   /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */
   trigger(key: string): Promise<{ executionId: string }>;
@@ -720,6 +741,8 @@ export interface Repo {
   create(): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
+  /** Abort this Repo Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** Commit a batch of file changes; use \`edit\` for a targeted single-string replacement. */
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   /**
@@ -809,11 +832,11 @@ export interface DynamicWorkerCollection {
  * \`/repos/...\`: an agent's workspace is the agent path under the prefix
  * (\`/workspaces/agents/...\`, exposed as \`itx.workspace\` in that agent's
  * scope), and standalone workspaces live under \`/workspaces/<anything>\`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * Getting a workspace is cheap; the first call on it clones the config repo.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path (clones the config repo on first use). */
   get(path: string): Workspace;
 }
 
@@ -902,6 +925,8 @@ export interface Stream {
       >;
     };
   }>;
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /**
    * Live EPHEMERAL event delivery: \`processEventBatch\` is called for every
    * committed batch (optionally replayed from \`replayAfterOffset\`); returns an
@@ -926,13 +951,13 @@ export interface Stream {
    * appends the batch's events into THIS stream with provenance stamping,
    * structural loop protection, and source-derived idempotency keys. A source
    * stream cross-posts here by configuring
-   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }\`.
+   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }\`.
    */
-  ingest(batch: StreamPushEventBatch): Promise<void>;
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
   /**
    * "When events matching this land HERE, post them onto stream \`path\`" — the
    * cross-post verb. Pure sugar over appending a \`subscription-configured\`
-   * push subscription targeting the destination's \`ingest\` sink; the appended
+   * push subscription targeting the destination's \`acceptCrossPost\` sink; the appended
    * event (returned) is the real interface and shows in the log like any
    * other config. Same-\`key\` calls replace the previous cross-post; remove
    * with \`removeCrossPost\`. Copies carry the full provenance chain
@@ -1038,6 +1063,8 @@ export interface Secret {
   __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
+  /** Abort this Secret Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** Set the secret material and/or its egress allowlist. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
@@ -1047,10 +1074,11 @@ export interface Secret {
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
  * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at \`/\` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. \`git\` publishes commits to the workspace's
- * own branch in the project repo (\`workspaces/<path>\`), never to main.
+ * the config repo at \`/repos/config\` — every call waits for that clone, so a
+ * read that returns proves the checkout exists. Read, write, and edit files
+ * freely; nothing is shared until pushed. \`git\` publishes commits to the
+ * workspace's own branch in the config repo (\`workspaces/<path>\`), never to
+ * main.
  *
  * Constraints: the \`.git\` directory is platform-managed — read it if you
  * like, but writes there are rejected (use the \`git\` methods). Large files
@@ -1062,6 +1090,8 @@ export interface Workspace {
   __describe(): Promise<Description>;
   /** Workspace identity string (debug). */
   whoami(): Promise<string>;
+  /** Abort this Workspace Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null>;
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
@@ -1381,8 +1411,12 @@ export type StreamPushEventBatch = {
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
-/** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
-export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
+  Disposable & {
+    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
+    kill(): Promise<void>;
+  };
 
 /** One entry of a session's project catalog (\`session.projects.list()\`). */
 export type ProjectListEntry = {
@@ -1620,7 +1654,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1628,6 +1662,40 @@ export type IntegrationConnectionStatus = {
   externalId: string | null;
   metadata: Record<string, unknown>;
 };
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured \`ok: false\` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. \`steal: true\` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
+ */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with \`steal: true\` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+/** The built-ins that connect via a redirect flow (OAuth code exchange or
+ * GitHub App installation) — the \`startOAuthFlow\`/\`completeConnect\` pair.
+ * Telegram is excluded: it connects by bot-token paste (\`connectTelegram\`),
+ * with no redirect and no signed state. */
+export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
@@ -1703,7 +1771,8 @@ export type SandboxInstanceType =
  *   anything since the last snapshot.
  * - \`start()\` boots the container now instead of lazily; \`sleep()\` snapshots
  *   and tears down now instead of waiting for \`sleepAfter\` (the SDK's
- *   \`stop()\` forwards to it); \`destroy()\` is permanent — the name is retired.
+ *   \`stop()\` forwards to it); \`kill()\` aborts the Durable Object incarnation;
+ *   \`destroy()\` is permanent — the name is retired.
  * - \`__describe()\` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - \`setEnvVars(vars)\` is DURABLE here (persisted, re-applied every start,
@@ -1714,7 +1783,10 @@ export type SandboxInstanceType =
  * - \`mountBucket\` and \`exposePort\` are unavailable (they throw): /workspace
  *   snapshots cover persistence, and \`tunnels\` covers public URLs.
  */
-export type CloudflareSandbox = object;
+export type CloudflareSandbox = object & {
+  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
+};
 
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {

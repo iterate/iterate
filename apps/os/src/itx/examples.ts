@@ -8,7 +8,7 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
-//   project-worker  the body baked into the project repo's worker.ts,
+//   project-worker  the body baked into the config repo's worker.ts,
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
@@ -415,7 +415,7 @@ return {
     id: "workspace-edit-and-push",
     title: "Edit files in a workspace, then push its branch",
     description:
-      'A workspace is a private checkout of the project repo in a durable virtual filesystem (no container, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other. The first call clones the project repo and every call waits for that clone. Changes stay private until pushed: git.push() publishes to the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+      'A workspace is a private checkout of the config repo in a durable virtual filesystem (no container, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other. The first call clones the project repo and every call waits for that clone. Changes stay private until pushed: git.push() publishes to the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -486,7 +486,7 @@ return {
   },
   {
     id: "repo-commit-files",
-    title: "Commit files into the project repo",
+    title: "Commit files into the config repo",
     description:
       "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
     context: "project",
@@ -512,14 +512,14 @@ return {
   },
   {
     id: "repo-read-file",
-    title: "Read a file from the project repo",
+    title: "Read a file from the config repo",
     description:
-      "Read committed file contents from the project repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
+      "Read committed file contents from the config repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const path = vars.path ?? "README.md";
-const repo = itx.repos.get(vars.repoPath ?? "/");
+const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const file = await repo.readFile({ path });
 
 if (file === null) {
@@ -536,18 +536,18 @@ return {
   },
   {
     id: "repo-edit-file",
-    title: "Read then edit a project repo file",
+    title: "Read then edit a config repo file",
     description:
       "Use readFile to inspect the current content, then edit to replace an exact string and commit the change. edit is safe for coding-agent workflows: oldString must match exactly once unless replaceAll is true.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const path = vars.path ?? "notes/edit-example.md";
-const repo = itx.repos.get(vars.repoPath ?? "/");
+const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
 
-// Path-scoped repos need first-use creation; the default project repo already exists.
+// Path-scoped repos need first-use creation; the default config repo already exists.
 if (vars.repoPath) await repo.create();
 
 // Seed a known starting point. Agents can skip this when editing an existing file.
@@ -953,7 +953,7 @@ return { link, github: state.state.github, lastGithubPush: state.state.lastGithu
     id: "stream-cross-post",
     title: "Cross-post matching events between streams",
     description:
-      "stream.crossPostTo({ path, eventTypes, condition? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's ingest sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
+      "stream.crossPostTo({ path, eventTypes, condition? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's acceptCrossPost sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

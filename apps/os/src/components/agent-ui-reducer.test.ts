@@ -708,6 +708,82 @@ describe("agent-ui reducer", () => {
     expect(state.items).toEqual([]);
   });
 
+  it("renders a telegram message webhook as a user bubble (text, sender, media placeholders)", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: {
+          botId: "7000001",
+          body: {
+            update_id: 100001,
+            message: {
+              message_id: 1,
+              from: { id: 555, is_bot: false, first_name: "Misha", username: "misha" },
+              chat: { id: 42, type: "private" },
+              date: 1_783_437_255,
+              text: "what's the plan for today?",
+            },
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: {
+          botId: "7000001",
+          body: {
+            update_id: 100002,
+            message: {
+              message_id: 2,
+              from: { id: 555, is_bot: false, first_name: "Misha" },
+              chat: { id: 42, type: "private" },
+              date: 1_783_437_299,
+              caption: "look at this",
+              photo: [{ file_id: "photo-1" }],
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: "what's the plan for today?",
+        via: { service: "telegram", sender: "misha" },
+      },
+      {
+        kind: "user",
+        text: "look at this [photo]",
+        via: { service: "telegram", sender: "Misha" },
+      },
+    ]);
+  });
+
+  it("renders a telegram send request as the assistant bubble and ignores non-message updates", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/telegram/send-requested",
+        payload: { text: "Started a fresh thread." },
+      },
+      // Membership updates, markers, and bot-authored echoes are not bubbles.
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: {
+          botId: "7000001",
+          body: { update_id: 3, my_chat_member: { chat: { id: 42 }, from: { id: 555 } } },
+        },
+      },
+      {
+        type: "events.iterate.com/telegram/message-sent",
+        payload: { messageId: 9001, requestOffset: 1 },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { kind: "assistant", text: "Started a fresh thread.", via: { service: "telegram" } },
+    ]);
+  });
+
   it("queues a slack user message that arrives mid-turn", () => {
     const state = reduceAll([
       {

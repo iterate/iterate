@@ -32,6 +32,7 @@ type StatefulWorkerRpc = {
     path: string[];
     ref: StatefulDynamicWorkerRef;
   }): Promise<unknown>;
+  kill(): Promise<void>;
 };
 
 /**
@@ -205,6 +206,11 @@ export class DynamicWorkerRunner {
     return flattenNestedPath
       ? await invokePreferringFlattenedPath({ args, path, target })
       : await replayPath({ args, path, target });
+  }
+
+  /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
+  async kill(ref: StatefulDynamicWorkerRef): Promise<void> {
+    await this.#statefulWorker(ref).kill();
   }
 
   async #load(
