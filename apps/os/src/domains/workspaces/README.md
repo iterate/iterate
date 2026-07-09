@@ -1,0 +1,53 @@
+# Workspaces
+
+A workspace is an overlay filesystem in a Durable Object. The project's ROOT
+workspace (`itx.workspaces.get("/")`) is a read-only fast cache of the project
+repo's main branch, invalidated by the repo's head cursor (one cheap
+`getHead()` per read; re-materialized only when main actually moved — and
+freely ditchable via `reset()`, it's just a cache). Every other workspace is a
+copy-on-write overlay over it: writes stay local, deletes leave whiteout rows,
+missing reads fall through to latest main, and `git.commit({ message })`
+publishes the merged view as one snapshot commit on the workspace's own branch
+(`workspaces/<path>`) — never main. See `workspace-durable-object.ts` for the
+full semantics.
+
+## Direction of travel (deliberately not built yet)
+
+Researched 2026-07-09 against Cloudflare's own stack; these are the seams we
+expect to grow along, kept here so the next change composes instead of
+colliding:
+
+- **Engine swap → `cloudflare/workspace` (dofs).** Cloudflare's successor to
+  `@cloudflare/shell`'s Workspace is a library object (`new Workspace({
+storage })`) hosted by any DO — not a DO class — over a content-addressed
+  SQLite VFS (`@cloudflare/dofs`, zero deps, 512KiB chunks) with pluggable
+  shell backends (just-bash dynamic worker / container FUSE via wsd) and git
+  (isomorphic-git) as a client over the VFS. It is alpha and unpublished on
+  npm; when it stabilizes (or we choose to vendor it), the swap should be
+  contained to the storage engine — the overlay semantics in this domain are
+  deliberately engine-agnostic.
+- **Mounts as the composition surface.** Their model composes a workspace from
+  content-source mounts at absolute, non-nesting roots (`{ "/skills":
+R2Bucket(...), "/project": GitHubRepo(...) }`). Our parent fall-through is,
+  in that vocabulary, an overlay mount at "/". The future picture we want:
+  an agent workspace with all project repos mounted as overlay mounts
+  (`/config`, `/website`, ...). Config-level change once mounts exist; do not
+  build a second composition mechanism.
+- **Sandbox mounting via git refs.** `cloudflare/artifact-fs` (a container-side
+  FUSE daemon; lazily-hydrating blobless clones — a different layer, it can
+  never run in a DO) mounts any git ref into a sandbox, with a proven
+  sandbox-sdk integration. Our snapshot-publish branches are git refs, so "a
+  published workspace branch is the mount seam" — keep publish-to-branch a
+  first-class verb.
+- **Overlay reconciliation.** artifact-fs pins a base snapshot generation and,
+  when the base moves, keeps a dirty overlay entry iff its recorded
+  `SourceOID` still matches the new base. We deliberately track NO per-file
+  source oid: our overlays pin per-path by shadowing, our root has no local
+  edits by definition, and "rebase a dirty overlay onto new main" — if ever
+  needed — is a git merge at publish time, not per-file bookkeeping.
+- **Workspace-per-branch caches.** The root-workspace pattern generalizes to a
+  ditchable cache DO per `{repo, branch}` should anything need fast reads of
+  non-main branches.
+
+No stream processor here on purpose: workspaces are storage with a publish
+verb, not event consumers; publishes already surface through the repos domain.
