@@ -31,6 +31,7 @@ describe("organization auto-join", () => {
     await ensureIterateOrganizationMembershipForNustomUser(client, {
       id: "usr_alice",
       email: "alice@nustom.com",
+      emailVerified: 1,
     });
     await ensureIterateOrganizationMembershipForNustomUserId(client, "usr_alice");
 
@@ -55,6 +56,21 @@ describe("organization auto-join", () => {
 
     assert.deepEqual(await listOrganizationsForUser(client, { userId: "usr_bob" }), []);
   });
+
+  it("does not join unverified nustom.com users", async (t) => {
+    const { client, dispose } = await createTestDb();
+    t.after(dispose);
+
+    await insertTestUser(client, {
+      id: "usr_unverified",
+      email: "unverified@nustom.com",
+      emailVerified: 0,
+    });
+
+    await ensureIterateOrganizationMembershipForNustomUserId(client, "usr_unverified");
+
+    assert.deepEqual(await listOrganizationsForUser(client, { userId: "usr_unverified" }), []);
+  });
 });
 
 async function createTestDb() {
@@ -75,13 +91,16 @@ async function createTestDb() {
   };
 }
 
-async function insertTestUser(client: Client, input: { id: string; email: string }) {
+async function insertTestUser(
+  client: Client,
+  input: { id: string; email: string; emailVerified?: number },
+) {
   const now = Date.now();
   await insertUser(client, {
     id: input.id,
     name: input.email.split("@")[0] ?? input.email,
     email: input.email,
-    emailVerified: 1,
+    emailVerified: input.emailVerified ?? 1,
     image: null,
     role: null,
     createdAt: now,

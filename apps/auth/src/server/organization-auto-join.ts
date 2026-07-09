@@ -34,13 +34,15 @@ export async function ensureIterateOrganizationMembershipForNustomUserId(
   return ensureIterateOrganizationMembershipForNustomUser(client, {
     id: user.id,
     email: user.email,
+    emailVerified: user.emailVerified,
   });
 }
 
 export async function ensureIterateOrganizationMembershipForNustomUser(
   client: Client,
-  user: { id: string; email: string },
+  user: { id: string; email: string; emailVerified: boolean | number | null | undefined },
 ) {
+  if (user.emailVerified !== true && user.emailVerified !== 1) return null;
   if (!shouldAutoJoinIterateOrganization(user.email)) return null;
 
   const organization = await ensureIterateOrganization(client);

@@ -108,7 +108,11 @@ export const auth = betterAuth({
     session: {
       create: {
         after: async (session) => {
-          await ensureIterateOrganizationMembershipForNustomUserId(db, session.userId);
+          try {
+            await ensureIterateOrganizationMembershipForNustomUserId(db, session.userId);
+          } catch (error) {
+            console.error("Failed to auto-join nustom user to iterate organization", error);
+          }
         },
       },
     },

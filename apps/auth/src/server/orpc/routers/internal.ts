@@ -89,6 +89,7 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
       await ensureIterateOrganizationMembershipForNustomUser(context.db, {
         id: existing.id,
         email: normalizedEmail,
+        emailVerified: 1,
       });
 
       return toUserRecord({
@@ -113,6 +114,7 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
     await ensureIterateOrganizationMembershipForNustomUser(context.db, {
       id,
       email: normalizedEmail,
+      emailVerified: 1,
     });
 
     return toUserRecord({
