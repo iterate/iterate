@@ -139,7 +139,8 @@ log):
     │  failure                              ▲ │ backoff min(30m, 1s·2^n) ±20% jitter,
     └───────────▶ retrying ─────────────────┘ │ one DO alarm = MIN(next_attempt_at)
                                               ▼
-                              parked ── subscription-resumed {afterOffset?} ──▶ active
+                              parked ── subscription-resumed ──▶ active
+                              (a redrive appends cursor-set first — resume is a pure un-park)
 ```
 
 Doctrine, worth memorizing:
