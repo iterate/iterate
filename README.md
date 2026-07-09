@@ -134,6 +134,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Testing](docs/testing.md) — test lanes, how to run them against any environment, the canonical env vars, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
+- [Playwright specs](./spec/AGENTS.md) - instructions for agents writing playwright tests
 
 ### Tasks & agent docs
 
