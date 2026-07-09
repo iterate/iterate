@@ -55,6 +55,44 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   };
 }
 
+/**
+ * The repo stream exists but its git data does not (yet): the Artifacts repo
+ * was never created, or was created and awaits its seed commit. Every project
+ * bootstrap has this window — the config repo's stream and its dependents
+ * (the project worker feed) come alive before the seed lands — so callers
+ * must be able to tell "not seeded YET, retry" from a real failure. Matched
+ * by NAME because the error crosses Workers RPC (which preserves `error.name`
+ * but not class identity).
+ */
+export class RepoNotSeededError extends Error {
+  static readonly NAME = "RepoNotSeededError";
+  override readonly name = RepoNotSeededError.NAME;
+}
+
+export function isRepoNotSeededError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === RepoNotSeededError.NAME;
+}
+
+/**
+ * Wraps a branch-clone failure as {@link RepoNotSeededError} when it means
+ * "the remote has no such ref/commits" — isomorphic-git's NotFoundError for a
+ * ref (an empty Artifacts remote answers HEAD with a branch that has no
+ * commits, observed as "Could not find refs/heads/master"), or the Artifacts
+ * repo itself missing (`NOT_FOUND` — created lazily by the bootstrap saga).
+ * Anything else returns unchanged.
+ */
+export function classifyRepoAccessError(error: unknown): unknown {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  const notSeeded =
+    code === "NOT_FOUND" ||
+    (code === "NotFoundError" && typeof message === "string" && message.includes("refs/"));
+  if (!notSeeded) return error;
+  return new RepoNotSeededError(
+    `Repo has no commits yet (unseeded or still seeding): ${typeof message === "string" ? message : String(error)}`,
+    { cause: error },
+  );
+}
+
 function normalizeRepoPath(path: string): string {
   if (path === "") return "/";
   return path.startsWith("/") ? path : `/${path}`;

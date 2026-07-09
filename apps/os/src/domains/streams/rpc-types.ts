@@ -138,6 +138,30 @@ export type StreamPushEventBatch = {
 };
 
 /**
+ * A push receiver's declaration that it cannot accept ANY batch right now —
+ * part of the delivery contract, not an implementation detail. The spine
+ * treats a rejection carrying this name as "the receiver is down/not ready"
+ * and routes it to the backoff/park lane even under `onPoison: "skip"`,
+ * because poison confirmation is a verdict about ONE event and an unavailable
+ * receiver fails every event: skip-confirming during an outage window steps
+ * over healthy events forever (the bootstrap incarnation: the project-worker
+ * feed dialed before the config repo seeded, and permanently skipped the
+ * events that raced the seed).
+ *
+ * Matched by NAME, not instanceof: the rejection crosses Workers RPC hops
+ * (loopback itx roots, DO bindings), which preserve `error.name` but not
+ * class identity.
+ */
+export class StreamReceiverUnavailableError extends Error {
+  static readonly NAME = "StreamReceiverUnavailableError";
+  override readonly name = StreamReceiverUnavailableError.NAME;
+}
+
+export function isStreamReceiverUnavailableError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === StreamReceiverUnavailableError.NAME;
+}
+
+/**
  * One webhook delivery: a single committed event POSTed as JSON to the
  * subscription's URL. Deliberately per-EVENT (external webhook consumers
  * expect individual events, and per-event acking gives mid-batch
