@@ -27,7 +27,6 @@ export type StreamIndexRow = {
 export class StreamDatabase {
   readonly #sql: SqlStorage;
   #projection: Record<string, StreamIndexRow>;
-  #seeded = false;
 
   constructor(sql: SqlStorage) {
     this.#sql = sql;
@@ -83,17 +82,20 @@ export class StreamDatabase {
   }
 
   /**
-   * One-time seed from the folded stream catalog, so streams that existed before
-   * the index (or before this incarnation) appear even without fresh activity.
-   * Insert-missing only — real activity via `touch` always wins.
+   * Backfill index rows for folded-catalog streams that have no row yet, so
+   * streams that predate the index — OR were added to the catalog since — appear
+   * even without fresh activity. Insert-missing only: real activity via `touch`
+   * always wins, and a stream already in the projection is skipped by a cheap
+   * hash lookup (no SQL, no reload). Called on every live-state assembly, NOT
+   * once — a one-shot flag would leave every stream created after the first call
+   * absent from ⌘K until its first event batch. Copy-on-write like `touch`, so a
+   * reassembly that backfills nothing keeps the projection's identity and the
+   * live-state diff bails out.
    */
-  ensureSeeded(catalog: readonly { path: string; createdAt: string }[]): void {
-    // A cold DO may call this before the fold has loaded (its catalog reads
-    // empty); don't burn the one-shot flag on nothing — wait for a loaded,
-    // non-empty catalog so pre-existing idle streams actually get backfilled.
-    if (this.#seeded || catalog.length === 0) return;
-    this.#seeded = true;
+  seedMissing(catalog: readonly { path: string; createdAt: string }[]): void {
+    let next = this.#projection;
     for (const stream of catalog) {
+      if (next[stream.path] !== undefined) continue;
       this.#sql.exec(
         `INSERT INTO streams (path, created_at, last_activity_at, last_type, event_count)
          VALUES (?, ?, ?, 'events.iterate.com/stream/created', 0)
@@ -102,8 +104,16 @@ export class StreamDatabase {
         stream.createdAt,
         stream.createdAt,
       );
+      if (next === this.#projection) next = { ...this.#projection }; // fork once, on first insert
+      next[stream.path] = {
+        path: stream.path,
+        createdAt: stream.createdAt,
+        lastActivityAt: stream.createdAt,
+        lastType: "events.iterate.com/stream/created",
+        eventCount: 0,
+      };
     }
-    this.#projection = this.#load();
+    this.#projection = next;
   }
 
   #load(): Record<string, StreamIndexRow> {

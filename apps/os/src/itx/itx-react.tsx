@@ -594,7 +594,7 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
 export function useItxSubscription(
   subscribe: (itx: ItxHandle) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
-  opts?: { enabled?: boolean },
+  opts?: { enabled?: boolean; itx?: ItxHandle },
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
   const enabled = opts?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
@@ -659,6 +659,10 @@ export function useItxSubscription(
       };
     },
     [enabled, epoch, ...deps],
+    // A `{ itx }` override subscribes through THAT connection (e.g. ⌘K opening a
+    // project's live index from outside its provider) — and keys the effect's
+    // reconnect on that socket, not the ambient one.
+    { itx: opts?.itx },
   );
 
   return {
@@ -702,11 +706,11 @@ function createLiveStateStore<State>() {
 }
 
 /**
- * THE live-state primitive: subscribe to any `.live` node, render the slice you
- * pick. The server pushes a snapshot then minimal diffs; this hook reassembles
+ * THE live-state primitive: subscribe to any `.liveState` node, render the slice
+ * you pick. The server pushes a snapshot then minimal diffs; this hook reassembles
  * them and hands back `selector(state)`.
  *
- *   const streams = useLiveState((itx) => itx.live, (s) => s.streamsIndex);
+ *   const streams = useLiveState((itx) => itx.liveState, (s) => s.streamsIndex);
  *   // re-renders ONLY when streamsIndex changes — a change elsewhere in the
  *   // project's live state does not re-render this component.
  *
@@ -718,12 +722,17 @@ function createLiveStateStore<State>() {
  *
  * `value` is `undefined` between mount and the first snapshot (one round trip);
  * render a loading row for that window. `deps` re-point the hook at a different
- * node — a change drops the held state so a stale slice never shows.
+ * node — a change drops the held state so a stale slice never shows. `opts.itx`
+ * subscribes through a specific connection instead of the ambient one — pass
+ * `useItx({ projectId })` to read a project's live state from OUTSIDE its provider
+ * (the ⌘K palette does this: it mounts in the global context but wants a project's
+ * streams index).
  */
 export function useLiveState<State, Selected = State>(
   live: (itx: ItxHandle) => LiveStateRpc<State>,
   selector: (state: State) => Selected = (state) => state as unknown as Selected,
   deps: unknown[] = [],
+  opts?: { itx?: ItxHandle },
 ): {
   value: Selected | undefined;
   status: ItxSubscriptionStatus;
@@ -741,6 +750,7 @@ export function useLiveState<State, Selected = State>(
   const subscription = useItxSubscription(
     (itx) => live(itx).subscribe((update) => store.apply(update, () => refreshRef.current())),
     deps,
+    { itx: opts?.itx },
   );
   refreshRef.current = subscription.refresh;
 

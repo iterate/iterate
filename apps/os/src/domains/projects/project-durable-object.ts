@@ -61,7 +61,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // keeps in SQLite and the demo counter.
     getLiveState: () => {
       const reduced = this.#projectProcessor.currentState;
-      this.#streamDatabase.ensureSeeded(reduced.streams);
+      // Reconcile any catalog stream missing an index row (cheap when none are),
+      // so newly-created quiet streams show up in ⌘K without waiting for events.
+      this.#streamDatabase.seedMissing(reduced.streams);
       return { reduced, streamsIndex: this.#streamDatabase.all(), liveDemo: this.#liveDemo };
     },
   });

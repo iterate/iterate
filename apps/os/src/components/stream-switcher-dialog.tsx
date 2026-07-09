@@ -14,7 +14,7 @@ import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
-import { useLiveState } from "~/itx/itx-react.tsx";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
 // segments separated by single slashes, no trailing slash.
@@ -67,10 +67,18 @@ export function StreamSwitcherDialog({
   // The whole streams index, live, in ONE subscription — so typing filters it in
   // memory (most-recently-active first) instead of waking a Durable Object per
   // node. That is the "⌘K, type, see" path; an empty query falls back to the
-  // browsable tree. (In a non-project context the index is empty → tree.)
+  // browsable tree.
+  //
+  // `scope` is the project id. ⌘K opens from the global palette — OUTSIDE the
+  // project's `<ItxProvider>` — so we subscribe through the project's own
+  // connection (`useItx({ projectId })`) rather than the ambient global socket,
+  // which has no `liveState`. Re-point the subscription when the scope changes.
+  const projectItx = useItx({ projectId: scope });
   const streamsIndex = useLiveState(
     (itx) => itx.liveState,
     (state) => state.streamsIndex,
+    [scope],
+    { itx: projectItx },
   );
   const query = destination.trim().replace(/^\/+/, "").toLowerCase();
   const matches =

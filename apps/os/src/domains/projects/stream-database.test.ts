@@ -60,10 +60,10 @@ describe("StreamDatabase", () => {
     expect(reopened.all()["/a"]).toMatchObject({ eventCount: 5 });
   });
 
-  it("seeds from the folded catalog once, without clobbering real activity", () => {
+  it("seeds missing catalog streams without clobbering real activity", () => {
     const db = new StreamDatabase(sqlStorage());
     db.touch("/a", "2026-05-01T00:00:00.000Z", "x", 4);
-    db.ensureSeeded([
+    db.seedMissing([
       { path: "/a", createdAt: "2020-01-01T00:00:00.000Z" }, // already indexed → activity wins
       { path: "/b", createdAt: "2026-01-01T00:00:00.000Z" }, // never touched → appears from catalog
     ]);
@@ -72,7 +72,27 @@ describe("StreamDatabase", () => {
       lastActivityAt: "2026-05-01T00:00:00.000Z",
     });
     expect(db.all()["/b"]).toMatchObject({ path: "/b", eventCount: 0 });
-    db.ensureSeeded([{ path: "/c", createdAt: "2026-01-01T00:00:00.000Z" }]); // second call is a no-op
-    expect(db.all()["/c"]).toBeUndefined();
+  });
+
+  it("reconciles streams added to the catalog AFTER the first call (not one-shot)", () => {
+    const db = new StreamDatabase(sqlStorage());
+    db.seedMissing([{ path: "/a", createdAt: "2026-01-01T00:00:00.000Z" }]);
+    const first = db.all();
+    // A stream created later: a subsequent assembly must backfill it.
+    db.seedMissing([
+      { path: "/a", createdAt: "2026-01-01T00:00:00.000Z" },
+      { path: "/b", createdAt: "2026-02-01T00:00:00.000Z" },
+    ]);
+    expect(db.all()["/b"]).toMatchObject({ path: "/b", eventCount: 0 });
+    expect(db.all()["/a"]).toBe(first["/a"]); // untouched row keeps identity → diff bails
+    expect(db.all()).not.toBe(first); // but the map forked (a row was added)
+  });
+
+  it("backfills nothing → keeps the projection identity (diff bails, no re-render)", () => {
+    const db = new StreamDatabase(sqlStorage());
+    db.touch("/a", "2026-01-01T00:00:00.000Z", "x", 1);
+    const before = db.all();
+    db.seedMissing([{ path: "/a", createdAt: "2020-01-01T00:00:00.000Z" }]); // already present
+    expect(db.all()).toBe(before);
   });
 });
