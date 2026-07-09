@@ -352,11 +352,16 @@ export async function test(options: PullRequestCommandOptions = {}) {
     `PR body records lease ${recordedLease.slug} (doppler config ${recordedLease.dopplerConfig}, recorded until ${formatUntil(recordedLease.leasedUntil)})`,
   );
 
-  const testableApps = Object.values(current.state.apps)
-    .filter((entry) => canRunPreviewTests(entry))
-    .filter((entry) => entry.headSha === context.pullRequestHeadSha)
-    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-    .filter((app): app is PreviewAppRuntime => app != null);
+  const toRuntimes = (entries: (typeof current.state.apps)[string][]) =>
+    entries
+      .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
+      .filter((app): app is PreviewAppRuntime => app != null);
+  const recordedTestable = Object.values(current.state.apps).filter((entry) =>
+    canRunPreviewTests(entry),
+  );
+  let testableApps = toRuntimes(
+    recordedTestable.filter((entry) => entry.headSha === context.pullRequestHeadSha),
+  );
 
   if (testableApps.length === 0) {
     // No app is recorded at this head — but "skip green" is only honest when
@@ -369,25 +374,47 @@ export async function test(options: PullRequestCommandOptions = {}) {
       ...context,
       previousState: current.state,
     });
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: appsDeployWouldSelect.map((app) => app.slug),
-      pullRequestHeadSha: context.pullRequestHeadSha,
-      recordedApps: current.state.apps,
-    });
-    logPreview(skip.notice);
-    await updatePreviewState(context, (state) => ({
-      ...state,
-      notice: skip.notice,
-    }));
-    if (skip.verdict === "stale-head") {
-      throw new Error(skip.notice);
+    // Older-head entries that never earned a green ("awaiting-tests" — a
+    // cancelled run's deploy landed but its tests never ran — or
+    // "tests-failed"). When the diff says nothing app-affecting changed,
+    // those deployments ARE this head's code, so the honest move is to run
+    // their tests now — not to skip green over zero results (observed
+    // 2026-07-10: run 7 deployed then got cancelled by run 8's push; run 8's
+    // one-line non-app diff then "skipped, results still stand" while every
+    // app sat at awaiting-tests).
+    const untestedOlderHead = recordedTestable.filter(
+      (entry) => entry.status !== "deployed" || entry.testDurationMs == null,
+    );
+    if (appsDeployWouldSelect.length === 0 && untestedOlderHead.length > 0) {
+      testableApps = toRuntimes(untestedOlderHead);
+      logPreview(
+        `no app is recorded at head ${context.pullRequestHeadSha.slice(0, 7)}, but nothing app-affecting changed and ${untestedOlderHead
+          .map((entry) => `${entry.appSlug} (${entry.status})`)
+          .join(
+            ", ",
+          )} never passed tests on the recorded deploy — testing the recorded deployments now`,
+      );
+    } else {
+      const skip = explainPreviewTestSkip({
+        appsDeployWouldSelect: appsDeployWouldSelect.map((app) => app.slug),
+        pullRequestHeadSha: context.pullRequestHeadSha,
+        recordedApps: current.state.apps,
+      });
+      logPreview(skip.notice);
+      await updatePreviewState(context, (state) => ({
+        ...state,
+        notice: skip.notice,
+      }));
+      if (skip.verdict === "stale-head") {
+        throw new Error(skip.notice);
+      }
+      return {
+        ok: true,
+        skipped: true,
+        skippedReason: skip.verdict,
+        state: current.state,
+      };
     }
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: skip.verdict,
-      state: current.state,
-    };
   }
   logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
 
