@@ -38,6 +38,29 @@ test("readFile returns null for a missing file (matches itx.workspace)", async (
   expect(await machine.readFile(join(dir.path, "nope.txt"))).toBeNull();
 });
 
+test("edit throws (rather than silently no-op) when oldString is absent", async () => {
+  await using dir = await tempDir();
+  const { machine } = machineUnderTest();
+  await machine.writeFile(join(dir.path, "f.txt"), "alpha");
+  await expect(
+    machine.edit({ path: join(dir.path, "f.txt"), oldString: "beta", newString: "gamma" }),
+  ).rejects.toThrow(/not found/);
+});
+
+test("edit refuses an ambiguous multi-match unless replaceAll is set (matches itx.workspace)", async () => {
+  await using dir = await tempDir();
+  const { machine } = machineUnderTest();
+  const path = join(dir.path, "f.txt");
+  await machine.writeFile(path, "x x x");
+
+  await expect(machine.edit({ path, oldString: "x", newString: "y" })).rejects.toThrow(/matched 3/);
+  expect(await machine.readFile(path)).toBe("x x x"); // unchanged — the file was not corrupted
+
+  const result = await machine.edit({ path, oldString: "x", newString: "y", replaceAll: true });
+  expect(result.occurrenceCount).toBe(3);
+  expect(await machine.readFile(path)).toBe("y y y");
+});
+
 test("readDir lists entries as file-info objects", async () => {
   await using dir = await tempDir();
   const { machine } = machineUnderTest();

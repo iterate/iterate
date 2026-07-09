@@ -25,10 +25,10 @@ import {
   connectAgentFeed,
   resolveItxAuth,
   type AgentConnectionStatus,
+  type MachineShareScope,
 } from "./agent-connection.ts";
 import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
 import { parseChatSlashCommand } from "./chat-slash-command.ts";
-import type { MachineShareScope } from "./agent-connection.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
@@ -68,7 +68,7 @@ let appState: AppState = {
   feed: model.snapshot(),
   status: { kind: "connecting" },
   notice:
-    "your filesystem is shared with this agent (session only) — /share opens it to the whole project",
+    "this agent can read/write files and run commands on your machine (this session) — /share opens it to the whole project",
   fsScope: "session",
 };
 const listeners = new Set<() => void>();
@@ -141,7 +141,7 @@ function AgentChatApp() {
             notice: "machine sharing narrowed back to this session's agent",
           });
           connection.unshareFromProject().catch((error: unknown) => {
-            patchAppState({ notice: `/unshare failed: ${errorText(error)}` });
+            patchAppState({ fsScope: "project", notice: `/unshare failed: ${errorText(error)}` });
           });
         }
         return;

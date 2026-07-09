@@ -49,6 +49,13 @@ export type AgentConnectionStatus =
 /** Whether the machine is shared only with this session's agent, or the whole project. */
 export type MachineShareScope = "session" | "project";
 
+/** The one bit of `connectItx` this module uses — injectable so tests can drive a fake. */
+type ConnectProject = (input: {
+  auth: ItxAuthCredentials;
+  baseUrl: string;
+  projectId: string;
+}) => RpcStub<Project>;
+
 /**
  * Resolve itx credentials for the TUI, in priority order: an admin API secret
  * from the environment (doppler / e2e lanes), an explicit bearer token, then
@@ -95,7 +102,10 @@ export function connectAgentFeed(input: {
   onStatus: (status: AgentConnectionStatus) => void;
   /** Called before each method the agent invokes on the shared machine. */
   onMachineInvocation?: (invocation: MachineInvocation) => void;
+  /** Override the itx connect fn (tests inject a fake project stub). */
+  connect?: ConnectProject;
 }): AgentConnection {
+  const connect: ConnectProject = input.connect ?? (connectItx as ConnectProject);
   let disposed = false;
   let project: RpcStub<Project> | undefined;
   let agent: RpcStub<Agent> | undefined;
@@ -119,14 +129,56 @@ export function connectAgentFeed(input: {
     types: MACHINE_CAPABILITY_TYPES,
   };
 
+  // provideCapability is a network round-trip. Between the guard check and the
+  // await resolving, the user can `/unshare`, the socket can reconnect, or we
+  // can dispose — so each provide RECONCILES against the desired state after the
+  // await and revokes the fresh mount if it's no longer wanted, instead of
+  // blindly retaining it. The in-flight flags stop two concurrent callers from
+  // both provisioning the same scope (e.g. `/share` racing a reconnect's
+  // re-provide). Together these keep "the mount reflects what the user asked
+  // for" true even under fast toggling over a slow link.
+  let providingSession = false;
+  let providingProject = false;
+
   const provideSession = async () => {
-    if (agent === undefined || sessionProvision !== undefined) return;
-    sessionProvision = await agent.provideCapability(provideInput);
+    if (agent === undefined || sessionProvision !== undefined || providingSession) return;
+    providingSession = true;
+    const providingOn = agent;
+    try {
+      const provision = await providingOn.provideCapability(provideInput);
+      if (disposed || agent !== providingOn) {
+        await provision.revoke().catch(() => {});
+        return;
+      }
+      sessionProvision = provision;
+    } finally {
+      providingSession = false;
+    }
   };
 
   const provideProject = async () => {
-    if (!sharingWithProject || project === undefined || projectProvision !== undefined) return;
-    projectProvision = await project.provideCapability(provideInput);
+    if (
+      !sharingWithProject ||
+      project === undefined ||
+      projectProvision !== undefined ||
+      providingProject
+    ) {
+      return;
+    }
+    providingProject = true;
+    const providingOn = project;
+    try {
+      const provision = await providingOn.provideCapability(provideInput);
+      // Reconcile: if the user `/unshare`d, we disposed, or the socket was
+      // replaced while awaiting, this mount is unwanted — revoke and bail.
+      if (!sharingWithProject || disposed || project !== providingOn) {
+        await provision.revoke().catch(() => {});
+        return;
+      }
+      projectProvision = provision;
+    } finally {
+      providingProject = false;
+    }
   };
 
   const disposeConnection = () => {
@@ -163,7 +215,7 @@ export function connectAgentFeed(input: {
     // Connect at the PROJECT scope and derive the agent from it, so we hold both
     // stubs on ONE socket: the agent for chat + the session-scoped mount, the
     // project for the `/share` mount.
-    const nextProject = connectItx({
+    const nextProject = connect({
       auth: input.auth,
       baseUrl: input.baseUrl,
       projectId: input.projectId,

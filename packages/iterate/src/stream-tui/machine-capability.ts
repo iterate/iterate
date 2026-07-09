@@ -16,13 +16,14 @@
  * `instructions`/`types` are what the agent sees through `itx.__describe()`, so
  * they ARE the tool design: keep them accurate.
  */
-import { exec as execCallback } from "node:child_process";
+import { exec as execCallback, execFile as execFileCallback } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { basename, resolve } from "node:path";
 import { platform } from "node:os";
 import { promisify } from "node:util";
 
 const execAsync = promisify(execCallback);
+const execFileAsync = promisify(execFileCallback);
 
 /** Cap on captured stdout/stderr so a chatty command can't blow up the payload. */
 const MAX_OUTPUT_CHARS = 20_000;
@@ -162,11 +163,18 @@ export function createMachineCapability(hooks: {
       if (occurrenceCount === 0) {
         throw new Error(`edit: oldString not found in ${path}.`);
       }
+      // Match itx.workspace: an ambiguous edit (>1 match, no replaceAll) throws
+      // rather than silently changing only the first — the agent must be explicit.
+      if (occurrenceCount > 1 && !replaceAll) {
+        throw new Error(
+          `edit: oldString matched ${occurrenceCount} times in ${path}. Pass replaceAll or make it unique.`,
+        );
+      }
       const updated = replaceAll
         ? content.split(oldString).join(newString)
         : content.replace(oldString, newString);
       await fs.writeFile(path, updated, "utf8");
-      return { path, occurrenceCount: replaceAll ? occurrenceCount : 1 };
+      return { path, occurrenceCount };
     },
 
     async readDir(dir) {
@@ -193,8 +201,13 @@ export function createMachineCapability(hooks: {
     async notify(message) {
       announce("notify", message);
       if (platform() !== "darwin") return;
-      const escaped = message.replace(/"/g, '\\"');
-      await execAsync(`osascript -e 'display notification "${escaped}" with title "iterate"'`);
+      // Pass the script as an argv item (no shell) so quotes/apostrophes in the
+      // message can't break out of — or inject into — the command. JSON string
+      // syntax matches AppleScript's double-quoted, backslash-escaped strings.
+      await execFileAsync("osascript", [
+        "-e",
+        `display notification ${JSON.stringify(message)} with title "iterate"`,
+      ]);
     },
   };
 }
