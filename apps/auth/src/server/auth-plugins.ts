@@ -77,6 +77,18 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
   return typeof user?.id === "string" ? user.id : null;
 }
 
+const iterateOrganizationRoles = new Set(["member", "admin", "owner"]);
+
+function normalizeSingleOrganizationRole(role: string) {
+  const normalized = role.trim();
+  if (!iterateOrganizationRoles.has(normalized)) {
+    throw new APIError("BAD_REQUEST", {
+      message: "Organization role must be one of member, admin, or owner",
+    });
+  }
+  return normalized;
+}
+
 /** Only the config the plugin list actually needs. Kept plain (not the whole
  * `AppConfig`) so the sqlfu schema-generation entry (auth.schema-only.ts) can
  * build the same plugin set without real secrets. */
@@ -107,7 +119,13 @@ export function getAuthPlugins(options: AuthPluginOptions) {
       // inviteMember. Hooks keep delivery on the endpoint path while still
       // using the native organization invitation lifecycle.
       organizationHooks: {
-        beforeCreateInvitation: async () => {
+        beforeAddMember: async (data) => ({
+          data: {
+            ...data.member,
+            role: normalizeSingleOrganizationRole(data.member.role),
+          },
+        }),
+        beforeCreateInvitation: async (data) => {
           const configError = getOrganizationInvitationEmailConfigError({
             senderDomain: options.emailSenderDomain,
             emailBinding: options.emailBinding,
@@ -115,6 +133,23 @@ export function getAuthPlugins(options: AuthPluginOptions) {
           if (configError) {
             throw new APIError("INTERNAL_SERVER_ERROR", { message: configError });
           }
+
+          return {
+            data: {
+              ...data.invitation,
+              role: normalizeSingleOrganizationRole(data.invitation.role),
+            },
+          };
+        },
+        beforeAcceptInvitation: async (data) => {
+          normalizeSingleOrganizationRole(data.invitation.role);
+        },
+        beforeUpdateMemberRole: async (data) => {
+          return {
+            data: {
+              role: normalizeSingleOrganizationRole(data.newRole),
+            },
+          };
         },
         afterCreateInvitation: async (data) => {
           const invitationUrl = new URL(

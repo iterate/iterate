@@ -11,30 +11,37 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { z } from "zod/v4";
 import { authClient, useSession } from "../../utils/auth-client.ts";
-import { inventoryQueryOptions } from "./-projects-shared.tsx";
+import { inventoryQueryOptions } from "./-projects-data.ts";
 
 export const Route = createFileRoute("/_auth/invitations/$invitationId")({
+  validateSearch: z.object({
+    organization: z.string().optional().catch(undefined),
+  }),
   component: InvitationPage,
 });
 
 function InvitationPage() {
   const { invitationId } = Route.useParams();
+  const { organization } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const session = useSession();
   const signedInEmail = session.user.email ?? "";
+  const currentInvitationQueryKey = ["better-auth", "invitation", invitationId] as const;
 
   const invitationQuery = useQuery({
-    queryKey: ["better-auth", "invitation", invitationId] as const,
+    queryKey: currentInvitationQueryKey,
     queryFn: () => authClient.organization.getInvitation({ query: { id: invitationId } }),
     retry: false,
   });
 
   const navigateToProjects = async (organizationSlug?: string) => {
+    const targetOrganizationSlug = organizationSlug ?? organization;
     await navigate({
       to: "/projects/{-$organizationSlug}",
-      params: organizationSlug ? { organizationSlug } : {},
+      params: targetOrganizationSlug ? { organizationSlug: targetOrganizationSlug } : {},
     });
   };
 
@@ -42,7 +49,10 @@ function InvitationPage() {
     mutationFn: () => authClient.organization.acceptInvitation({ invitationId }),
     onSuccess: async () => {
       toast.success("Invitation accepted");
-      await queryClient.invalidateQueries({ queryKey: inventoryQueryOptions().queryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: currentInvitationQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inventoryQueryOptions().queryKey }),
+      ]);
       await navigateToProjects(invitationQuery.data?.organizationSlug);
     },
     onError: (error) => toast.error(error.message),
@@ -52,6 +62,10 @@ function InvitationPage() {
     mutationFn: () => authClient.organization.rejectInvitation({ invitationId }),
     onSuccess: async () => {
       toast.success("Invitation declined");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: currentInvitationQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inventoryQueryOptions().queryKey }),
+      ]);
       await navigateToProjects();
     },
     onError: (error) => toast.error(error.message),
@@ -59,9 +73,10 @@ function InvitationPage() {
 
   const switchAccount = useMutation({
     mutationFn: () => authClient.signOut(),
-    onSuccess: () => {
+    onSuccess: async () => {
+      queryClient.clear();
       const returnURL = window.location.pathname + window.location.search;
-      navigate({ to: "/login", search: { redirect: returnURL } });
+      await navigate({ to: "/login", search: { redirect: returnURL } });
     },
     onError: (error) => toast.error(error.message),
   });

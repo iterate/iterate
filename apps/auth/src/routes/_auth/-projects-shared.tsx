@@ -1,7 +1,7 @@
 // Shared pieces of the /projects organization-management pages. The `-`
 // filename prefix keeps this out of the generated route tree (TanStack
 // Router's convention for colocated non-route files).
-import { useEffect, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { z } from "zod/v4";
 import {
   AlertDialog,
@@ -28,68 +28,31 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@iterate-com/ui/compo
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { authClient } from "../../utils/auth-client.ts";
 import { orpcClient } from "../../utils/query.tsx";
-
-type Organization = Awaited<ReturnType<typeof orpcClient.user.myOrganizations>>[number];
-export type Project = Awaited<ReturnType<typeof orpcClient.project.list>>[number];
-export type InventoryOrganization = Organization & { projects: Project[] };
+import {
+  inventoryQueryOptions,
+  organizationInvitationsQueryKey,
+  organizationManagementSections,
+  organizationMembersQueryKey,
+  type InventoryOrganization,
+  type OrganizationManagementSection,
+  type Project,
+} from "./-projects-data.ts";
 
 const organizationRoles = ["member", "admin", "owner"] as const;
 type OrganizationRole = (typeof organizationRoles)[number];
 
-type BetterAuthOrganizationMember = {
-  id: string;
-  organizationId: string;
-  userId: string;
-  role: string;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    image?: string | null | undefined;
-  };
-};
+const memberAdminRoles = ["member", "admin"] as const satisfies readonly OrganizationRole[];
 
-type BetterAuthOrganizationInvitation = {
-  id: string;
-  organizationId: string;
-  email: string;
-  role: string;
-  status: string;
-};
-
-function organizationMembersQueryKey(organizationId: string) {
-  return ["better-auth", "organization", organizationId, "members"] as const;
-}
-
-function organizationInvitationsQueryKey(organizationId: string) {
-  return ["better-auth", "organization", organizationId, "invitations"] as const;
-}
-
-export function inventoryQueryOptions() {
-  return queryOptions({
-    queryKey: ["auth", "workspace-inventory"] as const,
-    queryFn: loadInventory,
-  });
-}
-
-async function loadInventory(): Promise<InventoryOrganization[]> {
-  const organizations = await orpcClient.user.myOrganizations();
-  return await Promise.all(
-    organizations.map(async (organization) => ({
-      ...organization,
-      projects: await orpcClient.project.list({ organizationSlug: organization.slug }),
-    })),
-  );
-}
+type OrganizationMember = Awaited<ReturnType<typeof orpcClient.organization.members>>[number];
 
 export function OrganizationRail(props: {
   organizations: InventoryOrganization[];
   selectedOrganizationSlug: string;
+  selectedSection: OrganizationManagementSection;
 }) {
   return (
     <aside className="overflow-hidden rounded-lg border bg-card">
@@ -105,6 +68,9 @@ export function OrganizationRail(props: {
               key={organization.id}
               to="/projects/{-$organizationSlug}"
               params={{ organizationSlug: organization.slug }}
+              search={{
+                section: props.selectedSection === "projects" ? undefined : props.selectedSection,
+              }}
               className={[
                 "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition-colors",
                 selected ? "bg-primary text-primary-foreground" : "hover:bg-muted",
@@ -141,7 +107,9 @@ export function OrganizationRail(props: {
 export function OrganizationDetail(props: {
   organization: InventoryOrganization;
   canManage: boolean;
+  canManageOwnerRoles: boolean;
   currentUserId: string;
+  activeSection: OrganizationManagementSection;
   onCreateProject: () => void;
   onDeleteOrganization: () => void;
   onDeleteProject: (project: Project) => void;
@@ -177,7 +145,13 @@ export function OrganizationDetail(props: {
         </div>
       </div>
 
-      <div className="border-b">
+      <OrganizationSectionNav
+        organizationSlug={props.organization.slug}
+        activeSection={props.activeSection}
+        canManage={props.canManage}
+      />
+
+      <div id="organization-projects" className="scroll-mt-4 border-b">
         <div className="border-b px-5 py-3">
           <h3 className="text-sm font-medium">Projects</h3>
         </div>
@@ -209,10 +183,42 @@ export function OrganizationDetail(props: {
         organizationId={props.organization.id}
         organizationSlug={props.organization.slug}
         canManage={props.canManage}
-        currentUserRole={toOrganizationRole(props.organization.role)}
+        currentUserRole={
+          props.canManageOwnerRoles ? "owner" : toOrganizationRole(props.organization.role)
+        }
+        canManageOwnerRoles={props.canManageOwnerRoles}
         currentUserId={props.currentUserId}
       />
     </section>
+  );
+}
+
+function OrganizationSectionNav(props: {
+  organizationSlug: string;
+  activeSection: OrganizationManagementSection;
+  canManage: boolean;
+}) {
+  const sections = props.canManage ? organizationManagementSections : memberAdminVisibleSections;
+  return (
+    <nav className="flex flex-wrap gap-2 border-b px-5 py-3" aria-label="Organization sections">
+      {sections.map((section) => (
+        <Link
+          key={section}
+          to="/projects/{-$organizationSlug}"
+          params={{ organizationSlug: props.organizationSlug }}
+          search={{ section: section === "projects" ? undefined : section }}
+          aria-current={props.activeSection === section ? "page" : undefined}
+          className={[
+            "rounded-md px-3 py-1.5 text-sm transition-colors",
+            props.activeSection === section
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          ].join(" ")}
+        >
+          {section.slice(0, 1).toUpperCase() + section.slice(1)}
+        </Link>
+      ))}
+    </nav>
   );
 }
 
@@ -253,11 +259,12 @@ function OrganizationMembersPanel(props: {
   organizationId: string;
   organizationSlug: string;
   canManage: boolean;
+  canManageOwnerRoles: boolean;
   currentUserRole: OrganizationRole;
   currentUserId: string;
 }) {
   const queryClient = useQueryClient();
-  const [memberToRemove, setMemberToRemove] = useState<BetterAuthOrganizationMember | null>(null);
+  const [memberToRemove, setMemberToRemove] = useState<OrganizationMember | null>(null);
 
   const refreshMembers = async () => {
     await Promise.all([
@@ -273,29 +280,20 @@ function OrganizationMembersPanel(props: {
 
   const membersQuery = useQuery({
     queryKey: organizationMembersQueryKey(props.organizationId),
-    queryFn: async (): Promise<BetterAuthOrganizationMember[]> => {
-      const result = await authClient.organization.listMembers({
-        query: { organizationId: props.organizationId },
-      });
-      return result.members;
-    },
+    queryFn: () => orpcClient.organization.members({ organizationSlug: props.organizationSlug }),
   });
 
   const invitationsQuery = useQuery({
     queryKey: organizationInvitationsQueryKey(props.organizationId),
     enabled: props.canManage,
-    queryFn: async (): Promise<BetterAuthOrganizationInvitation[]> => {
-      const invitations = await authClient.organization.listInvitations({
-        query: { organizationId: props.organizationId },
-      });
-      return invitations.filter((invitation) => invitation.status === "pending");
-    },
+    queryFn: () =>
+      orpcClient.organization.listInvites({ organizationSlug: props.organizationSlug }),
   });
 
   const inviteMember = useMutation({
     mutationFn: (input: { email: string; role: OrganizationRole }) =>
-      authClient.organization.inviteMember({
-        organizationId: props.organizationId,
+      orpcClient.organization.createInvite({
+        organizationSlug: props.organizationSlug,
         email: input.email,
         role: input.role,
       }),
@@ -307,10 +305,10 @@ function OrganizationMembersPanel(props: {
   });
 
   const updateMemberRole = useMutation({
-    mutationFn: (input: { memberId: string; role: OrganizationRole }) =>
-      authClient.organization.updateMemberRole({
-        organizationId: props.organizationId,
-        memberId: input.memberId,
+    mutationFn: (input: { userId: string; role: OrganizationRole }) =>
+      orpcClient.organization.updateMemberRole({
+        organizationSlug: props.organizationSlug,
+        userId: input.userId,
         role: input.role,
       }),
     onSuccess: async () => {
@@ -321,10 +319,10 @@ function OrganizationMembersPanel(props: {
   });
 
   const removeMember = useMutation({
-    mutationFn: (memberIdOrEmail: string) =>
-      authClient.organization.removeMember({
-        organizationId: props.organizationId,
-        memberIdOrEmail,
+    mutationFn: (userId: string) =>
+      orpcClient.organization.removeMember({
+        organizationSlug: props.organizationSlug,
+        userId,
       }),
     onSuccess: async () => {
       toast.success("Member removed");
@@ -336,7 +334,10 @@ function OrganizationMembersPanel(props: {
 
   const cancelInvitation = useMutation({
     mutationFn: (invitationId: string) =>
-      authClient.organization.cancelInvitation({ invitationId }),
+      orpcClient.organization.cancelInvite({
+        organizationSlug: props.organizationSlug,
+        inviteId: invitationId,
+      }),
     onSuccess: async () => {
       toast.success("Invitation canceled");
       await refreshMembers();
@@ -346,11 +347,12 @@ function OrganizationMembersPanel(props: {
 
   const members = membersQuery.data ?? [];
   const invitations = invitationsQuery.data ?? [];
-  const manageableRoles: readonly OrganizationRole[] =
-    props.currentUserRole === "owner" ? organizationRoles : ["member", "admin"];
+  const manageableRoles: readonly OrganizationRole[] = props.canManageOwnerRoles
+    ? organizationRoles
+    : memberAdminRoles;
 
   return (
-    <section>
+    <section id="organization-members" className="scroll-mt-4">
       <div className="border-b px-5 py-3">
         <h3 className="text-sm font-medium">Members</h3>
       </div>
@@ -390,9 +392,9 @@ function OrganizationMembersPanel(props: {
               roleOptions={manageableRoles}
               isCurrentUser={member.userId === props.currentUserId}
               isUpdatingRole={
-                updateMemberRole.isPending && updateMemberRole.variables?.memberId === member.id
+                updateMemberRole.isPending && updateMemberRole.variables?.userId === member.userId
               }
-              onRoleChange={(role) => updateMemberRole.mutate({ memberId: member.id, role })}
+              onRoleChange={(role) => updateMemberRole.mutate({ userId: member.userId, role })}
               onRemove={() => setMemberToRemove(member)}
             />
           ))}
@@ -401,41 +403,43 @@ function OrganizationMembersPanel(props: {
 
       {props.canManage ? (
         <>
-          <div className="border-t px-5 py-3">
-            <h3 className="text-sm font-medium">Pending invitations</h3>
-          </div>
-          {invitationsQuery.isPending ? (
-            <div className="px-5 py-6 text-sm text-muted-foreground">Loading invitations...</div>
-          ) : invitationsQuery.isError ? (
-            <div className="px-5 py-6">
-              <p className="text-sm text-destructive">{invitationsQuery.error.message}</p>
-              <Button
-                className="mt-3"
-                size="sm"
-                variant="outline"
-                onClick={() => invitationsQuery.refetch()}
-              >
-                Try again
-              </Button>
+          <section id="organization-invitations" className="scroll-mt-4">
+            <div className="border-t px-5 py-3">
+              <h3 className="text-sm font-medium">Pending invitations</h3>
             </div>
-          ) : invitations.length === 0 ? (
-            <div className="px-5 py-6 text-sm text-muted-foreground">No pending invitations.</div>
-          ) : (
-            <div className="divide-y">
-              {invitations.map((invitation) => (
-                <PendingInvitationRow
-                  key={invitation.id}
-                  invitation={invitation}
-                  organizationSlug={props.organizationSlug}
-                  canManage={props.canManage}
-                  isCanceling={
-                    cancelInvitation.isPending && cancelInvitation.variables === invitation.id
-                  }
-                  onCancel={() => cancelInvitation.mutate(invitation.id)}
-                />
-              ))}
-            </div>
-          )}
+            {invitationsQuery.isPending ? (
+              <div className="px-5 py-6 text-sm text-muted-foreground">Loading invitations...</div>
+            ) : invitationsQuery.isError ? (
+              <div className="px-5 py-6">
+                <p className="text-sm text-destructive">{invitationsQuery.error.message}</p>
+                <Button
+                  className="mt-3"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => invitationsQuery.refetch()}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : invitations.length === 0 ? (
+              <div className="px-5 py-6 text-sm text-muted-foreground">No pending invitations.</div>
+            ) : (
+              <div className="divide-y">
+                {invitations.map((invitation) => (
+                  <PendingInvitationRow
+                    key={invitation.id}
+                    invitation={invitation}
+                    organizationSlug={props.organizationSlug}
+                    canManage={props.canManage}
+                    isCanceling={
+                      cancelInvitation.isPending && cancelInvitation.variables === invitation.id
+                    }
+                    onCancel={() => cancelInvitation.mutate(invitation.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
         </>
       ) : null}
 
@@ -444,7 +448,7 @@ function OrganizationMembersPanel(props: {
         isPending={removeMember.isPending}
         onOpenChange={(open) => !open && setMemberToRemove(null)}
         onConfirm={() => {
-          if (memberToRemove) removeMember.mutate(memberToRemove.id);
+          if (memberToRemove) removeMember.mutate(memberToRemove.userId);
         }}
       />
     </section>
@@ -463,23 +467,20 @@ function InviteMemberForm(props: {
 }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<OrganizationRole>("member");
-  const parsed = InviteMemberInput.safeParse({ email, role });
+  const parsed = useMemo(() => InviteMemberInput.safeParse({ email, role }), [email, role]);
+  const submitInvite = () => {
+    if (!parsed.success || props.isPending) return;
+    void props
+      .onSubmit(parsed.data)
+      .then(() => {
+        setEmail("");
+        setRole("member");
+      })
+      .catch(() => undefined);
+  };
 
   return (
-    <form
-      className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto] md:items-end"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!parsed.success) return;
-        void props
-          .onSubmit(parsed.data)
-          .then(() => {
-            setEmail("");
-            setRole("member");
-          })
-          .catch(() => undefined);
-      }}
-    >
+    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto] md:items-end">
       <Field data-invalid={!parsed.success && email.length > 0}>
         <FieldLabel htmlFor="member-email">Email</FieldLabel>
         <Input
@@ -487,6 +488,9 @@ function InviteMemberForm(props: {
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submitInvite();
+          }}
           disabled={props.isPending}
           aria-invalid={!parsed.success && email.length > 0}
         />
@@ -507,15 +511,15 @@ function InviteMemberForm(props: {
           ))}
         </NativeSelect>
       </Field>
-      <Button type="submit" disabled={!parsed.success || props.isPending}>
+      <Button type="button" disabled={!parsed.success || props.isPending} onClick={submitInvite}>
         {props.isPending ? "Inviting..." : "Invite"}
       </Button>
-    </form>
+    </div>
   );
 }
 
 function MemberRow(props: {
-  member: BetterAuthOrganizationMember;
+  member: OrganizationMember;
   canManage: boolean;
   currentUserRole: OrganizationRole;
   roleOptions: readonly OrganizationRole[];
@@ -531,9 +535,7 @@ function MemberRow(props: {
     targetRole: role,
     isCurrentUser: props.isCurrentUser,
   });
-  const roleOptions = props.roleOptions.includes(role)
-    ? props.roleOptions
-    : [role, ...props.roleOptions];
+  const roleOptions = props.roleOptions.includes(role) ? props.roleOptions : organizationRoles;
   return (
     <article className="grid gap-3 px-5 py-4 md:grid-cols-[minmax(0,1fr)_160px_auto] md:items-center">
       <div className="flex min-w-0 items-center gap-3">
@@ -579,7 +581,7 @@ function MemberRow(props: {
 }
 
 function PendingInvitationRow(props: {
-  invitation: BetterAuthOrganizationInvitation;
+  invitation: Awaited<ReturnType<typeof orpcClient.organization.listInvites>>[number];
   organizationSlug: string;
   canManage: boolean;
   isCanceling: boolean;
@@ -594,7 +596,7 @@ function PendingInvitationRow(props: {
             {formatOrganizationRole(toOrganizationRole(props.invitation.role))}
           </Badge>
         </div>
-        <p className="truncate text-xs text-muted-foreground">{props.invitation.status}</p>
+        <p className="truncate text-xs text-muted-foreground">Pending</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button
@@ -620,7 +622,7 @@ function PendingInvitationRow(props: {
 }
 
 function RemoveMemberDialog(props: {
-  member: BetterAuthOrganizationMember | null;
+  member: OrganizationMember | null;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -664,7 +666,7 @@ function copyInvitationLink(invitationId: string, organizationSlug: string) {
     .catch(() => toast.error("Could not copy invitation link"));
 }
 
-function memberInitials(member: BetterAuthOrganizationMember) {
+function memberInitials(member: OrganizationMember) {
   const seed = member.user.name || member.user.email;
   const parts = seed.trim().split(/\s+/).filter(Boolean);
   if (parts.length >= 2) {
@@ -692,6 +694,11 @@ function formatOrganizationRole(role: OrganizationRole) {
   return role.slice(0, 1).toUpperCase() + role.slice(1);
 }
 
+const memberAdminVisibleSections = [
+  "projects",
+  "members",
+] as const satisfies readonly OrganizationManagementSection[];
+
 // The selected organization is the parent's `state`, not local state — the
 // select writes straight back through onStateChange, so there's nothing to
 // sync.
@@ -705,6 +712,7 @@ export function ProjectDialog(props: {
 }) {
   return (
     <NameDialog
+      key={props.state?.organizationSlug ?? "create-project-closed"}
       open={Boolean(props.state)}
       title="Create project"
       description="Name the project users should recognize."
@@ -756,10 +764,6 @@ export function NameDialog(props: {
 }) {
   const [name, setName] = useState("");
   const parsed = NameInput.safeParse({ name });
-
-  useEffect(() => {
-    if (props.open) setName("");
-  }, [props.open]);
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>

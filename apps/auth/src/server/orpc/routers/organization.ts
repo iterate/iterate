@@ -1,5 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { slugify } from "@iterate-com/shared/slug";
+import { parseConfig } from "../../../config.ts";
 import {
   organizationAdminMiddleware,
   organizationScopedMiddleware,
@@ -25,6 +26,7 @@ import {
   updateMembershipRoleByOrganizationAndUserId,
   updateOrganizationNameById,
 } from "../../db/queries/index.ts";
+import { sendOrganizationInvitationEmail } from "../../email.ts";
 import { generateId, toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
 
 const create = os.organization.create
@@ -213,6 +215,9 @@ const createInvite = os.organization.createInvite
 
     const inviteId = generateId("inv");
     const role = input.role ?? "member";
+    const config = parseConfig(context.env);
+    const invitationUrl = new URL(`/invitations/${inviteId}`, config.authAppOrigin);
+    invitationUrl.searchParams.set("organization", context.organization.slug);
     await insertInvite(context.db, {
       id: inviteId,
       organizationId: context.organization.id,
@@ -223,6 +228,24 @@ const createInvite = os.organization.createInvite
       createdAt: Date.now(),
       inviterId: context.user.id,
     });
+
+    try {
+      await sendOrganizationInvitationEmail({
+        email: input.email,
+        role,
+        organizationName: context.organization.name,
+        inviterName: context.user.name,
+        inviterEmail: context.user.email,
+        invitationUrl: invitationUrl.toString(),
+        senderDomain: config.emailSenderDomain,
+        emailBinding: context.env.EMAIL,
+      });
+    } catch (error) {
+      await updateInviteStatusById(context.db, { status: "canceled" }, { id: inviteId });
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: error instanceof Error ? error.message : "Could not send invitation email",
+      });
+    }
 
     return {
       id: inviteId,
