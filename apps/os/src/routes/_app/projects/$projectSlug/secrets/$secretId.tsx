@@ -54,7 +54,7 @@ function ProjectSecretDetailContent() {
   // updated audit trail into this page while it's open.
   const { value: secret } = useLiveState(
     (itx) => itx.secrets.get(secretPath).liveState,
-    undefined,
+    (state) => state,
     [secretPath],
   );
 

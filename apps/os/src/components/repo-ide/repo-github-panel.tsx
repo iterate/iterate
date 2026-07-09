@@ -18,9 +18,11 @@ import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
  * live, so link and push facts fold into this panel as they happen.
  */
 export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; repoPath: string }) {
-  const repoProcessor = useLiveState((itx) => itx.repos.get(repoPath).liveState, undefined, [
-    repoPath,
-  ]);
+  const repoProcessor = useLiveState(
+    (itx) => itx.repos.get(repoPath).liveState,
+    (state) => state,
+    [repoPath],
+  );
   const state = repoProcessor.value;
   if (state === undefined) {
     return (

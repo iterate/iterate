@@ -45,9 +45,11 @@ function ProjectRepoDetailContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const repoPath = repoPathFromSplat(params._splat);
-  const repoProcessor = useLiveState((itx) => itx.repos.get(repoPath).liveState, undefined, [
-    repoPath,
-  ]);
+  const repoProcessor = useLiveState(
+    (itx) => itx.repos.get(repoPath).liveState,
+    (state) => state,
+    [repoPath],
+  );
 
   // The IDE only mounts on an initialized repo (its file reads would throw
   // before the artifact exists); until then the panel shows the bootstrap
