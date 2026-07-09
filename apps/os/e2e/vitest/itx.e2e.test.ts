@@ -1207,7 +1207,7 @@ describe("itx", () => {
       };
     }`);
     expect(scriptResult.result).toEqual({
-      repo: `repo ${description.projectId}:/`,
+      repo: `repo ${description.projectId}:/repos/config`,
       worker: "hello fetched /script",
     });
 
@@ -1331,7 +1331,7 @@ describe("itx", () => {
     });
     // @ts-expect-error - dynamic capability root
     expect(await project.probe.inspect()).toEqual({
-      repo: `repo ${description.projectId}:/`,
+      repo: `repo ${description.projectId}:/repos/config`,
     });
 
     using _projectWorkerRefProvision = await project.provideCapability({
