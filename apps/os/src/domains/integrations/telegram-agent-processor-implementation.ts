@@ -231,11 +231,24 @@ export class TelegramAgentProcessor extends StreamProcessor<
         : answeringMessageId !== undefined && answeringMessageId !== latestInboundMessageId
           ? answeringMessageId
           : undefined;
+    // Journaled sends are THREAD-BOUND: the stream's identity always wins over
+    // payload-supplied chat_id/message_thread_id. Not a capability boundary
+    // (the raw itx.integrations.telegram sendMessage can post anywhere) — a
+    // provenance one: the message-sent claim below records THIS stream as the
+    // message's thread, and a send that actually went elsewhere would poison
+    // reply hints and the reply_to comparison. Forced rather than rejected: a
+    // permanently-invalid request must not wedge the obligation retry loop.
+    // reply_to_message_id stays caller-overridable (it is within-chat).
+    const {
+      chat_id: _ignoredChatId,
+      message_thread_id: _ignoredThreadId,
+      ...payloadRest
+    } = input.event.payload;
     const { messageId } = await this.deps.sendTelegramMessage({
+      ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
+      ...payloadRest,
       chat_id: coerceTelegramId(input.chatId),
       ...(topicId === null ? {} : { message_thread_id: coerceTelegramId(topicId) }),
-      ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
-      ...input.event.payload,
     });
     return messageId;
   }

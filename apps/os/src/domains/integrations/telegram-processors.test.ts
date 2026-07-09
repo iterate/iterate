@@ -580,6 +580,28 @@ describe("TelegramAgentProcessor", () => {
     ).toHaveLength(1);
   });
 
+  it("forces the stream's chat over a payload-supplied chat_id/message_thread_id (thread-bound sends)", async () => {
+    const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
+    const { cursors, network, processor, sentMessages, stream } = setup({ agentPath });
+
+    await stream.append({
+      type: "events.iterate.com/telegram/send-requested",
+      // A confused (or mischievous) agent aims the journaled send at another
+      // chat. Not a capability boundary — raw sendMessage can post anywhere —
+      // but the claim below records THIS stream as the message's thread, so
+      // the delivery must actually go here: path identity wins, payload's
+      // chat coordinates are ignored (reply_to_message_id stays overridable).
+      payload: { chat_id: 999999, message_thread_id: 55, reply_to_message_id: 7, text: "hi" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(sentMessages).toEqual([
+      { chat_id: CHAT_ID, reply_to_message_id: 7, text: "hi" }, // no message_thread_id: the path has no topic
+    ]);
+    const claims = network.eventsAt(`/integrations/telegram/${CONNECTION}`);
+    expect(claims[0]!.payload).toMatchObject({ chatId: String(CHAT_ID), sessionPath: agentPath });
+  });
+
   it("never re-sends a MARKED request on replay (the crash-after-marker case)", async () => {
     const { cursors, processor, sentMessages, stream } = setup();
 
