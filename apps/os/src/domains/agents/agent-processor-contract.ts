@@ -8,28 +8,32 @@ export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
 
 /**
- * How stale an llm-request-requested's INTENT may be before providers must
- * refuse to start an attempt and settle it as expired instead. Recovery can
- * deliver a requested event arbitrarily late (a host revived days after a
- * crash loop); expiry is what makes late recovery safe — wake whenever,
- * act only within the intent's validity horizon. Matches the providers'
- * in-flight deadline: an attempt that would still be running is worth
- * starting; one whose whole lifetime has lapsed is not.
+ * Two horizons in one constant, deliberately equal:
+ *
+ * - How stale an llm-request-requested INTENT may be before the reconciler
+ *   refuses to start an attempt and settles it as an expired failure instead.
+ *   Recovery can deliver a requested event arbitrarily late (a host revived
+ *   days after a crash loop); expiry is what makes late recovery safe — wake
+ *   whenever, act only within the intent's validity horizon.
+ * - The wall-clock cap on one attempt's whole vendor phase (dial + stream
+ *   drain, enforced in workers-ai-transport.ts): an attempt that would still
+ *   be legitimately running is worth starting; one whose whole lifetime has
+ *   lapsed is not.
  */
 export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
 
 /**
- * The agent's own outer deadline on a `requested` request, enforced by its
- * per-batch reconciliation. Providers normally settle their own orphans well
- * before this; the backstop only fires when the provider layer is entirely
- * absent (the cloudflare-ai-without-recovery class of bug). It sits past TWO
- * provider deadlines so even an attempt queued behind another full-length
- * request finishes or fails first. If the pathological case still occurs (a
- * deep execution queue), the outcomes CONVERGE rather than conflict: the
- * backstop failure and any late provider completion carry idempotent keys,
- * the reducer ignores completions for a request that is no longer current,
- * and the late attempt's output is gated on request currency — the journal
- * records both facts, the fold believes exactly one.
+ * Last-resort deadline on a `requested` current request, enforced by the
+ * scheduling reconciler. Normally dead code: the obligation reconciler
+ * settles every open request well before this (attempts self-cap at
+ * DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS, crashed attempts cancel, expired
+ * intents fail). It exists for folds the normal lifecycle didn't produce —
+ * hand-seeded checkpoints, raw-append journals — and as insurance against
+ * reconciliation bugs. If it ever races a still-running attempt the outcomes
+ * CONVERGE rather than conflict: the backstop failure and any late completion
+ * carry idempotent keys, the reducer ignores completions for a request that
+ * is no longer current, and the late attempt's output is gated on request
+ * currency — the journal records both facts, the fold believes exactly one.
  */
 export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 
@@ -193,7 +197,7 @@ const LlmRequestResult = z.discriminatedUnion("status", [
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.4.0",
+  version: "0.5.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
@@ -214,7 +218,10 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          llmRequestId: z.number().int().positive(),
+          /** The llm-request-requested event's own stream offset — the handle
+           * every later lifecycle event (started/chunk/completed/cancelled)
+           * carries. */
+          llmRequestOffset: z.number().int().positive(),
           /** Epoch ms the requested event committed (its createdAt), driving
            * the reconciler's backstop deadline. Optional: raw appends and
            * pre-backstop checkpoints lack it, and the backstop then skips. */
@@ -242,10 +249,11 @@ export const AgentProcessorContract = defineProcessorContract({
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     /**
      * Open LLM obligations: every request that has not reached a terminal
-     * event, keyed by llmRequestId. End-of-batch reconciliation compares
-     * this fold against the incarnation's live execution set. Entries carry
-     * model + expiresAt so recovery can START an attempt from state alone.
-     * Terminal events delete the entry (not mark completed).
+     * event, keyed by the llm-request-requested event's offset (as a string).
+     * The reconcile pass compares this fold against the incarnation's live
+     * execution set. Entries carry model + expiresAt so recovery can START an
+     * attempt from state alone. Terminal events delete the entry (not mark
+     * completed).
      */
     llmRequests: z
       .record(
@@ -259,17 +267,6 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
       )
       .default({}),
-    inProgressScriptExecutions: z
-      .array(
-        z.object({
-          code: z.string(),
-          executionId: z.string(),
-          requestedOffset: z.number().int().positive(),
-          startedAt: z.string(),
-        }),
-      )
-      .default([]),
-    scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
   events: {
     "events.iterate.com/agent/config-updated": {
@@ -377,16 +374,17 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "The LLM produced assistant output.",
       payloadSchema: z.object({
         content: z.string(),
-        llmRequestId: z.number().int().positive().optional(),
+        /** Offset of the llm-request-requested event this output answers. */
+        llmRequestOffset: z.number().int().positive().optional(),
       }),
       examples: [
         {
           description:
-            "The model answered with a codemode script; llmRequestId is the offset of the llm-request-requested event it answers.",
+            "The model answered with a codemode script; llmRequestOffset is the offset of the llm-request-requested event it answers.",
           payload: {
             content:
               '```js\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
-            llmRequestId: 57,
+            llmRequestOffset: 57,
           },
         },
       ],
@@ -433,7 +431,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The agent has prepared an LLM request. The event offset is the llmRequestId; the processor rebuilds the prompt from history.",
+        "The agent has prepared an LLM request. The event's own offset is the llmRequestOffset every later lifecycle event references; the processor rebuilds the prompt from history.",
       payloadSchema: z.object({
         model: z.string().min(1),
         requestId: z.string(),
@@ -445,7 +443,7 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestId the processor answers to.",
+            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestOffset the processor answers to.",
           payload: {
             model: "@cf/moonshotai/kimi-k2.7-code",
             requestId: "llm-request:gen-3",
@@ -456,13 +454,13 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-started": {
       description: "The agent processor started an LLM request through the AI binding.",
       payloadSchema: z.object({
-        llmRequestId: z.number().int().positive(),
+        llmRequestOffset: z.number().int().positive(),
         model: z.string().min(1),
       }),
       examples: [
         {
           description: "The agent picks up a prepared request and dials the AI binding.",
-          payload: { llmRequestId: 57, model: "@cf/moonshotai/kimi-k2.7-code" },
+          payload: { llmRequestOffset: 57, model: "@cf/moonshotai/kimi-k2.7-code" },
         },
       ],
     },
@@ -470,7 +468,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "One streamed chunk received from the AI binding.",
       payloadSchema: z.object({
         chunk: z.unknown(),
-        llmRequestId: z.number().int().positive(),
+        llmRequestOffset: z.number().int().positive(),
         sequence: z.number().int().nonnegative(),
       }),
       examples: [
@@ -478,7 +476,7 @@ export const AgentProcessorContract = defineProcessorContract({
           description: "The first streamed text delta of a response.",
           payload: {
             chunk: { choices: [{ delta: { content: "Hello" } }] },
-            llmRequestId: 57,
+            llmRequestOffset: 57,
             sequence: 0,
           },
         },
@@ -488,7 +486,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "The agent processor finished an LLM request.",
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative(),
-        llmRequestId: z.number().int().positive(),
+        llmRequestOffset: z.number().int().positive(),
         result: LlmRequestResult,
       }),
       examples: [
@@ -497,7 +495,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "The LLM returned assistant output, with token usage as the model reported it.",
           payload: {
             durationMs: 2340,
-            llmRequestId: 57,
+            llmRequestOffset: 57,
             result: {
               status: "success",
               usage: { completion_tokens: 118, prompt_tokens: 4096, total_tokens: 4214 },
@@ -509,7 +507,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "The LLM call failed; the error becomes a model-visible input so the agent can react.",
           payload: {
             durationMs: 30012,
-            llmRequestId: 61,
+            llmRequestOffset: 61,
             result: {
               error: { message: "LLM request timed out after 30000ms" },
               status: "failure",
@@ -529,7 +527,7 @@ export const AgentProcessorContract = defineProcessorContract({
         z.object({
           phase: z.literal("requested"),
           reason: z.enum(["interrupted-by-user-input", "durable-object-crashed"]),
-          llmRequestId: z.number().int().positive(),
+          llmRequestOffset: z.number().int().positive(),
         }),
       ]),
       examples: [
@@ -542,16 +540,20 @@ export const AgentProcessorContract = defineProcessorContract({
           },
         },
         {
-          description: "New user input interrupted a request already running at the provider.",
-          payload: { phase: "requested", reason: "interrupted-by-user-input", llmRequestId: 58 },
+          description: "New user input interrupted a request already running at the model.",
+          payload: {
+            phase: "requested",
+            reason: "interrupted-by-user-input",
+            llmRequestOffset: 58,
+          },
         },
         {
           description:
-            "The Durable Object incarnation died mid-attempt (kill/reset/eviction); the reconciler cancelled the in-flight request.",
+            "The Durable Object incarnation died mid-attempt (kill/reset/eviction); the reconciler cancelled the in-flight request and the turn reschedules.",
           payload: {
             phase: "requested",
             reason: "durable-object-crashed",
-            llmRequestId: 61,
+            llmRequestOffset: 61,
           },
         },
       ],
@@ -592,7 +594,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
@@ -605,10 +606,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
-    // The reconciler's backstop: normally providers append the completion,
-    // but a request whose provider layer never answers at all is settled by
-    // the agent itself past AGENT_LLM_REQUEST_BACKSTOP_MS.
-    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
   ],

@@ -50,7 +50,6 @@ function agentHarness() {
                 };
               },
             },
-            readStreamEvents: () => ctx.stream.getEvents(),
           }),
       );
       return { agent };
@@ -76,7 +75,7 @@ describe("eviction recovery, end to end", () => {
     clearInterval(pump);
   });
 
-  it("cancels an in-flight LLM call after deploy: alarm → revival → durable-object-crashed cancel", async () => {
+  it("resumes a deploy-killed turn: alarm → revival → durable-object-crashed cancel → fresh request → reply", async () => {
     await h.stream.append({
       type: T.userMessage,
       payload: { origin: "web", content: "hello?" },
@@ -84,7 +83,7 @@ describe("eviction recovery, end to end", () => {
 
     // Incarnation 1 accepts the request and hangs on the AI binding.
     const started = await h.stream.waitForEvent({ eventTypes: [T.started], timeoutMs: 5_000 });
-    const inFlightRequestId = h.stream.events.find((e) => e.type === T.requested)!.offset;
+    const inFlightRequestOffset = h.stream.events.find((e) => e.type === T.requested)!.offset;
     // In-flight work parked a durable revival alarm ahead of itself.
     expect(h.store.alarm.at).not.toBeNull();
 
@@ -99,23 +98,39 @@ describe("eviction recovery, end to end", () => {
     const crashCancel = await h.stream.waitForEvent({
       eventTypes: [T.cancelled],
       predicate: (event) =>
-        (event.payload as { llmRequestId: number }).llmRequestId === inFlightRequestId,
+        (event.payload as { llmRequestOffset: number }).llmRequestOffset === inFlightRequestOffset,
       timeoutMs: 5_000,
     });
     expect(crashCancel.payload).toMatchObject({
       phase: "requested",
       reason: "durable-object-crashed",
-      llmRequestId: inFlightRequestId,
+      llmRequestOffset: inFlightRequestOffset,
     });
     // In-flight death is a cancel, not a completed failure.
     expect(
       h.stream.events.some(
         (event) =>
           event.type === T.completed &&
-          (event.payload as { llmRequestId: number }).llmRequestId === inFlightRequestId,
+          (event.payload as { llmRequestOffset: number }).llmRequestOffset ===
+            inFlightRequestOffset,
       ),
     ).toBe(false);
     expect(started).toBeDefined();
+
+    // The cancel re-queued the trigger: the user asked and never got an
+    // answer, so incarnation 2 must run a FRESH request (new offset) and
+    // actually reply — a deploy mid-turn cannot silently eat the question.
+    const resumedRequested = await h.stream.waitForEvent({
+      afterOffset: crashCancel.offset,
+      eventTypes: [T.requested],
+      timeoutMs: 5_000,
+    });
+    expect(resumedRequested.offset).toBeGreaterThan(inFlightRequestOffset);
+    const output = await h.stream.waitForEvent({ eventTypes: [T.output], timeoutMs: 5_000 });
+    expect(output.payload).toMatchObject({
+      content: expect.stringContaining("recovered!"),
+      llmRequestOffset: resumedRequested.offset,
+    });
   });
 
   it("recovers a lost debounce timer: revival re-derives the requested event from the fold", async () => {
@@ -161,7 +176,6 @@ describe("attempt bookkeeping under stream failures", () => {
           return { response: "late but fine" };
         },
       },
-      readStreamEvents: () => stream.getEvents(),
       now: () => Date.now(),
     });
     const [requested] = await realAppend({
@@ -186,7 +200,7 @@ describe("attempt bookkeeping under stream failures", () => {
       const completion = stream.events.find(
         (event) =>
           event.type === T.completed &&
-          (event.payload as { llmRequestId: number }).llmRequestId === requested!.offset,
+          (event.payload as { llmRequestOffset: number }).llmRequestOffset === requested!.offset,
       );
       expect(completion?.payload).toMatchObject({ result: { status: "success" } });
     });
@@ -204,7 +218,6 @@ describe("staleness policy (only-settle-past-expiry)", () => {
           throw new Error("must not dial for expired intent");
         },
       },
-      readStreamEvents: () => stream.getEvents(),
       now: () => Date.now(),
     });
     const [requested] = await stream.append({
@@ -219,7 +232,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     await vi.waitFor(() => {
       const completion = stream.events.find((event) => event.type === T.completed);
       expect(completion?.payload).toMatchObject({
-        llmRequestId: requested!.offset,
+        llmRequestOffset: requested!.offset,
         result: { status: "failure", error: { message: expect.stringContaining("expired") } },
       });
     });
@@ -233,7 +246,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     const stuck = AgentProcessorContract.stateSchema.parse({
       currentRequest: {
         phase: "requested",
-        llmRequestId: 2,
+        llmRequestOffset: 2,
         requestedAt: now - AGENT_LLM_REQUEST_BACKSTOP_MS - 1,
       },
     });
@@ -260,7 +273,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     const backstop = stream.events.find((event) => event.type === T.completed);
     expect(backstop?.idempotencyKey).toBe("agent/backstop-completed@2");
     expect(backstop?.payload).toMatchObject({
-      llmRequestId: 2,
+      llmRequestOffset: 2,
       result: { status: "failure", error: { message: expect.stringContaining("backstop") } },
     });
   });

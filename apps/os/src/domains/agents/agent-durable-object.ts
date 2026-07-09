@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
@@ -19,10 +18,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
-
-const AGENT_PROMPT_EVENT_PAGE_SIZE = 500;
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -40,7 +36,6 @@ export class AgentDurableObject extends DurableObject<Env> {
       new AgentProcessor({
         ...deps,
         ai: this.env.AI,
-        readStreamEvents: () => this.#readAgentPromptEvents(),
         // Oversized script results spill into the agent's OWN workspace (the
         // same checkout itx.workspace resolves to), so the model can page
         // through the file instead of blowing its context window. The first
@@ -147,20 +142,6 @@ export class AgentDurableObject extends DurableObject<Env> {
   // linked connection's itx.integrations.github Octokit, called by the agent
   // itself, so there are no side-effect deps here.
   readonly prAgentProcessor = this.#processorHost.add((deps) => new PrAgentProcessor(deps));
-
-  async #readAgentPromptEvents(): Promise<StreamEvent[]> {
-    const events: StreamEvent[] = [];
-    using pager = this.#stream.readEvents({
-      afterOffset: 0,
-      eventTypes: AgentProcessorContract.consumes,
-      limit: AGENT_PROMPT_EVENT_PAGE_SIZE,
-    });
-    for (;;) {
-      const page = await pager.next();
-      events.push(...page);
-      if (page.length < AGENT_PROMPT_EVENT_PAGE_SIZE) return events;
-    }
-  }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);

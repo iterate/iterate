@@ -1490,7 +1490,7 @@ export type AgentProcessorState = {
   llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number; requestedAt?: number | undefined }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -1501,13 +1501,6 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
-  inProgressScriptExecutions: {
-    code: string;
-    executionId: string;
-    requestedOffset: number;
-    startedAt: string;
-  }[];
-  scriptExecutionsCompleted: string[];
 };
 
 export type StreamEvent = {

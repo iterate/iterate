@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   AgentProcessor,
@@ -215,33 +215,6 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
-  it("tracks in-progress script executions in reduced state", async () => {
-    const stream = new MemoryStream();
-    await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-requested",
-      payload: { executionId: "agent-output:7", code: "async (itx) => 7" },
-    });
-
-    const runningState = reduceAgentEvents(stream.events);
-    expect(runningState.inProgressScriptExecutions).toEqual([
-      {
-        code: "async (itx) => 7",
-        executionId: "agent-output:7",
-        requestedOffset: 1,
-        startedAt: stream.events[0]!.createdAt,
-      },
-    ]);
-
-    await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: 7 },
-    });
-
-    const completedState = reduceAgentEvents(stream.events);
-    expect(completedState.inProgressScriptExecutions).toEqual([]);
-    expect(completedState.scriptExecutionsCompleted).toEqual(["agent-output:7"]);
-  });
-
   it("feeds a thrown script error back as input", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream });
@@ -344,7 +317,6 @@ describe("minimal web-chat agent processors", () => {
           };
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
@@ -544,7 +516,6 @@ describe("minimal web-chat agent processors", () => {
           return { response: "```js\nasync (itx) => {}\n```" };
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
@@ -654,7 +625,6 @@ describe("minimal web-chat agent processors", () => {
           );
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append(
@@ -708,7 +678,6 @@ describe("minimal web-chat agent processors", () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({
       stream,
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append(...agentRequestEvents("hello without ai"));
@@ -738,7 +707,6 @@ describe("minimal web-chat agent processors", () => {
           throw new Error("provider exploded");
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
@@ -794,7 +762,6 @@ describe("minimal web-chat agent processors", () => {
           throw new Error(`boom ${boom}`);
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
@@ -875,7 +842,7 @@ describe("minimal web-chat agent processors", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 1, llmRequestId: base + 1, result },
+        payload: { durationMs: 1, llmRequestOffset: base + 1, result },
       },
     ];
     const stream = new MemoryStream();
@@ -904,7 +871,7 @@ describe("minimal web-chat agent processors", () => {
     });
     await stream.append({
       type: "events.iterate.com/agent/llm-request-started",
-      payload: { llmRequestId: requested!.offset, model: "gpt-test" },
+      payload: { llmRequestOffset: requested!.offset, model: "gpt-test" },
     });
 
     // Incarnation 2: fresh processor (empty #liveLlmExecutions), catching up.
@@ -917,7 +884,6 @@ describe("minimal web-chat agent processors", () => {
           return { response: "unreachable" };
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     // At-head fold of the dead incarnation's events: obligation is `started`
     // with nobody live → reconciler cancels without re-driving AI.
@@ -934,7 +900,7 @@ describe("minimal web-chat agent processors", () => {
     expect(cancellations[0]!.payload).toMatchObject({
       phase: "requested",
       reason: "durable-object-crashed",
-      llmRequestId: requested!.offset,
+      llmRequestOffset: requested!.offset,
     });
     expect(
       stream.events.some(
@@ -956,9 +922,73 @@ describe("minimal web-chat agent processors", () => {
     const sweptSecond = stream.events.filter(
       (event) =>
         event.type === "events.iterate.com/agent/llm-request-cancelled" &&
-        (event.payload as { llmRequestId: number }).llmRequestId === second!.offset,
+        (event.payload as { llmRequestOffset: number }).llmRequestOffset === second!.offset,
     );
     expect(sweptSecond).toHaveLength(0);
+  });
+});
+
+describe("refold safety", () => {
+  // The doctrine's refold test (docs/writing-stream-processors.md): every
+  // processor whose process* hooks touch a vendor must prove that replaying a
+  // SETTLED journal into a fresh instance re-executes nothing. This is what
+  // catches consumed-idempotency-key and staleness-guard regressions.
+  it("refold: replaying the settled journal dials no AI and appends nothing new", async () => {
+    // Live flow to a settled turn: user message → scheduled → requested →
+    // started → output → completed, folded by a live processor as it goes.
+    const stream = new MemoryStream();
+    const live = new AgentProcessor({
+      stream,
+      ai: {
+        async run() {
+          return { response: "All done — nothing else to do." };
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    await stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { origin: "web", content: "hi" },
+    });
+    await vi.waitFor(
+      async () => {
+        await deliverNewEvents({ processor: live, stream, cursors });
+        expect(
+          stream.events.some(
+            (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+          ),
+        ).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
+    // Absorb the completion into the live fold and let the journal go quiet.
+    await deliverNewEvents({ processor: live, stream, cursors });
+    expect(live.state.llmRequests).toEqual({});
+    expect(live.state.currentRequest).toBeNull();
+    const journalLength = stream.events.length;
+
+    // A fresh incarnation refolds the WHOLE journal (a discarded checkpoint —
+    // the normal aftermath of deploying a state-shape change). It must
+    // re-execute NOTHING: a dangerous fake proves zero AI dials, the journal
+    // gains zero events, and the refolded state equals the live instance's.
+    const refolded = new AgentProcessor({
+      stream,
+      ai: {
+        async run(): Promise<never> {
+          throw new Error("refold must not dial the AI binding");
+        },
+      },
+    });
+    await refolded.ingest({
+      events: stream.events,
+      streamMaxOffset: stream.events.at(-1)!.offset,
+    });
+    // The replayed llm-request-scheduled re-arms a debounce timer; wait past
+    // it to prove the re-derived requested event dedups into the original
+    // instead of journaling anew.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(stream.events.length).toBe(journalLength);
+    expect(refolded.state).toEqual(live.state);
   });
 });
 
@@ -996,7 +1026,7 @@ describe("file attachments in the LLM request", () => {
       },
     );
 
-    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestId: 3 });
+    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 3 });
     const userMessage = body.messages.find((message) => message.role === "user");
     expect(userMessage).toMatchObject({
       content: "[File attached: cat.png (image/png)]",
@@ -1023,7 +1053,7 @@ describe("file attachments in the LLM request", () => {
     });
 
     // ...so the next request's history carries the image the agent sent.
-    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestId: 99 });
+    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 99 });
     const userMessage = body.messages.find((message) => message.role === "user");
     expect(userMessage?.files).toEqual([attachment]);
   });
