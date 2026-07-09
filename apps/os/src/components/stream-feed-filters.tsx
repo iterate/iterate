@@ -4,13 +4,16 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { FeedEventTypesFilter } from "~/components/feed-items-view.tsx";
 import type { StreamFeedPreset } from "~/lib/stream-feed-filters.ts";
-import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
+import {
+  streamViewMode,
+  useStreamViewSearch,
+  type StreamViewMode,
+} from "~/lib/stream-view-search.ts";
 
 /**
- * The Feed tab's filter row: preset pills, text search, any-of event types,
- * and raw-offset bounds. All state is URL-backed (stream-view-search.ts); the
- * event-type and offset filters only apply to the feed-items collection, so
- * they hide on the agent-chat preset.
+ * Mode-owned filter row. Pretty modes: search only. Raw / non-agent: feed-items
+ * presets (when offered), search, event types, offset bounds. All state is
+ * URL-backed (stream-view-search.ts).
  */
 export function StreamFeedFilterRow({
   activePreset,
@@ -19,74 +22,71 @@ export function StreamFeedFilterRow({
   connectionStatus,
   feedDatabase,
   presets,
+  streamPath,
 }: {
   activePreset: StreamFeedPreset;
   defaultPresetId: string;
   eventCount: number;
   connectionStatus: string;
-  /** The feed-items mirror backing the event-type filter's counts. */
   feedDatabase: StreamBrowserDatabase;
   presets: readonly StreamFeedPreset[];
+  streamPath: string;
 }) {
   const { search, setSearch } = useStreamViewSearch();
-  // The row mounts when the filter toggle opens it, so focusing on mount lands
-  // the cursor in the search box exactly when the user asked to filter. A
-  // stable ref callback runs once per mount (an inline one would re-run — and
-  // steal focus — on every render).
+  const mode = streamViewMode(search, streamPath);
+  const prettyMode = mode === "pretty" || mode === "pretty-debug";
   const focusOnMount = useCallback((element: HTMLInputElement | null) => element?.focus(), []);
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1.5 pt-1">
-      <div
-        className="flex flex-wrap items-center gap-1.5"
-        role="radiogroup"
-        aria-label="Feed preset"
-        data-testid="stream-feed-preset"
-      >
-        {presets.map((preset) => {
-          const active = preset.id === activePreset.id;
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() =>
-                setSearch({
-                  preset: preset.id === defaultPresetId ? undefined : preset.id,
-                  // The event-type list is scoped to a preset's event family
-                  // (stale types would silently empty the new one), and offset
-                  // bounds would survive invisibly through an agent-chat
-                  // detour — a preset switch resets both, keeping only `q`.
-                  types: undefined,
-                  from: undefined,
-                  to: undefined,
-                })
-              }
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                active
-                  ? "border-transparent bg-foreground text-background"
-                  : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-      </div>
+      {prettyMode ? null : presets.length > 1 ? (
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          role="radiogroup"
+          aria-label="Feed preset"
+          data-testid="stream-feed-preset"
+        >
+          {presets.map((preset) => {
+            const active = preset.id === activePreset.id;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() =>
+                  setSearch({
+                    preset: preset.id === defaultPresetId ? undefined : preset.id,
+                    types: undefined,
+                    from: undefined,
+                    to: undefined,
+                  })
+                }
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                  active
+                    ? "border-transparent bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
       <div className="flex h-8 min-w-0 max-w-xs flex-1 items-center gap-2 rounded-full bg-muted px-3">
         <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={focusOnMount}
           value={search.q ?? ""}
           onChange={(event) => setSearch({ q: event.target.value || undefined })}
-          placeholder="Search feed…"
-          aria-label="Search feed"
+          placeholder={prettyMode ? "Search chat…" : "Search feed…"}
+          aria-label={prettyMode ? "Search chat" : "Search feed"}
           className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
       </div>
-      {activePreset.kind === "feed-items" ? (
+      {prettyMode ? null : (
         <>
           <FeedEventTypesFilter
             database={feedDatabase}
@@ -98,53 +98,55 @@ export function StreamFeedFilterRow({
             className="flex items-center gap-1 font-mono text-xs text-muted-foreground"
             title="Raw event offset range"
           >
-            <OffsetBoundInput
-              label="From offset"
-              placeholder="from #"
+            <span>from</span>
+            <OffsetInput
               value={search.from}
+              placeholder="#"
               onChange={(from) => setSearch({ from })}
             />
-            –
-            <OffsetBoundInput
-              label="To offset"
-              placeholder="to #"
-              value={search.to}
-              onChange={(to) => setSearch({ to })}
-            />
+            <span>to</span>
+            <OffsetInput value={search.to} placeholder="#" onChange={(to) => setSearch({ to })} />
           </div>
         </>
-      ) : null}
-      <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+      )}
+      <span className="shrink-0 font-mono text-xs text-muted-foreground">
         {eventCount.toLocaleString()} events · {connectionStatus}
+        {prettyModeLabel(mode)}
       </span>
     </div>
   );
 }
 
-function OffsetBoundInput({
-  label,
-  placeholder,
+function prettyModeLabel(mode: StreamViewMode): string {
+  if (mode === "pretty") return " · pretty";
+  if (mode === "pretty-debug") return " · pretty+debug";
+  return "";
+}
+
+function OffsetInput({
   value,
+  placeholder,
   onChange,
 }: {
-  label: string;
-  placeholder: string;
   value: number | undefined;
+  placeholder: string;
   onChange: (value: number | undefined) => void;
 }) {
   return (
     <input
-      type="number"
       inputMode="numeric"
-      min={0}
-      aria-label={label}
-      placeholder={placeholder}
       value={value ?? ""}
+      placeholder={placeholder}
       onChange={(event) => {
-        const parsed = event.target.value === "" ? undefined : Number(event.target.value);
-        onChange(parsed != null && Number.isFinite(parsed) ? parsed : undefined);
+        const raw = event.target.value.trim();
+        if (raw === "") {
+          onChange(undefined);
+          return;
+        }
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) onChange(Math.trunc(parsed));
       }}
-      className="h-8 w-20 rounded-full bg-muted px-3 text-xs outline-none placeholder:text-muted-foreground [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      className="w-14 rounded-md border border-border bg-background px-1.5 py-0.5 text-center outline-none focus-visible:ring-1 focus-visible:ring-ring"
     />
   );
 }

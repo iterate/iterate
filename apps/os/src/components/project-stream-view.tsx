@@ -39,7 +39,6 @@ import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import { StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
-import { StreamStateView } from "~/components/stream-state-view.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -51,22 +50,26 @@ import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
-  streamViewTab,
+  defaultModeForStream,
+  modesForStream,
+  streamViewMode,
   useStreamViewPanels,
   useStreamViewSearch,
+  type StreamViewMode,
 } from "~/lib/stream-view-search.ts";
 
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 /**
- * The stream view: every domain page's main pane. Renders one stream's Feed
- * and State tabs under the shared header, with the composer below and the
- * right-edge overlays (raw-event inspector, processors sidebar) on top.
+ * The stream view: every domain page's main pane. Renders mode-owned feed
+ * surfaces under the shared header (Pretty / Pretty+debug / Raw on agents),
+ * with the composer below and right-edge overlays (raw-event inspector,
+ * processors sheet) on top.
  *
  * This component is the orchestrator: it owns the three browser-hosted
  * processors that mirror the stream into local SQLite (raw events, agent UI,
  * grouped feed items) and hands their stores/databases to focused child
- * components. All view state (tab, filters, open panels) lives in the URL —
+ * components. All view state (mode, filters, open panels) lives in the URL —
  * see ~/lib/stream-view-search.ts — so children read it themselves; the
  * component stays mounted across ⌘K stream switches (the switcher navigates
  * with an empty search, resetting the view to the new stream's defaults).
@@ -164,10 +167,12 @@ export function ProjectStreamView({
 
   const { search, setSearch } = useStreamViewSearch();
   const panels = useStreamViewPanels();
-  const activeTab = streamViewTab(search);
-  // WHAT the feed shows is the preset's job; the stream path decides which
-  // presets exist and which one is the domain default (the first). A
-  // stale/hand-edited preset id falls back to the default.
+  const activeMode = streamViewMode(search, streamPath);
+  // Pretty modes only exist on agent streams (agent_feed_items projection).
+  const isPrettyMode =
+    streamPath.startsWith("/agents/") && (activeMode === "pretty" || activeMode === "pretty-debug");
+  // Feed-items presets apply in Raw mode (and non-agent streams). Stale ids
+  // fall back to the domain default (first preset).
   const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
   const defaultPreset = presets[0]!;
   const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
@@ -273,7 +278,7 @@ export function ProjectStreamView({
   };
 
   const filterRow =
-    search.filter !== true ? null : activeTab === "feed" ? (
+    search.filter !== true ? null : (
       <StreamFeedFilterRow
         activePreset={activePreset}
         defaultPresetId={defaultPreset.id}
@@ -281,33 +286,27 @@ export function ProjectStreamView({
         connectionStatus={snapshot.connectionStatus}
         feedDatabase={feedStore.streamDatabase}
         presets={presets}
+        streamPath={streamPath}
       />
-    ) : (
-      <div className="flex shrink-0 items-center justify-end px-4 pb-1.5 pt-1">
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
-        </span>
-      </div>
     );
 
-  // The feed column — tab content with the right-edge overlays on top, the
-  // composer below. One JSX value so the split layout and the fullPanel
-  // sheet render the identical thing.
+  // The feed column — mode body with overlays on top, composer below. One JSX
+  // value so the split layout and the fullPanel Events sheet render the same
+  // thing.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "state" ? (
-          <StreamStateView store={store} />
-        ) : activePreset.kind === "agent-chat" ? (
+        {isPrettyMode ? (
           <AgentFeedView
             {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
               ? { onInterruptQueuedMessages: interrupt.run }
               : {})}
-            // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
-            key={store.streamDatabase.databasePath}
+            // Fresh virtualizer state per stream mirror + mode (see AgentFeedView docs).
+            key={`${store.streamDatabase.databasePath}:${activeMode}`}
             database={store.streamDatabase}
             liveState={agentUiState}
             search={feedSearch}
+            showDebug={activeMode === "pretty-debug"}
             emptyLabel={connectionLabel}
             isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
             projectSlug={projectSlug}
@@ -341,37 +340,46 @@ export function ProjectStreamView({
             onClose={panels.closeInspector}
           />
         ) : null}
-        {panels.processorsPanelOpen ? (
-          <StreamProcessorsPanel
-            presence={presence}
-            metrics={metrics}
-            eventCount={eventCount}
-            busy={agentBusy}
-            focusedKey={panels.focusedProcessorKey}
-            onFocus={panels.focusProcessor}
-            onBack={panels.openProcessorsOverview}
-            onClose={panels.closeProcessorsPanel}
-            onClearClientDatabase={clearClientDatabases}
-            getProcessorRuntimeState={getProcessorRuntimeState}
-          />
-        ) : null}
       </div>
 
-      {activeTab === "state" ? null : (
-        <div className="shrink-0 px-4 pb-4 pt-2.5">
-          <StreamViewComposer
-            autoFocusMessage={autoFocusMessageComposer}
-            {...(defaultComposerMode == null ? {} : { defaultMode: defaultComposerMode })}
-            interrupt={interrupt}
-            {...(messageComposer == null ? {} : { messageComposer })}
-            onNudgeDeliveries={nudgeDeliveries}
-            presence={presence}
-            store={store}
-          />
-        </div>
-      )}
+      <div className="shrink-0 px-4 pb-4 pt-2.5">
+        <StreamViewComposer
+          autoFocusMessage={autoFocusMessageComposer}
+          {...(defaultComposerMode == null
+            ? isPrettyMode
+              ? { defaultMode: "message" as const }
+              : { defaultMode: "raw" as const }
+            : { defaultMode: defaultComposerMode })}
+          interrupt={interrupt}
+          {...(messageComposer == null ? {} : { messageComposer })}
+          onNudgeDeliveries={nudgeDeliveries}
+          presence={presence}
+          store={store}
+        />
+      </div>
     </div>
   );
+
+  const processorsSheet = (
+    <StreamProcessorsPanel
+      open={panels.processorsPanelOpen}
+      onOpenChange={(open) => {
+        if (!open) panels.closeProcessorsPanel();
+      }}
+      presence={presence}
+      metrics={metrics}
+      eventCount={eventCount}
+      busy={agentBusy}
+      focusedKey={panels.focusedProcessorKey}
+      onFocus={panels.focusProcessor}
+      onBack={panels.openProcessorsOverview}
+      onClose={panels.closeProcessorsPanel}
+      onClearClientDatabase={clearClientDatabases}
+      getProcessorRuntimeState={getProcessorRuntimeState}
+    />
+  );
+
+  const eventsSheetModes = modesForStream(streamPath);
 
   if (layout === "fullPanel") {
     return (
@@ -386,6 +394,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
+        {processorsSheet}
         <Sheet
           open={search.events === true}
           onOpenChange={(open) => setSearch({ events: open ? true : undefined })}
@@ -401,21 +410,30 @@ export function ProjectStreamView({
                 {streamPath}
               </span>
               <div className="ml-auto flex items-center gap-1">
-                <Tabs
-                  value={activeTab}
-                  onValueChange={(value) =>
-                    setSearch({ tab: value === "feed" ? undefined : (value as "feed" | "state") })
-                  }
-                >
-                  <TabsList className="h-8">
-                    <TabsTrigger value="feed" className="px-3 text-xs">
-                      Feed
-                    </TabsTrigger>
-                    <TabsTrigger value="state" className="px-3 text-xs">
-                      State
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
+                {eventsSheetModes.length > 0 ? (
+                  <Tabs
+                    value={activeMode}
+                    onValueChange={(value) => {
+                      const mode = value as StreamViewMode;
+                      const defaultMode = defaultModeForStream(streamPath);
+                      setSearch({
+                        mode: mode === defaultMode ? undefined : mode,
+                        types: undefined,
+                        from: undefined,
+                        to: undefined,
+                        preset: undefined,
+                      });
+                    }}
+                  >
+                    <TabsList className="h-8">
+                      {eventsSheetModes.map((mode) => (
+                        <TabsTrigger key={mode.id} value={mode.id} className="px-2.5 text-xs">
+                          {mode.label}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </Tabs>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -467,6 +485,7 @@ export function ProjectStreamView({
         )}
         {feedColumn}
       </div>
+      {processorsSheet}
     </section>
   );
 }

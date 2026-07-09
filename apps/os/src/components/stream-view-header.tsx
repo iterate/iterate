@@ -6,7 +6,6 @@ import {
   PauseIcon,
   PlayIcon,
 } from "lucide-react";
-import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,
@@ -26,20 +25,22 @@ import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
 import { presenceLabel, sparklinePoints, type RttMetrics } from "~/lib/stream-presence.ts";
 import {
-  streamViewTab,
+  activeModeDefinition,
+  defaultModeForStream,
+  modesForStream,
+  streamViewMode,
   useStreamViewPanels,
   useStreamViewSearch,
-  type StreamViewTab,
+  type StreamViewMode,
 } from "~/lib/stream-view-search.ts";
 
 const MAX_PRESENCE_AVATARS = 4;
 
 /**
  * THE page header — the app renders no other. Pill path breadcrumb (⌘K
- * trigger) top-left; presence, metrics, Feed/State tabs, and the filter
- * toggle on the right. Tab/filter/panel state is read and written straight
- * from the URL (stream-view-search.ts), so this component needs no callbacks
- * from the view it heads.
+ * trigger) top-left; presence, metrics, mode tabs (when the stream offers
+ * more than one), and the filter toggle (when the active mode opts in) on
+ * the right. Tab/filter/panel state is URL-backed (stream-view-search.ts).
  */
 export function StreamViewHeader({
   agentBusy,
@@ -63,8 +64,8 @@ export function StreamViewHeader({
   };
   /**
    * Full-panel layouts relegate the feed to a sheet; this renders the header
-   * button that opens it (replacing the inline Feed/State tabs and filter
-   * toggle, which live inside the sheet instead).
+   * button that opens it (replacing mode tabs and filter, which live inside
+   * the sheet instead).
    */
   eventsToggle?: { eventCount: number };
   metrics: RttMetrics;
@@ -73,9 +74,11 @@ export function StreamViewHeader({
 }) {
   const { search, setSearch } = useStreamViewSearch();
   const { focusedProcessorKey, focusProcessor, openProcessorsOverview } = useStreamViewPanels();
+  const modes = modesForStream(streamPath);
+  const activeMode = streamViewMode(search, streamPath);
+  const modeDef = activeModeDefinition(search, streamPath);
   const toolsOpen = search.filter === true;
-  // Signal active filters on the toggle even while the row is closed — a
-  // filtered feed with no visible cue reads as missing events.
+  const showFilterToggle = eventsToggle == null && (modeDef?.filters ?? true);
   const filtersActive = feedFiltersActive(search, streamPath);
 
   return (
@@ -87,14 +90,6 @@ export function StreamViewHeader({
       />
 
       <div className="ml-auto flex items-center gap-3">
-        {agentPause == null ? null : (
-          <Badge
-            variant={agentPause.paused ? "destructive" : "secondary"}
-            title={agentPause.reason ?? (agentPause.paused ? "Agent paused" : "Agent running")}
-          >
-            {agentPause.paused ? "Paused" : "Running"}
-          </Badge>
-        )}
         {presence.length === 0 ? null : (
           <div className="flex items-center pl-1.5">
             {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
@@ -105,16 +100,11 @@ export function StreamViewHeader({
                   type="button"
                   title={`${presenceLabel(entry)} — open processor`}
                   onClick={() => focusProcessor(entry.subscriptionKey)}
-                  // The selected ring renders outside the avatar; lift it above
-                  // the overlapping siblings so it isn't clipped.
                   className={cn("-ml-1.5 rounded-full", selected && "relative z-10")}
                 >
                   <PresenceAvatar
                     entry={entry}
                     busy={agentBusy}
-                    // The avatar already reserves a 2px border to separate
-                    // overlapping siblings; recolor that same border for the
-                    // selected one instead of stacking a ring outside it.
                     className={cn("border-2", selected ? "border-foreground" : "border-background")}
                   />
                 </button>
@@ -135,7 +125,7 @@ export function StreamViewHeader({
         <Button
           variant="ghost"
           size="sm"
-          title="Stream health & metrics"
+          title="Stream health & processors"
           onClick={openProcessorsOverview}
           className="font-mono text-xs font-normal text-muted-foreground"
         >
@@ -167,38 +157,50 @@ export function StreamViewHeader({
           </Button>
         ) : (
           <>
-            <Tabs
-              value={streamViewTab(search)}
-              onValueChange={(value) => {
-                const tab = value as StreamViewTab;
-                setSearch({ tab: tab === "feed" ? undefined : tab });
-              }}
-            >
-              <TabsList className="h-8">
-                <TabsTrigger value="feed" className="px-3 text-xs">
-                  Feed
-                </TabsTrigger>
-                <TabsTrigger value="state" className="px-3 text-xs">
-                  State
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <Button
-              variant="ghost"
-              size="icon"
-              title="Search & filter"
-              aria-expanded={toolsOpen}
-              onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
-              className="relative rounded-full text-muted-foreground"
-            >
-              <FilterIcon className="size-3.5" />
-              {filtersActive ? (
-                <span
-                  aria-hidden="true"
-                  className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
-                />
-              ) : null}
-            </Button>
+            {modes.length > 0 ? (
+              <Tabs
+                value={activeMode}
+                onValueChange={(value) => {
+                  const mode = value as StreamViewMode;
+                  const defaultMode = defaultModeForStream(streamPath);
+                  setSearch({
+                    mode: mode === defaultMode ? undefined : mode,
+                    // Mode switch clears feed-items-only filters so they don't
+                    // stick invisibly under Pretty; keep `q` for search continuity.
+                    types: undefined,
+                    from: undefined,
+                    to: undefined,
+                    preset: undefined,
+                  });
+                }}
+              >
+                <TabsList className="h-8">
+                  {modes.map((mode) => (
+                    <TabsTrigger key={mode.id} value={mode.id} className="px-2.5 text-xs">
+                      {mode.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            ) : null}
+            {showFilterToggle ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Search & filter"
+                aria-expanded={toolsOpen}
+                onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
+                className="relative rounded-full text-muted-foreground"
+              >
+                <FilterIcon className="size-3.5" />
+                {filtersActive ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
+                  />
+                ) : null}
+              </Button>
+            ) : null}
           </>
         )}
         <StreamActionMenu kill={streamKill} pause={agentPause} />

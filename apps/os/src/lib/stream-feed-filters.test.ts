@@ -9,7 +9,6 @@ import {
 describe("presetsForStream", () => {
   it("puts the domain default first and Everything last", () => {
     expect(presetsForStream("/agents/slack/general").map((preset) => preset.id)).toEqual([
-      "agent-chat",
       "agent-events",
       "everything",
     ]);
@@ -59,8 +58,6 @@ describe("buildFeedItemsFilter", () => {
   });
 
   it("matches groups that only OVERLAP the offset bounds", () => {
-    // A group row spanning #5–#15 must survive from=10: its last_offset (15)
-    // is past the lower bound even though its first_offset (5) is not.
     const filter = buildFeedItemsFilter({
       eventTypes: null,
       eventTypePrefix: null,
@@ -78,28 +75,30 @@ describe("feedFiltersActive", () => {
 
   it("is inactive on the stream's defaults", () => {
     expect(feedFiltersActive({}, agentPath)).toBe(false);
-    expect(feedFiltersActive({ preset: "agent-chat" }, agentPath)).toBe(false);
+    expect(feedFiltersActive({ mode: "pretty" }, agentPath)).toBe(false);
+    expect(feedFiltersActive({}, secretPath)).toBe(false);
   });
 
-  it("signals any deviation, including while the row is closed", () => {
-    expect(feedFiltersActive({ preset: "everything" }, agentPath)).toBe(true);
+  it("signals search on pretty modes", () => {
     expect(feedFiltersActive({ q: "boom" }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ mode: "pretty-debug", q: "x" }, agentPath)).toBe(true);
+  });
+
+  it("ignores feed-items-only filters while in pretty mode", () => {
+    expect(feedFiltersActive({ types: ["a"], from: 1, to: 9 }, agentPath)).toBe(false);
+  });
+
+  it("signals raw/feed-items filter deviations", () => {
+    expect(feedFiltersActive({ mode: "raw", preset: "everything" }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ mode: "raw", q: "boom" }, agentPath)).toBe(true);
     expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
     expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
     expect(feedFiltersActive({ to: 9 }, secretPath)).toBe(true);
   });
 
   it("judges what the feed renders, not the raw URL", () => {
-    // A stale/unknown preset id falls back to the default preset in the view.
-    expect(feedFiltersActive({ preset: "no-such-preset" }, agentPath)).toBe(false);
-    // Another stream's preset id also resolves to this stream's default.
-    expect(feedFiltersActive({ preset: "secret-events" }, agentPath)).toBe(false);
-    // An empty types array applies no constraint in buildFeedItemsFilter.
+    expect(feedFiltersActive({ preset: "no-such-preset" }, secretPath)).toBe(false);
     expect(feedFiltersActive({ types: [] }, secretPath)).toBe(false);
-    // The agent-chat view honors only text search — feed-items-only filters
-    // left in the URL don't light the dot while chat ignores them.
-    expect(feedFiltersActive({ types: ["a"], from: 1, to: 9 }, agentPath)).toBe(false);
-    expect(feedFiltersActive({ preset: "agent-events", types: ["a"] }, agentPath)).toBe(true);
   });
 });
 
