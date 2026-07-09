@@ -68,23 +68,6 @@ export interface Session {
   projects: ProjectCollection;
 }
 
-/**
- * The server-side **itx** — the object an `async (itx) => { … }` script holds and
- * what `env.ITX.get()` returns. One class serves the project root and every nested
- * (agent) scope; the injected `capabilityHost` selects which scope's dynamic
- * capability table backs it.
- *
- * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
- * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
- * in the isolate; only unknown roots fall through `withInvokeCapabilityFallback`
- * to the capability host's dynamic table (which itself chains up to enclosing
- * scopes). So the common `itx.streams.get(...)` path never makes a round trip
- * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
- * capability can never shadow a built-in name — the built-in always wins
- * (`rejectBuiltinCollision` enforces this at provide time). If we end up needing
- * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
- * round trip; today we don't.
- */
 export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
@@ -1396,7 +1379,7 @@ export type ProjectLiveState = {
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
-  liveDemo: { count: number; lastActor: string | null };
+  liveDemo: { count: number };
 };
 
 /** Capability recipe accepted by `provideCapability`. */

@@ -21,5 +21,5 @@ export type ProjectLiveState = {
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
-  liveDemo: { count: number; lastActor: string | null };
+  liveDemo: { count: number };
 };

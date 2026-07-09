@@ -43,7 +43,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
   // shared-engine case — and dogfoods the `getLiveState` fold the streams index
   // will use.
-  #liveDemo: { count: number; lastActor: string | null } = { count: 0, lastActor: null };
+  #liveDemo: { count: number } = { count: 0 };
   // The project's streams index — a materialized view in the DO's own SQLite,
   // touched from the processEventBatch fan-in (see touchStreamActivity).
   readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
@@ -185,10 +185,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget(this.#processorHost);
   }
 
-  /** Demo mutation: bump the shared counter and push it to every `itx.live` watcher. */
-  incrementLiveDemo(actor?: string): void {
-    this.#liveDemo = { count: this.#liveDemo.count + 1, lastActor: actor ?? null };
-    this.#processorHost.live.assign({ liveDemo: this.#liveDemo });
+  /** Demo mutation: bump the shared counter and push it to every `itx.liveState` watcher. */
+  incrementLiveDemo(): void {
+    this.#liveDemo = { count: this.#liveDemo.count + 1 };
+    this.#processorHost.refreshLive();
   }
 
   /**
@@ -199,7 +199,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    */
   touchStreamActivity(path: string, at: string, type: string, count: number): void {
     this.#streamDatabase.touch(path, at, type, count);
-    this.#processorHost.live.assign({ streamsIndex: this.#streamDatabase.all() });
+    this.#processorHost.refreshLive();
   }
 
   async fetch(request: Request): Promise<Response> {

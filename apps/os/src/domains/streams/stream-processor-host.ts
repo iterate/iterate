@@ -128,10 +128,17 @@ export type StreamProcessorHost = {
   /** The node's live-state engine; a `.live` RpcTarget exposes getState()/subscribe() over it. */
   readonly live: LiveState<Record<string, unknown>>;
   /**
-   * Load every hosted processor's checkpoint and reassemble the live state, so
-   * the first `.live` read/subscription reflects committed writes;
-   * `observeStateChanges` keeps it fresh after. Also call it after mutating a
-   * non-processor live-state input (e.g. the streams index).
+   * Reassemble the live state from current (already-loaded) inputs — the ONE
+   * writer for `.live`. Call it after mutating any non-processor live-state
+   * input (the streams index, the demo counter); a processor's own state change
+   * calls it automatically via `observeStateChanges`. The diff makes a full
+   * reassembly cheap (unchanged slices keep identity), so there is no need to
+   * poke individual slices.
+   */
+  refreshLive(): void;
+  /**
+   * Like `refreshLive`, but first LOADS every processor's checkpoint — so the
+   * first `.live` read/subscription reflects committed writes even on a cold DO.
    */
   refreshLiveState(): Promise<void>;
   /**
@@ -383,6 +390,7 @@ export function createStreamProcessorHost(
   return {
     stream: options.stream,
     live,
+    refreshLive: assembleLive,
     async refreshLiveState() {
       await Promise.all(
         [...entries.values()].map((entry) => entry.processor.snapshot().catch(() => undefined)),

@@ -3783,6 +3783,16 @@ type ProjectRpcTargetProps = {
  * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
  * round trip; today we don't.
  */
+/**
+ * The project Durable Object's methods this isolate reaches — one typed view
+ * instead of re-declaring each signature at every `durableObjectStub` cast.
+ */
+type ProjectDurableObjectRpc = {
+  liveState: PromiseLike<WritableLiveStateRpc<ProjectLiveState>>;
+  incrementLiveDemo(): Promise<void>;
+  touchStreamActivity(path: string, at: string, type: string, count: number): Promise<void>;
+};
+
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -3878,25 +3888,19 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** The project DO's methods this isolate reaches — typed once (see {@link ProjectDurableObjectRpc}). */
+  get #projectDo(): ProjectDurableObjectRpc {
+    return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
+  }
+
   /** The project's live state — reduced processor state plus non-folded slices. See {@link WritableLiveStateRpc}. */
   get liveState(): WritableLiveStateRpc<ProjectLiveState> {
-    return new LiveStateRelayRpcTarget<ProjectLiveState>(
-      () =>
-        this.durableObjectStub as unknown as {
-          liveState: PromiseLike<WritableLiveStateRpc<ProjectLiveState>>;
-        },
-    );
+    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
   }
 
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (DO-backed). */
   get liveDemo(): LiveDemoRpcTarget {
-    return new LiveDemoRpcTarget(() =>
-      Promise.resolve(
-        (
-          this.durableObjectStub as unknown as { incrementLiveDemo(): Promise<void> }
-        ).incrementLiveDemo(),
-      ),
-    );
+    return new LiveDemoRpcTarget(() => this.#projectDo.incrementLiveDemo());
   }
 
   /** Workers AI: run(model, body), models(). */
@@ -4141,11 +4145,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
     void Promise.resolve(
-      (
-        this.durableObjectStub as unknown as {
-          touchStreamActivity(path: string, at: string, type: string, count: number): Promise<void>;
-        }
-      ).touchStreamActivity(batch.path, last.createdAt, last.type, batch.events.length),
+      this.#projectDo.touchStreamActivity(
+        batch.path,
+        last.createdAt,
+        last.type,
+        batch.events.length,
+      ),
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
     });
