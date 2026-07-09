@@ -148,7 +148,16 @@ class RepoTypeScriptSession {
    */
   #maybeAcquireTypes(desired: Map<string, string>, delayMs: number): void {
     const packageJsonText = desired.get("package.json");
-    if (packageJsonText === undefined) return;
+    if (packageJsonText === undefined) {
+      // package.json removed: cancel any pending debounced acquisition so a
+      // timer armed by an earlier edit can't fire and re-acquire types for a
+      // manifest that no longer exists, and reset the guard so re-adding a
+      // package.json acquires again.
+      if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
+      this.#acquireTimer = null;
+      this.#lastRequestedPackageJson = null;
+      return;
+    }
     if (packageJsonText === this.#lastRequestedPackageJson) return;
     this.#lastRequestedPackageJson = packageJsonText;
     if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
