@@ -20,6 +20,7 @@
 // Durable Object's append commit point assigns offsets, reduces state, and
 // persists the batch in one await-free turn.
 
+import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { StreamEvent } from "./schemas.ts";
 import { StreamEvent as StreamEventSchema } from "./schemas.ts";
 
@@ -265,15 +266,10 @@ export type SubscriptionCursorStore = {
 
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
-  /** Monotonic within this instance; wall-clock floor covers restarts. */
-  #lastEpoch = 0;
-
-  constructor(readonly sql: SqlStorage) {
-    this.sql.exec(`
-      -- Delivery cursors for durable subscriptions (the spine's rows). One row
-      -- per subscriptionKey; created on subscription-configured, dropped on
-      -- subscription-removed. See stream-subscribers.ts for the state machine.
-      create table if not exists subscriptions (
+  static db = defineConfig({
+    // The desired schema now (`sqlfu draft` diffs new migrations against it).
+    definitions: sql`
+      create table subscriptions (
         subscription_key text primary key,
         acked_offset integer not null,
         attempt integer not null default 0,
@@ -281,17 +277,156 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         last_error text,
         epoch integer not null default 0,
         updated_at text not null
-      )
-    `);
-    const subscriptionColumns = new Set(
-      this.sql
-        .exec<{ name: string }>("pragma table_info(subscriptions)")
-        .toArray()
-        .map((column) => column.name),
-    );
-    if (!subscriptionColumns.has("epoch")) {
-      this.sql.exec("alter table subscriptions add column epoch integer not null default 0");
-    }
+      );
+    `,
+    migrations: [
+      {
+        // The #1784 table, verbatim. `if not exists` is load-bearing: live DOs
+        // created their table from raw constructor DDL before sqlfu owned it,
+        // so this migration adopts an existing pre-epoch table as readily as
+        // it creates a fresh one.
+        name: "20260709000001_create_subscriptions",
+        content: sql`
+          create table if not exists subscriptions (
+            subscription_key text primary key,
+            acked_offset integer not null,
+            attempt integer not null default 0,
+            next_attempt_at integer,
+            last_error text,
+            updated_at text not null
+          );
+        `,
+      },
+      {
+        // `epoch` postdates the table (#1784 shipped without it, #1792 queries
+        // it). This is a rebuild rather than `alter table add column` because
+        // the migration meets THREE live shapes with empty sqlfu history: no
+        // table (migration 1 just created it), the pre-epoch #1784 table, and
+        // the with-epoch table #1792-era constructors created — a plain ALTER
+        // would throw "duplicate column name" on the last one. Rows and
+        // cursor progress are preserved; epoch restarts at 0 (the fence value
+        // fresh #1784 rows had). Resetting a with-epoch table's fences is
+        // safe here: this runs in the DO constructor, and no in-flight
+        // delivery (the only reader of a stale epoch) survives a DO restart.
+        name: "20260709000002_add_epoch",
+        content: sql`
+          alter table subscriptions rename to subscriptions_pre_epoch;
+          create table subscriptions (
+            subscription_key text primary key,
+            acked_offset integer not null,
+            attempt integer not null default 0,
+            next_attempt_at integer,
+            last_error text,
+            epoch integer not null default 0,
+            updated_at text not null
+          );
+          insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at)
+          select subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at
+          from subscriptions_pre_epoch;
+          drop table subscriptions_pre_epoch;
+        `,
+      },
+    ],
+    queries: {
+      get: sql.nullableOne<{
+        parameters: { subscriptionKey: string };
+        result: SubscriptionCursorRowRecord;
+      }>`
+        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
+        from subscriptions
+        where subscription_key = :subscriptionKey
+      `,
+      list: sql.many<{ result: SubscriptionCursorRowRecord }>`
+        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
+        from subscriptions
+      `,
+      ensure: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        insert into subscriptions (subscription_key, acked_offset, epoch, updated_at)
+        values (:subscriptionKey, :ackedOffset, :epoch, :updatedAt)
+        on conflict (subscription_key) do nothing
+      `,
+      ack: sql.run<{
+        parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
+      }>`
+        update subscriptions
+        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
+      ackFenced: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      advanceWatermark: sql.run<{
+        parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
+      }>`
+        update subscriptions
+        set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
+      nack: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          attempt: number;
+          nextAttemptAt: number;
+          error: string;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
+      setCursor: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null, epoch = :epoch, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
+      delete: sql.run<{ parameters: { subscriptionKey: string } }>`
+        delete from subscriptions where subscription_key = :subscriptionKey
+      `,
+      minNextAttemptAt: sql.one<{ result: { next: number | null } }>`
+        select min(next_attempt_at) as next from subscriptions where next_attempt_at is not null
+      `,
+    },
+  });
+
+  /** Monotonic within this instance; wall-clock floor covers restarts. */
+  #lastEpoch = 0;
+
+  #db: ReturnType<
+    typeof SqliteSubscriptionCursorStore.db<ReturnType<typeof createDurableObjectClient>>
+  >;
+
+  constructor(sql: SqlStorage) {
+    // {sql} without transactionSync: this store only holds SqlStorage. That
+    // forgoes sqlfu's per-migration transaction, which is fine here — the
+    // constructor is await-free, and Durable Object SQLite commits all writes
+    // in one event-loop task atomically, so a crash mid-migration cannot
+    // persist a half-applied state.
+    this.#db = SqliteSubscriptionCursorStore.db(createDurableObjectClient({ sql }));
+    this.#db.migrate();
   }
 
   #nextEpoch(): number {
@@ -300,92 +435,72 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   }
 
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
-    return this.sql
-      .exec<SubscriptionCursorRowRecord>(
-        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch from subscriptions where subscription_key = ?",
-        subscriptionKey,
-      )
-      .toArray()
-      .map(rowFromRecord)[0];
+    const record = this.#db.get({ subscriptionKey });
+    return record ? rowFromRecord(record) : undefined;
   }
 
   list(): SubscriptionCursorRow[] {
-    return this.sql
-      .exec<SubscriptionCursorRowRecord>(
-        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch from subscriptions",
-      )
-      .toArray()
-      .map(rowFromRecord);
+    return this.#db.list().map(rowFromRecord);
   }
 
   ensure(subscriptionKey: string, ackedOffset: number): void {
-    this.sql.exec(
-      "insert into subscriptions (subscription_key, acked_offset, epoch, updated_at) values (?, ?, ?, ?) on conflict (subscription_key) do nothing",
+    this.#db.ensure({
       subscriptionKey,
       ackedOffset,
       // Fresh rows get a fresh epoch, so an ack fenced on a DELETED row's
       // epoch cannot land on a same-key recreation (the remove+recreate
       // deliver:"all" clobber).
-      this.#nextEpoch(),
-      new Date().toISOString(),
-    );
+      epoch: this.#nextEpoch(),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    this.sql.exec(
-      `update subscriptions set acked_offset = max(acked_offset, ?), attempt = 0, next_attempt_at = null, last_error = null, updated_at = ? where subscription_key = ?${epoch === undefined ? "" : " and epoch = ?"}`,
-      ...(epoch === undefined
-        ? [ackedOffset, new Date().toISOString(), subscriptionKey]
-        : [ackedOffset, new Date().toISOString(), subscriptionKey, epoch]),
-    );
+    const params = { subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() };
+    if (epoch === undefined) {
+      this.#db.ack(params);
+    } else {
+      this.#db.ackFenced({ ...params, epoch });
+    }
   }
 
   advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
-    this.sql.exec(
-      "update subscriptions set acked_offset = max(acked_offset, ?), next_attempt_at = null, updated_at = ? where subscription_key = ?",
-      ackedOffset,
-      new Date().toISOString(),
+    this.#db.advanceWatermark({
       subscriptionKey,
-    );
+      ackedOffset,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   nack(
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
   ): void {
-    this.sql.exec(
-      "update subscriptions set attempt = ?, next_attempt_at = ?, last_error = ?, updated_at = ? where subscription_key = ?",
-      args.attempt,
-      args.nextAttemptAt,
-      // Bound the stored error so a pathological message cannot bloat the row.
-      args.error.slice(0, 2_000),
-      new Date().toISOString(),
+    this.#db.nack({
       subscriptionKey,
-    );
+      attempt: args.attempt,
+      nextAttemptAt: args.nextAttemptAt,
+      // Bound the stored error so a pathological message cannot bloat the row.
+      error: args.error.slice(0, 2_000),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
-    this.sql.exec(
-      "update subscriptions set acked_offset = ?, attempt = 0, next_attempt_at = null, last_error = null, epoch = ?, updated_at = ? where subscription_key = ?",
-      ackedOffset,
-      this.#nextEpoch(),
-      new Date().toISOString(),
+    this.#db.setCursor({
       subscriptionKey,
-    );
+      ackedOffset,
+      epoch: this.#nextEpoch(),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   delete(subscriptionKey: string): void {
-    this.sql.exec("delete from subscriptions where subscription_key = ?", subscriptionKey);
+    this.#db.delete({ subscriptionKey });
   }
 
   minNextAttemptAt(): number | null {
-    return (
-      this.sql
-        .exec<{ next: number | null }>(
-          "select min(next_attempt_at) as next from subscriptions where next_attempt_at is not null",
-        )
-        .toArray()[0]?.next ?? null
-    );
+    return this.#db.minNextAttemptAt().next;
   }
 }
 

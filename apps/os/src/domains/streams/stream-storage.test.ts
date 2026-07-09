@@ -212,12 +212,47 @@ describe("SqliteSubscriptionCursorStore schema migration", () => {
     expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
   });
 
+  it("adopts a with-epoch table that predates sqlfu ownership (post-#1792 constructor DDL)", () => {
+    // DOs created between #1792 and this fix got the epoch column from raw
+    // constructor DDL, so they have the current shape but an empty
+    // sqlfu_migrations table. The migration chain must pass over them without
+    // throwing (a bare `alter table add column epoch` would die with
+    // "duplicate column name") and without losing rows. Epochs reset to 0 —
+    // acceptable because no in-flight delivery survives the DO restart that
+    // reruns the constructor.
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      create table subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        epoch integer not null default 0,
+        updated_at text not null
+      )
+    `);
+    db.prepare(
+      "insert into subscriptions (subscription_key, acked_offset, epoch, updated_at) values (?, ?, ?, ?)",
+    ).run("pre-existing", 7, Date.now(), new Date(0).toISOString());
+
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+
+    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
+    expect(store.list()).toHaveLength(1);
+    store.ensure("fresh", 0);
+    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
+  });
+
   it("is idempotent on an already-current table", () => {
     const db = new DatabaseSync(":memory:");
     const first = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     first.ensure("k", 3);
     const again = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     expect(again.get("k")).toMatchObject({ ackedOffset: 3 });
+    // Second construction re-ran migrate() against recorded history: the
+    // epoch minted by the first store must survive (no re-rebuild).
+    expect(again.get("k")!.epoch).toBeGreaterThan(0);
   });
 });
 
