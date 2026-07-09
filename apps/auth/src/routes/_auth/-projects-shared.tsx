@@ -283,6 +283,7 @@ function OrganizationMembersPanel(props: {
 
   const invitationsQuery = useQuery({
     queryKey: organizationInvitationsQueryKey(props.organizationId),
+    enabled: props.canManage,
     queryFn: async (): Promise<BetterAuthOrganizationInvitation[]> => {
       const invitations = await authClient.organization.listInvitations({
         query: { organizationId: props.organizationId },
@@ -398,41 +399,45 @@ function OrganizationMembersPanel(props: {
         </div>
       )}
 
-      <div className="border-t px-5 py-3">
-        <h3 className="text-sm font-medium">Pending invitations</h3>
-      </div>
-      {invitationsQuery.isPending ? (
-        <div className="px-5 py-6 text-sm text-muted-foreground">Loading invitations...</div>
-      ) : invitationsQuery.isError ? (
-        <div className="px-5 py-6">
-          <p className="text-sm text-destructive">{invitationsQuery.error.message}</p>
-          <Button
-            className="mt-3"
-            size="sm"
-            variant="outline"
-            onClick={() => invitationsQuery.refetch()}
-          >
-            Try again
-          </Button>
-        </div>
-      ) : invitations.length === 0 ? (
-        <div className="px-5 py-6 text-sm text-muted-foreground">No pending invitations.</div>
-      ) : (
-        <div className="divide-y">
-          {invitations.map((invitation) => (
-            <PendingInvitationRow
-              key={invitation.id}
-              invitation={invitation}
-              organizationSlug={props.organizationSlug}
-              canManage={props.canManage}
-              isCanceling={
-                cancelInvitation.isPending && cancelInvitation.variables === invitation.id
-              }
-              onCancel={() => cancelInvitation.mutate(invitation.id)}
-            />
-          ))}
-        </div>
-      )}
+      {props.canManage ? (
+        <>
+          <div className="border-t px-5 py-3">
+            <h3 className="text-sm font-medium">Pending invitations</h3>
+          </div>
+          {invitationsQuery.isPending ? (
+            <div className="px-5 py-6 text-sm text-muted-foreground">Loading invitations...</div>
+          ) : invitationsQuery.isError ? (
+            <div className="px-5 py-6">
+              <p className="text-sm text-destructive">{invitationsQuery.error.message}</p>
+              <Button
+                className="mt-3"
+                size="sm"
+                variant="outline"
+                onClick={() => invitationsQuery.refetch()}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : invitations.length === 0 ? (
+            <div className="px-5 py-6 text-sm text-muted-foreground">No pending invitations.</div>
+          ) : (
+            <div className="divide-y">
+              {invitations.map((invitation) => (
+                <PendingInvitationRow
+                  key={invitation.id}
+                  invitation={invitation}
+                  organizationSlug={props.organizationSlug}
+                  canManage={props.canManage}
+                  isCanceling={
+                    cancelInvitation.isPending && cancelInvitation.variables === invitation.id
+                  }
+                  onCancel={() => cancelInvitation.mutate(invitation.id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
 
       <RemoveMemberDialog
         member={memberToRemove}
