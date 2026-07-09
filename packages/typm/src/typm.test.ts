@@ -366,6 +366,10 @@ test("unresolvable packages warn but never break the rest", async () => {
 
   expect(result.packages).toMatchObject([{ name: "real" }]);
   expect(result.warnings.join("\n")).toContain("not-on-npm");
+  // The registry ANSWERED (404) — that's an honest "nothing here", not a
+  // transient failure, so consumers must treat the result as authoritative
+  // (the repo IDE worker evicts stale types on failures: 0, retries on > 0).
+  expect(result).toMatchObject({ failures: 0 });
 });
 
 test("skips names outside npm's grammar before they reach a URL or vfs path", async () => {
@@ -429,6 +433,8 @@ test("a thrown fetch costs only its own package, not the whole wave", async () =
   expect(result.packages).toMatchObject([{ name: "healthy" }]);
   expect(result.warnings.join("\n")).toContain("network blip");
   expect(Object.keys(result.files)).toContain("/node_modules/healthy/index.d.ts");
+  // Thrown fetches (unlike answered 404s) count as transient-shaped failures.
+  expect(result).toMatchObject({ failures: 1 });
 });
 
 test("includes devDependencies from the root package.json", async () => {

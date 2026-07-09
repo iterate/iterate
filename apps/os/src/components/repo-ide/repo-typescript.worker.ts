@@ -276,12 +276,16 @@ const api = {
           limits: TYPM_LIMITS,
         });
         const nextPaths = new Set(Object.keys(result.files));
-        // Warnings with NOTHING acquired usually means offline/CDN-down (the
-        // core degrades per-package, so total wipeout is transient-shaped).
-        // Reset so a retry is possible — retries stay cheap, they re-enter
-        // this dedupe — and keep the previous acquisition's types in place
-        // rather than degrading working buffers over a blip.
-        if (nextPaths.size === 0 && result.warnings.length > 0) {
+        // THROWN-fetch losses with NOTHING acquired means offline/CDN-down
+        // (`result.failures` — the core degrades per-package, so a total
+        // wipeout of throws is transient-shaped). Reset so a retry is
+        // possible — retries stay cheap, they re-enter this dedupe — and
+        // keep the previous acquisition's types rather than degrading
+        // working buffers over a blip. Mere WARNINGS (resolve 404s,
+        // unfetchable specifiers, no-types packages) are the registry's
+        // honest answer: an empty result then falls through to the stale
+        // diff below, evicting types the manifest no longer supports.
+        if (nextPaths.size === 0 && result.failures > 0) {
           lastAcquiredDependencies = null;
           return { acquired: false, failed: true };
         }

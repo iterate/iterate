@@ -50,6 +50,14 @@ export interface AcquireTypesResult {
   files: Record<string, string>;
   packages: AcquiredPackage[];
   warnings: string[];
+  /**
+   * Packages lost to a THROWN fetch (offline, DNS failure, dropped
+   * connection) — transient-shaped, worth retrying later. Warnings alone
+   * (resolve 404s, unfetchable specifiers, packages shipping no types) are
+   * the registry's honest answer and do NOT count: an empty result with
+   * zero failures means the manifest genuinely has nothing acquirable.
+   */
+  failures: number;
   totalBytes: number;
 }
 
@@ -77,6 +85,7 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
   const files: Record<string, string> = {};
   const packages: AcquiredPackage[] = [];
   const warnings: string[] = [];
+  let failures = 0;
   let totalBytes = 0;
   /** Package names ever enqueued — the vfs node_modules is flat, so one
    * version per name and the FIRST resolution wins (top-level dependencies
@@ -206,6 +215,7 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
         // only its own package, not reject the wave and discard every
         // completed one: degradation is per-package.
         acquireOne(dependency).catch((error) => {
+          failures += 1;
           warn(`failed to acquire ${dependency.name}: ${String(error)}`);
           return [];
         }),
@@ -220,7 +230,7 @@ export async function acquireTypes(input: AcquireTypesInput): Promise<AcquireTyp
       .map((acquired) => `${acquired.name}@${acquired.version}`)
       .join(", ")}`,
   );
-  return { files, packages, warnings, totalBytes };
+  return { files, packages, warnings, failures, totalBytes };
 }
 
 /** Top level: regular + dev dependencies (real repos keep `@types/*` in dev). */
