@@ -12,12 +12,11 @@ reconciler/request-by-reference work (PRs #1460, #1483).
 
 ## Problem
 
-LLM request processors guard agent-visible appends with a still-current check
+The agent processor guards agent-visible appends with a still-current check
 (`#isRequestStillCurrent` in
-`apps/os/src/domains/agents/cloudflare-ai-processor-implementation.ts` and
-`apps/os/src/domains/agents/openai-ws-processor-implementation.ts`): they
-re-read committed history and only append `agent/output-added` if the agent is
-still waiting on this request. That is check-then-act — if an
+`apps/os/src/domains/agents/agent-processor-implementation.ts`): it re-reads
+committed history and only appends `agent/output-added` if the agent is still
+waiting on this request. That is check-then-act — if an
 `agent/llm-request-cancelled` commits between the check and the append, the
 output reaches the stream but the agent reducer's guard ignores it, so the
 model never sees its own response in history.
@@ -36,6 +35,6 @@ Cares:
 
 - Keep it generic (offset CAS or a reducer-predicate hook), not an
   agent-specific flag on the stream API.
-- The providers' stale path must still append their provider-level
-  `llm-request-completed` (observability) — only agent-visible events are
+- The stale path must still append `agent/llm-request-completed`
+  (observability) — only agent-visible output events are
   conditional.
