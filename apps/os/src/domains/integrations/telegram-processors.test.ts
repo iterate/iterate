@@ -1014,6 +1014,8 @@ class MemoryStreamNetwork {
 class MemoryStream implements Stream {
   events: StreamEvent[] = [];
 
+  async kill(): Promise<void> {}
+
   async __describe() {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
