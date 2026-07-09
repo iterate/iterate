@@ -3,12 +3,14 @@ import { getOriginalDoc, unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import { LockIcon, MinusIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { HtmlPreview } from "./html-preview.tsx";
-import { isHtmlPreviewPath, repoFileKind } from "./repo-file-kinds.ts";
+import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -47,7 +49,8 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
-  /** Html files only: the sandboxed rendered view of the current buffer. */
+  /** Markdown and html files: show the rendered preview (markdown HTML, or the
+   * sandboxed html iframe) instead of the editor. */
   previewOpen: boolean;
   onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
@@ -254,23 +257,26 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
-    // Diff wins if a hand-edited URL sets both: the toggles keep `preview` and
-    // `diff` mutually exclusive, but honor that invariant here too so the pane
-    // never renders Preview while the header shows the Diff/"Working Tree" state.
-    const showPreview = previewOpen && !diffOpen && isHtmlPreviewPath(path);
+    // Markdown and html files get a vscode-style Code | Preview toggle; the
+    // preview renders the CURRENT buffer (unsaved edits included). Diff wins if
+    // a hand-edited URL sets both `preview` and `diff` (the toggles keep them
+    // mutually exclusive, but honor that invariant here too) so the pane never
+    // renders Preview while the header shows the Diff/"Working Tree" state.
+    const showPreview = previewOpen && !diffOpen && isPreviewablePath(path);
     return (
       <FileChrome
         path={path}
         {...(diffOpen ? { suffix: "(Working Tree)" } : showPreview ? { suffix: "(Preview)" } : {})}
         status={status}
         leading={
-          isHtmlPreviewPath(path) ? (
-            <CodePreviewToggle previewOpen={showPreview} onTogglePreview={onTogglePreview} />
+          isPreviewablePath(path) ? (
+            <CodePreviewToggle preview={showPreview} onChange={onTogglePreview} />
           ) : undefined
         }
         actions={
           <>
-            {headHasPath || staged !== undefined ? (
+            {/* The preview replaces the editor, diff and all. */}
+            {!showPreview && (headHasPath || staged !== undefined) ? (
               <Button
                 variant={diffOpen ? "secondary" : "ghost"}
                 size="sm"
@@ -285,7 +291,11 @@ export function RepoEditorPane({
         }
       >
         {showPreview ? (
-          <HtmlPreview html={value} />
+          kind.language === "markdown" ? (
+            <MarkdownPreview markdown={value} />
+          ) : (
+            <HtmlPreview html={value} />
+          )
         ) : (
           <SourceCodeBlock
             key={path}
@@ -361,33 +371,6 @@ export function RepoEditorPane({
   );
 }
 
-/** The vscode-style "Preview | Code" tab pair at the top-left of an html
- * file's header. */
-function CodePreviewToggle({
-  previewOpen,
-  onTogglePreview,
-}: {
-  previewOpen: boolean;
-  onTogglePreview: (open: boolean) => void;
-}) {
-  const tab = (label: string, active: boolean, onClick: () => void) => (
-    <Button
-      variant={active ? "secondary" : "ghost"}
-      size="sm"
-      className="h-5 rounded-sm px-2 text-[11px]"
-      onClick={onClick}
-    >
-      {label}
-    </Button>
-  );
-  return (
-    <span className="flex shrink-0 items-center gap-0.5 rounded-md border p-0.5">
-      {tab("Code", !previewOpen, () => onTogglePreview(false))}
-      {tab("Preview", previewOpen, () => onTogglePreview(true))}
-    </span>
-  );
-}
-
 /** Shared editor-pane chrome (path header + status badge + actions slot) —
  * exported for the sibling readonly commit-diff pane so every pane matches. */
 export function FileChrome({
@@ -404,7 +387,7 @@ export function FileChrome({
   suffix?: string;
   readonly?: boolean;
   status?: "added" | "deleted" | "modified";
-  /** Rendered before the path — the Code/Preview toggle lives here. */
+  /** Top-left slot before the path — the Code | Preview toggle lives here. */
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -429,6 +412,54 @@ export function FileChrome({
         <div className="ml-auto flex items-center gap-1">{actions}</div>
       </div>
       {children}
+    </div>
+  );
+}
+
+/** vscode's "Code | Preview" tab pair for previewable (markdown / html) files. */
+function CodePreviewToggle({
+  preview,
+  onChange,
+}: {
+  preview: boolean;
+  onChange: (preview: boolean) => void;
+}) {
+  return (
+    <Tabs
+      value={preview ? "preview" : "code"}
+      onValueChange={(value) => onChange(value === "preview")}
+      className="shrink-0"
+    >
+      <TabsList className="h-7">
+        <TabsTrigger value="code" className="px-2 text-xs">
+          Code
+        </TabsTrigger>
+        <TabsTrigger value="preview" className="px-2 text-xs">
+          Preview
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+}
+
+/**
+ * Rendered markdown for the current working-tree buffer, via MessageResponse
+ * (streamdown) — already the agent feed's chat renderer, so no new dependency
+ * and no dangerouslySetInnerHTML. SECURITY INVARIANT: repo content is
+ * user-supplied, and the layer that actually defuses it is rehype-sanitize's
+ * default (GitHub) schema in streamdown's DEFAULT rehype pipeline — its
+ * rehype-harden config is wide open (`allowedProtocols: ["*"]` etc.). That
+ * default only holds because nothing here passes `rehypePlugins`; don't add
+ * that prop without re-checking sanitization.
+ */
+function MarkdownPreview({ markdown }: { markdown: string }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">
+        {/* A settled document, not a stream — skip streamdown's unpaired-
+            marker balancing (it appends a phantom `*` to text like "17 * 23"). */}
+        <MessageResponse parseIncompleteMarkdown={false}>{markdown}</MessageResponse>
+      </div>
     </div>
   );
 }

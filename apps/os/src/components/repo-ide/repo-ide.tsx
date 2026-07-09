@@ -291,7 +291,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 expandedOid={expandedCommitOid}
                 selectedPath={selectedPath}
                 onExpand={(oid) => patchSearch({ commit: oid })}
-                onOpenFile={(path) => patchSearch({ file: path })}
+                // selectFile clears diff/preview/staged too, so a lingering
+                // preview=true doesn't spuriously re-open Preview for the file
+                // you pick out of a commit (history/commit stay set — the
+                // commit diff keeps showing until you leave History).
+                onOpenFile={(path) => selectFile(path)}
               />
             </Suspense>
           ) : gh ? (
@@ -597,11 +601,13 @@ function GitPanel({
 
 /**
  * IDE view state, URL-owned like every stream view's: `file` is the open
- * path, `diff` whether the HEAD↔staged diff is showing, `scm`/`gh`/`history`
- * which sidebar shows instead of the file tree (Source Control / GitHub /
- * commit history), `commit` the expanded commit's oid (which also pins the
- * readonly commit diff the open file renders as). The repo detail route
- * validates these (RepoDetailSearch), so loose reads here are safe.
+ * path, `diff` whether the HEAD↔staged diff is showing, `preview` whether a
+ * markdown/html file shows its rendered preview instead of the editor,
+ * `scm`/`gh`/`history` which sidebar shows instead of the file tree (Source
+ * Control / GitHub / commit history), `commit` the expanded commit's oid
+ * (which also pins the readonly commit diff the open file renders as). The
+ * repo detail route validates these (RepoDetailSearch), so loose reads here
+ * are safe.
  */
 function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {

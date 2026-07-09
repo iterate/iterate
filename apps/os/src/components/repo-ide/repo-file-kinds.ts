@@ -75,8 +75,17 @@ export function isBinaryRepoPath(path: string): boolean {
   return repoFileKind(path).kind !== "text";
 }
 
-/** Only real html documents get the editor pane's Code/Preview toggle — .svg
- * also opens as html-highlighted text but is an image format, not a page. */
-export function isHtmlPreviewPath(path: string): boolean {
+/** Only real html documents get the html Preview (sandboxed iframe) — .svg
+ * also opens as html-highlighted text but is an image format, not a page.
+ * Module-internal: `isPreviewablePath` is the exported predicate. */
+function isHtmlPreviewPath(path: string): boolean {
   return /\.html?$/i.test(path);
+}
+
+/** Files that get the editor pane's Code | Preview toggle: html documents
+ * (rendered in a sandboxed iframe) and markdown (rendered to HTML). */
+export function isPreviewablePath(path: string): boolean {
+  if (isHtmlPreviewPath(path)) return true;
+  const kind = repoFileKind(path);
+  return kind.kind === "text" && kind.language === "markdown";
 }
