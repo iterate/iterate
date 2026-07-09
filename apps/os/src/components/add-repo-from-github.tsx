@@ -199,7 +199,8 @@ function AddRepoFromGithubWizard({
     existingRepoPaths !== undefined &&
     existingRepoPaths.includes(normalizedPath) &&
     !createdHere.has(normalizedPath);
-  const pathValid = REPO_PATH_PATTERN.test(normalizedPath) && pathsKnown && !pathTaken;
+  const pathFormatValid = REPO_PATH_PATTERN.test(normalizedPath);
+  const pathValid = pathFormatValid && pathsKnown && !pathTaken;
 
   const addRepo = useMutation({
     mutationFn: async (input: { path: string; repo: InstallationRepo }) => {
@@ -328,7 +329,11 @@ function AddRepoFromGithubWizard({
         </Suspense>
       </Field>
 
-      <Field data-invalid={!pathValid && path !== "/repos/"}>
+      {/* Error blame is split: format problems name the format, a taken path
+          names the collision, and a still-loading repo list shows NO error —
+          the closed gate only holds the submit button, it is not the user's
+          fault. */}
+      <Field data-invalid={(pathTaken || !pathFormatValid) && path !== "/repos/"}>
         <FieldLabel htmlFor="add-repo-github-path">Path</FieldLabel>
         <Input
           id="add-repo-github-path"
@@ -338,15 +343,19 @@ function AddRepoFromGithubWizard({
             setPath(event.currentTarget.value);
             setPathEdited(true);
           }}
-          aria-invalid={!pathValid && path !== "/repos/"}
+          aria-invalid={(pathTaken || !pathFormatValid) && path !== "/repos/"}
         />
-        <FieldDescription>Project-local repo path.</FieldDescription>
+        <FieldDescription>
+          {pathsKnown
+            ? "Project-local repo path."
+            : "Project-local repo path (loading the repo list…)."}
+        </FieldDescription>
         {pathTaken ? (
           <FieldError>
             {normalizedPath} already exists. To back an existing repo with GitHub, use the GitHub
             panel on that repo's page.
           </FieldError>
-        ) : !pathValid && path !== "/repos/" ? (
+        ) : !pathFormatValid && path !== "/repos/" ? (
           <FieldError>Use a repo path like "/repos/project".</FieldError>
         ) : null}
       </Field>
