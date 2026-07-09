@@ -1,11 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { ItxBinding } from "../../sdk.ts";
+import type { ItxBinding } from "iterate/sdk";
 
 // A stateless app: a plain WorkerEntrypoint the root project worker routes
 // to when ingress selects the "hello" app. It still gets the full project
 // itx through env.ITX. Built from a masked snapshot of this repo (see the
-// APPS map in the root worker.ts), so it can import shared modules like
-// sdk.ts.
+// APPS map in the root worker.ts), so it can import any shared modules its
+// mask includes.
 export default class HelloApp extends WorkerEntrypoint<{
   ITX: ItxBinding;
 }> {
