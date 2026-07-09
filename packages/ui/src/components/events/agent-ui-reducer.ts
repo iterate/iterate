@@ -25,7 +25,6 @@ export type AgentUiLlmStep = {
   llmRequestOffset: number;
   status: "running" | "done";
   model?: string;
-  provider?: string;
   /** Streamed reasoning summary ("thinking") text. */
   thinkingText: string;
   /** Streamed response text — for code-mode agents this is source code. */
@@ -35,7 +34,6 @@ export type AgentUiLlmStep = {
   durationMs?: number;
   outcome?: "completed" | "failed" | "cancelled";
   errorMessage?: string;
-  providerResponseId?: string;
   startedAtMs: number;
 };
 
@@ -389,9 +387,6 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
                 ...(usage.input == null ? {} : { inputTokens: usage.input }),
                 ...(usage.output == null ? {} : { outputTokens: usage.output }),
                 ...(errorMessage == null ? {} : { errorMessage }),
-                ...(typeof result?.providerResponseId === "string"
-                  ? { providerResponseId: result.providerResponseId }
-                  : {}),
               },
         ),
         timestampMs,
