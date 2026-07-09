@@ -1,7 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "./schemas.ts";
-import { StreamEventLog } from "./stream-storage.ts";
+import {
+  reconcileSubscriptionCursorRows,
+  SqliteSubscriptionCursorStore,
+  StreamEventLog,
+} from "./stream-storage.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -124,3 +128,33 @@ function fromNodeSqlValue([key, value]: [string, unknown]) {
   }
   return [key, value];
 }
+
+describe("reconcileSubscriptionCursorRows", () => {
+  it("drops orphaned rows, keeps progress, clears failure state (version-mismatch rebuild)", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("survivor-clean", 5);
+    store.ensure("survivor-backing-off", 3);
+    store.nack("survivor-backing-off", {
+      attempt: 7,
+      nextAttemptAt: 99_999,
+      error: "old-code bug",
+    });
+    store.ensure("orphan", 2);
+    store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
+
+    reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
+
+    // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
+    expect(store.get("orphan")).toBeUndefined();
+    expect(store.minNextAttemptAt()).toBeNull();
+    // Progress survives (ackedOffset is monotonic truth about the same log)...
+    expect(store.get("survivor-clean")?.ackedOffset).toBe(5);
+    expect(store.get("survivor-backing-off")?.ackedOffset).toBe(3);
+    // ...but backoff state is cleared: the new fold gets an immediate fresh try.
+    expect(store.get("survivor-backing-off")).toMatchObject({
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+});

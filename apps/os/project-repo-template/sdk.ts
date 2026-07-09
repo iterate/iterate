@@ -105,7 +105,7 @@ export interface Project {
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
-  processor: StreamProcessorRpc<ProjectProcessorState>;
+  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -230,22 +230,6 @@ export interface ProjectCollection {
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
-export interface StreamProcessorRpc<State = unknown> {
-  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
-   * commit pushes and `snapshot()` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
-  snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
-}
-
 /** Workers AI binding exposed through ITX as a project/agent capability. */
 export interface Ai {
   __describe(): Promise<Description>;
@@ -282,7 +266,7 @@ export interface Agent {
   /** Shortcut for `capabilityHost.revokeCapability`. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
-  processor: StreamProcessorRpc<AgentProcessorState>;
+  processor: WakeableStreamProcessorRpc<AgentProcessorState>;
   /** The agent's own event stream. */
   stream: Stream;
   /** The agent's web-chat door (what the user sees). */
@@ -357,6 +341,9 @@ export interface AgentChat {
 export interface CapabilityHost {
   /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */
   path: string;
+  /** This scope's capability-host stream processor (snapshot/state). A real
+   * member, so it also claims the name: mounts cannot shadow `processor`. */
+  processor: WakeableStreamProcessorRpc;
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
@@ -449,6 +436,11 @@ export interface ProjectEgress {
  */
 export interface EmailCapability {
   __describe(): Promise<Description>;
+  /** The email router's stream processor: the project-class host Durable
+   * Object at /integrations/email, whose EmailProcessor routes inbound mail.
+   * Wake subscriptions for it persist `["email", "processor",
+   * "wakeStreamSubscriber"]`. */
+  processor: WakeableStreamProcessorRpc;
   /**
    * Send one email from the project's own address (`<slug>@<hostname base>`).
    * From ANY agent scope, send binds the conversation to the calling agent:
@@ -679,6 +671,8 @@ export interface SandboxCollection {
  */
 export interface Scheduler {
   __describe(): Promise<Description>;
+  /** The scheduler stream processor (snapshot/state). */
+  processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
@@ -760,7 +754,7 @@ export interface Repo {
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
-  processor: StreamProcessorRpc<RepoProcessorState>;
+  processor: WakeableStreamProcessorRpc<RepoProcessorState>;
 }
 
 /**
@@ -866,7 +860,7 @@ export interface Stream {
       subscriptions: Record<
         string,
         {
-          mode: "wake" | "push";
+          mode: "wake" | "push" | "webhook";
           ackedOffset: number;
           lag: number;
           attempt: number;
@@ -942,6 +936,22 @@ export interface Stream {
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
 }
 
+export interface StreamProcessorRpc<State = unknown> {
+  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
+  /**
+   * Server-push of the processor's reduced state. The callback receives the
+   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
+   * commit pushes and `snapshot()` reads monotonically against each other —
+   * once immediately on subscribe (current state IS the first paint) and then
+   * after every checkpointed batch that changed state.
+   */
+  onStateChange(
+    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
+  ): Promise<ProcessorStateSubscriptionHandle>;
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+}
+
 /**
  * The `itx.agents.defaults` built-in: default agent POLICY as data. The
  * project worker owns applying it — the seeded template reacts to
@@ -1009,7 +1019,7 @@ export interface Secret {
   /** Set the secret material and/or its egress allowlist. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
-  processor: StreamProcessorRpc<SecretDescription>;
+  processor: WakeableStreamProcessorRpc<SecretDescription>;
 }
 
 /**
@@ -1226,6 +1236,25 @@ export type ProjectDescription = Description & {
 };
 
 /**
+ * A processor node that is also its HOST's wake-mode delivery door. This is
+ * what the domain surfaces expose (`itx.agents.get(path).processor`,
+ * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
+ * stream subscriptions persist as their delivery expression:
+ * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
+ *
+ * `wakeStreamSubscriber` is dialed by stream delivery spines only
+ * (trusted-internal): the handshake's sink drives the host's durable
+ * checkpoint, so an ordinary session poking it could feed fabricated batches
+ * and fast-forward the checkpoint past real events. Multi-processor hosts (an
+ * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * processor wakes from the request's `processorSlug` — the inspection half of
+ * this node reads the host's main processor.
+ */
+export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+};
+
+/**
  * The project processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape. `created` flips when the
  * bootstrap saga lands; the list fields are what the collection `list()`
@@ -1323,31 +1352,41 @@ export type CapabilityDescription = {
   types?: string;
 };
 
-/** Serializable snapshot plus optional live runtime debug state for a processor. */
-export type ProcessorRuntimeState<State = unknown> = {
-  snapshot: { offset: number; state: State };
-  runtime?: Record<string, unknown>;
-};
-
-export type ProcessorSnapshot<State> = {
-  offset: number;
-  state: State;
+/**
+ * What the stream sends when poking a durable wake-mode subscriber
+ * (`wakeStreamSubscriber`): serializable coordinates only.
+ */
+export type StreamSubscriberWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: SubscriptionKey;
+  /** Which hosted processor the poke is for (multi-processor hosts resolve on it). */
+  processorSlug?: string;
 };
 
 /**
- * Live handle for one `onStateChange` subscription.
- *
- * `ping()` is the liveness probe: `true` while the subscription is still
- * registered on the live processor, `false` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, `false` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
+ * What the poked subscriber hands back — the entire handshake in one return
+ * value. The stream retains `sink` (ownership of a returned stub transfers to
+ * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
+ * there is no subscribe-back call and therefore no handshake race to fence.
  */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
+export type StreamSubscriberWakeResponse = {
+  /** The processor's durable checkpoint offset — replay resumes after it. */
+  checkpointOffset: number;
+  /** The live delivery callback the stream retains and invokes per batch. */
+  sink: ProcessEventBatch;
+  /**
+   * Serializable subscriber identity (validated against
+   * `StreamSubscriberDescriptor` by the stream) appended as the
+   * subscriber-connected presence fact; carries the processor's contract
+   * announcement for the stream's `processorsBySlug` registry.
+   */
+  subscriber?: unknown;
+  /** Live runtime-state capability, retained for the connection lifetime. */
+  getRuntimeState?: GetProcessorRuntimeState;
 };
 
 export type CfMarkdownConversionArgs =
@@ -1626,6 +1665,37 @@ export type SandboxInstanceType =
  */
 export type CloudflareSandbox = object;
 
+/** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
+export type SchedulerProcessorState = {
+  pendingTriggers: Record<
+    string,
+    {
+      [x: string]: unknown;
+      key: string;
+      requestedAt: string;
+      runCount: number;
+      scheduledFor: string;
+    }
+  >;
+  schedules: Record<
+    string,
+    {
+      [x: string]: unknown;
+      action: { [x: string]: unknown; kind: "itx-script"; script: string };
+      definedAtOffset: number;
+      metadata?: Record<string, unknown> | undefined;
+      path?: string | undefined;
+      nextTriggerAt: number | null;
+      recurrence:
+        | { [x: string]: unknown; at: string }
+        | { [x: string]: unknown; every: number }
+        | { [x: string]: unknown; cron: string; timezone?: string | undefined };
+      runCount: number;
+      setAt: string;
+    }
+  >;
+};
+
 /**
  * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
  * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
@@ -1805,6 +1875,12 @@ export type StreamEventReadInput = {
   limit?: number;
 };
 
+/** Serializable snapshot plus optional live runtime debug state for a processor. */
+export type ProcessorRuntimeState<State = unknown> = {
+  snapshot: { offset: number; state: State };
+  runtime?: Record<string, unknown>;
+};
+
 /**
  * Callback invoked by the stream pump for each delivered batch.
  *
@@ -1841,6 +1917,38 @@ export type StreamSubscriptionHandle = Disposable & {
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
  */
 export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+
+export type ProcessorSnapshot<State> = {
+  offset: number;
+  state: State;
+};
+
+/**
+ * Live handle for one `onStateChange` subscription.
+ *
+ * `ping()` is the liveness probe: `true` while the subscription is still
+ * registered on the live processor, `false` once it was dropped (delivery
+ * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
+ * Object incarnation is gone. For a subscriber, `false` and a rejection mean
+ * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
+ * transport half-opens, so a periodic ping is how a client turns "silently
+ * stale" into "detectably dead".
+ */
+export type ProcessorStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
+
+/**
+ * Optional runtime-state callback exposed by a hosted processor.
+ *
+ * It accepts sync or async implementations because local processors can return
+ * immediately, while RPC-backed processors may need an async round trip.
+ */
+export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
@@ -2054,9 +2162,6 @@ export type WorkspaceFileInfo = {
   type: "directory" | "file" | "symlink";
   updatedAt: number;
 };
-
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
 
 export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
 

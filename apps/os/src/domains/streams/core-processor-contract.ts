@@ -11,8 +11,6 @@
 
 import { z } from "zod";
 import { ItxExpression } from "../../itx/expression.ts";
-import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
-import { normalizePath } from "../durable-object-names.ts";
 import type { GetProcessorRuntimeState } from "./rpc-types.ts";
 import { EventSelector } from "./event-selector.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
@@ -45,7 +43,12 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 //      subscription records; cross-post rules deleted (a cross-post is a push
 //      subscription addressing the target stream's `ingest`); worker wake
 //      targets deleted (stateless workers consume via push).
-export const CORE_STATE_VERSION = 10;
+// - 11: one addressing grammar for every durable mode — wake targets are itx
+//      expressions too, naming the domain node's processor (`["agents",
+//      ["get", path], "processor", "wakeStreamSubscriber"]`) instead of a
+//      typed Durable Object address, and `webhook` joins as the third mode
+//      (per-EVENT HTTP POST on the push spine's cursor machinery).
+export const CORE_STATE_VERSION = 11;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -54,79 +57,73 @@ const DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY = 100_000;
 const DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE = 6_000_000;
 
 /**
- * Persisted configured subscriber target. The stream resolves these narrow
- * targets itself, so subscription config cannot smuggle an arbitrary RPC method
- * or cross-project Durable Object name into the wake path.
+ * A delivery-addressing expression: an {@link ItxExpression} whose FINAL step
+ * is a property step naming the method the spine will invoke. The dial turns
+ * that tail into a call step at delivery time (`[..., [tail, payload]]`), so
+ * the invocation happens receiver-bound on the remote side — reading the
+ * method as a property and applying it locally detaches it from `this` across
+ * a real RPC hop. Enforced here so an invalid tail is rejected before the
+ * config event commits, not discovered as a delivery failure forever after.
  */
-const DurableObjectAddress = z.strictObject({
-  projectId: z.string().trim().min(1).nullable(),
-  path: z.string().transform(normalizePath),
-  props: z.record(z.string(), z.string()).default({}),
-}) satisfies z.ZodType<DurableObjectAddressType, unknown>;
-
-/**
- * The Durable Object kinds a stream may wake as a configured subscriber. Every
- * one is addressed the same way (a validated `DurableObjectAddress`); only the
- * binding they resolve to differs, so they share one union member rather than
- * five identical ones.
- */
-export const ConfiguredSubscriberDurableObjectType = z.enum([
-  "agent",
-  "capability-host",
-  "project",
-  "repo",
-  "scheduler",
-  "secret",
-]);
-export type ConfiguredSubscriberDurableObjectType = z.infer<
-  typeof ConfiguredSubscriberDurableObjectType
->;
-
-/**
- * Wake-mode delivery target: a Durable Object hosting a stream processor. The
- * optional `processorSlug` names which hosted processor the wake is for —
- * multi-processor hosts (an agent DO hosts agent + llm-provider + more)
- * resolve on it; single-processor hosts may omit it.
- */
-export const WakeDeliveryTarget = z.strictObject({
-  type: ConfiguredSubscriberDurableObjectType,
-  address: DurableObjectAddress,
-  processorSlug: z.string().trim().min(1).optional(),
-});
-
-export type WakeDeliveryTarget = z.infer<typeof WakeDeliveryTarget>;
+const DeliveryExpression = ItxExpression.refine(
+  (expression) => typeof expression.at(-1) === "string",
+  { message: "delivery expression must end in a property step naming the method to invoke" },
+);
 
 export const StreamSubscriptionType = z.enum(["configured", "ephemeral"]);
 export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
 
 /**
- * How a durable subscription's events reach the subscriber — the two
- * modalities of the streams README's axes table:
+ * How a durable subscription's events reach the subscriber — the three
+ * modalities of the streams README's axes table. Wake and push share ONE
+ * addressing grammar: a persisted {@link ItxExpression itx expression},
+ * evaluated at delivery time against the stream's own authority root (the
+ * project itx for project streams, the trusted deployment root for global
+ * streams). The mode picks the delivery protocol, never the addressing:
  *
  * - `wake`: the subscriber is a stateful fold (a Durable-Object-hosted
- *   processor) that owns its own `{offset, state}` checkpoint. The stream
- *   pokes it (`wakeStreamSubscriber`); the poke returns the checkpoint and a
- *   live one-way sink, and the stream streams batches into the sink from
- *   there. The stream-side cursor is an OBSERVATIONAL watermark (poke
- *   coalescing + lag); the subscriber's checkpoint is the truth.
- * - `push`: the subscriber is a stateless effect named by a persisted
- *   {@link ItxExpression itx expression} (`["worker",
- *   "processEventBatch"]`, `["streams", ["get", path], "ingest"]`, …). The
- *   stream owns the AUTHORITATIVE cursor, dials the expression fresh per
- *   batch, and advances only on a successful awaited call.
+ *   processor) that owns its own `{offset, state}` checkpoint. The expression
+ *   names the poke method on the domain node's processor (`["agents", ["get",
+ *   path], "processor", "wakeStreamSubscriber"]`, `["repos", …]`, the project
+ *   root's own `["processor", "wakeStreamSubscriber"]`, …); the poke returns
+ *   the checkpoint and a live one-way sink, and the stream streams batches
+ *   into the sink from there. The stream-side cursor is an OBSERVATIONAL
+ *   watermark (poke coalescing + lag); the subscriber's checkpoint is the
+ *   truth.
+ * - `push`: the subscriber is a stateless effect named by the expression
+ *   (`["worker", "processEventBatch"]`, `["streams", ["get", path],
+ *   "ingest"]`, …). The stream owns the AUTHORITATIVE cursor, dials the
+ *   expression fresh per batch, and advances only on a successful awaited
+ *   call.
+ * - `webhook`: push semantics over plain HTTP, one event per POST — the
+ *   receiver is outside the itx world, and external webhook consumers expect
+ *   individual events, so the cursor advances per event instead of per batch.
  *
  * The criterion: the offset lives with whoever owns the state it must be
  * transactionally consistent with.
  */
 const SubscriptionDelivery = z.discriminatedUnion("mode", [
-  z.strictObject({ mode: z.literal("wake"), target: WakeDeliveryTarget }),
-  z.strictObject({ mode: z.literal("push"), expression: ItxExpression }),
+  z.strictObject({
+    mode: z.literal("wake"),
+    expression: DeliveryExpression,
+    /**
+     * Which hosted processor the wake is for — multi-processor hosts (an
+     * agent DO hosts agent + llm-provider + more) resolve on it;
+     * single-processor hosts may omit it. Rides the wake request verbatim.
+     */
+    processorSlug: z.string().trim().min(1).optional(),
+  }),
+  z.strictObject({ mode: z.literal("push"), expression: DeliveryExpression }),
+  z.strictObject({ mode: z.literal("webhook"), url: z.url({ protocol: /^https?$/ }) }),
 ]);
 
+export type SubscriptionDelivery = z.infer<typeof SubscriptionDelivery>;
+
 /**
- * Initial cursor for a push subscription. `"new"` pins to the configuring
- * event's own offset — deterministic under log replay, no clock — and is the
- * default. `"all"` replays the full history (`afterOffset: 0`).
+ * Initial cursor for a stream-owned-cursor subscription (push/webhook).
+ * `"new"` pins to the configuring event's own offset — deterministic under
+ * log replay, no clock — and is the default. `"all"` replays the full history
+ * (`afterOffset: 0`).
  */
 const DeliverPolicy = z.union([
   z.literal("all"),
@@ -137,13 +134,14 @@ const DeliverPolicy = z.union([
 export type DeliverPolicy = z.infer<typeof DeliverPolicy>;
 
 /**
- * What a push subscription does when one specific batch keeps failing while
- * the receiver is otherwise alive: `park` (default) stops delivery and records
- * a `subscription-parked` fact — ordered receivers like cross-post must never
- * skip (a skip is a silent gap in the target stream); `skip` bisects the batch
- * to isolate the poison event, records an idempotent `error-occurred`, and
- * steps over it — right for feeds where one bad event must not silence
- * everything after it (the project worker feed).
+ * What a push/webhook subscription does when one specific batch keeps failing
+ * while the receiver is otherwise alive: `park` (default) stops delivery and
+ * records a `subscription-parked` fact — ordered receivers like cross-post
+ * must never skip (a skip is a silent gap in the target stream); `skip`
+ * bisects the batch to isolate the poison event (webhook batches are already
+ * single events), records an idempotent `error-occurred`, and steps over it —
+ * right for feeds where one bad event must not silence everything after it
+ * (the project worker feed).
  */
 const OnPoisonPolicy = z.enum(["park", "skip"]);
 
@@ -155,9 +153,9 @@ const SubscriptionConfiguredPayload = z.object({
   delivery: SubscriptionDelivery,
   /** Which events this subscription receives. Absent = everything. */
   selector: EventSelector.optional(),
-  /** Push-mode initial cursor (see {@link DeliverPolicy}). Ignored for wake mode. */
+  /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
   deliver: DeliverPolicy.optional(),
-  /** Push-mode poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
+  /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
   onPoison: OnPoisonPolicy.optional(),
   /**
    * Receiver-owned configuration, passed through VERBATIM on every delivery

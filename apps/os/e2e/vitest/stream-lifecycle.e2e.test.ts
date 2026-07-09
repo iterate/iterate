@@ -119,76 +119,66 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
   }).rejects.toThrow(/reserved for a durable subscriber/);
 });
 
-test("configured durable object subscribers must target the stream project", async () => {
-  // This pins the important pre-commit rule for project-scoped streams: a
-  // configured Durable Object subscriber may only name a Durable Object address
-  // with the same projectId as the stream. If append accepted this event and the
-  // wake side effect merely failed later, the stream would still retain a bad
-  // durable desired-state record and keep trying to wake it on future appends.
-  // The final `expectNoSubscriptionConfiguredEvent(...)` assertion is the
-  // critical part: it proves rejection happened before the event was committed.
+test("delivery expressions must end in a property step, rejected before commit", async () => {
+  // Cross-project safety needs no append-time check anymore: a delivery
+  // expression carries no projectId at all — every delivery re-derives
+  // authority from the stream's OWN itx root, so persisted config cannot name
+  // another project structurally. What still needs pre-commit validation is
+  // the expression's SHAPE: the dial invokes the final step as a method, so a
+  // call-step tail is a config that can never deliver. If append accepted it
+  // and delivery merely failed later, the stream would retain a bad durable
+  // desired-state record and retry it forever. The final
+  // `expectNoSubscriptionConfiguredEvent(...)` assertion proves rejection
+  // happened before the event was committed.
   const marker = crypto.randomUUID();
-  const subscriptionKey = `configured-cross-project-${marker}`;
+  const subscriptionKey = `configured-call-tail-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-cross-project-${marker}` });
-  const { projectId } = await project.__describe();
-  using stream = project.streams.get(`/configured-cross-project-${marker}`);
+  using project = itx.projects.create({ slug: `configured-call-tail-${marker}` });
+  using stream = project.streams.get(`/configured-call-tail-${marker}`);
 
   await expect(
     stream.append(
       subscriptionConfiguredEvent({
         subscriptionKey,
-        target: {
-          address: {
-            path: "/",
-            projectId: `${projectId}-other`,
-            props: {},
-          },
-          type: "repo",
+        // Tail is a CALL step — the poke method name is missing.
+        delivery: {
+          mode: "wake",
+          expression: ["repos", ["get", "/"]],
         },
       }),
     ),
-  ).rejects.toThrow(/does not match stream projectId/);
+  ).rejects.toThrow(/property step/);
 
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
 
-test("global streams reject project-scoped configured durable object subscribers", async () => {
-  // The same invariant applies to deployment-wide/global streams. A stream with
-  // `projectId: null` may only configure subscribers whose Durable Object
-  // address also has `projectId: null`; it must not become a global registry that
-  // can wake arbitrary project Durable Objects. This covers the null-project
-  // branch of the same append-time validation as the previous test.
+test("webhook subscriptions validate their URL before commit", async () => {
+  // Same pre-commit doctrine for the webhook lane: a URL the dial can never
+  // POST to must be rejected at append, not discovered as an eternal retry.
   const marker = crypto.randomUUID();
-  const subscriptionKey = `configured-global-cross-project-${marker}`;
+  const subscriptionKey = `configured-webhook-url-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using stream = itx.streams.get(`/configured-global-cross-project-${marker}`);
+  using project = itx.projects.create({ slug: `configured-webhook-url-${marker}` });
+  using stream = project.streams.get(`/configured-webhook-url-${marker}`);
 
   await expect(
     stream.append(
       subscriptionConfiguredEvent({
         subscriptionKey,
-        target: {
-          address: {
-            path: "/",
-            projectId: `prj_${marker}`,
-            props: {},
-          },
-          type: "repo",
-        },
+        delivery: { mode: "webhook", url: `ftp://example.com/${marker}` },
       }),
     ),
-  ).rejects.toThrow(/does not match stream projectId/);
+  ).rejects.toThrow(/url|invalid/i);
 
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
@@ -535,7 +525,7 @@ function asStreamRuntimeState(value: unknown): StreamRuntimeState {
 }
 
 function subscriptionConfiguredEvent(input: {
-  target: Record<string, unknown>;
+  delivery: Record<string, unknown>;
   subscriptionKey: string;
 }): StreamEventInput {
   // These tests hand-author the public event instead of using the bootstrap
@@ -547,7 +537,7 @@ function subscriptionConfiguredEvent(input: {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: input.subscriptionKey,
-      delivery: { mode: "wake", target: input.target },
+      delivery: input.delivery,
     },
   };
 }

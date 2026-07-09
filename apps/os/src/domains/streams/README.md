@@ -76,7 +76,7 @@ three-part shape —
 — but it runs inline in the append turn, which grants it the two powers no
 hosted processor can have: it is synchronous with the commit, and
 `#validateAppend` can **reject an event before it becomes a durable fact**
-(pause door, subscription target/expression validation).
+(pause door, delivery expression/URL validation).
 
 ## Subscribers: one axis, one sink
 
@@ -95,22 +95,26 @@ the session?
   them every matching event, forever, across disconnects, deploys, and
   hibernation.
 
-Durable delivery comes in two modes, chosen by one criterion — **the offset
+Durable delivery comes in three modes, chosen by one criterion — **the offset
 lives with whoever owns the state it must be transactionally consistent
-with**:
+with**. Wake and push share ONE addressing grammar: a persisted itx
+expression naming the method to invoke on the ordinary domain surface
+(`["agents", ["get", path], "processor", "wakeStreamSubscriber"]`,
+`["worker", "processEventBatch"]`, `["streams", ["get", path], "ingest"]`);
+webhook is the same cursor machinery pointed at plain HTTP:
 
-|                         | ephemeral                              | durable `wake`                                                    | durable `push`                                                  |
-| ----------------------- | -------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------- |
-| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                             | stateless effects: the project worker feed, cross-post `ingest` |
-| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", target}`                   | config event, `delivery: {mode:"push", expression}`             |
-| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold | **stream** — spine cursor row, atomic with the log              |
-| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                    | authoritative cursor                                            |
-| sink arrives as         | `subscribe()` parameter                | returned from the poke                                            | named by a persisted itx expression                             |
-| warm transport          | retained one-way callback              | retained one-way sink                                             | fresh awaited call per batch                                    |
-| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                   | one, awaited (**the ack** that advances the cursor)             |
-| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                         | same spine, same machine (+ `onPoison: park \| skip`)           |
-| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                   | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`       |
-| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)             | `selector: {eventTypes?, condition?}` in config                 |
+|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                  | durable `webhook`                                |
+| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
+| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, cross-post `ingest` | external HTTP receivers                          |
+| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`             | config event, `delivery: {mode:"webhook", url}`  |
+| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log              | **stream** — same cursor row, advanced per EVENT |
+| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                            | authoritative cursor                             |
+| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                             | the configured URL                               |
+| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                                    | one `fetch` POST per event                       |
+| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)             | the 2xx response (**the ack**), per event        |
+| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)           | same spine, same machine, per-event granularity  |
+| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`       | same as push                                     |
+| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                 | same selector shape                              |
 
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
@@ -154,12 +158,13 @@ Doctrine, worth memorizing:
   receivers: `ingest` documents its own `params.transform`. When an effect
   needs real code, it goes in the project worker — typed, reviewed, in the
   repo.
-- **Persist the name, re-derive the authority.** A push expression
-  (`src/itx/expression.ts`) is a capability NAME evaluated per delivery
-  against the project-scoped `env.ITX` root — the identical authority recipe
-  every dynamic worker gets. Deleting the subscription is revocation. A
-  project's root can't name another project, so cross-project delivery is
-  unexpressible rather than checked.
+- **Persist the name, re-derive the authority.** A delivery expression
+  (`src/itx/expression.ts`) — wake AND push — is a capability NAME evaluated
+  per delivery against the stream's own authority root: the project-scoped
+  `env.ITX` root (the identical recipe every dynamic worker gets), or the
+  trusted deployment root for global (`projectId: null`) streams. Deleting
+  the subscription is revocation. A root can't name another project, so
+  cross-project delivery is unexpressible rather than checked.
 - **Control facts must be first-hand.** A cross-posted copy of a
   `stream/*` control event is stored and visible but INERT — it configures
   nothing (closes the config-propagation-by-copy hole no matter what
@@ -168,7 +173,23 @@ Doctrine, worth memorizing:
 ## The wake handshake: one poke, one return value
 
 For wake-mode subscribers (stateful DO-hosted processors) the whole handshake
-is a single call. The stream pokes; the host answers with everything:
+is a single call. The subscription persists the poke's NAME — the processor
+node on the ordinary domain surface, plus the wake door the dial appends:
+
+```ts
+delivery: {
+  mode: "wake",
+  expression: ["agents", ["get", "/agents/bla"], "processor", "wakeStreamSubscriber"],
+  processorSlug: "agent",  // multi-processor hosts resolve on it
+}
+```
+
+Every host's processor is a real itx node (`itx.agents.get(path).processor`,
+`itx.repos.get(path).processor`, the project root's own `itx.processor`,
+`itx.email.processor`, `itx.integrations.slack["<conn>"].processor`, …), and
+`wakeStreamSubscriber` on it is the host's wake door — trusted-internal only,
+because the handshake's sink drives the host's durable checkpoint. The stream
+pokes; the host answers with everything:
 
 ```ts
 wakeStreamSubscriber({ stream, subscriptionKey, processorSlug? })

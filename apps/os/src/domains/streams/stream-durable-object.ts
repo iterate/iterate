@@ -13,22 +13,24 @@ import type {
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import { compileEventSelector } from "./event-selector.ts";
-import { SqliteSubscriptionCursorStore, StreamEventLog } from "./stream-storage.ts";
+import {
+  reconcileSubscriptionCursorRows,
+  SqliteSubscriptionCursorStore,
+  StreamEventLog,
+} from "./stream-storage.ts";
 import {
   StreamSubscribers,
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
-import { createSubscriberDial, type WakeTargetStub } from "./subscriber-sinks.ts";
+import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
-  type ConfiguredSubscriberDurableObjectType,
   type CoreProcessorState,
   type LiveStreamSubscriberDescriptor,
   type SubscriptionConfiguredPayload,
-  type WakeDeliveryTarget,
 } from "./core-processor-contract.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
@@ -78,25 +80,21 @@ export class StreamDurableObject extends DurableObject<Env> {
    * and transports and decides policy (who may subscribe, what a config event
    * means, which facts to append).
    */
+  /**
+   * The spine's durable cursor rows. A field (not inlined into the hooks)
+   * because the core-state rebuild path also reconciles these rows against
+   * the freshly folded config — see #readCoreProcessorState.
+   */
+  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
       readEvents: (args) => this.getEvents(args),
       coreState: () => this.#coreProcessorState,
-      store: new SqliteSubscriptionCursorStore(this.ctx.storage.sql),
+      store: this.#subscriptionCursorStore,
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
-        wakeTargetStub: (target) => {
-          // Belt-and-braces: config was validated in #validateAppend before it
-          // became durable state; re-checking on the dial path protects older
-          // or hand-edited persisted state. Policy stays here — the dial only
-          // knows transports.
-          this.#validateWakeDeliveryTarget(target);
-          return this.#wakeTargetNamespace(target.type).getByName(
-            DurableObjectNameCodec.stringify(target.address, { allowNullProjectId: true }),
-          );
-        },
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -359,18 +357,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       // invalid target/expression would already be durable state every future
       // append re-reconciles. The lifecycle e2e tests assert both the
       // rejection and that no event was committed.
+      // The contract schema already carries the structural delivery
+      // validation (expression grammar + the property-step tail rule, webhook
+      // URL shape); cross-project reach needs no check at all because
+      // persisted expressions are NAMES — every delivery re-derives authority
+      // from THIS stream's own itx root (project-scoped, or the deployment
+      // root for projectId: null streams).
       const event = CoreProcessorContract.parseEventInput(
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
-      const delivery = event.payload.delivery;
-      if (delivery.mode === "wake") {
-        this.#validateWakeDeliveryTarget(delivery.target);
-      } else if (this.name.projectId === null) {
-        // A push expression evaluates against a project-scoped itx root; a
-        // global stream has no project to derive that authority from.
-        throw new Error("push subscriptions require a project-scoped stream");
-      }
       // An unparseable selector condition must be rejected before it commits,
       // not discovered as a per-event error forever after. (compile throws.)
       compileEventSelector(event.payload.selector);
@@ -809,37 +805,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (inputs.length > 0) this.append(...inputs);
   }
 
-  #wakeTargetNamespace(type: ConfiguredSubscriberDurableObjectType): WakeTargetNamespace {
-    const namespace = {
-      agent: this.env.AGENT,
-      "capability-host": this.env.CAPABILITY_HOST,
-      project: this.env.PROJECT,
-      repo: this.env.REPO,
-      scheduler: this.env.SCHEDULER,
-      secret: this.env.SECRET,
-    }[type];
-    return namespace as unknown as WakeTargetNamespace;
-  }
-
-  #validateWakeDeliveryTarget(target: WakeDeliveryTarget): void {
-    // A wake target's projectId must equal the stream's projectId exactly; a
-    // global stream (`projectId: null`) may only target a global address, a
-    // project stream only Durable Objects in that same project. This is the
-    // durable-subscriber safety invariant: persisted delivery state must never
-    // encode cross-project authority. (Push subscriptions get the same
-    // property by construction — the expression evaluates against THIS
-    // project's itx root, which cannot name another project.)
-    const projectId = target.address.projectId;
-    if (projectId !== this.name.projectId) {
-      throw new Error(
-        `wake target ${target.type} projectId ${projectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
-      );
-    }
-    if (projectId === null && target.type !== "repo") {
-      throw new Error(`wake target ${target.type} must be project-scoped`);
-    }
-  }
-
   #appendToStreamCoordinate(
     coordinate: { projectId: string | null; path: string },
     ...events: StreamEventInput[]
@@ -884,6 +849,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (storedState === undefined) return CoreProcessorContract.stateSchema.parse({});
 
     const state = this.#catchUpCoreProcessorState(storedState);
+
+    if (!storedStateIsCurrent) {
+      // A version-mismatch rebuild replayed the config from the log, but the
+      // spine's SQLite cursor rows are storage and survived as-is — possibly
+      // describing a world the new fold no longer derives (a subscription
+      // whose config event no longer parses loses its config but kept its
+      // row; a row's backoff may blame code the new version replaced). Drop
+      // rows with no surviving config; keep progress (ackedOffset is
+      // monotonic truth about the same immutable log) but clear failure state
+      // so every survivor gets an immediate fresh try under the new fold.
+      reconcileSubscriptionCursorRows(
+        this.#subscriptionCursorStore,
+        new Set(Object.keys(state.configuredSubscribersByKey)),
+      );
+    }
 
     if (!storedStateIsCurrent || state.maxOffset !== storedState.maxOffset) {
       this.#writeCoreProcessorState(state);
@@ -1167,16 +1147,6 @@ function resetCircuitBreaker(
     trippedAtOffset: null,
   };
 }
-
-/**
- * A wake-target Durable Object namespace. Stubs are cast to this shape because
- * the generated DurableObjectStub types would otherwise chase each target
- * class's full internal surface; `WakeTargetStub` (subscriber-sinks.ts) is the
- * one method the dial actually calls.
- */
-type WakeTargetNamespace = {
-  getByName(name: string): WakeTargetStub;
-};
 
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {

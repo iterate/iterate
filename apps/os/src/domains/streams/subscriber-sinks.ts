@@ -35,8 +35,8 @@ import type {
   StreamPushEventBatch,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
+  StreamWebhookDelivery,
 } from "./rpc-types.ts";
-import type { WakeDeliveryTarget } from "./core-processor-contract.ts";
 import type { SubscriberDial } from "./stream-subscribers.ts";
 import { disposeIgnoredRpcResult, isThenable } from "./stream-processor.ts";
 
@@ -76,6 +76,13 @@ export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
   opts: {
     onDeliveryError?: (error: unknown) => void;
+    /**
+     * Runs after the retained stub is disposed — the hook that lets a caller
+     * tie OTHER stubs' lifetimes to this sink's (the wake dial parks the
+     * loopback chain that carried the sink here, so the chain outlives every
+     * batch call but not the connection).
+     */
+    onDisposed?: () => void;
   } = {},
 ): RetainedProcessEventBatch {
   const retained = retainRpcCallback(processEventBatch);
@@ -106,7 +113,11 @@ export function retainProcessEventBatch(
     },
     {
       [Symbol.dispose]() {
-        dispose?.();
+        try {
+          dispose?.();
+        } finally {
+          opts.onDisposed?.();
+        }
       },
     },
   );
@@ -163,45 +174,76 @@ export function retainGetProcessorRuntimeState(
 // The dial: how the spine reaches subscribers over real transports.
 // =============================================================================
 
-/** The one RPC method a wake-target Durable Object stub must expose. */
-export type WakeTargetStub = {
-  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
-};
-
 /**
- * Builds the spine's {@link SubscriberDial} from the Stream Durable Object's
- * authority: a namespace resolver for wake pokes (policy — which namespaces
- * exist, target validation — stays with the DO) and the project-scoped itx
- * loopback for push expressions. Everything transport-shaped — retention of
- * returned sinks, per-delivery stub lifecycles, expression walking over RPC —
- * lives here, keeping this file the ONLY streams module that knows transports
- * exist.
+ * Builds the spine's {@link SubscriberDial}. Wake and push share ONE lane: the
+ * persisted itx expression is evaluated against the stream's authority root —
+ * the itx loopback that mints the project-scoped root every dynamic worker
+ * sees as `env.ITX`, or the trusted deployment root for a global
+ * (`projectId: null`) stream. Everything transport-shaped — root minting,
+ * retention of returned sinks, per-delivery stub lifecycles, expression
+ * walking over RPC — lives here, keeping this file the ONLY streams module
+ * that knows transports exist.
  */
 export function createSubscriberDial(deps: {
-  /** The stream's projectId; push requires a project scope. */
+  /** The stream's projectId; `null` = global stream (deployment authority root). */
   projectId: string | null;
   /** The Durable Object's `ctx.exports` (the in-worker loopback registry). */
   exports: unknown;
-  /** Validate + resolve a wake target to its Durable Object stub (DO policy). */
-  wakeTargetStub(target: WakeDeliveryTarget): WakeTargetStub;
   /** Where durable-sink delivery rejections land (spine: close → re-poke). */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void;
 }): SubscriberDial {
+  /**
+   * Mints the stream's authority root for one expression evaluation. Both the
+   * loopback binding and the root it returned are per-acquisition stubs —
+   * dropping either unpulled leaks the remote reference for the isolate's
+   * lifetime, so the caller MUST run `dispose` (push: right after the call;
+   * wake: when the connection's sink is disposed, because the returned sink
+   * proxies through this chain and must not outlive it).
+   */
+  const acquireAuthorityRoot = async () => {
+    const binding = itxLoopbackStub(deps.exports, { projectId: deps.projectId, path: "/" });
+    try {
+      const root = await binding.get();
+      return {
+        root,
+        dispose: () => {
+          (root as Partial<Disposable>)[Symbol.dispose]?.();
+          binding[Symbol.dispose]?.();
+        },
+      };
+    } catch (error) {
+      binding[Symbol.dispose]?.();
+      throw error;
+    }
+  };
+
   return {
     /**
-     * One poke: `wakeStreamSubscriber` on the target Durable Object. The
-     * response IS the whole handshake — checkpoint plus a live sink whose
-     * ownership transfers to this stream (returned-stub semantics:
+     * One poke: evaluate the wake expression to the handshake response —
+     * checkpoint plus a live sink whose ownership transfers to this stream
+     * (returned-stub semantics:
      * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/).
-     * The sink is retained here with the durable lane's result-pulling
-     * liveness policy attached.
+     * The sink is retained with the durable lane's result-pulling liveness
+     * policy attached, and the loopback chain that carried it stays alive
+     * until the sink is disposed.
      */
-    async poke(target, request) {
-      const response = await deps.wakeTargetStub(target).wakeStreamSubscriber(request);
+    async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
+      const { root, dispose } = await acquireAuthorityRoot();
+      let response: StreamSubscriberWakeResponse;
+      try {
+        const { value } = await evaluateItxExpression(root, toInvocation(expression, request));
+        response = parseWakeHandshake(value);
+      } catch (error) {
+        // Disposing the chain releases whatever the failed/misshapen
+        // evaluation exported along the way.
+        dispose();
+        throw error;
+      }
       return {
         checkpointOffset: response.checkpointOffset,
         sink: retainProcessEventBatch(response.sink, {
           onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
+          onDisposed: dispose,
         }),
         subscriber: response.subscriber,
         getRuntimeState: response.getRuntimeState,
@@ -210,46 +252,73 @@ export function createSubscriberDial(deps: {
 
     /**
      * One push delivery: evaluate the expression to a sink and invoke it with
-     * the batch. The root is the project-scoped itx every dynamic worker sees
-     * as `env.ITX` (the scheduler's script lane uses the identical recipe), so
-     * `["worker", "processEventBatch"]` reaches the project worker and
-     * `["streams", ["get", path], "ingest"]` reaches a sibling stream through
-     * exactly the calls ordinary user code would make. The awaited resolve is
-     * the ack; a reject propagates to the spine's retry/park machine. Both
-     * per-delivery stubs (the loopback binding and the itx root it minted) are
-     * disposed — dropping either unpulled leaks the remote reference for the
-     * isolate's lifetime.
+     * the batch — `["worker", "processEventBatch"]` reaches the project
+     * worker and `["streams", ["get", path], "ingest"]` reaches a sibling
+     * stream through exactly the calls ordinary user code would make. The
+     * awaited resolve is the ack; a reject propagates to the spine's
+     * retry/park machine.
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
-      const projectId = deps.projectId;
-      if (projectId === null) {
-        throw new Error("push subscriptions require a project-scoped stream");
-      }
-      // The expression's final step MUST be a property step naming the sink
-      // method; the dial turns it into a CALL step so the invocation happens
-      // receiver-bound on the remote side. Reading the method as a property
-      // and applying it locally worked in-process but DETACHED the method from
-      // `this` across the real loopback RPC hop on deployed workerd (thermo
-      // round 2, blocker 1: every ingest delivery failed with
-      // "Cannot read properties of undefined (reading 'auth')").
-      const tail = expression.at(-1);
-      if (typeof tail !== "string") {
-        throw new Error(
-          "push subscription expression must end in a property step naming the sink method",
-        );
-      }
-      const invocation: ItxExpression = [...expression.slice(0, -1), [tail, batch]];
-      const binding = itxLoopbackStub(deps.exports, { projectId, path: "/" });
+      const { root, dispose } = await acquireAuthorityRoot();
       try {
-        const itx = await binding.get();
-        try {
-          await evaluateItxExpression(itx, invocation);
-        } finally {
-          (itx as Partial<Disposable>)?.[Symbol.dispose]?.();
-        }
+        await evaluateItxExpression(root, toInvocation(expression, batch));
       } finally {
-        binding[Symbol.dispose]?.();
+        dispose();
+      }
+    },
+
+    /**
+     * One webhook delivery: POST the single-event envelope as JSON. A 2xx is
+     * the ack; anything else (or a network failure) rejects into the spine's
+     * retry/park machine. The receiver is outside the itx world — no root, no
+     * stubs, just HTTP.
+     */
+    async webhook(url: string, delivery: StreamWebhookDelivery) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(delivery),
+      });
+      // The body is never read; cancel it so the connection is released.
+      await response.body?.cancel();
+      if (!response.ok) {
+        throw new Error(`webhook responded ${response.status} ${response.statusText}`);
       }
     },
   };
+}
+
+/**
+ * Converts a delivery expression into its invocation: the final step MUST be
+ * a property step naming the method, and the dial turns it into a CALL step
+ * so the invocation happens receiver-bound on the remote side. Reading the
+ * method as a property and applying it locally worked in-process but DETACHED
+ * the method from `this` across the real loopback RPC hop on deployed workerd
+ * (thermo round 2, blocker 1: every ingest delivery failed with "Cannot read
+ * properties of undefined (reading 'auth')"). Config validation enforces the
+ * tail shape at append time; this re-check protects hand-edited state.
+ */
+function toInvocation(expression: ItxExpression, payload: unknown): ItxExpression {
+  const tail = expression.at(-1);
+  if (typeof tail !== "string") {
+    throw new Error("delivery expression must end in a property step naming the method to invoke");
+  }
+  return [...expression.slice(0, -1), [tail, payload]];
+}
+
+/**
+ * Structural check on what a wake expression evaluated to. A configured
+ * expression can name ANY reachable method; one that answers with something
+ * other than the `{ checkpointOffset, sink }` handshake is a broken
+ * subscription, and the spine should see an ordinary delivery failure
+ * (backoff → park), not a crash deeper in the pump.
+ */
+function parseWakeHandshake(value: unknown): StreamSubscriberWakeResponse {
+  const candidate = value as Partial<StreamSubscriberWakeResponse> | null | undefined;
+  if (typeof candidate?.checkpointOffset !== "number" || typeof candidate.sink !== "function") {
+    throw new Error(
+      "wake expression did not resolve to a wake handshake ({ checkpointOffset, sink })",
+    );
+  }
+  return candidate as StreamSubscriberWakeResponse;
 }

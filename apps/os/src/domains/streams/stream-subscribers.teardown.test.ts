@@ -9,7 +9,10 @@
 // the log, every fact-append triggers wake(), parked facts fold.
 
 import { describe, expect, it } from "vitest";
-import { CoreProcessorContract } from "./core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  type SubscriptionConfiguredPayload,
+} from "./core-processor-contract.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamSubscribers } from "./stream-subscribers.ts";
 import type { RetainedProcessEventBatch } from "./subscriber-sinks.ts";
@@ -107,7 +110,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         }),
       store,
       dial: {
-        poke: async (_target, request) => {
+        poke: async (_expression, request) => {
           pokes.push(request.subscriptionKey);
           if (pokeImpl !== undefined) return pokeImpl(request);
           const sink = Object.assign(() => undefined, {
@@ -119,6 +122,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           return { checkpointOffset: log.length, sink };
         },
         push: async () => undefined,
+        webhook: async () => undefined,
       },
       appendFact: append,
       now: () => Date.now(),
@@ -134,11 +138,11 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     }
   };
 
-  const wakePayload = {
+  const wakePayload: SubscriptionConfiguredPayload = {
     subscriptionKey: "k",
     delivery: {
-      mode: "wake" as const,
-      target: { type: "agent" as const, address: { projectId: "p1", path: "/t", props: {} } },
+      mode: "wake",
+      expression: ["agents", ["get", "/t"], "processor", "wakeStreamSubscriber"],
     },
   };
 
@@ -184,6 +188,10 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
 
     expect(h.pokes.length).toBe(pokesBefore);
     expect(h.subscribers.hasConnection("k")).toBe(false);
+    // The retained sink was DISPOSED, not just forgotten: the whole point of
+    // idle teardown is releasing the RPC stubs that pin the stream and its
+    // subscriber DOs resident (the mutual-stub-pinning incident class).
+    expect(h.sinkAlive()).toBe(false);
     // The watermark covers the teardown's own facts...
     expect(h.row("k")?.ackedOffset).toBe(h.log.length);
 

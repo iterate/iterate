@@ -6,16 +6,17 @@
 // observational watermark, and the ephemeral lane.
 
 import { describe, expect, it } from "vitest";
+import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
   SubscriptionConfiguredPayload,
-  WakeDeliveryTarget,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 import type {
   StreamEventBatch,
   StreamPushEventBatch,
   StreamSubscriberWakeRequest,
+  StreamWebhookDelivery,
 } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
@@ -141,24 +142,28 @@ function makeHarness() {
   const pokes: StreamSubscriberWakeRequest[] = [];
   const pushes: StreamPushEventBatch[] = [];
   const pushOutcomes: ("resolved" | "rejected")[] = [];
+  const webhooks: { url: string; delivery: StreamWebhookDelivery }[] = [];
 
   // Scripted behaviors, swappable per test. The dial wrapper below records
   // every invocation regardless of the scripted outcome.
   const dialImpl = {
     poke: ((): Promise<PokeResult> =>
       Promise.reject(new Error("dial.poke not scripted for this test"))) as (
-      target: WakeDeliveryTarget,
+      expression: ItxExpression,
       request: StreamSubscriberWakeRequest,
     ) => Promise<PokeResult>,
     push: ((): Promise<void> => Promise.resolve()) as (
       batch: StreamPushEventBatch,
     ) => Promise<void>,
+    webhook: ((): Promise<void> => Promise.resolve()) as (
+      delivery: StreamWebhookDelivery,
+    ) => Promise<void>,
   };
 
   const dial: SubscriberDial = {
-    poke: (target, request) => {
+    poke: (expression, request) => {
       pokes.push(request);
-      return dialImpl.poke(target, request);
+      return dialImpl.poke(expression, request);
     },
     push: async (_expression, batch) => {
       pushes.push(batch);
@@ -169,6 +174,10 @@ function makeHarness() {
         throw error;
       }
       pushOutcomes.push("resolved");
+    },
+    webhook: async (url, delivery) => {
+      webhooks.push({ url, delivery });
+      await dialImpl.webhook(delivery);
     },
   };
 
@@ -220,6 +229,7 @@ function makeHarness() {
     pokes,
     pushes,
     pushOutcomes,
+    webhooks,
     dialImpl,
     configured,
     log,
@@ -274,8 +284,19 @@ function wakePayload(): SubscriptionConfiguredPayload {
     subscriptionKey: "k",
     delivery: {
       mode: "wake",
-      target: { type: "agent", address: { projectId: "p1", path: "/t", props: {} } },
+      expression: ["agents", ["get", "/t"], "processor", "wakeStreamSubscriber"],
     },
+  };
+}
+
+function webhookPayload(
+  overrides: Partial<SubscriptionConfiguredPayload> = {},
+): SubscriptionConfiguredPayload {
+  return {
+    subscriptionKey: "k",
+    delivery: { mode: "webhook", url: "https://example.com/hook" },
+    deliver: "all",
+    ...overrides,
   };
 }
 
@@ -860,5 +881,94 @@ describe("StreamSubscribers", () => {
       { subscriptionKey: "rejecting-watcher", reason: "unsubscribed" },
       { subscriptionKey: "watcher", reason: "unsubscribed" },
     ]);
+  });
+
+  it("o. webhook: one POST per event in order, per-event acking, lean envelope", async () => {
+    const h = makeHarness();
+    h.configure(webhookPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.webhooks.map((call) => call.url)).toEqual([
+      "https://example.com/hook",
+      "https://example.com/hook",
+      "https://example.com/hook",
+    ]);
+    expect(h.webhooks.map((call) => call.delivery.event.offset)).toEqual([1, 2, 3]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+    expect(h.pushes).toHaveLength(0); // webhook rides its own dial lane
+
+    const first = h.webhooks[0]!.delivery;
+    expect(first.deliveryId).toBe("k:1-1");
+    expect(first.attempt).toBe(1);
+    expect(first.projectId).toBe("p1");
+    expect(first.path).toBe("/t");
+    expect(first.configuredEvent.payload).toEqual(webhookPayload());
+    // The envelope is lean by design: no `state`, no sibling events.
+    expect("state" in first).toBe(false);
+    expect("events" in first).toBe(false);
+  });
+
+  it("p. webhook mid-batch failure: delivered events stay acked, retry resumes at the failed event", async () => {
+    const h = makeHarness();
+    h.configure(webhookPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+
+    let failOffset: number | null = 2;
+    h.dialImpl.webhook = async (delivery) => {
+      if (delivery.event.offset === failOffset) throw new Error("500 from receiver");
+    };
+    h.subscribers.wake();
+    await h.settle();
+
+    // Event 1 acked; event 2 failed → backoff row at cursor 1, no event 3 attempt.
+    expect(h.webhooks.map((call) => call.delivery.event.offset)).toEqual([1, 2]);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+    expect(h.row("k")?.attempt).toBe(1);
+    expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+
+    // Receiver recovers; the alarm redrive resumes at EXACTLY the failed event.
+    failOffset = null;
+    h.advanceTo(h.store.minNextAttemptAt()! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.webhooks.map((call) => call.delivery.event.offset)).toEqual([1, 2, 2, 3]);
+    expect(h.webhooks[2]!.delivery.attempt).toBe(2); // redelivery is visibly attempt 2
+    expect(h.row("k")?.ackedOffset).toBe(3);
+    expect(h.row("k")?.attempt).toBe(0);
+  });
+
+  it("q. webhook onPoison skip: a single event is its own poison isolate — confirmed, recorded, stepped over", async () => {
+    const h = makeHarness();
+    h.configure(webhookPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "poison"), evt(2, "fine"));
+
+    h.dialImpl.webhook = async (delivery) => {
+      if (delivery.event.offset === 1) throw new Error("unprocessable");
+    };
+    h.subscribers.wake();
+    await h.settle();
+    for (let round = 0; round < SKIP_CONFIRM_ATTEMPTS; round += 1) {
+      const next = h.store.minNextAttemptAt();
+      if (next === null) break;
+      h.advanceTo(next + 1);
+      h.subscribers.onAlarm();
+      await h.settle();
+    }
+
+    // The poison event was confirmed (SKIP_CONFIRM_ATTEMPTS tries), recorded,
+    // stepped over — and the event behind it still got delivered.
+    const skips = h.factsOfType(ERROR_OCCURRED);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]!.idempotencyKey).toBe("push-poison-skipped:k:1");
+    expect(h.webhooks.filter((call) => call.delivery.event.offset === 1)).toHaveLength(
+      SKIP_CONFIRM_ATTEMPTS,
+    );
+    expect(h.webhooks.at(-1)!.delivery.event.offset).toBe(2);
+    expect(h.row("k")?.ackedOffset).toBe(2);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
   });
 });

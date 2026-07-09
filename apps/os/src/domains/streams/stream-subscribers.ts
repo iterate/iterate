@@ -1,14 +1,17 @@
 // Every subscriber, one module: the stream's delivery machinery.
 //
-// A SUBSCRIBER gives the stream exactly one thing — a sink, `(batch:
-// StreamEventBatch) => unknown` — and the three lanes differ only in how the
-// sink reaches the stream and what happens to the call result:
+// A SUBSCRIBER gives the stream exactly one thing — a sink — and the lanes
+// differ only in how the sink reaches the stream and what happens to the call
+// result. Durable addressing is ONE grammar: a persisted itx expression naming
+// the method to invoke (wake pokes it for a handshake, push calls it per
+// batch); webhook is the same cursor machinery with an HTTP POST per EVENT:
 //
-// | lane       | sink arrives as                    | call result            |
-// |------------|------------------------------------|------------------------|
-// | ephemeral  | `subscribe()` parameter            | disposed unpulled — zero return frames |
-// | wake       | returned from the poke             | pulled, never awaited — prompt corpse detection |
-// | push       | named by a persisted itx expression| awaited — the ack that advances the cursor |
+// | lane       | sink arrives as                       | call result            |
+// |------------|---------------------------------------|------------------------|
+// | ephemeral  | `subscribe()` parameter               | disposed unpulled — zero return frames |
+// | wake       | returned from the expression-named poke| pulled, never awaited — prompt corpse detection |
+// | push       | named by a persisted itx expression   | awaited — the ack that advances the cursor |
+// | webhook    | the configured URL (per-event POST)   | awaited 2xx — the ack that advances the cursor |
 //
 // Ephemeral subscriptions are session-scoped and forgotten on disconnect.
 // Durable subscriptions (wake + push) are desired state — the folded
@@ -34,6 +37,7 @@ import type {
   StreamEventBatch,
   StreamPushEventBatch,
   StreamSubscriberWakeRequest,
+  StreamWebhookDelivery,
 } from "./rpc-types.ts";
 import type {
   CoreProcessorState,
@@ -41,7 +45,7 @@ import type {
   StreamSubscriberDisconnectReason,
   StreamSubscriptionType,
   SubscriptionConfiguredPayload,
-  WakeDeliveryTarget,
+  SubscriptionDelivery,
 } from "./core-processor-contract.ts";
 import { StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema } from "./core-processor-contract.ts";
 import { compileEventSelector, type CompiledEventSelector } from "./event-selector.ts";
@@ -75,7 +79,7 @@ export type ConnectionRuntimeState = {
 
 /** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
 export type SubscriptionRuntimeState = {
-  mode: "wake" | "push";
+  mode: SubscriptionDelivery["mode"];
   /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
   ackedOffset: number;
   /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
@@ -127,14 +131,16 @@ type OpenConnectionArgs = {
 };
 
 /**
- * The transport quarantine's face: how the spine reaches subscribers. The DO
- * wires `poke` to the target Durable Object's `wakeStreamSubscriber` (with
- * sink retention applied to the response) and `push` to an itx-expression
- * evaluation against the project-scoped `env.ITX` root.
+ * The transport quarantine's face: how the spine reaches subscribers. Wake and
+ * push are BOTH itx-expression evaluations against the stream's authority root
+ * (the project itx for project streams, the trusted deployment root for global
+ * streams); `poke` additionally retains the sink the wake handshake returns.
+ * `webhook` is a plain per-event HTTP POST.
  */
 export type SubscriberDial = {
+  /** Evaluate the wake expression (`[..., [tail, request]]`) to the handshake response. */
   poke(
-    target: WakeDeliveryTarget,
+    expression: ItxExpression,
     request: StreamSubscriberWakeRequest,
   ): Promise<{
     checkpointOffset: number;
@@ -144,6 +150,8 @@ export type SubscriberDial = {
   }>;
   /** Evaluate the expression to a sink and invoke it with the batch. Resolve = ack. */
   push(expression: ItxExpression, batch: StreamPushEventBatch): Promise<void>;
+  /** POST one event to the webhook URL. Resolve (2xx) = ack; non-2xx rejects. */
+  webhook(url: string, delivery: StreamWebhookDelivery): Promise<void>;
 };
 
 /** The policy/storage seams the owning Stream Durable Object provides. */
@@ -301,7 +309,7 @@ export class StreamSubscribers {
         if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
           continue;
         }
-        this.#poke(subscriptionKey, config.delivery.target, configOffset);
+        this.#poke(subscriptionKey, config.delivery, configOffset);
         continue;
       }
 
@@ -319,13 +327,17 @@ export class StreamSubscribers {
    * was replaced (or switched to push mode) must drop its sink rather than
    * open a zombie connection or ack a now-authoritative push cursor.
    */
-  #poke(subscriptionKey: string, target: WakeDeliveryTarget, configOffset: number): void {
+  #poke(
+    subscriptionKey: string,
+    delivery: Extract<SubscriptionDelivery, { mode: "wake" }>,
+    configOffset: number,
+  ): void {
     const state = this.#hooks.coreState();
     if (state.projectId === undefined || state.path === undefined) return;
     const request: StreamSubscriberWakeRequest = {
       stream: { projectId: state.projectId, path: state.path, streamMaxOffset: state.maxOffset },
       subscriptionKey,
-      ...(target.processorSlug === undefined ? {} : { processorSlug: target.processorSlug }),
+      ...(delivery.processorSlug === undefined ? {} : { processorSlug: delivery.processorSlug }),
     };
 
     this.#pokesInFlight.add(subscriptionKey);
@@ -335,7 +347,7 @@ export class StreamSubscribers {
         // RETAINED sink; dropping that undisposed would leak a session-pinning
         // stub on exactly the wedged-subscriber occasions the timeout exists
         // for. The late-settle hook disposes it (thermo round 2, blocker 4b).
-        const pokePromise = this.#hooks.dial.poke(target, request);
+        const pokePromise = this.#hooks.dial.poke(delivery.expression, request);
         const response = await withDeliveryTimeout(pokePromise, `poke ${subscriptionKey}`, {
           onLateResolve: (late) => late.sink[Symbol.dispose](),
         });
@@ -395,12 +407,12 @@ export class StreamSubscribers {
   }
 
   /**
-   * Drain one push subscription to the tail: read after the cursor, filter
-   * through the selector (skip-not-defer — the cursor advances past
-   * non-matching events), invoke the expression-named sink with the batch, and
-   * advance the cursor on the awaited resolve. The awaited call IS the ack —
-   * this is the one lane with acknowledgement semantics, which is exactly why
-   * the stream can own its cursor.
+   * Drain one stream-owned-cursor subscription (push or webhook) to the tail:
+   * read after the cursor, filter through the selector (skip-not-defer — the
+   * cursor advances past non-matching events), deliver, and advance the
+   * cursor on the awaited resolve. The awaited call IS the ack — these are
+   * the lanes with acknowledgement semantics, which is exactly why the stream
+   * can own their cursors. Push delivers per batch; webhook per event.
    */
   #drainPush(subscriptionKey: string): void {
     this.#pushDrains.add(subscriptionKey);
@@ -411,7 +423,7 @@ export class StreamSubscribers {
           const entry = state.configuredSubscribersByKey[subscriptionKey];
           if (entry === undefined || entry.parkedAtOffset !== undefined) return;
           const config = entry.latestConfiguredEvent.payload;
-          if (config.delivery.mode !== "push") return;
+          if (config.delivery.mode === "wake") return;
           const row = this.#hooks.store.get(subscriptionKey);
           if (row === undefined) return;
           if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) return;
@@ -435,6 +447,56 @@ export class StreamSubscribers {
           }
 
           if (state.projectId === undefined || state.path === undefined) return;
+          const configuredEvent = {
+            type: entry.latestConfiguredEvent.type,
+            offset: entry.latestConfiguredEvent.offset,
+            createdAt: entry.latestConfiguredEvent.createdAt,
+            path: state.path,
+            payload: entry.latestConfiguredEvent.payload,
+          };
+
+          if (config.delivery.mode === "webhook") {
+            // Webhook delivery is per EVENT on the same cursor machinery: each
+            // 2xx acks that single offset, so a failure mid-batch resumes at
+            // the exact event that failed. The poison machinery sees the true
+            // delivery unit (one event), which makes bisecting moot — a
+            // webhook "batch" is already its own poison isolate.
+            const url = config.delivery.url;
+            for (const event of matched) {
+              const attempt = (this.#hooks.store.get(subscriptionKey)?.attempt ?? 0) + 1;
+              try {
+                await withDeliveryTimeout(
+                  this.#hooks.dial.webhook(url, {
+                    projectId: state.projectId,
+                    path: state.path,
+                    event,
+                    subscriptionKey,
+                    deliveryId: deliveryId(subscriptionKey, event.offset, event.offset),
+                    attempt,
+                    configuredEvent,
+                  }),
+                  `webhook ${subscriptionKey}`,
+                );
+              } catch (error) {
+                // "continue" = confirmed poison stepped over (and acked);
+                // "stop" = backed off or parked — the alarm/resume owns the
+                // future, and everything delivered so far is already acked.
+                if (
+                  this.#onPushFailure({ subscriptionKey, config, matched: [event], error }) ===
+                  "continue"
+                ) {
+                  continue;
+                }
+                return;
+              }
+              this.#hooks.store.ack(subscriptionKey, event.offset);
+              this.#consecutiveSkips.delete(subscriptionKey);
+            }
+            // Cover any trailing non-matching events the selector skipped.
+            this.#hooks.store.ack(subscriptionKey, lastOffset);
+            continue;
+          }
+
           const batch: StreamPushEventBatch = {
             projectId: state.projectId,
             path: state.path,
@@ -447,13 +509,7 @@ export class StreamSubscribers {
             subscriptionKey,
             deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
             attempt: row.attempt + 1,
-            configuredEvent: {
-              type: entry.latestConfiguredEvent.type,
-              offset: entry.latestConfiguredEvent.offset,
-              createdAt: entry.latestConfiguredEvent.createdAt,
-              path: state.path,
-              payload: entry.latestConfiguredEvent.payload,
-            },
+            configuredEvent,
           };
 
           try {

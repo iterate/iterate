@@ -304,6 +304,30 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   }
 }
 
+/**
+ * Reconciles the spine's cursor rows against a freshly REBUILT config fold
+ * (core state version mismatch). Rows are storage and survive the KV state,
+ * so after a rebuild they can describe a world the new fold no longer
+ * derives: a row whose config event no longer parses is orphaned (its
+ * `next_attempt_at` would arm alarms forever), and a surviving row's backoff
+ * may blame code the new version replaced. Progress is kept — `ackedOffset`
+ * is monotonic truth about the same immutable log — while failure state is
+ * cleared so every survivor gets an immediate fresh try under the new fold.
+ */
+export function reconcileSubscriptionCursorRows(
+  store: SubscriptionCursorStore,
+  configuredKeys: ReadonlySet<string>,
+): void {
+  for (const row of store.list()) {
+    if (!configuredKeys.has(row.subscriptionKey)) {
+      store.delete(row.subscriptionKey);
+    } else if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
+      // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
+      store.ack(row.subscriptionKey, row.ackedOffset);
+    }
+  }
+}
+
 type SubscriptionCursorRowRecord = {
   subscription_key: string;
   acked_offset: number;

@@ -42,6 +42,25 @@ export type ProcessorStateSubscriptionHandle = Disposable & {
   unsubscribe(): void;
 };
 
+/**
+ * A processor node that is also its HOST's wake-mode delivery door. This is
+ * what the domain surfaces expose (`itx.agents.get(path).processor`,
+ * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
+ * stream subscriptions persist as their delivery expression:
+ * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
+ *
+ * `wakeStreamSubscriber` is dialed by stream delivery spines only
+ * (trusted-internal): the handshake's sink drives the host's durable
+ * checkpoint, so an ordinary session poking it could feed fabricated batches
+ * and fast-forward the checkpoint past real events. Multi-processor hosts (an
+ * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * processor wakes from the request's `processorSlug` — the inspection half of
+ * this node reads the host's main processor.
+ */
+export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+};
+
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   /**
@@ -103,6 +122,26 @@ export type StreamPushEventBatch = StreamEventBatch & {
    * Narrowed to the fields the fold stores; an honest shape instead of a
    * `StreamEvent` cast that pretends metadata/source survived.
    */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+};
+
+/**
+ * One webhook delivery: a single committed event POSTed as JSON to the
+ * subscription's URL. Deliberately per-EVENT (external webhook consumers
+ * expect individual events, and per-event acking gives mid-batch
+ * resumability) and deliberately WITHOUT the `state` other lanes carry — core
+ * reduced state is internal and has no business leaving the deployment.
+ */
+export type StreamWebhookDelivery = {
+  projectId: string | null;
+  path: string;
+  event: StreamEvent;
+  subscriptionKey: SubscriptionKey;
+  /** Stable across retries of this event (`${subscriptionKey}:${offset}-${offset}`). */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this event. */
+  attempt: number;
+  /** The committed `subscription-configured` event this delivery serves (see {@link StreamPushEventBatch}). */
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 

@@ -120,8 +120,8 @@ test.skipIf(signingSecret === null)(
           path: SLACK_INTEGRATION_STREAM_PATH,
         }),
         idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
+        processor: ["integrations", "slack", CONNECTION, "processor"],
         processorSlug: "slack",
-        subscriberType: "project",
       }),
       {
         type: "events.iterate.com/slack/connected",

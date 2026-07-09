@@ -1951,29 +1951,33 @@ describe("itx", () => {
     const outputOffset = events.find(
       (event) => event.type === AGENT_OUTPUT_ADDED_TYPE && event.payload?.content === content,
     )?.offset;
-    // Processor subscriptions are wake-mode deliveries to typed Durable Object
-    // targets: the payload carries { delivery: { mode: "wake", target } }.
+    // Processor subscriptions are wake-mode deliveries addressed by itx
+    // expression over the ordinary domain surface: { delivery: { mode:
+    // "wake", expression: ["agents", ["get", path], "processor",
+    // "wakeStreamSubscriber"] } }. The expression ROOT names the host domain.
     const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
       event.payload as {
         subscriptionKey?: string;
-        delivery?: { mode?: string; target?: { type?: string } };
+        delivery?: { mode?: string; expression?: unknown[] };
       };
+    const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
+      wakeSubscriptionPayload(event).delivery?.expression?.[0];
     const agentSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        wakeSubscriptionPayload(event).delivery?.target?.type === "agent" &&
+        wakeExpressionRoot(event) === "agents" &&
         String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
     )?.offset;
     const cloudflareAiSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        wakeSubscriptionPayload(event).delivery?.target?.type === "agent" &&
+        wakeExpressionRoot(event) === "agents" &&
         String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#cloudflare-ai"),
     )?.offset;
     const itxSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        wakeSubscriptionPayload(event).delivery?.target?.type === "capability-host",
+        wakeExpressionRoot(event) === "capabilityHosts",
     )?.offset;
     const scriptRequestedOffset = events.find(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
