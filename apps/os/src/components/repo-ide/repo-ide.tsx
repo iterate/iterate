@@ -391,7 +391,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                     store.unstage(selectedPath);
                     patchSearch({ staged: undefined });
                   }}
-                  onOpenWorking={() => patchSearch({ staged: undefined, diff: undefined })}
+                  onOpenWorking={() =>
+                    patchSearch({ staged: undefined, diff: undefined, preview: undefined })
+                  }
                   stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
                   onRestore={() => dropChange(selectedPath)}
                 />

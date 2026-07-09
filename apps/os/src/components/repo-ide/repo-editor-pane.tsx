@@ -254,7 +254,10 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
-    const showPreview = previewOpen && isHtmlPreviewPath(path);
+    // Diff wins if a hand-edited URL sets both: the toggles keep `preview` and
+    // `diff` mutually exclusive, but honor that invariant here too so the pane
+    // never renders Preview while the header shows the Diff/"Working Tree" state.
+    const showPreview = previewOpen && !diffOpen && isHtmlPreviewPath(path);
     return (
       <FileChrome
         path={path}
