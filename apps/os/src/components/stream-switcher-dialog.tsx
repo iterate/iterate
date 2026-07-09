@@ -20,6 +20,9 @@ import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 // segments separated by single slashes, no trailing slash.
 const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_-]+)+$/;
 
+// The "what's happening right now" window for the default ⌘K list.
+const RECENT_WINDOW_MS = 5 * 60_000;
+
 // The destination input prefills with the parent of the current stream, so the
 // default action creates a *sibling* (type a leaf, hit Create). Keep typing
 // past another "/" to go deeper, or edit the prefix to land anywhere.
@@ -62,6 +65,10 @@ export function StreamSwitcherDialog({
   scope: string;
 }) {
   const [destination, setDestination] = useState("");
+  // Whether the path field has been edited THIS open. Fresh open = untouched → the
+  // list is the recently-active default; the first keystroke flips it to search.
+  // (The field still prefills the parent so "type a leaf, Enter" creates a sibling.)
+  const [touched, setTouched] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // The whole streams index, live, in ONE subscription — so typing filters it in
@@ -81,13 +88,21 @@ export function StreamSwitcherDialog({
     { itx: projectItx },
   );
   const query = destination.trim().replace(/^\/+/, "").toLowerCase();
-  const matches =
-    query === "" || streamsIndex.value === undefined
-      ? []
-      : Object.values(streamsIndex.value)
-          .filter((row) => row.path.toLowerCase().includes(query))
-          .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
-          .slice(0, 50);
+  const rows = streamsIndex.value === undefined ? [] : Object.values(streamsIndex.value);
+  // Default view (untouched): streams active in the last few minutes — ⌘K, glance,
+  // jump. Start typing and it becomes a substring search over the whole index.
+  // Either way the list is most-recent-first, and an empty result falls through to
+  // the browsable tree.
+  const recentSince = Date.now() - RECENT_WINDOW_MS;
+  const matches = (
+    touched
+      ? query === ""
+        ? []
+        : rows.filter((row) => row.path.toLowerCase().includes(query))
+      : rows.filter((row) => new Date(row.lastActivityAt).getTime() >= recentSince)
+  )
+    .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
+    .slice(0, 50);
 
   // Opening seeds the path field for a sibling with the cursor placed after
   // the trailing slash, ready for the leaf. (The tree seeds its own expansion
@@ -96,6 +111,7 @@ export function StreamSwitcherDialog({
   useEffect(() => {
     if (!open) return;
     setDestination(destinationPrefill(currentPath));
+    setTouched(false);
     requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
@@ -123,6 +139,12 @@ export function StreamSwitcherDialog({
         <div className="min-h-0 flex-1 overflow-y-auto">
           {matches.length > 0 ? (
             <ul className="flex flex-col gap-0.5" data-testid="stream-switcher-matches">
+              <li
+                className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60"
+                aria-hidden
+              >
+                {touched ? "Matches" : "Recently active"}
+              </li>
               {matches.map((row) => (
                 <li key={row.path}>
                   <button
@@ -170,7 +192,10 @@ export function StreamSwitcherDialog({
                 id="stream-switcher-destination"
                 ref={inputRef}
                 value={destination}
-                onChange={(event) => setDestination(event.target.value)}
+                onChange={(event) => {
+                  setDestination(event.target.value);
+                  setTouched(true);
+                }}
                 placeholder="/agents/web/new-stream"
                 className="h-8 font-mono text-xs"
               />
