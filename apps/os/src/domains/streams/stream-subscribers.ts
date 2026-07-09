@@ -76,6 +76,11 @@ export type ConnectionRuntimeState = {
   batchesSent: number;
   eventsSent: number;
   lastDeliveredAt?: string;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
 };
 
 /** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
@@ -977,6 +982,7 @@ export class StreamSubscribers {
           batchesSent: connection.batchesSent,
           eventsSent: connection.eventsSent,
           lastDeliveredAt: connection.lastDeliveredAt,
+          hasPendingDelivery: connection.hasPendingDelivery(),
         },
       ]),
     );
