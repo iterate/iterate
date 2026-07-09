@@ -287,6 +287,9 @@ describe("itx", () => {
 
     // We don't care about ordering, just that the stream contains each of these
     // event types. Mapping to types + arrayContaining is the concise idiomatic way.
+    // The repo/* events are CROSS-POSTED COPIES: the config repo commits its
+    // facts on its own stream (/repos/config) and the bootstrap's cross-post
+    // rule copies them here for the creation saga.
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
         "events.iterate.com/stream/created",
@@ -307,18 +310,67 @@ describe("itx", () => {
     expect(repoCreated).toMatchObject({
       payload: {
         artifactName: RepoArtifactNameCodec.stringify({
-          path: "/",
+          path: "/repos/config",
           projectId: description.projectId,
         }),
-        path: "/",
+        path: "/repos/config",
         projectId: description.projectId,
+      },
+      // Provenance: the copy names its source coordinate on the config repo's
+      // own stream.
+      source: {
+        crossPostedFrom: [
+          expect.objectContaining({
+            path: "/repos/config",
+            projectId: description.projectId,
+            subscriptionKey: "cross-post:/",
+            type: "events.iterate.com/repo/created",
+          }),
+        ],
       },
     });
     expect(projectCreated).toBeTruthy();
     expect(repoCreated!.offset).toBeLessThan(projectCreated!.offset);
 
-    expect(await project.repo.whoami()).toBe(`repo ${description.projectId}:/`);
-    expect(await project.repos.get("/").whoami()).toBe(`repo ${description.projectId}:/`);
+    // First-hand on the config repo's own stream: the same facts, no
+    // provenance chain, plus the repo processor + cross-post subscriptions.
+    const configRepoEvents = await project.streams.get("/repos/config").getEvents();
+    const firstHandRepoCreated = configRepoEvents.find(
+      (event) => event.type === "events.iterate.com/repo/created",
+    );
+    expect(firstHandRepoCreated).toMatchObject({
+      payload: { path: "/repos/config", projectId: description.projectId },
+    });
+    expect(firstHandRepoCreated!.source?.crossPostedFrom).toBeUndefined();
+    expect(
+      configRepoEvents.some(
+        (event) =>
+          event.type === "events.iterate.com/stream/subscription-configured" &&
+          (event.payload as { subscriptionKey?: string }).subscriptionKey === "cross-post:/",
+      ),
+    ).toBe(true);
+
+    // The cross-post pipe stays live after bootstrap: a fresh append on the
+    // config repo's stream shows up on `/` as a provenance-stamped copy.
+    const [configRepoFact] = await project.streams.get("/repos/config").append({
+      type: "events.iterate.test/config-repo-fact",
+      payload: { marker: description.projectId },
+    });
+    await stream.waitForEvent({
+      // Replay from the start: the copy may land before this waiter attaches.
+      afterOffset: 0,
+      eventTypes: ["events.iterate.test/config-repo-fact"],
+      predicate: (event) =>
+        (event.payload as { marker?: string }).marker === description.projectId &&
+        event.source?.crossPostedFrom?.[0]?.path === "/repos/config" &&
+        event.source.crossPostedFrom[0].offset === configRepoFact!.offset,
+      timeoutMs: 30_000,
+    });
+
+    expect(await project.repo.whoami()).toBe(`repo ${description.projectId}:/repos/config`);
+    expect(await project.repos.get("/repos/config").whoami()).toBe(
+      `repo ${description.projectId}:/repos/config`,
+    );
 
     // The seeded root worker serves a static homepage for un-routed requests;
     // the hello app (selected via the trusted x-iterate-app header) echoes the
@@ -553,7 +605,7 @@ describe("itx", () => {
       );
       expect(projectState.repos).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ path: "/" }),
+          expect.objectContaining({ path: "/repos/config" }),
           expect.objectContaining({ path: repoPath }),
         ]),
       );
@@ -566,7 +618,7 @@ describe("itx", () => {
       expect((await project.agents.list()).some((item) => item.path.startsWith("/agents/"))).toBe(
         true,
       );
-      expect((await project.repos.list()).some((item) => item.path === "/")).toBe(true);
+      expect((await project.repos.list()).some((item) => item.path === "/repos/config")).toBe(true);
       expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(
         true,
       );
@@ -1220,7 +1272,7 @@ describe("itx", () => {
     using explicitWorker = project.workers.get({
       path: "/",
       source: {
-        files: { repoPath: "/", type: "repo" },
+        files: { repoPath: "/repos/config", type: "repo" },
         options: { entryPoint: "worker.ts" },
       },
       type: "stateless",
@@ -1237,7 +1289,7 @@ describe("itx", () => {
       durableWorkerKey: `direct-db-${crypto.randomUUID()}`,
       path: "/",
       source: {
-        files: { repoPath: "/", type: "repo" },
+        files: { repoPath: "/repos/config", type: "repo" },
         options: { entryPoint: "worker.ts" },
       },
       type: "stateful",
@@ -1290,7 +1342,7 @@ describe("itx", () => {
           {
             path: "/",
             source: {
-              files: { repoPath: "/", type: "repo" },
+              files: { repoPath: "/repos/config", type: "repo" },
               options: { entryPoint: "worker.ts" },
             },
             type: "stateless",
@@ -1316,7 +1368,7 @@ describe("itx", () => {
             durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
             path: "/",
             source: {
-              files: { repoPath: "/", type: "repo" },
+              files: { repoPath: "/repos/config", type: "repo" },
               options: { entryPoint: "worker.ts" },
             },
             type: "stateful",
@@ -1341,7 +1393,7 @@ describe("itx", () => {
             durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
             path: "/",
             source: {
-              files: { repoPath: "/", type: "repo" },
+              files: { repoPath: "/repos/config", type: "repo" },
               options: { entryPoint: "worker.ts" },
             },
             type: "stateful",
@@ -1689,7 +1741,7 @@ describe("itx", () => {
     });
 
     const repoWorkerSource = {
-      files: { repoPath: "/", type: "repo" },
+      files: { repoPath: "/repos/config", type: "repo" },
       options: { entryPoint: "worker.ts" },
     } as const;
     const inlineProjectStateless: DynamicWorkerRef = {
@@ -2050,7 +2102,7 @@ describe("itx", () => {
             durableWorkerKey,
             path: agentPath,
             source: {
-              files: { include: ["apps/counter/**"], repoPath: "/", type: "repo" },
+              files: { include: ["apps/counter/**"], repoPath: "/repos/config", type: "repo" },
               options: { entryPoint: "apps/counter/worker.ts" },
             },
             type: "stateful",
