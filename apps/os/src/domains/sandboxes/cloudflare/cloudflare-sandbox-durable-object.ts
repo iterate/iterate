@@ -10,7 +10,11 @@ import {
   type SandboxLifecycleEventInput,
 } from "../sandbox-processor-contract.ts";
 import { SANDBOX_INSTANCE_TYPE_BINDINGS, type SandboxInstanceType } from "../instance-types.ts";
-import { githubTokenEnvForConnections, assertSandboxPath } from "../utils.ts";
+import {
+  assertSandboxPath,
+  assertValidSleepAfter,
+  githubTokenEnvForConnections,
+} from "../utils.ts";
 
 /**
  * The workspace root inside every sandbox container: what the backup/restore
@@ -65,26 +69,6 @@ type SandboxRecord = {
 };
 
 const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as const;
-
-/**
- * Validate a `sleepAfter` value BEFORE it can reach the SDK. The SDK's
- * `setSleepAfter` persists the raw value to Durable Object storage before
- * parsing it, and its constructor re-parses the stored value inside
- * `blockConcurrencyWhile` — so an unparseable value ("1d", "30min") doesn't
- * just fail the call, it permanently crash-loops the DO on every later
- * instantiation (even `destroy()` becomes unreachable; only manual storage
- * surgery recovers). Accepted forms mirror the SDK's parser exactly:
- * a positive number of seconds, or `<digits><s|m|h>`.
- */
-function assertValidSleepAfter(value: string | number): void {
-  const valid =
-    typeof value === "number" ? Number.isFinite(value) && value > 0 : /^\d+[smh]$/.test(value);
-  if (!valid) {
-    throw new Error(
-      `invalid sleepAfter "${value}": pass a positive number of seconds or "<n>s"/"<n>m"/"<n>h" (e.g. "30s", "5m", "1h")`,
-    );
-  }
-}
 
 /**
  * The durable sandbox env-var map, as stored. The SDK's `setEnvVars` input
@@ -198,8 +182,7 @@ function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<
 
 /**
  * The sandbox's own address, as carried by its Durable Object name:
- * which project it belongs to and its path (always
- * `/sandboxes/<instanceType>/<name>`).
+ * which project it belongs to and its path (always `/sandboxes/<name>`).
  */
 type SandboxIdentity = { path: string; projectId: string };
 
@@ -296,16 +279,19 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   /**
    * Create the sandbox: write the durable record that makes it exist. The
    * instance type is validated against THIS class (the collection routed here
-   * by the path's instance-type segment) and fixed for life. Strict, not
-   * idempotent — a pet is born once; an existing or destroyed path is an
-   * error, so two callers can't silently share a sandbox they each think they
-   * created.
+   * by the type it journaled on `create-requested`) and fixed for life.
+   * Strict, not idempotent — a pet is born once; an existing or destroyed
+   * path is an error, so two callers can't silently share a sandbox they each
+   * think they created. (A retry of a create whose first attempt died between
+   * the journal append and this call finds no record and completes normally —
+   * the collection only routes here with the journaled type.)
    *
    * `sleepAfter` and `keepAlive` pass straight through to the SDK's own
    * durable setters (`setSleepAfter` / `setKeepAlive` — the SDK persists and
-   * restores them itself); `env` merges as if by {@link setEnvVars}. Emits
-   * `create-requested` (the command) then `created` (the completion). No
-   * container boots here — the first command or an explicit `start()` does.
+   * restores them itself); `env` merges as if by {@link setEnvVars}. The
+   * collection journals `create-requested` (the command) before calling;
+   * this emits `created` (the completion). No container boots here — the
+   * first command or an explicit `start()` does.
    */
   async create(input: {
     env?: Record<string, string | undefined>;
@@ -333,15 +319,6 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
           : `sandbox "${input.path}" already exists — itx.sandboxes.get("${input.path}") to use it`,
       );
     }
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/create-requested",
-      payload: {
-        instanceType: input.instanceType,
-        sleepAfter: input.sleepAfter,
-        keepAlive: input.keepAlive,
-        env: definedEnvEntries(input.env),
-      },
-    });
     const record: SandboxRecord = {
       createdAt: new Date().toISOString(),
       instanceType: input.instanceType,

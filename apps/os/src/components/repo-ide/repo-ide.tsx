@@ -5,6 +5,8 @@ import {
   FilesIcon,
   GitBranchIcon,
   GitCommitVerticalIcon,
+  GithubIcon,
+  HistoryIcon,
   MinusIcon,
   PlusIcon,
   Undo2Icon,
@@ -19,7 +21,10 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
+import { CommitDiffPane } from "./commit-diff-pane.tsx";
+import { CommitHistoryPanel } from "./commit-history-panel.tsx";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
+import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import {
   commitPlan,
@@ -48,7 +53,17 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   const changes = useWorkingTree(store);
   const headPaths = files.paths;
   const headPathSet = new Set(headPaths);
-  const { file: selectedPath, diff, preview, scm, stagedView, patchSearch } = useRepoIdeSearch();
+  const {
+    file: selectedPath,
+    diff,
+    preview,
+    scm,
+    gh,
+    stagedView,
+    history,
+    commit: expandedCommitOid,
+    patchSearch,
+  } = useRepoIdeSearch();
 
   const selectFile = useCallback(
     (path: string | undefined) =>
@@ -175,6 +190,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       await queryClient.invalidateQueries({
         queryKey: ["itx", "repo-files", projectId, repoPath],
       });
+      // The commit list changed too (this commit is now its head). Per-commit
+      // detail/content queries stay — they key by oid and are immutable.
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-log", projectId, repoPath],
+      });
       store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
       toast.success(
         result.noChanges
@@ -189,15 +209,25 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row">
-      {/* vscode-style activity strip: Files / Source control. */}
+      {/* vscode-style activity strip: Files / Source control / History / GitHub. */}
       <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
         <Button
-          variant={scm ? "ghost" : "secondary"}
+          variant={scm || gh || history ? "ghost" : "secondary"}
           size="icon"
           title="Files"
-          // The Files view browses working-tree files; leaving the SCM view
-          // also leaves any Index pseudo-file it had open.
-          onClick={() => patchSearch({ scm: undefined, staged: undefined })}
+          aria-label="Files"
+          // The Files view browses working-tree files; leaving the SCM,
+          // GitHub, or History view also leaves any pseudo-file (Index,
+          // commit diff) it had open.
+          onClick={() =>
+            patchSearch({
+              scm: undefined,
+              gh: undefined,
+              staged: undefined,
+              history: undefined,
+              commit: undefined,
+            })
+          }
           className="text-muted-foreground"
         >
           <FilesIcon className="size-4" />
@@ -206,7 +236,12 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm ? "secondary" : "ghost"}
           size="icon"
           title="Source control"
-          onClick={() => patchSearch({ scm: true })}
+          // Explicit name: the dirty-count badge inside would otherwise BE the
+          // accessible name ("1"), beating the title.
+          aria-label="Source control"
+          onClick={() =>
+            patchSearch({ scm: true, gh: undefined, history: undefined, commit: undefined })
+          }
           className="relative text-muted-foreground"
         >
           <GitBranchIcon className="size-4" />
@@ -216,11 +251,67 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             </span>
           )}
         </Button>
+        <Button
+          variant={history ? "secondary" : "ghost"}
+          size="icon"
+          title="History"
+          onClick={() =>
+            patchSearch({ history: true, scm: undefined, gh: undefined, staged: undefined })
+          }
+          className="text-muted-foreground"
+        >
+          <HistoryIcon className="size-4" />
+        </Button>
+        <Button
+          variant={gh ? "secondary" : "ghost"}
+          size="icon"
+          title="GitHub"
+          onClick={() =>
+            patchSearch({ gh: true, scm: undefined, history: undefined, commit: undefined })
+          }
+          className="text-muted-foreground"
+        >
+          <GithubIcon className="size-4" />
+        </Button>
       </div>
 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
-          {scm ? (
+          {history ? (
+            <Suspense
+              fallback={
+                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                  Loading history…
+                </div>
+              }
+            >
+              <CommitHistoryPanel
+                projectId={projectId}
+                repoPath={repoPath}
+                expandedOid={expandedCommitOid}
+                selectedPath={selectedPath}
+                onExpand={(oid) => patchSearch({ commit: oid })}
+                // selectFile clears diff/preview/staged too, so a lingering
+                // preview=true doesn't spuriously re-open Preview for the file
+                // you pick out of a commit (history/commit stay set — the
+                // commit diff keeps showing until you leave History).
+                onOpenFile={(path) => selectFile(path)}
+              />
+            </Suspense>
+          ) : gh ? (
+            // Own Suspense (like RepoEditorPane's): the panel's first
+            // connections read suspends, and without a local boundary that
+            // would bubble to the route's ItxBoundary and blank the whole IDE.
+            <Suspense
+              fallback={
+                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                  Loading…
+                </div>
+              }
+            >
+              <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+            </Suspense>
+          ) : scm ? (
             <GitPanel
               changes={changes}
               headPathSet={headPathSet}
@@ -270,35 +361,47 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 </div>
               }
             >
-              <RepoEditorPane
-                key={selectedPath}
-                projectId={projectId}
-                repoPath={repoPath}
-                path={selectedPath}
-                headCommitOid={files.commitOid}
-                headHasPath={headPathSet.has(selectedPath)}
-                change={changes.get(selectedPath)}
-                diffOpen={diff}
-                // Diff and preview are mutually exclusive views of the same
-                // buffer — turning one on turns the other off.
-                onToggleDiff={(open) =>
-                  patchSearch({ diff: open ? true : undefined, preview: undefined })
-                }
-                previewOpen={preview}
-                onTogglePreview={(open) =>
-                  patchSearch({ preview: open ? true : undefined, diff: undefined })
-                }
-                onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
-                onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
-                onStageFile={() => store.stage(selectedPath)}
-                onUnstageFile={() => {
-                  store.unstage(selectedPath);
-                  patchSearch({ staged: undefined });
-                }}
-                onOpenWorking={() => patchSearch({ staged: undefined, diff: undefined })}
-                stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
-                onRestore={() => dropChange(selectedPath)}
-              />
+              {history && expandedCommitOid !== undefined ? (
+                <CommitDiffPane
+                  key={`${selectedPath}:${expandedCommitOid}`}
+                  projectId={projectId}
+                  repoPath={repoPath}
+                  path={selectedPath}
+                  commitOid={expandedCommitOid}
+                />
+              ) : (
+                <RepoEditorPane
+                  key={selectedPath}
+                  projectId={projectId}
+                  repoPath={repoPath}
+                  path={selectedPath}
+                  headCommitOid={files.commitOid}
+                  headHasPath={headPathSet.has(selectedPath)}
+                  change={changes.get(selectedPath)}
+                  diffOpen={diff}
+                  // Diff and preview are mutually exclusive views of the same
+                  // buffer — turning one on turns the other off.
+                  onToggleDiff={(open) =>
+                    patchSearch({ diff: open ? true : undefined, preview: undefined })
+                  }
+                  previewOpen={preview}
+                  onTogglePreview={(open) =>
+                    patchSearch({ preview: open ? true : undefined, diff: undefined })
+                  }
+                  onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
+                  onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
+                  onStageFile={() => store.stage(selectedPath)}
+                  onUnstageFile={() => {
+                    store.unstage(selectedPath);
+                    patchSearch({ staged: undefined });
+                  }}
+                  onOpenWorking={() =>
+                    patchSearch({ staged: undefined, diff: undefined, preview: undefined })
+                  }
+                  stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
+                  onRestore={() => dropChange(selectedPath)}
+                />
+              )}
             </Suspense>
           )}
         </ResizablePanel>
@@ -498,9 +601,13 @@ function GitPanel({
 
 /**
  * IDE view state, URL-owned like every stream view's: `file` is the open
- * path, `diff` whether the HEAD↔staged diff is showing, `scm` whether the
- * sidebar shows Source Control instead of the file tree. The repo detail
- * route validates these (RepoDetailSearch), so loose reads here are safe.
+ * path, `diff` whether the HEAD↔staged diff is showing, `preview` whether a
+ * markdown/html file shows its rendered preview instead of the editor,
+ * `scm`/`gh`/`history` which sidebar shows instead of the file tree (Source
+ * Control / GitHub / commit history), `commit` the expanded commit's oid
+ * (which also pins the readonly commit diff the open file renders as). The
+ * repo detail route validates these (RepoDetailSearch), so loose reads here
+ * are safe.
  */
 function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {
@@ -508,7 +615,10 @@ function useRepoIdeSearch() {
     diff?: boolean;
     preview?: boolean;
     scm?: boolean;
+    gh?: boolean;
     staged?: boolean;
+    history?: boolean;
+    commit?: string;
   };
   const navigate = useNavigate();
   const patchSearch = useCallback(
@@ -517,7 +627,10 @@ function useRepoIdeSearch() {
       diff?: boolean | undefined;
       preview?: boolean | undefined;
       scm?: boolean | undefined;
+      gh?: boolean | undefined;
       staged?: boolean | undefined;
+      history?: boolean | undefined;
+      commit?: string | undefined;
     }) => {
       void navigate({
         search: ((previous: Record<string, unknown>) => ({
@@ -534,7 +647,10 @@ function useRepoIdeSearch() {
     diff: search.diff === true,
     preview: search.preview === true,
     scm: search.scm === true,
+    gh: search.gh === true,
     stagedView: search.staged === true,
+    history: search.history === true,
+    commit: search.commit,
     patchSearch,
   };
 }

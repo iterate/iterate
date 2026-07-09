@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
-import { EMAIL_AGENT_SYSTEM_PROMPT } from "../projects/project-processor-implementation.ts";
+import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
@@ -51,6 +51,7 @@ class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(this.events.length + 1).toISOString(),
         offset: this.events.length + 1,
+        path: this.path,
       };
       this.events.push(event);
       return event;
@@ -101,7 +102,7 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
+    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
   }
 
   async subscribe(): Promise<never> {

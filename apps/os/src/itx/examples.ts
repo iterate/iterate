@@ -381,20 +381,19 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Create a sandbox and run shell commands in it",
     description:
-      "A sandbox is a real Linux container, kept like a project pet: it exists only after itx.sandboxes.create({ name, instanceType? }) (instance types are Cloudflare's — lite, basic (default), standard-1..4 — fixed for life as the path's second segment, /sandboxes/<instanceType>/<name>), and itx.sandboxes.get(path) then returns the bare Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, … — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). The first command boots the container (can take a minute cold); after idle it is snapshotted and shut down — files under /workspace come back on the next start, everything else resets. The image is the stock Cloudflare one (Ubuntu, Node, Bun, git): install what you need, and clone repos with gitCheckout (GH_TOKEN is planted automatically when the project has a GitHub connection). Prefer reusing an existing sandbox (itx.sandboxes.list()) over creating more.",
+      "A sandbox is a real Linux container, kept like a project pet: it exists only after itx.sandboxes.create({ name, instanceType? }) (names are one path segment — the path is /sandboxes/<name>; instance types are Cloudflare's — lite, basic (default), standard-1..4 — fixed for life), and itx.sandboxes.get(path) then returns the bare Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, … — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). The first command boots the container (can take a minute cold); after idle it is snapshotted and shut down — files under /workspace come back on the next start, everything else resets. The image is the stock Cloudflare one (Ubuntu, Node, Bun, git): install what you need, and clone repos with gitCheckout (GH_TOKEN is planted automatically when the project has a GitHub connection). Prefer reusing an existing sandbox (itx.sandboxes.list()) over creating more.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// Reuse the sandbox if it exists, create it otherwise. The path IS the
-// identity, verbatim — no normalization anywhere: same path, same sandbox
-// (and its /workspace) until destroy(). It carries the instance type as its
-// second segment, so derive both create inputs from it. create is strict, so
-// a concurrent creator can win the race — swallow the create error and let
-// the second get() be the arbiter.
-const path = vars.sandboxPath ?? "/sandboxes/basic/example";
-const [, , instanceType, ...nameSegments] = path.split("/");
+// Reuse the sandbox if it exists, create it otherwise. The name IS the
+// identity, verbatim — no normalization anywhere: same name, same sandbox
+// (and its /workspace) until destroy(). create is strict, so a concurrent
+// creator can win the race — swallow the create error and let the second
+// get() be the arbiter.
+const name = vars.sandboxName ?? "example";
+const path = "/sandboxes/" + name;
 const sandbox = await itx.sandboxes.get(path).catch(async () => {
-  await itx.sandboxes.create({ name: nameSegments.join("/"), instanceType }).catch(() => {});
+  await itx.sandboxes.create({ name, instanceType: vars.instanceType }).catch(() => {});
   return itx.sandboxes.get(path);
 });
 
@@ -1130,7 +1129,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     return new Response("not found", { status: 404 });
   }
 
-  processEvent() {}
+  processEventBatch() {}
 }
 \`,
     },

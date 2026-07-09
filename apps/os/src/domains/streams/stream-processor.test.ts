@@ -48,6 +48,7 @@ function incrementedEvent(by: number, offset?: number): StreamEvent {
     payload: { by },
     createdAt: new Date(nextOffset).toISOString(),
     offset: nextOffset,
+    path: "/tests/counter",
   };
 }
 
@@ -57,6 +58,7 @@ function unrelatedEvent(offset?: number): StreamEvent {
     type: "events.iterate.com/other/happened",
     createdAt: new Date(nextOffset).toISOString(),
     offset: nextOffset,
+    path: "/tests/counter",
   };
 }
 
@@ -209,6 +211,7 @@ describe("StreamProcessor parse-failure skipping", () => {
       payload: { by: "not-a-number" },
       createdAt: new Date(nextOffset).toISOString(),
       offset: nextOffset,
+      path: "/tests/counter",
     };
   }
 

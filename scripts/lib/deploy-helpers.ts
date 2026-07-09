@@ -9,10 +9,9 @@
  * machinery.
  */
 import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import JSON5 from "json5";
+import { join } from "node:path";
 import type { DeployableEnv, EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
@@ -67,16 +66,11 @@ export async function smoke(url: string, ok: (status: number) => boolean, label:
 /**
  * `wrangler deploy --secrets-file` with the secrets in a 0600 tmpfile that is
  * always cleaned up — code + secrets land atomically in one worker version.
- *
- * When `ensureClassesFor` is given, first checks the live worker for Durable
- * Object bindings and runs a plain (secrets-less) deploy when there are none.
- * Gotcha (observed live 2026-07-03): a worker with NO Durable Object classes
- * yet — a brand-new env whose script has never been uploaded — fails
- * `wrangler deploy --secrets-file` with 10061, because the initial class
- * migrations don't ride that upload path. The plain deploy establishes the
- * classes (existing secrets are preserved across versions), then the secrets
- * deploy lands code+secrets atomically as usual. Apps without DO classes skip
- * it; envs that already carry the classes fall straight through.
+ * Durable Object classes ride the same upload: the config's declarative
+ * `exports` map is reconciled server-side per deploy, so a brand-new env's
+ * first upload and a steady-state redeploy are the same single command (the
+ * legacy migrations flow needed a classless bootstrap deploy first; exports
+ * does not — verified live 2026-07-08).
  */
 export async function deployWithSecrets(input: {
   /** App root the wrangler commands run in. */
@@ -89,8 +83,6 @@ export async function deployWithSecrets(input: {
   credentials: Record<string, string>;
   /** Extra `wrangler deploy` args (e.g. `["--env", name]` for env-block configs). */
   extraDeployArgs?: string[];
-  /** DO-class-carrying apps pass this to get the plain-deploy-first guard. */
-  ensureClassesFor?: { ctx: CfContext; workerName: string };
 }) {
   const deployArgs = [
     "exec",
@@ -100,53 +92,6 @@ export async function deployWithSecrets(input: {
     input.builtConfig,
     ...(input.extraDeployArgs ?? []),
   ];
-
-  if (input.ensureClassesFor) {
-    const { ctx, workerName } = input.ensureClassesFor;
-    const remote = await ctx
-      .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${workerName}/settings`)
-      .catch(() => null);
-    if (!remote?.bindings?.some((binding) => binding.type === "durable_object_namespace")) {
-      console.log(
-        "Worker has no Durable Object classes yet — plain deploy first to establish them.",
-      );
-      // The bootstrap deploy carries no --secrets-file, and a classless
-      // worker has no existing secrets either — wrangler's secrets.required
-      // enforcement would fail it. Deploy from a config copy without the
-      // `secrets` blocks (top-level for vite's env-flattened dist output,
-      // per-env for `--env`-selected configs); the real deploy below
-      // re-enforces them. JSON5 because the config may be commented JSONC
-      // (generated or checked-in), not just the vite build's plain JSON.
-      const { secrets: _secrets, ...config } = JSON5.parse(readFileSync(input.builtConfig, "utf8"));
-      if (config.env) {
-        config.env = Object.fromEntries(
-          Object.entries(config.env as Record<string, Record<string, unknown>>).map(
-            ([envName, { secrets: _envSecrets, ...envBlock }]) => [envName, envBlock],
-          ),
-        );
-      }
-      // Wrangler resolves relative paths (assets, containers) against the
-      // config's directory, so the copy must live next to the original.
-      const bootstrapConfig = join(dirname(input.builtConfig), "wrangler.bootstrap.json");
-      writeFileSync(bootstrapConfig, JSON.stringify(config));
-      try {
-        run(
-          "pnpm",
-          [
-            "exec",
-            "wrangler",
-            "deploy",
-            "--config",
-            bootstrapConfig,
-            ...(input.extraDeployArgs ?? []),
-          ],
-          { cwd: input.cwd, env: input.credentials },
-        );
-      } finally {
-        rmSync(bootstrapConfig, { force: true });
-      }
-    }
-  }
 
   const secretsDir = mkdtempSync(join(tmpdir(), "deploy-secrets-"));
   try {

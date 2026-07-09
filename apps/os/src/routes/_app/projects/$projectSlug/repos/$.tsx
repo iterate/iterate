@@ -10,13 +10,17 @@ import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 
 /** The stream-view params plus the IDE's own view state (open file, diff,
- * html preview, source-control sidebar). */
+ * markdown/html preview, source-control / GitHub sidebar, history sidebar +
+ * expanded commit). */
 const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
   diff: z.boolean().optional().catch(undefined),
   preview: z.boolean().optional().catch(undefined),
   scm: z.boolean().optional().catch(undefined),
+  gh: z.boolean().optional().catch(undefined),
   staged: z.boolean().optional().catch(undefined),
+  history: z.boolean().optional().catch(undefined),
+  commit: z.string().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
@@ -90,5 +94,9 @@ function ProjectRepoDetailContent() {
 
 function repoPathFromSplat(splat: string | undefined) {
   const suffix = splat?.replace(/^\/+/, "") ?? "";
+  // TEMPORARY HACK: the legacy project repo lives at path "/", whose suffix is
+  // empty — its URL ".../repos//" normalizes to the repos index, making it
+  // unviewable. "ROOT" stands in for it until the / repo becomes /repos/config.
+  if (suffix === "ROOT") return "/";
   return `/repos/${suffix}`;
 }
