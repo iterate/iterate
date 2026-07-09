@@ -29,6 +29,7 @@
 
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
 import { itxLoopbackStub } from "../itx/utils.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -271,18 +272,36 @@ export function createSubscriberDial(deps: {
      * One webhook delivery: POST the single-event envelope as JSON. A 2xx is
      * the ack; anything else (or a network failure) rejects into the spine's
      * retry/park machine. The receiver is outside the itx world — no root, no
-     * stubs, just HTTP.
+     * stubs, just HTTP — but the request rides the PROJECT EGRESS lane, never
+     * bare global fetch: webhook config is appendable by any project
+     * principal (including agent scripts whose ordinary egress is jailed), so
+     * an un-attributed fetch here would be a durable event-exfiltration
+     * channel that bypasses egress policy (thermo round 3, blocker 1). Which
+     * is also why webhooks require a project scope: a global stream has no
+     * egress identity to attribute the POST to.
      */
     async webhook(url: string, delivery: StreamWebhookDelivery) {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(delivery),
-      });
-      // The body is never read; cancel it so the connection is released.
-      await response.body?.cancel();
-      if (!response.ok) {
-        throw new Error(`webhook responded ${response.status} ${response.statusText}`);
+      if (deps.projectId === null) {
+        throw new Error("webhook subscriptions require a project-scoped stream");
+      }
+      const egress = projectEgressFetcher(
+        deps.exports as ExecutionContext["exports"],
+        deps.projectId,
+      );
+      try {
+        const response = await egress.fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(delivery),
+        });
+        // The body is never read; cancel it so the connection is released.
+        await response.body?.cancel();
+        if (!response.ok) {
+          throw new Error(`webhook responded ${response.status} ${response.statusText}`);
+        }
+      } finally {
+        // The egress fetcher is a per-acquisition loopback stub.
+        (egress as Partial<Disposable>)[Symbol.dispose]?.();
       }
     },
   };

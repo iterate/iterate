@@ -18,7 +18,7 @@ type ReducedConnection = {
 
 /** The per-subscription spine row `runtimeState().runtime.subscriptions` exposes. */
 type RuntimeSubscription = {
-  mode?: "wake" | "push";
+  mode?: "wake" | "push" | "webhook";
   ackedOffset?: number;
   lag?: number;
   connected?: boolean;
@@ -181,6 +181,87 @@ test("webhook subscriptions validate their URL before commit", async () => {
   ).rejects.toThrow(/url|invalid/i);
 
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
+test("global streams reject webhook subscriptions before commit", async () => {
+  // Webhook POSTs ride the project egress lane (attribution + interception);
+  // a global (projectId: null) stream has no project to attribute them to,
+  // so the config must die at the append gate, not as an eternal retry.
+  const marker = crypto.randomUUID();
+  const subscriptionKey = `configured-global-webhook-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using stream = itx.streams.get(`/configured-global-webhook-${marker}`);
+
+  await expect(
+    stream.append(
+      subscriptionConfiguredEvent({
+        subscriptionKey,
+        delivery: { mode: "webhook", url: `https://example.com/${marker}` },
+      }),
+    ),
+  ).rejects.toThrow(/project-scoped/);
+
+  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
+test("wake expressions traverse dynamic dispatch surfaces (the slack router shape)", async () => {
+  // Every other wake expression walks real getters (agents.get(p).processor,
+  // repos.get(p).processor, ...). The slack router's walks the integrations
+  // collection's DYNAMIC dotted proxy — ["integrations", "slack", <conn>,
+  // "processor", "wakeStreamSubscriber"] — over the loopback RPC: awaited
+  // property steps over proxy/function stubs, a different transport mechanic
+  // entirely, and it replaced the old typed-target dial with no other running
+  // coverage (thermo round 3, blocker 2). This pins the whole walk live: the
+  // poke resolves the handshake through the proxy and a durable connection
+  // lands on the stream.
+  const marker = crypto.randomUUID();
+  const connection = `e2e-${marker.slice(0, 8)}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-dynamic-wake-${marker}` });
+  using stream = project.streams.get(`/integrations/slack/${connection}`);
+
+  const subscriptionKey = `dynamic-wake-${marker}`;
+  await stream.append(
+    subscriptionConfiguredEvent({
+      subscriptionKey,
+      delivery: {
+        mode: "wake",
+        expression: ["integrations", "slack", connection, "processor", "wakeStreamSubscriber"],
+        processorSlug: "slack",
+      },
+    }),
+  );
+
+  await waitForCondition(
+    async () => {
+      const state = asStreamRuntimeState(await stream.runtimeState());
+      return state.runtime.subscriptions[subscriptionKey]?.connected === true;
+    },
+    {
+      description: "the dynamic-proxy wake handshake to open a durable connection",
+      timeoutMs: 30_000,
+    },
+  );
+
+  // The presence fact is the durable proof the handshake completed.
+  const events = await stream.getEvents({ afterOffset: 0 });
+  expect(
+    events.some(
+      (event) =>
+        event.type === "events.iterate.com/stream/subscriber-connected" &&
+        (event.payload as { subscriptionKey?: string }).subscriptionKey === subscriptionKey,
+    ),
+  ).toBe(true);
 });
 
 test("project streams are born with the project-worker push feed and replace it by key", async () => {

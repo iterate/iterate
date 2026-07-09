@@ -98,6 +98,8 @@ export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
  * - `webhook`: push semantics over plain HTTP, one event per POST — the
  *   receiver is outside the itx world, and external webhook consumers expect
  *   individual events, so the cursor advances per event instead of per batch.
+ *   POSTs ride the project egress lane (attributed + interceptable, never
+ *   bare global fetch), so webhooks require a project-scoped stream.
  *
  * The criterion: the offset lives with whoever owns the state it must be
  * transactionally consistent with.

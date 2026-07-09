@@ -163,8 +163,10 @@ Doctrine, worth memorizing:
   per delivery against the stream's own authority root: the project-scoped
   `env.ITX` root (the identical recipe every dynamic worker gets), or the
   trusted deployment root for global (`projectId: null`) streams. Deleting
-  the subscription is revocation. A root can't name another project, so
-  cross-project delivery is unexpressible rather than checked.
+  the subscription is revocation. A PROJECT root can't name another project,
+  so cross-project delivery is unexpressible rather than checked. (The
+  deployment root is wider — it is session-shaped and admin-write-only, so a
+  global stream's expressions are already operator territory.)
 - **Control facts must be first-hand.** A cross-posted copy of a
   `stream/*` control event is stored and visible but INERT — it configures
   nothing (closes the config-propagation-by-copy hole no matter what
@@ -257,21 +259,21 @@ announcements and checkpoints.
 
 ## File map
 
-| File                         | Role                                                                                                              |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes + push expressions), `ingest` |
-| `core-processor-contract.ts` | Core contract: reduced-state schema (v10) + the `events.iterate.com/stream/*` event catalog                       |
-| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                |
-| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)       |
-| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                          |
-| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                    |
-| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                    |
-| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                      |
-| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                             |
-| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                              |
-| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                               |
-| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                          |
-| `client-libraries/`          | Browser mirror host and browser-side processors                                                                   |
+| File                         | Role                                                                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, webhooks), `ingest` |
+| `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                |
+| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                         |
+| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                |
+| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                   |
+| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                             |
+| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                             |
+| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                               |
+| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                                      |
+| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                                       |
+| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                                        |
+| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                                   |
+| `client-libraries/`          | Browser mirror host and browser-side processors                                                                            |
 
 Public capability surface (`Stream`, `StreamEventBatch`, `ProcessEventBatch`,
 …) is defined in `src/domains/streams/rpc-types.ts` (and projected into the

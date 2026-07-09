@@ -367,6 +367,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
+      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
+        // Webhook POSTs ride the project egress lane (attribution +
+        // interception); a global stream has no project to attribute them to.
+        throw new Error("webhook subscriptions require a project-scoped stream");
+      }
       // An unparseable selector condition must be rejected before it commits,
       // not discovered as a per-event error forever after. (compile throws.)
       compileEventSelector(event.payload.selector);
