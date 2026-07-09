@@ -244,6 +244,7 @@ export abstract class StreamProcessor<
   #checkpointOffset = 0;
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
   #loaded: Promise<void> | undefined;
+  #hasLoaded = false;
   #processing: Promise<void> = Promise.resolve();
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
@@ -657,6 +658,16 @@ export abstract class StreamProcessor<
   }
 
   /**
+   * Whether the checkpoint has been read (found, found-invalid, or found absent)
+   * — i.e. `currentState` reflects the last ingested fold rather than the schema
+   * default. Hosts gate synchronous live-state assembly on it: assembling a cold
+   * processor's default would push patches that wipe real facts to subscribers.
+   */
+  get isLoaded(): boolean {
+    return this.#hasLoaded;
+  }
+
+  /**
    * Observe reduced-state changes IN-PROCESS: the observer is a local function
    * (the host wires it to refresh its live-state engine), not a retained RPC
    * stub. Returns an unsubscribe.
@@ -725,12 +736,17 @@ export abstract class StreamProcessor<
       }
       this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
-    })().catch((error: unknown) => {
-      // Clear the memoized load so a later batch retries the snapshot read
-      // instead of replaying this rejection forever.
-      this.#loaded = undefined;
-      throw error;
-    });
+    })().then(
+      () => {
+        this.#hasLoaded = true; // every success path above: currentState is now the fold
+      },
+      (error: unknown) => {
+        // Clear the memoized load so a later batch retries the snapshot read
+        // instead of replaying this rejection forever.
+        this.#loaded = undefined;
+        throw error;
+      },
+    );
     await this.#loaded;
   }
 

@@ -424,7 +424,7 @@ export function useItxQuery<T>({
 function useItxEffect(
   setup: (itx: ItxHandle) => void | (() => void) | Promise<void | (() => void)>,
   deps: unknown[],
-  opts?: { itx?: ItxHandle; address?: ItxAddress },
+  opts?: { itx?: ItxHandle; address?: ItxAddress; onDialError?: (error: unknown) => void },
 ): void {
   // `useItx()` must run unconditionally (rules of hooks), and the ambient context
   // is already connected in practice, so this never suspends. A lazy `address`
@@ -461,9 +461,13 @@ function useItxEffect(
       // Lazy address (e.g. ⌘K reaching a project from the app shell): dial INSIDE
       // the effect via connectItxBrowser so render never suspends — the documented
       // ⌘K contract. Reconnect recovery rides useItxSubscription's watchdog, not an
-      // [itx] dep (there is no render-time handle to key on).
+      // [itx] dep (there is no render-time handle to key on). A FAILED dial never
+      // reaches `setup`, so a caller owning status (useItxSubscription) must take
+      // `onDialError` to surface + retry it — without one it can only be logged.
       void connectItxBrowser(address).then(apply, (error: unknown) => {
-        if (!disposed) console.error("useItxEffect: dial failed", error);
+        if (disposed) return;
+        if (opts?.onDialError) opts.onDialError(error);
+        else console.error("useItxEffect: dial failed", error);
       });
     } else {
       apply(itx); // synchronous, exactly like a plain effect
@@ -587,7 +591,8 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
  *     → the {@link watchItxSubscription} watchdog detects it and either
  *     re-subscribes (dead) or drops the sockets so everything re-dials
  *     (timed-out);
- *   - a failed subscribe attempt → status "error", retried on a
+ *   - a failed subscribe attempt — including a failed lazy dial when
+ *     subscribing via `{ address }` — → status "error", retried on a
  *     watchdog-shaped delay.
  *
  * `subscribe` opens the subscription and returns its handle; server pushes go
@@ -619,6 +624,12 @@ export function useItxSubscription(
   const [state, setState] = useState<{ status: ItxSubscriptionStatus; error?: string }>({
     status: "connecting",
   });
+  // The dial-error retry outlives its effect run (the failure IS the run never
+  // starting), so its timer is cleared on unmount rather than by an effect
+  // cleanup. A bump landing after a later successful run only re-subscribes,
+  // which is idempotent (see the watchdog note below).
+  const dialRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(dialRetry.current), []);
 
   useItxEffect(
     async (effectItx) => {
@@ -680,7 +691,25 @@ export function useItxSubscription(
     // Subscribe through a specific connection: `{ itx }` uses a handle you already
     // hold; `{ address }` (e.g. ⌘K reaching a project from the app shell) dials
     // lazily inside the effect so render never suspends.
-    { itx: opts?.itx, address: opts?.address },
+    {
+      itx: opts?.itx,
+      address: opts?.address,
+      // A failed lazy dial never reaches the setup above, so without this the
+      // hook would sit on "connecting" forever: put it on the SAME lane as a
+      // failed subscribe — status "error", then an epoch bump retries the dial
+      // (the socket pool dropped the failed promise, so the retry re-dials).
+      onDialError: (error) => {
+        setState({
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        clearTimeout(dialRetry.current);
+        dialRetry.current = setTimeout(
+          () => setEpoch((current) => current + 1),
+          SUBSCRIBE_RETRY_MS,
+        );
+      },
+    },
   );
 
   return {

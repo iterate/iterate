@@ -113,6 +113,8 @@ export type AnyHostedProcessor = {
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
   /** The current reduced state, synchronously — feeds live-state assembly without an async hop. */
   currentState: unknown;
+  /** Whether the checkpoint has been read, i.e. `currentState` is the fold and not the schema default. */
+  readonly isLoaded: boolean;
   /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
   observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void;
 };
@@ -128,12 +130,14 @@ export type StreamProcessorHost = {
   /** The node's live-state engine; a `.live` RpcTarget exposes getState()/subscribe() over it. */
   readonly live: LiveState<Record<string, unknown>>;
   /**
-   * Reassemble the live state from current (already-loaded) inputs — the ONE
-   * writer for `.live`. Call it after mutating any non-processor live-state
-   * input (the streams index, the demo counter); a processor's own state change
-   * calls it automatically via `observeStateChanges`. The diff makes a full
-   * reassembly cheap (unchanged slices keep identity), so there is no need to
-   * poke individual slices.
+   * Reassemble the live state from current inputs — the ONE writer for `.live`.
+   * Call it after mutating any non-processor live-state input (the streams
+   * index, the demo counter); a processor's own state change calls it
+   * automatically via `observeStateChanges`. The diff makes a full reassembly
+   * cheap (unchanged slices keep identity), so there is no need to poke
+   * individual slices. On a cold DO (a processor's checkpoint not yet loaded)
+   * it defers to an async load-then-assemble instead of publishing the schema
+   * default over real facts.
    */
   refreshLive(): void;
   /**
@@ -383,20 +387,34 @@ export function createStreamProcessorHost(
   // on the first `refreshLiveState` and kept fresh by each processor's observer.
   const live = new LiveState<Record<string, unknown>>({});
   function assembleLive(): void {
+    // An unloaded processor reports the schema DEFAULT as currentState —
+    // assembling from that would push patches that wipe real facts to live
+    // subscribers (e.g. a cold DO whose first wake is a touchStreamActivity).
+    // Load first, then this reassembly re-runs with the real fold.
+    if ([...entries.values()].some((entry) => !entry.processor.isLoaded)) {
+      void loadThenAssemble();
+      return;
+    }
     const primary = [...entries.values()][0]?.processor.currentState;
     live.setState(options.getLiveState?.() ?? (primary as Record<string, unknown>) ?? {});
+  }
+  async function loadThenAssemble(): Promise<void> {
+    await Promise.all(
+      [...entries.values()].map((entry) => entry.processor.snapshot().catch(() => undefined)),
+    );
+    // A checkpoint read that still failed leaves that processor unloaded:
+    // KEEP the last assembled state rather than publishing defaults as facts
+    // (the failed snapshot() already cleared its memo, so the next refresh —
+    // or the storage-failure DO restart — retries the load).
+    if ([...entries.values()].some((entry) => !entry.processor.isLoaded)) return;
+    assembleLive();
   }
 
   return {
     stream: options.stream,
     live,
     refreshLive: assembleLive,
-    async refreshLiveState() {
-      await Promise.all(
-        [...entries.values()].map((entry) => entry.processor.snapshot().catch(() => undefined)),
-      );
-      assembleLive();
-    },
+    refreshLiveState: loadThenAssemble,
     add(build) {
       // The registry name is the processor's contract slug, which only exists
       // after the builder runs; the checkpoint-storage deps close over it

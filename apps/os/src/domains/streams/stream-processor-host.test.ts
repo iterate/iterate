@@ -344,6 +344,34 @@ describe("the shared alarm", () => {
   });
 });
 
+describe("live-state assembly", () => {
+  // A recorder whose FOLD differs from the schema default — that difference is
+  // what lets the test tell "loaded checkpoint" apart from "published default".
+  class CountingRecorder extends Recorder {
+    protected override reduce(args: Parameters<Recorder["reduce"]>[0]) {
+      return args.event.type === PING ? { pings: args.state.pings + 1 } : args.state;
+    }
+  }
+
+  it("refreshLive on a COLD incarnation loads the checkpoint instead of publishing schema defaults", async () => {
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new CountingRecorder(RecorderA, deps)) }),
+    });
+    await h.stream.append({ type: PING, payload: {} });
+    await h.deliverAll(); // checkpoint written; the ingest observer assembled live state
+    expect(h.host.live.getState()).toEqual({ pings: 1 });
+
+    h.crash(); // cold incarnation: the checkpoint is in storage, nothing loaded yet
+
+    // The regression: a synchronous refresh on a cold DO (touchStreamActivity's
+    // lane) must not publish the schema default ({ pings: 0 }) over the real
+    // fold — it defers to load-then-assemble instead.
+    h.host.refreshLive();
+    expect(h.host.live.getState()).not.toEqual({ pings: 0 });
+    await vi.waitFor(() => expect(h.host.live.getState()).toEqual({ pings: 1 }));
+  });
+});
+
 /** Drain the microtask queue a few turns so serialized alarm writes land. */
 async function vitestSettle(): Promise<void> {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
