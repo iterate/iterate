@@ -22,7 +22,7 @@ describe("formatActivitySummary", () => {
           {
             kind: "llm",
             id: "l1",
-            llmRequestId: 1,
+            llmRequestOffset: 1,
             status: "done",
             thinkingText: "",
             responseText: "",
@@ -41,7 +41,7 @@ describe("formatStepLine", () => {
       formatStepLine({
         kind: "llm",
         id: "l1",
-        llmRequestId: 1,
+        llmRequestOffset: 1,
         status: "done",
         model: "gpt-test",
         thinkingText: "",

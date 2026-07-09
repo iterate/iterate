@@ -341,7 +341,7 @@ function ProcessorsOverview({
 
 function isLlmish(entry: AgentUiPresenceEntry): boolean {
   const slug = entry.processor?.slug ?? "";
-  return ["agent", "openai-ws", "cloudflare-ai", "capability-host"].includes(slug);
+  return ["agent", "capability-host"].includes(slug);
 }
 
 /** Deterministic fake RTT for preview data; stable per subscription but still visibly live. */

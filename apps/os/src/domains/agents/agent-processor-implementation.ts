@@ -1,6 +1,22 @@
+// =============================================================================
+// The agent processor. One class, three lanes:
+//
+//   reduce       — pure fold: journal → AgentState. One switch, in
+//                  `reduceAgentEvent` below, shared with off-runtime refolds.
+//   processEvent — per-event side effects. One switch, nothing else.
+//   reconcile    — at-head only (base-gated): drive or settle open LLM
+//                  obligations, then derive the next scheduling decision.
+//
+// Everything below the class is a pure helper one of the lanes calls: the
+// fold switch, chat-request building, and codemode script-result rendering.
+// The Workers AI wire format (SSE, response shapes, attempt deadline) lives
+// in workers-ai-transport.ts.
+// =============================================================================
+
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
@@ -10,30 +26,57 @@ import {
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
+import {
+  jsonCompatible,
+  runWorkersAiAttempt,
+  type WorkersAiBinding,
+} from "./workers-ai-transport.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
 /**
- * Host-provided deps beyond the stream plumbing. `writeWorkspaceFile` writes
- * one file into THIS agent's own workspace (the same checkout `itx.workspace`
- * resolves to) so oversized script results can spill to a file the model pages
- * through with plain JavaScript. Optional: without it (bare test hosts),
- * oversized results fall back to inline truncation.
+ * Host-provided deps beyond the stream plumbing.
+ *
+ * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
+ *   Optional so a host without one fails requests with a journaled error
+ *   instead of crashing at construction.
+ * - `writeWorkspaceFile` writes one file into THIS agent's own workspace (the
+ *   same checkout `itx.workspace` resolves to) so oversized script results can
+ *   spill to a file the model pages through with plain JavaScript. Optional:
+ *   without it (bare test hosts), oversized results fall back to inline
+ *   truncation.
+ * - `now` is the injected clock (expiry stamps, durations, backstop deadline);
+ *   defaults to Date.now.
  */
 type AgentProcessorDeps = {
+  ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
-  /** Injected clock (expiry stamps + backstop deadline); defaults to Date.now. */
   now?: () => number;
 };
 
+/** Page size for full-journal reads (prompt building, currency checks). */
+const CONSUMED_EVENTS_PAGE_SIZE = 500;
+
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
-  readonly #scheduledRequestsWithActiveTimers = new Set<string>();
+
+  // Incarnation-local bookkeeping. Dies with every eviction, and that is fine:
+  // it is the "actual" half of reconciliation, never the source of truth.
+  /** Armed debounce timers by requestId; `cancel()` disarms without firing. */
+  readonly #scheduledRequestTimers = new Map<string, { cancel: () => void }>();
+  /** llmRequestOffsets with an execution alive in THIS incarnation. */
+  readonly #liveLlmExecutions = new Set<number>();
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
   }
+
+  // ---------------------------------------------------------------------------
+  // Lane 1: the fold. The switch lives in `reduceAgentEvent` (module level)
+  // so off-runtime refolds — prompt building, request-currency checks — run
+  // the exact same projection.
+  // ---------------------------------------------------------------------------
 
   protected override reduce({
     event,
@@ -41,6 +84,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }: Parameters<StreamProcessor<AgentProcessorContract>["reduce"]>[0]) {
     return reduceAgentEvent({ event, state });
   }
+
+  // ---------------------------------------------------------------------------
+  // Lane 2: per-event side effects. One switch; every arm is a short append
+  // (blockProcessorWhile) or a droppable attempt whose outcome the reconcile
+  // lane recovers (runInBackground).
+  // ---------------------------------------------------------------------------
 
   protected override processEvent({
     append,
@@ -93,9 +142,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       }
       case "events.iterate.com/agent/input-added": {
-        // Scheduling the next LLM request is derived from reduced state at the
-        // end of the batch (see #settleLlmRequestScheduling); the only
-        // per-event side effect is interrupting a request already underway.
+        // Scheduling the next LLM request is derived from reduced state in the
+        // reconcile lane (#reconcileLlmScheduling); the only per-event side
+        // effect is interrupting a request already underway.
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interrupted = previousState.currentRequest;
         if (interrupted === null) return;
@@ -104,25 +153,45 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       case "events.iterate.com/agent/llm-request-scheduled":
         // The debounce timer is a droppable ATTEMPT: the scheduled event is
-        // the durable evidence, and #settleLlmRequestScheduling re-derives a
-        // lost timer from the fold. Losing this closure costs latency, never
-        // the request.
-        this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
+        // the durable evidence, and #reconcileLlmScheduling re-derives a lost
+        // timer from the fold. Losing this closure costs latency, never the
+        // request. A scheduled-phase cancel disarms it (see the cancelled
+        // case below) so an interrupted turn can never fire its request.
         runInBackground(async () => {
-          await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
+          const requestId = event.payload.requestId;
+          const fired = await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => resolve(true), event.payload.debounceMs);
+            this.#scheduledRequestTimers.set(requestId, {
+              cancel: () => {
+                clearTimeout(timer);
+                resolve(false);
+              },
+            });
+          });
           try {
+            if (!fired) return;
             await append(
               this.#buildLlmRequestRequested({
                 model: event.payload.model,
-                provider: event.payload.provider,
-                requestId: event.payload.requestId,
+                requestId,
                 scheduledOffset: event.offset,
               }),
             );
           } finally {
-            this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
+            this.#scheduledRequestTimers.delete(requestId);
           }
         });
+        return;
+      // The LLM starts in the reconcile lane (#reconcileLlmObligations), not
+      // here — so a mid-refold never dials env.AI for a long-settled request.
+      case "events.iterate.com/agent/llm-request-requested":
+        return;
+      case "events.iterate.com/agent/llm-request-cancelled":
+        // A cancel during the debounce window disarms the armed timer, so the
+        // interrupted request never fires its llm-request-requested. Safe on
+        // refold: replayed cancels find no armed timer and no-op.
+        if (event.payload.phase !== "scheduled") return;
+        this.#scheduledRequestTimers.get(event.payload.requestId)?.cancel();
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
@@ -162,14 +231,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // model-visible input, exactly like a thrown script. Below the
       // consecutive-failure cap the input triggers a retry so the model can
       // react (fix its request, tell the user what happened); at the cap it
-      // sits in context untriggered so a persistent provider failure (bad key,
-      // outage) cannot retry-loop — the next user message resumes normally.
+      // sits in context untriggered so a persistent failure (bad model name,
+      // vendor outage) cannot retry-loop — the next user message resumes
+      // normally.
       case "events.iterate.com/agent/llm-request-completed": {
         const result = event.payload.result;
         if (result.status !== "failure") return;
         if (
           previousState.currentRequest?.phase !== "requested" ||
-          previousState.currentRequest.llmRequestId !== event.payload.llmRequestId
+          previousState.currentRequest.llmRequestOffset !== event.payload.llmRequestOffset
         ) {
           // Stale completion (e.g. the request was already cancelled) — the
           // reducer ignored it, so don't render an error input for it either.
@@ -182,7 +252,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             idempotencyKey: this.idempotencyKey("render-llm-failure", event),
             payload: {
               content:
-                `Your LLM request failed (${event.payload.provider}):\n\`\`\`\n${result.error.message}\n\`\`\`` +
+                `Your LLM request failed:\n\`\`\`\n${result.error.message}\n\`\`\`` +
                 (retry
                   ? ""
                   : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
@@ -199,30 +269,121 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
   }
 
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
+  // ---------------------------------------------------------------------------
+  // Lane 3: reconciliation. The base calls this only for AT-HEAD batches, so
+  // neither pass needs its own mid-refold gate: a catch-up fold can never
+  // dial env.AI for a long-settled request or journal a false failure.
+  // ---------------------------------------------------------------------------
+
+  protected override async reconcile(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
   ): Promise<void> {
-    await super.processEventBatch(args);
-    await this.#settleLlmRequestScheduling(args);
+    await this.#reconcileLlmObligations(args);
+    await this.#reconcileLlmScheduling(args);
   }
 
   /**
-   * The LLM-request scheduling decision, derived from reduced state once per
-   * batch after the whole fold — never per event, where appends made earlier
-   * in the same batch are invisible. "A trigger is pending and no request is
-   * current" means exactly one llm-request-scheduled for the current request
-   * generation; the generation-keyed idempotency makes every re-derivation
-   * (many inputs in one batch, chunked delivery, crash replay) collapse into
-   * the same stream event.
+   * Open LLM obligations (the fold's `llmRequests`) against this incarnation's
+   * live executions:
+   *
+   * - `requested`, current (or nothing is current — bare-journal recovery),
+   *   not live, not expired → START the attempt
+   * - `requested` but another request is current → settle as superseded
+   *   failure WITHOUT dialing: a stray requested event (raw append, an
+   *   abandoned turn) must never run a parallel LLM turn nobody asked for
+   * - `requested` but expired → settle as expired failure
+   * - `started`, not live → CANCEL as durable-object-crashed (in-flight when
+   *   the incarnation died — kill/reset/eviction). Never re-drive: the model
+   *   may have partially streamed, and a cancel is the honest journal fact.
+   *   The cancel's reducer re-queues the trigger, so the turn RESUMES with a
+   *   fresh request instead of silently dropping the user's question.
    */
-  async #settleLlmRequestScheduling(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
+  async #reconcileLlmObligations(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
   ): Promise<void> {
-    // At-head gate (see OpenAiWsProcessor.processEventBatch): scheduling
-    // decisions and the backstop must never fire from a mid-catch-up fold —
-    // a long-settled request transiently looks `requested` mid-refold, and
-    // backstopping it would journal a false failure.
-    if (args.checkpointOffset < args.streamMaxOffset) return;
+    const now = this.#now();
+    const cancelCrashed: number[] = [];
+    const settleAsFailed: { llmRequestOffset: number; message: string }[] = [];
+    for (const [key, request] of Object.entries(args.state.llmRequests)) {
+      const llmRequestOffset = Number(key);
+      if (this.#liveLlmExecutions.has(llmRequestOffset)) continue;
+      if (request.status === "requested" && now >= request.expiresAt) {
+        settleAsFailed.push({
+          llmRequestOffset,
+          message:
+            "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
+        });
+        continue;
+      }
+      if (request.status === "requested") {
+        const isCurrent =
+          args.state.currentRequest?.phase === "requested" &&
+          args.state.currentRequest.llmRequestOffset === llmRequestOffset;
+        if (!isCurrent && args.state.currentRequest !== null) {
+          settleAsFailed.push({
+            llmRequestOffset,
+            message:
+              "LLM request is not the agent's current request (superseded or raw-appended); settled by the reconciler without starting an attempt.",
+          });
+          continue;
+        }
+        this.#liveLlmExecutions.add(llmRequestOffset);
+        args.runInBackground(async () => {
+          try {
+            await this.#executeLlmRequest({ llmRequestOffset, model: request.model });
+          } finally {
+            this.#liveLlmExecutions.delete(llmRequestOffset);
+          }
+        });
+        continue;
+      }
+      cancelCrashed.push(llmRequestOffset);
+    }
+    if (cancelCrashed.length === 0 && settleAsFailed.length === 0) return;
+    args.blockProcessorWhile(async () => {
+      for (const llmRequestOffset of cancelCrashed) {
+        console.error("[agent] cancelling in-flight llm request after durable-object crash", {
+          llmRequestOffset,
+        });
+        await args.append({
+          type: "events.iterate.com/agent/llm-request-cancelled",
+          idempotencyKey: this.idempotencyKey(
+            `llm-request-cancelled@requested:${llmRequestOffset}`,
+          ),
+          payload: {
+            phase: "requested",
+            reason: "durable-object-crashed",
+            llmRequestOffset,
+          },
+        });
+      }
+      for (const { llmRequestOffset, message } of settleAsFailed) {
+        console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
+        await args.append({
+          type: "events.iterate.com/agent/llm-request-completed",
+          idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
+          payload: {
+            durationMs: 0,
+            llmRequestOffset,
+            result: { status: "failure", error: { message } },
+          },
+        });
+      }
+    });
+  }
+
+  /**
+   * The LLM-request scheduling decision, derived from the batch's final fold —
+   * never per event, where appends made earlier in the same batch are
+   * invisible. "A trigger is pending and no request is current" means exactly
+   * one llm-request-scheduled for the current request generation; the
+   * generation-keyed idempotency makes every re-derivation (many inputs in
+   * one batch, chunked delivery, crash replay) collapse into the same stream
+   * event.
+   */
+  async #reconcileLlmScheduling(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+  ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
@@ -251,46 +412,47 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         payload: {
           debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
           model: state.llmConfig.model,
-          provider: state.llmProvider,
           requestId: `llm-request:gen-${state.requestGeneration}`,
         },
       });
       return;
     }
     if (state.currentRequest.phase === "requested") {
-      // The BACKSTOP: providers settle their own undriven requests, so a
-      // `requested` this old means the provider layer never answered at all.
-      // Settling it un-wedges the queue — the failure input (rendered by
-      // processEvent above on the next batch) tells the model what happened.
+      // Last-resort backstop. Normally dead code: the obligation pass above
+      // settles every open request (attempts self-cap at the expiry deadline,
+      // crashed attempts cancel, expired intents fail), so this only fires
+      // for folds the lifecycle didn't produce — hand-seeded checkpoints,
+      // raw-append journals — or a reconciliation bug. The completion key is
+      // the SAME one every other settle lane uses, so the backstop, the
+      // obligation pass, and any late real settle collapse to one durable
+      // outcome instead of double-failing the request.
       const requestedAt = state.currentRequest.requestedAt;
       if (requestedAt === undefined) return;
       if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
-      const llmRequestId = state.currentRequest.llmRequestId;
+      const llmRequestOffset = state.currentRequest.llmRequestOffset;
       await args.append({
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: `agent/backstop-completed@${llmRequestId}`,
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
         payload: {
           durationMs: this.#now() - requestedAt,
-          llmRequestId,
-          provider: state.currentRequest.provider ?? state.llmProvider,
+          llmRequestOffset,
           result: {
             status: "failure",
             error: {
-              message: `No LLM provider settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
+              message: `No LLM attempt settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
             },
           },
         },
       });
       return;
     }
-    if (this.#scheduledRequestsWithActiveTimers.has(state.currentRequest.requestId)) return;
+    if (this.#scheduledRequestTimers.has(state.currentRequest.requestId)) return;
     // No active timer for this scheduled request: the DO restarted and lost the
     // debounce. Fire llm-request-requested immediately. The idempotency key
     // makes this safe if the timer also fires concurrently.
     await args.append(
       this.#buildLlmRequestRequested({
         model: state.llmConfig.model,
-        provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
         scheduledOffset: state.currentRequest.scheduledOffset,
       }),
@@ -302,18 +464,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * llm-request-scheduled event, and the SHARED key (per scheduled offset) is
    * what collapses that race to a single append; building the whole event in
    * one place also keeps the expiry stamp and key from drifting apart. */
-  #buildLlmRequestRequested(input: {
-    model: string;
-    provider: AgentState["llmProvider"];
-    requestId: string;
-    scheduledOffset: number;
-  }) {
+  #buildLlmRequestRequested(input: { model: string; requestId: string; scheduledOffset: number }) {
     return {
       type: "events.iterate.com/agent/llm-request-requested" as const,
       idempotencyKey: this.idempotencyKey(`llm-request-requested@${input.scheduledOffset}`),
       payload: {
         model: input.model,
-        provider: input.provider,
         requestId: input.requestId,
         expiresAt: this.#now() + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
       },
@@ -338,78 +494,146 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     return {
       type: "events.iterate.com/agent/llm-request-cancelled" as const,
       idempotencyKey: this.idempotencyKey(
-        `llm-request-cancelled@requested:${request.llmRequestId}`,
+        `llm-request-cancelled@requested:${request.llmRequestOffset}`,
       ),
       payload: {
         phase: "requested" as const,
         reason: "interrupted-by-user-input" as const,
-        llmRequestId: request.llmRequestId,
+        llmRequestOffset: request.llmRequestOffset,
       },
     };
   }
-}
 
-export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
-  let state = AgentProcessorContract.stateSchema.parse({});
-  for (const event of events) {
+  /**
+   * One LLM attempt, start to durable outcome. Journals started-evidence,
+   * dials Workers AI (deadline-capped in the transport), streams chunk
+   * events, and settles with exactly one llm-request-completed — success or
+   * failure. Runs as a droppable background attempt; #reconcileLlmObligations
+   * recovers the outcome if this incarnation dies mid-flight.
+   */
+  async #executeLlmRequest(input: { llmRequestOffset: number; model: string }): Promise<void> {
+    const { llmRequestOffset, model } = input;
+    const startedAt = this.#now();
+    // Started-evidence outside the try: if this append fails the model was
+    // never dialed, so no completion may be appended — the obligation stays
+    // `requested` and a later reconciliation retries the attempt.
+    await this.append({
+      type: "events.iterate.com/agent/llm-request-started",
+      idempotencyKey: this.idempotencyKey(`llm-request-started@${llmRequestOffset}`),
+      payload: { llmRequestOffset, model },
+    });
+
     try {
-      state = reduceAgentEvent({
-        event: AgentProcessorContract.parseEvent(event) as AgentConsumedEvent,
-        state,
+      const ai = this.deps.ai;
+      if (ai === undefined) {
+        throw new Error("Agent processor has no AI binding configured.");
+      }
+      const body = buildAgentLlmRequestBody({
+        events: await this.#readConsumedEvents(),
+        llmRequestOffset,
       });
-    } catch {
-      continue;
+      const completion = await runWorkersAiAttempt({
+        ai,
+        // The attempt's whole vendor phase (dial + stream drain) self-caps at
+        // the intent-expiry horizon, so a wedged binding releases the live
+        // set here instead of pinning the obligation until the backstop.
+        deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
+        // Workers AI chat bodies are text-only here: file attachments flatten
+        // to hint lines telling the agent how to fetch/convert the bytes.
+        messages: body.messages.map((message) => ({
+          role: message.role,
+          content: flattenMessageToText(message),
+        })),
+        model,
+        onChunk: async (chunk, index) => {
+          await this.append({
+            type: "events.iterate.com/agent/llm-response-chunk",
+            idempotencyKey: this.idempotencyKey(`llm-response-chunk@${llmRequestOffset}:${index}`),
+            payload: { chunk: jsonCompatible(chunk), llmRequestOffset, sequence: index },
+          });
+        },
+      });
+
+      // Output and completion are one atomic append: the same information
+      // triggers both facts, and a crash between two separate appends would
+      // leave an answered turn looking crashed (output in history, obligation
+      // still open — the crash-cancel would then re-run an answered turn).
+      const completedEvent = {
+        type: "events.iterate.com/agent/llm-request-completed" as const,
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
+        payload: {
+          durationMs: this.#now() - startedAt,
+          llmRequestOffset,
+          result: {
+            status: "success" as const,
+            rawResponse: completion.rawResponse,
+            ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+          },
+        },
+      };
+      if (await this.#isRequestStillCurrent({ llmRequestOffset })) {
+        await this.append(
+          {
+            type: "events.iterate.com/agent/output-added",
+            idempotencyKey: this.idempotencyKey(`output-added@${llmRequestOffset}`),
+            payload: { content: completion.text, llmRequestOffset },
+          },
+          completedEvent,
+        );
+      } else {
+        await this.append(completedEvent);
+      }
+    } catch (error) {
+      await this.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
+        payload: {
+          durationMs: this.#now() - startedAt,
+          llmRequestOffset,
+          result: {
+            status: "failure",
+            error: { message: stringifyError(error) },
+          },
+        },
+      });
     }
   }
-  return state;
+
+  /**
+   * The whole journal's consumed subset, paged from offset 0 — the one read
+   * behind prompt building and the request-currency check. Filtering to
+   * `consumes` keeps bulk emitted-only types (response chunks) out of the
+   * transfer; paging (rather than one capped read) means long histories are
+   * never silently truncated.
+   */
+  async #readConsumedEvents(): Promise<StreamEvent[]> {
+    const events: StreamEvent[] = [];
+    using pager = this.stream.readEvents({
+      afterOffset: 0,
+      eventTypes: this.contract.consumes,
+      limit: CONSUMED_EVENTS_PAGE_SIZE,
+    });
+    for (;;) {
+      const page = await pager.next();
+      events.push(...page);
+      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return events;
+    }
+  }
+
+  /** Re-folds committed history right before publishing output: a request the
+   * user has since interrupted must not add its answer to the conversation. */
+  async #isRequestStillCurrent(input: { llmRequestOffset: number }) {
+    const state = reduceAgentEvents(await this.#readConsumedEvents());
+    return (
+      state.currentRequest?.phase === "requested" &&
+      state.currentRequest.llmRequestOffset === input.llmRequestOffset
+    );
+  }
 }
 
-/** One agent-history message as providers receive it. */
-export type AgentChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-  files?: AgentFileAttachment[];
-};
-
-function buildLlmChatRequest(state: AgentState): { messages: AgentChatMessage[] } {
-  return {
-    messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
-  };
-}
-
-/**
- * The model-visible text for a file the current model cannot ingest natively:
- * never fail the turn — tell the agent where the bytes live and how to read
- * or convert them, and let it act (fetch via itx.files, convert via
- * itx.ai.toMarkdown) on its next script.
- */
-export function renderFileHintLine(file: AgentFileAttachment): string {
-  return (
-    `[Attached file: ${file.filename} (${file.contentType}, ${file.size} bytes) — ` +
-    `bytes: await itx.files.get(${JSON.stringify(file.path)}).bytes(); ` +
-    `convert: itx.ai.toMarkdown; public url: ${file.url}]`
-  );
-}
-
-/**
- * Flattens one history message to plain text: content plus a hint line per
- * attachment. Providers without native file support (or for non-image files)
- * render attachments this way.
- */
-export function flattenMessageToText(message: AgentChatMessage): string {
-  const files = message.files ?? [];
-  if (files.length === 0) return message.content;
-  return [message.content, ...files.map(renderFileHintLine)].join("\n");
-}
-
-export function buildAgentLlmRequestBody(input: {
-  events: readonly StreamEvent[];
-  llmRequestId: number;
-}) {
-  return buildLlmChatRequest(
-    reduceAgentEvents(input.events.filter((event) => event.offset <= input.llmRequestId)),
-  );
-}
+// =============================================================================
+// The fold: one pure switch per consumed event.
+// =============================================================================
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const { event, state } = input;
@@ -442,12 +666,11 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         history: [...state.history, { role: "assistant", content: event.payload.content }],
       };
     case "events.iterate.com/agent/llm-provider-selected":
-      if (event.payload.ifUnset && state.llmProviderConfigured) return state;
+      if (event.payload.ifUnset && state.llmConfigConfigured) return state;
       return {
         ...state,
         llmConfig: { model: event.payload.model },
-        llmProvider: event.payload.provider,
-        llmProviderConfigured: true,
+        llmConfigConfigured: true,
       };
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
@@ -462,36 +685,68 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         autonomousTurnCount:
           state.pendingTriggerSource === "agent-loop" ? state.autonomousTurnCount + 1 : 0,
       };
-    case "events.iterate.com/agent/llm-request-requested":
+    case "events.iterate.com/agent/llm-request-requested": {
+      const key = String(event.offset);
+      const expiresAt =
+        event.payload.expiresAt ??
+        Date.parse(event.createdAt) + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS;
+      const withLifecycle: AgentState = {
+        ...state,
+        llmRequests: {
+          ...state.llmRequests,
+          [key]: {
+            status: "requested" as const,
+            model: event.payload.model,
+            expiresAt,
+          },
+        },
+      };
       if (
         state.currentRequest?.phase !== "scheduled" ||
         state.currentRequest.requestId !== event.payload.requestId
-      )
-        return state;
+      ) {
+        return withLifecycle;
+      }
       return {
-        ...state,
+        ...withLifecycle,
         currentRequest: {
           phase: "requested",
-          llmRequestId: event.offset,
+          llmRequestOffset: event.offset,
           requestedAt: Date.parse(event.createdAt),
-          provider: event.payload.provider,
         },
         pendingTriggerOffset: null,
       };
-    case "events.iterate.com/agent/llm-request-completed":
-      if (
-        state.currentRequest?.phase !== "requested" ||
-        state.currentRequest.llmRequestId !== event.payload.llmRequestId
-      ) {
-        return state;
-      }
+    }
+    case "events.iterate.com/agent/llm-request-started": {
+      const key = String(event.payload.llmRequestOffset);
+      const existing = state.llmRequests[key];
+      if (existing === undefined) return state;
       return {
         ...state,
+        llmRequests: {
+          ...state.llmRequests,
+          [key]: { ...existing, status: "started" as const },
+        },
+      };
+    }
+    case "events.iterate.com/agent/llm-request-completed": {
+      const llmRequests = { ...state.llmRequests };
+      delete llmRequests[String(event.payload.llmRequestOffset)];
+      const next: AgentState = { ...state, llmRequests };
+      if (
+        state.currentRequest?.phase !== "requested" ||
+        state.currentRequest.llmRequestOffset !== event.payload.llmRequestOffset
+      ) {
+        return next;
+      }
+      return {
+        ...next,
         consecutiveLlmFailures:
           event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
         currentRequest: null,
         requestGeneration: state.requestGeneration + 1,
       };
+    }
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
@@ -500,12 +755,35 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
-      if (
-        event.payload.phase === "requested" &&
-        state.currentRequest?.phase === "requested" &&
-        state.currentRequest.llmRequestId === event.payload.llmRequestId
-      ) {
-        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
+      if (event.payload.phase === "requested") {
+        // Always drop the obligation (a crash-cancel may arrive when
+        // currentRequest was never set, e.g. a bare seeded requested+started
+        // history). Clear currentRequest only when this was the agent-visible
+        // current attempt.
+        const llmRequests = { ...state.llmRequests };
+        delete llmRequests[String(event.payload.llmRequestOffset)];
+        const isCurrent =
+          state.currentRequest?.phase === "requested" &&
+          state.currentRequest.llmRequestOffset === event.payload.llmRequestOffset;
+        if (!isCurrent) return { ...state, llmRequests };
+        return {
+          ...state,
+          llmRequests,
+          currentRequest: null,
+          requestGeneration: state.requestGeneration + 1,
+          // A user interrupt needs no re-queue: the interrupting input IS the
+          // next trigger. A crash-cancel has no such input — the user asked
+          // and never got an answer — so the cancel itself re-queues the turn
+          // and the scheduling reconciler fires a fresh request. Source
+          // "agent-loop": a crash-looping host burns down the autonomous-turn
+          // breaker instead of retrying forever.
+          ...(event.payload.reason === "durable-object-crashed"
+            ? {
+                pendingTriggerOffset: event.offset,
+                pendingTriggerSource: "agent-loop" as const,
+              }
+            : {}),
+        };
       }
       return state;
     case "events.iterate.com/agent/loop-stopped":
@@ -514,32 +792,35 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
       };
-    case "events.iterate.com/capability-host/script-execution-requested":
-      return {
-        ...state,
-        inProgressScriptExecutions: [
-          ...state.inProgressScriptExecutions.filter(
-            (script) => script.executionId !== event.payload.executionId,
-          ),
-          {
-            code: event.payload.code,
-            executionId: event.payload.executionId,
-            requestedOffset: event.offset,
-            startedAt: event.createdAt,
-          },
-        ],
-      };
-    case "events.iterate.com/capability-host/script-execution-completed":
-      return {
-        ...state,
-        inProgressScriptExecutions: state.inProgressScriptExecutions.filter(
-          (script) => script.executionId !== event.payload.executionId,
-        ),
-        scriptExecutionsCompleted: [...state.scriptExecutionsCompleted, event.payload.executionId],
-      };
     default:
       return state;
   }
+}
+
+/**
+ * Folds a raw journal into agent state outside the processor runtime — the
+ * read path behind prompt building and request-currency checks. Non-consumed
+ * types and events whose shape fails the contract parse are skipped exactly
+ * like the live fold skips them (streams accept raw appends by design; a
+ * malformed event is a fact of the log, not an exception). Reducer bugs, by
+ * contrast, throw — swallowing them would silently fold wrong state.
+ */
+export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
+  let state = AgentProcessorContract.stateSchema.parse({});
+  for (const event of events) {
+    const definition = getConsumedEventDefinition({
+      contract: AgentProcessorContract,
+      eventType: event.type,
+    });
+    if (definition === undefined) continue;
+    const parsed = cachedEventSchema({
+      type: event.type,
+      payloadSchema: definition.payloadSchema,
+    }).safeParse(event);
+    if (!parsed.success) continue;
+    state = reduceAgentEvent({ event: parsed.data as AgentConsumedEvent, state });
+  }
+  return state;
 }
 
 function agentInputTriggerSource(
@@ -554,6 +835,61 @@ function agentInputTriggerSource(
     : "user";
 }
 
+// =============================================================================
+// Building the model-facing chat request.
+// =============================================================================
+
+/** One agent-history message as the model receives it. */
+type AgentChatMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+  files?: AgentFileAttachment[];
+};
+
+/** The chat request is a pure refold of committed history up to the
+ * llm-request-requested event's offset, so every retry of the same request
+ * sees the same conversation. */
+export function buildAgentLlmRequestBody(input: {
+  events: readonly StreamEvent[];
+  llmRequestOffset: number;
+}): { messages: AgentChatMessage[] } {
+  const state = reduceAgentEvents(
+    input.events.filter((event) => event.offset <= input.llmRequestOffset),
+  );
+  return {
+    messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
+  };
+}
+
+/**
+ * Flattens one history message to plain text: content plus a hint line per
+ * attachment. Models without native file support (or non-image files) see
+ * attachments this way.
+ */
+export function flattenMessageToText(message: AgentChatMessage): string {
+  const files = message.files ?? [];
+  if (files.length === 0) return message.content;
+  return [message.content, ...files.map(renderFileHintLine)].join("\n");
+}
+
+/**
+ * The model-visible text for a file the current model cannot ingest natively:
+ * never fail the turn — tell the agent where the bytes live and how to read
+ * or convert them, and let it act (fetch via itx.files, convert via
+ * itx.ai.toMarkdown) on its next script.
+ */
+function renderFileHintLine(file: AgentFileAttachment): string {
+  return (
+    `[Attached file: ${file.filename} (${file.contentType}, ${file.size} bytes) — ` +
+    `bytes: await itx.files.get(${JSON.stringify(file.path)}).bytes(); ` +
+    `convert: itx.ai.toMarkdown; public url: ${file.url}]`
+  );
+}
+
+// =============================================================================
+// Codemode: scripts out of outputs, script results back into inputs.
+// =============================================================================
+
 const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
 
 /**
@@ -562,6 +898,20 @@ const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
  * for the user.
  */
 const MAX_CONSECUTIVE_LLM_FAILURES = 3;
+
+function extractAsyncJsSnippet(content: string): string | null {
+  // Fences count only at line starts: scripts legitimately carry ``` inside
+  // string literals (chat messages formatted as markdown), and in valid JS
+  // those always sit mid-line — a raw newline cannot appear in a string
+  // literal, and an unescaped ``` would terminate a template literal. A fence
+  // match anywhere used to cut the script at the first embedded ``` and
+  // execute an unparseable prefix (unclosed string literal).
+  const fenced = content.match(
+    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
+  );
+  const code = (fenced?.[1] ?? content).trim();
+  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
+}
 
 // The "tool result" half of the codemode loop: a finished script execution
 // renders back into model-visible history so the next turn can look at the
@@ -666,16 +1016,11 @@ function spillNotice(input: { path: string; totalChars: number }): string {
   ].join("\n");
 }
 
-function extractAsyncJsSnippet(content: string): string | null {
-  // Fences count only at line starts: scripts legitimately carry ``` inside
-  // string literals (chat messages formatted as markdown), and in valid JS
-  // those always sit mid-line — a raw newline cannot appear in a string
-  // literal, and an unescaped ``` would terminate a template literal. A fence
-  // match anywhere used to cut the script at the first embedded ``` and
-  // execute an unparseable prefix (unclosed string literal).
-  const fenced = content.match(
-    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
-  );
-  const code = (fenced?.[1] ?? content).trim();
-  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
+function stringifyError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }

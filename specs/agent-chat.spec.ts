@@ -1,4 +1,5 @@
 import { spinnerWaiter } from "middlewright";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The feed marks settled chat messages with data-testid="agent-feed-message"
@@ -6,12 +7,26 @@ import { test } from "./test-support/test.ts";
 // styling classes.
 const assistantMessage = '[data-testid="agent-feed-message"][data-kind="assistant"]';
 const userMessage = '[data-testid="agent-feed-message"][data-kind="user"]';
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
-test("onboarding agent replies to a chat message in the feed", async ({ helpers, page }) => {
-  // Deviation from the suite's default timeout: two full LLM turns (the
-  // unprompted greeting + our reply) don't fit the default budget.
-  test.setTimeout(240_000);
+test("onboarding agent replies to a chat message in the feed", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  // Two full onboarding LLM turns (unprompted greeting can itself be multi-
+  // script) plus UI paint. Under preview load this regularly exceeds 90s/turn.
+  test.setTimeout(480_000);
   await using fixture = await helpers.createFixture("agent-chat");
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+
+  // Backend wait (itx) is the durable signal that a turn finished; UI assert
+  // confirms the feed painted the same event. Decouples LLM latency from
+  // "did the stream subscription land in the browser".
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
 
@@ -32,16 +47,33 @@ test("onboarding agent replies to a chat message in the feed", async ({ helpers,
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     // The onboarding agent greets unprompted; let that turn settle first so
     // our message starts a clean turn instead of merging into the greeting.
-    await page.locator(assistantMessage).first().waitFor({ timeout: 90_000 });
+    // afterOffset: 0 — greeting may already be committed before we open the
+    // wait (createFixture finishes after agent birth + kickoff).
+    const greeting = await agent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [WEB_MESSAGE_SENT],
+      timeoutMs: 180_000,
+    });
+    await page.locator(assistantMessage).first().waitFor({ timeout: 30_000 });
 
     await page.getByPlaceholder("Message this agent").fill(message);
     await page.getByRole("button", { name: "Send message" }).click();
 
     await page.locator(userMessage).getByText(marker).waitFor({ timeout: 30_000 });
+
+    await agent.stream.waitForEvent({
+      afterOffset: greeting.offset,
+      eventTypes: [WEB_MESSAGE_SENT],
+      timeoutMs: 180_000,
+      predicate: (event) => {
+        const text = (event.payload as { message?: unknown } | undefined)?.message;
+        return typeof text === "string" && text.includes(marker);
+      },
+    });
     await page
       .locator(assistantMessage)
       .filter({ hasText: marker })
       .first()
-      .waitFor({ timeout: 90_000 });
+      .waitFor({ timeout: 30_000 });
   });
 });

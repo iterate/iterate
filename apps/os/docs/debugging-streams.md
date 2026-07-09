@@ -41,24 +41,25 @@ doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
 ```
 
 This is useful for confirming whether a failure is in stream append ordering,
-subscriber delivery, processor catch-up, provider execution, or the final itx
+subscriber delivery, processor catch-up, agent LLM execution, or the final itx
 script that sends the user-visible response.
 
-## Provider Comparison
+## Agent LLM turn inspection
 
-Use two fresh sibling agent streams under the same project and send the same
-message through `pnpm cli itx agent-smoke` or
-`itx.agents.get(path).sendMessage(message)`. Compare the stream events around:
+Use a fresh agent stream and send a message through `pnpm cli itx agent-smoke`
+or `itx.agents.get(path).sendMessage(message)`. Compare the stream events
+around:
 
-- `events.iterate.com/openai-ws/llm-request-started`
-- `events.iterate.com/openai-ws/llm-request-completed`
+- `events.iterate.com/agent/llm-request-started`
+- `events.iterate.com/agent/llm-response-chunk`
+- `events.iterate.com/agent/llm-request-completed`
 - `events.iterate.com/capability-host/script-execution-requested`
 - `events.iterate.com/capability-host/script-execution-completed`
 - `events.iterate.com/agents/web-message-sent`
 
-If raw provider transcript events dominate the stream before script execution
-starts, inspect Cloudflare traces for stream subscriber delivery and processor
-runtime spans.
+If streamed LLM chunks dominate the stream before script execution starts,
+inspect Cloudflare traces for stream subscriber delivery and processor runtime
+spans.
 
 ## Cloudflare Traces
 
