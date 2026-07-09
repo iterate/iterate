@@ -31,7 +31,7 @@ import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
  */
 export const TelegramAgentProcessorContract = defineProcessorContract({
   slug: "telegram-agent",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Handles Telegram-specific behavior for one routed Telegram agent stream.",
   stateSchema: z.object({
     botId: z.string().optional(),
@@ -69,6 +69,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/input-added",
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/telegram/message-sent",
+    "events.iterate.com/capability-host/script-execution-requested",
   ],
 });
 

@@ -104,10 +104,28 @@ export class TelegramAgentProcessor extends StreamProcessor<
         // back through the webhook, and answering them is a feedback loop.
         if (target?.fromIsBot === true) return;
 
-        const newCommand =
-          target?.kind === "message"
-            ? telegramNewCommand(readRecord(readRecord(event.payload.body)?.message)?.text)
-            : null;
+        const messageText = readRecord(readRecord(event.payload.body)?.message)?.text;
+        if (target?.kind === "message" && isTelegramDebugCommand(messageText)) {
+          // /debug mirrors Slack's !debug: compiled straight to a script
+          // execution — no LLM turn, no agent input. The script posts the
+          // debug dump back through the journaled send pair on THIS session
+          // stream, so it lands in the right thread with provenance like the
+          // /new ack. (Slack's general !<expression> compiler is deliberately
+          // NOT ported — /debug only for now.)
+          blockProcessorWhile(async () => {
+            await append({
+              type: "events.iterate.com/capability-host/script-execution-requested",
+              idempotencyKey: `telegram-agent:debug-command:${event.offset}`,
+              payload: {
+                code: compileTelegramDebugScript(this.deps.agentPath),
+                executionId: `telegram-debug-command-${event.offset}`,
+              },
+            });
+          });
+          return;
+        }
+
+        const newCommand = target?.kind === "message" ? telegramNewCommand(messageText) : null;
 
         // Human messages and button presses wake the agent; everything else
         // (edits, membership changes, channel posts by anonymous admins, …)
@@ -294,13 +312,30 @@ function coerceTelegramId(id: string): number | string {
   return Number.isSafeInteger(numeric) ? numeric : id;
 }
 
-/** The exact thread-reading call the hint and the system prompt both teach:
- * webhook-received + send-requested ARE the two-sided transcript (user text
- * in `payload.body.message.text`, bot text in `payload.text`) — an unfiltered
- * getEvents returns the OLDEST raw events, which on a real stream is
- * subscriber/llm plumbing with likely zero conversation in the first page. */
-export function telegramThreadReadSnippet(streamPath: string): string {
-  return `await itx.streams.get(${JSON.stringify(streamPath)}).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] })`;
+/** A message of exactly `/debug` (Telegram appends `@BotUsername` in groups). */
+function isTelegramDebugCommand(text: unknown): boolean {
+  return typeof text === "string" && /^\/debug(?:@\S+)?$/.test(text.trim());
+}
+
+/**
+ * The /debug script, mirroring Slack's !debug (compileBangCommand in
+ * slack-agent-processor-implementation.ts): run itx.debug() and post the
+ * result into the chat via the journaled send on this session stream.
+ * Telegram caps message text at 4096 chars, so the dump truncates safely.
+ */
+function compileTelegramDebugScript(sessionPath: string): string {
+  return [
+    "async (itx) => {",
+    "  const debug = await itx.debug();",
+    "  const text = `Debug info:\n${debug}`;",
+    "  const limit = 4096;",
+    "  const truncated = text.length > limit ? `${text.slice(0, limit - 12)}\n…truncated` : text;",
+    `  await itx.streams.get(${JSON.stringify(sessionPath)}).append({`,
+    '    type: "events.iterate.com/telegram/send-requested",',
+    "    payload: { text: truncated },",
+    "  });",
+    "}",
+  ].join("\n");
 }
 
 function telegramWebhookAgentInput(
@@ -316,7 +351,10 @@ function telegramWebhookAgentInput(
   if (replyHintPath !== undefined) {
     lines.push(
       "",
-      `IMPORTANT: this message REPLIES to a message from a different thread: ${replyHintPath} (resolved by ${readString(replyHint?.resolvedBy) ?? "unknown"}). Before answering — and before any other exploration — read that thread's transcript: ${telegramThreadReadSnippet(replyHintPath)} (user text is in payload.body.message.text, your earlier replies in payload.text; if exactly 500 events come back, repeat with afterOffset: events.at(-1).offset to reach the recent end). Then answer in THAT thread by appending your send request to that stream instead of this one, or answer here — your judgement, but only after reading it.`,
+      // The taught read is FILTERED to the two conversation event types — an
+      // unfiltered getEvents returns the OLDEST raw events (subscriber/llm
+      // plumbing), which is how a live agent failed to recover a thread.
+      `IMPORTANT: this message REPLIES to a message from a different thread: ${replyHintPath} (resolved by ${readString(replyHint?.resolvedBy) ?? "unknown"}). Before answering — and before any other exploration — read that thread's transcript: await itx.streams.get(${JSON.stringify(replyHintPath)}).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }) (user text is in payload.body.message.text, your earlier replies in payload.text; if exactly 500 events come back, repeat with afterOffset: events.at(-1).offset to reach the recent end). Then answer in THAT thread by appending your send request to that stream instead of this one, or answer here — your judgement, but only after reading it.`,
     );
   }
   lines.push("", "```yaml", stringifyYaml(payload).trimEnd(), "```");

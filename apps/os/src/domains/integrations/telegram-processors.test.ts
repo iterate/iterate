@@ -724,6 +724,39 @@ describe("TelegramAgentProcessor", () => {
     );
   });
 
+  it("compiles /debug into a script execution (no LLM turn) that posts via the journaled send", async () => {
+    const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-8000`;
+    const { cursors, processor, stream } = setup({ agentPath });
+
+    // Telegram appends @BotUsername to commands in group chats.
+    await stream.append({
+      type: "events.iterate.com/telegram/webhook-received",
+      payload: humanMessageWebhookPayload({ text: "/debug@MishasHelperBot" }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const scripts = stream.events.filter(
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toMatchObject({
+      idempotencyKey: "telegram-agent:debug-command:1",
+      payload: { executionId: "telegram-debug-command-1" },
+    });
+    const code = (scripts[0]!.payload as { code: string }).code;
+    expect(code).toContain("await itx.debug()");
+    // The result posts through the journaled send pair on THIS session
+    // stream — right thread, full provenance, like the /new ack.
+    expect(code).toContain(`itx.streams.get("${agentPath}")`);
+    expect(code).toContain("events.iterate.com/telegram/send-requested");
+    // Telegram caps messages at 4096 chars; the dump truncates safely.
+    expect(code).toContain("…truncated");
+    // No LLM turn and no agent input — the command IS the whole handling.
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(0);
+  });
+
   it("renders the router's reply hint in the transcription with the referenced stream path", async () => {
     const { cursors, processor, stream } = setup({
       agentPath: `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-7000`,
