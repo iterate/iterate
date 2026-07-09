@@ -324,16 +324,29 @@ export class WorkspaceCore {
    * workspace branch).
    */
   async reset(): Promise<void> {
-    // Settle any in-flight materialization or write first — even a FAILING
-    // one (that is exactly when reset is needed), hence catch-and-ignore.
-    await this.#rootRefresh?.catch(() => {});
-    await this.#writeChain.catch(() => {});
-    this.#rootRefresh = undefined;
-    this.#overlayReady = undefined;
-    this.#kv.delete(ROOT_HEAD_KEY);
-    this.#kv.delete(WHITEOUTS_KEY);
-    this.#kv.delete(LEGACY_CLONE_SENTINEL_KEY);
-    await this.#wipeFilesystem();
+    // The wipe OCCUPIES the single-flight materialization slot for its whole
+    // duration: #ensureFreshRoot always awaits the slot before deciding to
+    // materialize, so no clone can interleave with the rm sweep or observe
+    // the cleared head key mid-wipe. It chains BEHIND any in-flight
+    // materialization (even a failing one — that is exactly when reset is
+    // needed, hence catch-and-ignore) and runs on the write chain, so
+    // concurrent overlay writes queue behind it rather than landing on a
+    // half-wiped tree.
+    const wipe = () =>
+      this.#serializeWrite(async () => {
+        this.#overlayReady = undefined;
+        this.#kv.delete(ROOT_HEAD_KEY);
+        this.#kv.delete(WHITEOUTS_KEY);
+        this.#kv.delete(LEGACY_CLONE_SENTINEL_KEY);
+        await this.#wipeFilesystem();
+      });
+    const run = (this.#rootRefresh ?? Promise.resolve()).catch(() => {}).then(wipe);
+    // Only vacate the slot if a newer occupant hasn't replaced this one.
+    const occupant: Promise<void> = run.finally(() => {
+      if (this.#rootRefresh === occupant) this.#rootRefresh = undefined;
+    });
+    this.#rootRefresh = occupant;
+    await occupant;
   }
 
   /**
