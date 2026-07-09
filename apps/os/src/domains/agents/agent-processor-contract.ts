@@ -8,6 +8,26 @@ export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
 
 /**
+ * How stale an llm-request-requested's INTENT may be before providers must
+ * refuse to start an attempt and settle it as expired instead. Recovery can
+ * deliver a requested event arbitrarily late (a host revived days after a
+ * crash loop); expiry is what makes late recovery safe — wake whenever,
+ * act only within the intent's validity horizon. Matches the providers'
+ * in-flight deadline: an attempt that would still be running is worth
+ * starting; one whose whole lifetime has lapsed is not.
+ */
+export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
+
+/**
+ * The agent's own outer deadline on a `requested` request, enforced by its
+ * per-batch reconciliation. Providers normally settle their own orphans; this
+ * backstop only fires when the provider layer is entirely absent (the
+ * cloudflare-ai-without-recovery class of bug), so it sits deliberately past
+ * the provider deadline + expiry.
+ */
+export const AGENT_LLM_REQUEST_BACKSTOP_MS = 15 * 60_000;
+
+/**
  * Snippet-writing guidance shared by every codemode prompt (web-chat default,
  * Slack). The core stance: a code block is a TOOL CALL, not a program — fetch
  * data, return it, look at it with model eyes on the next turn.
@@ -180,6 +200,10 @@ export const AgentProcessorContract = defineProcessorContract({
         z.object({
           phase: z.literal("requested"),
           llmRequestId: z.number().int().positive(),
+          /** Epoch ms the requested event committed (its createdAt), driving
+           * the reconciler's backstop deadline. Optional: raw appends and
+           * pre-backstop checkpoints lack it, and the backstop then skips. */
+          requestedAt: z.number().int().positive().optional(),
         }),
       ])
       .nullable()
@@ -282,6 +306,10 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
         provider: AgentLlmProvider,
         requestId: z.string(),
+        /** Epoch ms past which no provider may START an attempt; stale intent
+         * settles as an expired failure instead. Absent (raw appends), the
+         * providers default to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
+        expiresAt: z.number().int().positive().optional(),
       }),
     },
     "events.iterate.com/agent/llm-request-completed": {
@@ -352,6 +380,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
+    // The reconciler's backstop: normally providers append the completion,
+    // but a request whose provider layer never answers at all is settled by
+    // the agent itself past AGENT_LLM_REQUEST_BACKSTOP_MS.
+    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
   ],

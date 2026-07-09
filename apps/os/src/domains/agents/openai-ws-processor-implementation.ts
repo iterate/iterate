@@ -22,12 +22,8 @@ import {
   renderFileHintLine,
   type AgentChatMessage,
 } from "./agent-processor-implementation.ts";
+import { DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS } from "./agent-processor-contract.ts";
 import { OpenAiWsProcessorContract } from "./openai-ws-processor-contract.ts";
-
-type LlmRequestRequestedEvent = Extract<
-  ReturnType<typeof OpenAiWsProcessorContract.parseEvent>,
-  { type: "events.iterate.com/agent/llm-request-requested" }
->;
 
 export type OpenAiResponsesWebSocket = {
   readonly readyState: number;
@@ -68,6 +64,8 @@ export class OpenAiWsProcessor extends StreamProcessor<
     apiKey: string | null;
     createResponsesWebSocketClient?: (apiKey: string) => Promise<OpenAiResponsesWebSocket>;
     readStreamEvents(): Promise<StreamEvent[]>;
+    /** Injected clock (expiry decisions); production defaults to Date.now. */
+    now?: () => number;
   }
 > {
   readonly contract = OpenAiWsProcessorContract;
@@ -88,12 +86,11 @@ export class OpenAiWsProcessor extends StreamProcessor<
   #executionChain: Promise<unknown> = Promise.resolve();
 
   /**
-   * llmRequestIds with an execution alive in THIS incarnation. A request the
-   * durable fold shows incomplete but that no live execution owns was
-   * orphaned — the incarnation running it was evicted (deploy, hibernation)
-   * or its socket wedged past the deadline — and must be failed, or it
-   * occupies the agent's currentRequest forever and every later input queues
-   * behind it (the 2026-07-07 prd email-thread wedge).
+   * llmRequestIds with an execution alive in THIS incarnation — the "what is
+   * ACTUALLY running" half of the reconciliation. An obligation in the fold
+   * that no live execution owns has no driver: its incarnation was evicted
+   * (deploy, hibernation) or its socket wedged past the deadline, and nothing
+   * else will ever complete it (the 2026-07-07 prd email-thread wedge).
    */
   readonly #liveExecutions = new Set<number>();
 
@@ -104,92 +101,109 @@ export class OpenAiWsProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/agent/llm-request-requested": {
         if (event.payload.provider !== OpenAiWsProcessorContract.slug) return state;
-        const key = String(event.offset);
-        if (state.requests[key]?.status === "completed") return state;
         return {
           ...state,
-          requests: { ...state.requests, [key]: { status: "requested" as const } },
+          requests: {
+            ...state.requests,
+            [String(event.offset)]: {
+              status: "requested" as const,
+              model: event.payload.model,
+              expiresAt:
+                event.payload.expiresAt ??
+                Date.parse(event.createdAt) + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
+            },
+          },
         };
       }
-      case "events.iterate.com/openai-ws/llm-request-started":
+      case "events.iterate.com/openai-ws/llm-request-started": {
+        const key = String(event.payload.llmRequestId);
+        const existing = state.requests[key];
+        if (existing === undefined) return state;
         return {
           ...state,
-          requests: {
-            ...state.requests,
-            [String(event.payload.llmRequestId)]: { status: "started" as const },
-          },
+          requests: { ...state.requests, [key]: { ...existing, status: "started" as const } },
         };
+      }
+      // Terminal events settle the obligation: the entry leaves the fold, so
+      // reconciliation has nothing to say about it and the map stays small.
+      // Replays converge because events fold in order (a refold re-creates
+      // the entry at `requested` and deletes it again at its completion).
       case "events.iterate.com/openai-ws/llm-request-completed":
-        return {
-          ...state,
-          requests: {
-            ...state.requests,
-            [String(event.payload.llmRequestId)]: { status: "completed" as const },
-          },
-        };
+        return { ...state, requests: withoutKey(state.requests, event.payload.llmRequestId) };
+      case "events.iterate.com/agent/llm-request-cancelled":
+        if (event.payload.phase !== "requested") return state;
+        return { ...state, requests: withoutKey(state.requests, event.payload.llmRequestId) };
       default:
         return state;
     }
   }
 
-  protected override processEvent({
-    event,
-    runInBackground,
-    state,
-  }: Parameters<StreamProcessor<OpenAiWsProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/agent/llm-request-requested") return;
-    if (event.payload.provider !== OpenAiWsProcessorContract.slug) return;
-    const llmRequestId = event.offset;
-    if (state.requests[String(llmRequestId)]?.status === "completed") return;
-    // Registered synchronously, before any await: the same batch's orphan
-    // sweep must see this request as live.
-    this.#liveExecutions.add(llmRequestId);
-    const execution = this.#executionChain.then(() => this.#executeRequest({ event }));
-    this.#executionChain = execution.catch(() => undefined);
-    runInBackground(() => execution);
-  }
-
   /**
-   * After every batch: fail requests the durable fold shows incomplete but
-   * that no execution in THIS incarnation owns. Such a request's executing
-   * incarnation is gone (eviction mid-request advances the checkpoint —
-   * executions are runInBackground — so the requested event never redelivers)
-   * and nothing else will ever complete it; without this sweep it occupies
-   * the agent's currentRequest forever and every later input queues behind
-   * it. The failure completions use the exact idempotency keys of the normal
-   * completion path, so any race resolves to one durable outcome.
+   * The whole provider is this one end-of-batch reconciliation of DESIRED
+   * (the fold's open obligations) against ACTUAL (this incarnation's live
+   * executions), with expiry as the staleness policy:
+   *
+   * - `requested`, nobody driving it, not expired → START the attempt. This
+   *   is both the normal start (the requested event just folded) and the
+   *   lost-before-started recovery — the two cases are indistinguishable on
+   *   purpose, and neither depends on the requested event being in THIS batch.
+   * - `requested` but expired → settle as an expired failure. A revival a
+   *   week late must not fire a week-old prompt at the provider
+   *   (only-settle-past-expiry).
+   * - `started`, nobody driving it → the attempt died with its incarnation;
+   *   settle as an orphaned failure. Never re-drive: the provider may have
+   *   partially executed, and the agent re-derives a fresh request anyway.
+   *
+   * The failure completions reuse the normal completion path's idempotency
+   * keys, so a race between a late attempt and the reconciler collapses to
+   * one durable outcome at the append dedup layer. That same property makes
+   * full refolds safe: a long-completed request transiently re-enters the
+   * fold as `requested` mid-replay, and anything the reconciler appends for
+   * it dedupes against the original completion.
    */
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
-    const orphaned = Object.entries(args.state.requests)
-      .filter(
-        ([id, request]) => request.status !== "completed" && !this.#liveExecutions.has(Number(id)),
-      )
-      .map(([id]) => Number(id));
-    if (orphaned.length === 0) return;
+    const now = (this.deps.now ?? Date.now)();
+    const settle: { llmRequestId: number; message: string }[] = [];
+    for (const [id, request] of Object.entries(args.state.requests)) {
+      const llmRequestId = Number(id);
+      if (this.#liveExecutions.has(llmRequestId)) continue;
+      if (request.status === "requested" && now < request.expiresAt) {
+        // Registered synchronously, before any await: this same pass must not
+        // also classify the request as undriven.
+        this.#liveExecutions.add(llmRequestId);
+        const execution = this.#executionChain.then(() =>
+          this.#executeRequest({ llmRequestId, model: request.model }),
+        );
+        this.#executionChain = execution.catch(() => undefined);
+        args.runInBackground(() => execution);
+        continue;
+      }
+      settle.push({
+        llmRequestId,
+        message:
+          request.status === "started"
+            ? "LLM request orphaned: the incarnation executing it went away before completing (eviction or wedged socket). Failed by the reconciler; the agent's next trigger reschedules."
+            : "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
+      });
+    }
+    if (settle.length === 0) return;
     args.blockProcessorWhile(async () => {
-      for (const llmRequestId of orphaned) {
-        console.error("[openai-ws] failing orphaned llm request", { llmRequestId });
+      for (const { llmRequestId, message } of settle) {
+        console.error("[openai-ws] settling undriven llm request", { llmRequestId, message });
         await this.#appendCompletion({
           llmRequestId,
           durationMs: 0,
-          result: {
-            status: "failure" as const,
-            error: {
-              message:
-                "LLM request orphaned: the incarnation executing it went away before completing (eviction or wedged socket). Failed by the recovery sweep; the agent's next trigger reschedules.",
-            },
-          },
+          result: { status: "failure" as const, error: { message } },
         });
       }
     });
   }
 
-  async #executeRequest(input: { event: LlmRequestRequestedEvent }): Promise<void> {
-    const llmRequestId = input.event.offset;
-    const model = input.event.payload.model;
+  async #executeRequest(input: { llmRequestId: number; model: string }): Promise<void> {
+    const { llmRequestId, model } = input;
     const startedAt = Date.now();
     await this.stream.append({
       type: "events.iterate.com/openai-ws/llm-request-started",
@@ -214,10 +228,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
       try {
         completion = await this.#withRequestDeadline(
           this.#createAndConsumeResponse({
+            llmRequestId,
             messages: body.messages,
             model,
             previousResponseId: attemptedPreviousResponseId,
-            sourceEvent: input.event,
           }),
         );
       } catch (error) {
@@ -228,10 +242,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
         completion = await this.#withRequestDeadline(
           this.#createAndConsumeResponse({
             idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
+            llmRequestId,
             messages: body.messages,
             model,
             previousResponseId: null,
-            sourceEvent: input.event,
           }),
         );
       }
@@ -327,10 +341,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
 
   async #createAndConsumeResponse(input: {
     idempotencyScope?: string;
+    llmRequestId: number;
     messages: ReturnType<typeof buildAgentLlmRequestBody>["messages"];
     model: string;
     previousResponseId: string | null;
-    sourceEvent: LlmRequestRequestedEvent;
   }): Promise<{ rawResponse: unknown; responseId?: string; text: string; usage?: unknown }> {
     const connection = await this.#getConnection();
     const requestMessage = buildResponsesClientEvent({
@@ -349,7 +363,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     return await this.#consumeResponse({
       connection,
       idempotencyScope: input.idempotencyScope,
-      sourceEvent: input.sourceEvent,
+      llmRequestId: input.llmRequestId,
     });
   }
 
@@ -361,9 +375,9 @@ export class OpenAiWsProcessor extends StreamProcessor<
   async #consumeResponse(input: {
     connection: OpenAiWsConnection;
     idempotencyScope?: string;
-    sourceEvent: LlmRequestRequestedEvent;
+    llmRequestId: number;
   }): Promise<{ rawResponse: unknown; responseId?: string; text: string; usage?: unknown }> {
-    const llmRequestId = input.sourceEvent.offset;
+    const llmRequestId = input.llmRequestId;
     let sequence = 0;
     let text = "";
 
@@ -445,6 +459,17 @@ export class OpenAiWsProcessor extends StreamProcessor<
       state.currentRequest.llmRequestId === input.llmRequestId
     );
   }
+}
+
+/** Remove one llmRequestId's entry from the obligations map (terminal events). */
+function withoutKey(
+  requests: Record<string, unknown>,
+  llmRequestId: number,
+): Record<string, never> {
+  const key = String(llmRequestId);
+  if (!(key in requests)) return requests as Record<string, never>;
+  const { [key]: _settled, ...rest } = requests;
+  return rest as Record<string, never>;
 }
 
 /**

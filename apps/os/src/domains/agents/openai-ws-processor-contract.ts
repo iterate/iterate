@@ -11,14 +11,25 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
   description: "Runs agent LLM requests through OpenAI Responses WebSocket mode.",
   stateSchema: z.object({
     /**
-     * Per-request lifecycle fold. "requested" is set from the agent's
-     * llm-request-requested (this provider only) BEFORE any execution work, so
-     * a request the executing incarnation died on — between accepting it and
-     * appending its completion — is visible as an orphan to the next
-     * incarnation's recovery sweep (see recoverOrphanedRequests).
+     * The provider's OBLIGATIONS: every request of this provider's that has
+     * not reached a terminal event (completed or cancelled), keyed by
+     * llmRequestId. This is the "what should be running" half of the
+     * end-of-batch reconciliation — the other half is the incarnation's live
+     * execution set. Entries carry everything needed to START an attempt from
+     * state alone (model, expiry), so recovery never depends on the requested
+     * event being redelivered. Terminal events delete the entry.
      */
     requests: z
-      .record(z.string(), z.object({ status: z.enum(["requested", "started", "completed"]) }))
+      .record(
+        z.string(),
+        z.object({
+          status: z.enum(["requested", "started"]),
+          model: z.string().min(1),
+          /** Epoch ms past which no attempt may START; stale intent settles
+           * as an expired failure instead (only-settle-past-expiry). */
+          expiresAt: z.number().int().positive(),
+        }),
+      )
       .default({}),
   }),
   events: {
@@ -60,6 +71,7 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract],
   consumes: [
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/openai-ws/llm-request-started",
     "events.iterate.com/openai-ws/llm-request-completed",
   ],

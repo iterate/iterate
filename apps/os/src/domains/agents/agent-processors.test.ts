@@ -942,11 +942,12 @@ describe("minimal web-chat agent processors", () => {
       },
       readStreamEvents: () => stream.getEvents(),
     });
-    // Deliver only the STARTED event (the requested event is before the
-    // checkpoint of a caught-up-but-restarted instance in the real incident;
-    // any batch works — the sweep reads folded state, not the batch).
+    // Deliver the dead incarnation's events; the fold shows the obligation at
+    // `started` and the reconciler settles it WITHOUT starting an attempt
+    // (started + nobody live = orphaned, never re-driven — hence the throwing
+    // websocket factory above proving no dial happens).
     await openAiWs.ingest({
-      events: stream.events.filter((event) => event.offset > requested!.offset),
+      events: stream.events,
       streamMaxOffset: stream.events.length,
     });
     await new Promise((resolve) => setTimeout(resolve, 50));

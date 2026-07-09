@@ -4,15 +4,28 @@
 //
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
-//   host = createStreamProcessorHost(this.ctx, { stream });
+//   host = createStreamProcessorHost(this.ctx, { stream, version: workerVersion(this.env) });
 //   agent = this.host.add((deps) => new AgentProcessor({ ...deps, openai }));
 //   search = this.host.add((deps) => new SearchProcessor(deps));
 //
 //   wakeStreamSubscriber(args: StreamSubscriberWakeRequest) {
 //     return this.host.wakeStreamSubscriber(args);
 //   }
+//
+//   alarm() {
+//     return this.host.handleAlarm();
+//   }
 // }
 // ```
+//
+// EVERY hosting DO class must wire `alarm()` to `handleAlarm()`: the host
+// parks a durable alarm ahead of in-flight side-effect work (the keepalive,
+// stream-processor-keepalive.ts), and that alarm firing in a fresh
+// incarnation is the ONLY thing that revives a DO that died owing work on a
+// quiet stream. A DO that needs the alarm for its own scheduling too (the
+// scheduler) shares it through `setAlarmSlice` — the host arms the earliest
+// desire across every slice, and each subsystem self-gates on whether the
+// fire was its own.
 //
 // This is the subscriber half of the wake handshake, and the whole handshake
 // is ONE call: the stream pokes `wakeStreamSubscriber` with serializable
@@ -31,6 +44,16 @@
 // (ingest is internally serialized and offset-deduped, so overlap between a
 // dying sink and its replacement is harmless); sustained failure parks the
 // subscription as a durable fact instead of a console line.
+//
+// What the spine's durable retries CANNOT cover is the ZERO-LAG wedge: a
+// batch that checkpointed fine but whose `runInBackground` attempt died with
+// the incarnation. From the stream's side there is nothing left to deliver,
+// so nothing ever dials this DO again. The keepalive closes that: its alarm
+// fires post-eviction, the host appends one revival fact to the stream (which
+// cold-boots the stream DO and restores the spine) and pulls every processor
+// through its pending events — the fact guarantees at least one batch, and
+// every processor's end-of-batch reconciliation settles what the dead
+// incarnation left behind.
 
 import type { Stream } from "../../itx-api.generated.ts";
 import type {
@@ -40,6 +63,16 @@ import type {
 } from "./rpc-types.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
+import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
+
+/**
+ * The journaled evidence a revival pass appends before pulling processors
+ * through their pending events. Its delivery is what guarantees at least one
+ * batch (and therefore one reconciliation pass) even when the checkpoint was
+ * already at the head — and it makes the whole episode readable in the raw
+ * event feed: requested → revived → failure completion → reschedule.
+ */
+export const PROCESSOR_HOST_REVIVED_EVENT_TYPE = "events.iterate.com/stream-processor-host/revived";
 
 /**
  * Base deps the host provides to each processor it owns. Spread them into the
@@ -81,7 +114,7 @@ type HostedEntry = {
   ingestChain: Promise<void>;
 };
 
-type StreamProcessorHost = {
+export type StreamProcessorHost = {
   readonly stream: Stream;
   /**
    * Register a processor under its contract slug. The builder receives the
@@ -105,15 +138,126 @@ type StreamProcessorHost = {
    * successfully ingested state, exactly as it would have without the pull.
    */
   catchUp(name: string): Promise<void>;
+  /**
+   * Wire this to the host DO's `alarm()` handler — REQUIRED on every hosting
+   * class. The keepalive self-gates on whether the fire was its own, so a DO
+   * sharing the alarm with its own scheduling (see {@link setAlarmSlice})
+   * calls this unconditionally and then runs its own due work.
+   */
+  handleAlarm(): Promise<void>;
+  /**
+   * Share the single DO alarm: each named slice states its own desired fire
+   * time (or null for none) and the host arms the earliest across all slices
+   * plus the keepalive's. A slice owner must tolerate early fires (another
+   * slice's) and re-arm itself during its handler — in-memory desires do not
+   * survive eviction; the durable alarm plus each subsystem's re-derivation do.
+   */
+  setAlarmSlice(name: string, atMs: number | null): void;
+  /** The slice's own current desire (NOT the merged alarm time). */
+  getAlarmSlice(name: string): number | null;
 };
 
 export function createStreamProcessorHost(
   ctx: DurableObjectState,
-  options: { stream: Stream },
+  options: {
+    stream: Stream;
+    /** Worker deploy version; a change resets the keepalive's crash-loop
+     * budget (the antidote deploy). Pass `workerVersion(env)`. */
+    version?: string;
+    /** Injected clock for the node test harness; production uses Date.now. */
+    now?: () => number;
+  },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
+  const KEEPALIVE_RECORD_KEY = "stream-processor-host:keepalive";
+
+  // ---------------------------------------------------------------------------
+  // The shared DO alarm. A Durable Object has exactly ONE alarm and setAlarm
+  // clobbers it, so every desire goes through this slice map and the earliest
+  // wins. Slices are in-memory (an eviction loses them) and that is correct:
+  // the durable alarm itself survives, its fire runs every subsystem's
+  // handler, and each handler re-derives its own desire — the keepalive from
+  // its KV record, the scheduler from its fold.
+  // ---------------------------------------------------------------------------
+  const alarmSlices = new Map<string, number>();
+  /**
+   * A durable alarm armed by a PREVIOUS incarnation whose owning slice we
+   * cannot know (in-memory desires died with it). The first reconcile adopts
+   * it as a desire of its own so this incarnation's arming/disarming cannot
+   * clobber it; the next actual fire drops it — every subsystem re-derives
+   * its desire in that turn.
+   */
+  const INHERITED_ALARM_SLICE = "@inherited";
+  /** What the platform alarm holds; null = cleared, undefined = unknown. */
+  let platformAlarmAtMs: number | null | undefined;
+  /** Serializes alarm storage ops so read-adopt and writes cannot interleave. */
+  let alarmChain: Promise<void> = Promise.resolve();
+  function reconcileAlarm(): void {
+    const step = alarmChain.then(async () => {
+      if (platformAlarmAtMs === undefined) {
+        const existing = await ctx.storage.getAlarm();
+        platformAlarmAtMs = existing;
+        if (existing !== null) alarmSlices.set(INHERITED_ALARM_SLICE, existing);
+      }
+      let earliest: number | null = null;
+      for (const atMs of alarmSlices.values()) {
+        if (earliest === null || atMs < earliest) earliest = atMs;
+      }
+      if (earliest === platformAlarmAtMs) return;
+      platformAlarmAtMs = earliest;
+      if (earliest === null) await ctx.storage.deleteAlarm();
+      else await ctx.storage.setAlarm(earliest);
+    });
+    alarmChain = step.catch((error: unknown) => {
+      platformAlarmAtMs = undefined; // unknown — the next reconcile re-reads
+      console.error("stream processor host alarm arming failed", error);
+    });
+    ctx.waitUntil(alarmChain);
+  }
+  function setAlarmSlice(name: string, atMs: number | null): void {
+    if (atMs === null) alarmSlices.delete(name);
+    else alarmSlices.set(name, atMs);
+    reconcileAlarm();
+  }
+
+  const keepalive = new ProcessorKeepalive({
+    now: options.now ?? (() => Date.now()),
+    readRecord: () => ctx.storage.kv.get<KeepaliveRecord>(KEEPALIVE_RECORD_KEY) ?? undefined,
+    writeRecord: (record) => void ctx.storage.kv.put(KEEPALIVE_RECORD_KEY, record),
+    armAlarm: (atMs) => setAlarmSlice("keepalive", atMs),
+    keepAlive: (work) => void ctx.waitUntil(work),
+    revive: async (record) => {
+      // The append cold-boots the stream DO if the deploy evicted it too (its
+      // `woken` fan-out restores the spine's deliveries), guarantees at least
+      // one pending event, and journals the episode. The catch-up pulls are
+      // UNFILTERED — unlike wake-mode push, which filters by each contract's
+      // consumes list — so the fact reaches every processor's batch and the
+      // end-of-batch reconciliations run even for processors that do not
+      // consume it. Failures throw: the keepalive's breaker owns retries.
+      await options.stream.append({
+        type: PROCESSOR_HOST_REVIVED_EVENT_TYPE,
+        payload: {
+          revivals: record.revivals,
+          version: record.version,
+          processors: [...entries.keys()],
+        },
+      });
+      for (const name of entries.keys()) {
+        await catchUpInternal(name, { rethrow: true });
+      }
+    },
+    appendFact: (event) => {
+      void Promise.resolve(options.stream.append(event)).catch((error: unknown) => {
+        console.error("stream processor host evidence append failed", error);
+      });
+    },
+    version: options.version ?? "unversioned",
+  });
+  // A fresh incarnation restores the keepalive's persisted desire, so another
+  // slice re-arming cannot clobber a pending revival alarm.
+  if (keepalive.armedAtMs !== null) alarmSlices.set("keepalive", keepalive.armedAtMs);
 
   function requireEntry(name: string): HostedEntry {
     const entry = entries.get(name);
@@ -136,6 +280,30 @@ export function createStreamProcessorHost(
     );
   }
 
+  async function catchUpInternal(name: string, opts: { rethrow: boolean }): Promise<void> {
+    const entry = requireEntry(name);
+    try {
+      const { offset } = await entry.processor.snapshot();
+      using pager = options.stream.readEvents({ afterOffset: offset, limit: 500 });
+      for (;;) {
+        const events = await pager.next();
+        if (events.length === 0) return;
+        // Non-consumed event types reduce to no-ops but still advance the
+        // checkpoint, mirroring what a filtered delivery's cursor does.
+        await entry.processor.ingest({
+          events,
+          streamMaxOffset: events.at(-1)!.offset,
+        });
+      }
+    } catch (error) {
+      if (opts.rethrow) throw error;
+      console.error(
+        `stream processor "${name}" catch-up failed; serving last ingested state`,
+        error,
+      );
+    }
+  }
+
   return {
     stream: options.stream,
     add(build) {
@@ -155,7 +323,11 @@ export function createStreamProcessorHost(
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(slug())) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(slug()), snapshot),
-        keepAliveWhile: (work) => void ctx.waitUntil(work()),
+        // Every registered side-effect closure (blockProcessorWhile and
+        // runInBackground alike) rides through the keepalive: while any of it
+        // is in flight, a durable alarm sits a few seconds ahead, and an
+        // incarnation that dies owing work gets revived by its fire.
+        keepAliveWhile: (work) => keepalive.track(work()),
       });
       if (entries.has(processor.contract.slug)) {
         throw new Error(
@@ -167,28 +339,24 @@ export function createStreamProcessorHost(
       return processor;
     },
 
-    async catchUp(name) {
-      const entry = requireEntry(name);
+    catchUp: (name) => catchUpInternal(name, { rethrow: false }),
+
+    async handleAlarm() {
+      // Entering alarm() means the platform consumed the durable alarm:
+      // whatever we believed was armed no longer is, every reconcile from here
+      // must re-issue rather than skip as "unchanged", and any inherited
+      // desire has served its purpose — the subsystems re-derive this turn.
+      platformAlarmAtMs = null;
+      alarmSlices.delete(INHERITED_ALARM_SLICE);
       try {
-        const { offset } = await entry.processor.snapshot();
-        using pager = options.stream.readEvents({ afterOffset: offset, limit: 500 });
-        for (;;) {
-          const events = await pager.next();
-          if (events.length === 0) return;
-          // Non-consumed event types reduce to no-ops but still advance the
-          // checkpoint, mirroring what a filtered delivery's cursor does.
-          await entry.processor.ingest({
-            events,
-            streamMaxOffset: events.at(-1)!.offset,
-          });
-        }
-      } catch (error) {
-        console.error(
-          `stream processor "${name}" catch-up failed; serving last ingested state`,
-          error,
-        );
+        await keepalive.onAlarm();
+      } finally {
+        reconcileAlarm();
       }
     },
+
+    setAlarmSlice,
+    getAlarmSlice: (name) => alarmSlices.get(name) ?? null,
 
     async wakeStreamSubscriber(args) {
       const name = resolveProcessorName(args);
@@ -208,8 +376,12 @@ export function createStreamProcessorHost(
         entry.ingestChain = attempt.catch((error: unknown) => {
           console.error(`stream processor "${name}" failed to ingest batch`, error);
         });
-        // waitUntil keeps the DO alive through ingest after the RPC callback returns.
-        ctx.waitUntil(entry.ingestChain);
+        // Tracked, not merely waitUntil'd: the keepalive keeps the DO alive
+        // through ingest AND parks its alarm ahead of it, so an eviction
+        // mid-batch on a stream that also died (a deploy takes both) still
+        // gets this host redialed — the stream-side retry needs the stream
+        // DO awake to notice the corpse.
+        keepalive.track(attempt);
         return attempt;
       };
 

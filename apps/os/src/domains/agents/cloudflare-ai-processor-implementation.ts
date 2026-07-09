@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
@@ -6,72 +5,113 @@ import {
   flattenMessageToText,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
+import { DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
-
-type LlmRequestRequestedEvent = Extract<
-  ReturnType<typeof CloudflareAiProcessorContract.parseEvent>,
-  { type: "events.iterate.com/agent/llm-request-requested" }
->;
 
 export class CloudflareAiProcessor extends StreamProcessor<
   CloudflareAiProcessorContract,
   {
     ai: { run(model: string, body: unknown): Promise<unknown> };
     readStreamEvents(): Promise<StreamEvent[]>;
+    /** Injected clock (expiry decisions); production defaults to Date.now. */
+    now?: () => number;
   }
 > {
   readonly contract = CloudflareAiProcessorContract;
+
+  /** Executions alive in THIS incarnation — the "actual" half of the
+   * reconciliation. See the openai-ws sibling for the full story. */
+  readonly #liveExecutions = new Set<number>();
 
   protected override reduce({
     event,
     state,
   }: Parameters<StreamProcessor<CloudflareAiProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/cloudflare-ai/llm-request-started":
+      case "events.iterate.com/agent/llm-request-requested": {
+        if (event.payload.provider !== CloudflareAiProcessorContract.slug) return state;
         return {
           ...state,
           requests: {
             ...state.requests,
-            [String(event.payload.llmRequestId)]: { status: "started" as const },
+            [String(event.offset)]: {
+              status: "requested" as const,
+              model: event.payload.model,
+              expiresAt:
+                event.payload.expiresAt ??
+                Date.parse(event.createdAt) + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
+            },
           },
         };
+      }
+      case "events.iterate.com/cloudflare-ai/llm-request-started": {
+        const key = String(event.payload.llmRequestId);
+        const existing = state.requests[key];
+        if (existing === undefined) return state;
+        return {
+          ...state,
+          requests: { ...state.requests, [key]: { ...existing, status: "started" as const } },
+        };
+      }
       case "events.iterate.com/cloudflare-ai/llm-request-completed":
-        return {
-          ...state,
-          requests: {
-            ...state.requests,
-            [String(event.payload.llmRequestId)]: { status: "completed" as const },
-          },
-        };
+        return { ...state, requests: withoutKey(state.requests, event.payload.llmRequestId) };
+      case "events.iterate.com/agent/llm-request-cancelled":
+        if (event.payload.phase !== "requested") return state;
+        return { ...state, requests: withoutKey(state.requests, event.payload.llmRequestId) };
       default:
         return state;
     }
   }
 
-  protected override processEvent({
-    event,
-    runInBackground,
-    state,
-  }: Parameters<StreamProcessor<CloudflareAiProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/agent/llm-request-requested") return;
-    if (event.payload.provider !== CloudflareAiProcessorContract.slug) return;
-    const llmRequestId = event.offset;
-    if (state.requests[String(llmRequestId)]?.status === "completed") return;
-    runInBackground(() => this.#executeRequest({ event, state }));
+  /**
+   * End-of-batch reconciliation of desired (open obligations in the fold)
+   * against actual (this incarnation's live executions) — a verbatim sibling
+   * of OpenAiWsProcessor.processEventBatch; the doctrine lives there.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<typeof CloudflareAiProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    const now = (this.deps.now ?? Date.now)();
+    const settle: { llmRequestId: number; message: string }[] = [];
+    for (const [id, request] of Object.entries(args.state.requests)) {
+      const llmRequestId = Number(id);
+      if (this.#liveExecutions.has(llmRequestId)) continue;
+      if (request.status === "requested" && now < request.expiresAt) {
+        this.#liveExecutions.add(llmRequestId);
+        args.runInBackground(() => this.#executeRequest({ llmRequestId, model: request.model }));
+        continue;
+      }
+      settle.push({
+        llmRequestId,
+        message:
+          request.status === "started"
+            ? "LLM request orphaned: the incarnation executing it went away before completing. Failed by the reconciler; the agent's next trigger reschedules."
+            : "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
+      });
+    }
+    if (settle.length === 0) return;
+    args.blockProcessorWhile(async () => {
+      for (const { llmRequestId, message } of settle) {
+        console.error("[cloudflare-ai] settling undriven llm request", { llmRequestId, message });
+        await this.#appendCompletion({
+          llmRequestId,
+          durationMs: 0,
+          result: { status: "failure" as const, error: { message } },
+        });
+      }
+    });
   }
 
-  async #executeRequest(input: {
-    event: LlmRequestRequestedEvent;
-    state: z.infer<typeof CloudflareAiProcessorContract.stateSchema>;
-  }): Promise<void> {
-    const llmRequestId = input.event.offset;
+  async #executeRequest(input: { llmRequestId: number; model: string }): Promise<void> {
+    const { llmRequestId, model } = input;
     const startedAt = Date.now();
     await this.stream.append({
       type: "events.iterate.com/cloudflare-ai/llm-request-started",
       idempotencyKey: `cloudflare-ai/llm-request-started@${llmRequestId}`,
       payload: {
         llmRequestId,
-        model: input.event.payload.model,
+        model,
       },
     });
 
@@ -86,22 +126,15 @@ export class CloudflareAiProcessor extends StreamProcessor<
         role: message.role,
         content: flattenMessageToText(message),
       }));
-      const raw = await this.deps.ai.run(input.event.payload.model, { messages, stream: true });
+      const raw = await this.deps.ai.run(model, { messages, stream: true });
       const completion =
         raw instanceof ReadableStream
-          ? await this.#consumeStream({ body: raw, sourceEvent: input.event })
+          ? await this.#consumeStream({ body: raw, llmRequestId })
           : {
               text: extractAssistantText(raw),
               rawResponse: jsonCompatible(raw),
               usage: extractUsage(raw),
             };
-
-      const durationMs = Date.now() - startedAt;
-      const providerResult = {
-        status: "success" as const,
-        rawResponse: completion.rawResponse,
-        ...(completion.usage === undefined ? {} : { usage: completion.usage }),
-      };
 
       if (await this.#isRequestStillCurrent({ llmRequestId })) {
         await this.stream.append({
@@ -111,60 +144,65 @@ export class CloudflareAiProcessor extends StreamProcessor<
         });
       }
 
-      await this.stream.append(
-        {
-          type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/provider-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            result: providerResult,
-          },
+      await this.#appendCompletion({
+        durationMs: Date.now() - startedAt,
+        llmRequestId,
+        result: {
+          status: "success" as const,
+          rawResponse: completion.rawResponse,
+          ...(completion.usage === undefined ? {} : { usage: completion.usage }),
         },
-        {
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/agent-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            provider: "cloudflare-ai",
-            result: providerResult,
-          },
-        },
-      );
+      });
     } catch (error) {
-      const durationMs = Date.now() - startedAt;
-      const failure = {
-        status: "failure" as const,
-        error: { message: stringifyError(error) },
-      };
-      await this.stream.append(
-        {
-          type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/provider-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            result: failure,
-          },
+      await this.#appendCompletion({
+        durationMs: Date.now() - startedAt,
+        llmRequestId,
+        result: {
+          status: "failure" as const,
+          error: { message: stringifyError(error) },
         },
-        {
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/agent-completed@${llmRequestId}`,
-          payload: {
-            durationMs,
-            llmRequestId,
-            provider: "cloudflare-ai",
-            result: failure,
-          },
-        },
-      );
+      });
+    } finally {
+      this.#liveExecutions.delete(llmRequestId);
     }
+  }
+
+  /** The one durable outcome of a request — provider + agent completion pair.
+   * Success, in-execution failure, and the reconciler all land here with
+   * identical idempotency keys, so races collapse at the append dedup layer. */
+  async #appendCompletion(input: {
+    durationMs: number;
+    llmRequestId: number;
+    result:
+      | { status: "success"; rawResponse?: unknown; usage?: unknown }
+      | { status: "failure"; error: { message: string }; rawResponse?: unknown };
+  }): Promise<void> {
+    await this.stream.append(
+      {
+        type: "events.iterate.com/cloudflare-ai/llm-request-completed",
+        idempotencyKey: `cloudflare-ai/provider-completed@${input.llmRequestId}`,
+        payload: {
+          durationMs: input.durationMs,
+          llmRequestId: input.llmRequestId,
+          result: input.result,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `cloudflare-ai/agent-completed@${input.llmRequestId}`,
+        payload: {
+          durationMs: input.durationMs,
+          llmRequestId: input.llmRequestId,
+          provider: "cloudflare-ai",
+          result: input.result,
+        },
+      },
+    );
   }
 
   async #consumeStream(input: {
     body: ReadableStream;
-    sourceEvent: LlmRequestRequestedEvent;
+    llmRequestId: number;
   }): Promise<{ rawResponse: unknown; text: string; usage?: unknown }> {
     const reader = input.body.getReader();
     const decoder = new TextDecoder();
@@ -178,10 +216,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
       usage = extractUsage(chunk) ?? usage;
       await this.stream.append({
         type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        idempotencyKey: `cloudflare-ai/llm-response-chunk@${input.sourceEvent.offset}:${sequence}`,
+        idempotencyKey: `cloudflare-ai/llm-response-chunk@${input.llmRequestId}:${sequence}`,
         payload: {
           chunk: jsonCompatible(chunk),
-          llmRequestId: input.sourceEvent.offset,
+          llmRequestId: input.llmRequestId,
           sequence,
         },
       });
@@ -222,6 +260,17 @@ export class CloudflareAiProcessor extends StreamProcessor<
       state.currentRequest.llmRequestId === input.llmRequestId
     );
   }
+}
+
+/** Remove one llmRequestId's entry from the obligations map (terminal events). */
+function withoutKey(
+  requests: Record<string, unknown>,
+  llmRequestId: number,
+): Record<string, never> {
+  const key = String(llmRequestId);
+  if (!(key in requests)) return requests as Record<string, never>;
+  const { [key]: _settled, ...rest } = requests;
+  return rest as Record<string, never>;
 }
 
 function parseSseFrame(frame: string): unknown | undefined {

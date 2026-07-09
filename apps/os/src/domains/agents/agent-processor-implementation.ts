@@ -2,8 +2,10 @@ import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
+  AGENT_LLM_REQUEST_BACKSTOP_MS,
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+  DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
@@ -11,9 +13,19 @@ import {
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
-export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
+export class AgentProcessor extends StreamProcessor<
+  AgentProcessorContract,
+  {
+    /** Injected clock (expiry stamps + backstop deadline); defaults to Date.now. */
+    now?: () => number;
+  }
+> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
+
+  #now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
 
   protected override reduce({
     event,
@@ -83,19 +95,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
+        // The debounce timer is a droppable ATTEMPT: the scheduled event is
+        // the durable evidence, and #settleLlmRequestScheduling re-derives a
+        // lost timer from the fold. Losing this closure costs latency, never
+        // the request.
         this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
         runInBackground(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
           try {
-            await append({
-              type: "events.iterate.com/agent/llm-request-requested",
-              idempotencyKey: `agent/llm-request-requested@${event.offset}`,
-              payload: {
+            await append(
+              this.#buildLlmRequestRequested({
                 model: event.payload.model,
                 provider: event.payload.provider,
                 requestId: event.payload.requestId,
-              },
-            });
+                scheduledOffset: event.offset,
+              }),
+            );
           } finally {
             this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
           }
@@ -220,20 +235,64 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
       });
       return;
     }
-    if (state.currentRequest.phase !== "scheduled") return;
+    if (state.currentRequest.phase === "requested") {
+      // The BACKSTOP: providers settle their own undriven requests, so a
+      // `requested` this old means the provider layer never answered at all.
+      // Settling it un-wedges the queue — the failure input (rendered by
+      // processEvent above on the next batch) tells the model what happened.
+      const requestedAt = state.currentRequest.requestedAt;
+      if (requestedAt === undefined) return;
+      if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
+      const llmRequestId = state.currentRequest.llmRequestId;
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `agent/backstop-completed@${llmRequestId}`,
+        payload: {
+          durationMs: this.#now() - requestedAt,
+          llmRequestId,
+          provider: state.llmProvider,
+          result: {
+            status: "failure",
+            error: {
+              message: `No LLM provider settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
+            },
+          },
+        },
+      });
+      return;
+    }
     if (this.#scheduledRequestsWithActiveTimers.has(state.currentRequest.requestId)) return;
     // No active timer for this scheduled request: the DO restarted and lost the
     // debounce. Fire llm-request-requested immediately. The idempotency key
     // makes this safe if the timer also fires concurrently.
-    await args.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      idempotencyKey: `agent/llm-request-requested@${state.currentRequest.scheduledOffset}`,
-      payload: {
+    await args.append(
+      this.#buildLlmRequestRequested({
         model: state.llmConfig.model,
         provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
+        scheduledOffset: state.currentRequest.scheduledOffset,
+      }),
+    );
+  }
+
+  /** The one construction of llm-request-requested (debounce and recovery
+   * paths), so the expiry stamp and idempotency key can never drift apart. */
+  #buildLlmRequestRequested(input: {
+    model: string;
+    provider: AgentState["llmProvider"];
+    requestId: string;
+    scheduledOffset: number;
+  }) {
+    return {
+      type: "events.iterate.com/agent/llm-request-requested" as const,
+      idempotencyKey: `agent/llm-request-requested@${input.scheduledOffset}`,
+      payload: {
+        model: input.model,
+        provider: input.provider,
+        requestId: input.requestId,
+        expiresAt: this.#now() + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
       },
-    });
+    };
   }
 }
 
@@ -358,7 +417,11 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return state;
       return {
         ...state,
-        currentRequest: { phase: "requested", llmRequestId: event.offset },
+        currentRequest: {
+          phase: "requested",
+          llmRequestId: event.offset,
+          requestedAt: Date.parse(event.createdAt),
+        },
         pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
