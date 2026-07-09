@@ -54,6 +54,17 @@ What this doctrine buys, every time:
   checkpoint, so side effects must be idempotency-keyed; serialized batches
   give in-order execution and requested/completed event pairs make
   at-least-once reruns detectable.
+- **Appends go through the stamped lanes; `emits` is the complete append
+  vocabulary.** A processor appends through `args.append`/`args.appendTo`
+  (event-bound: the committed row's `source.processor` records who appended
+  it and while processing which event) or `this.append`/`this.appendTo`
+  (alarm handlers, DO methods, whole-fold decisions — stamped without
+  `whileProcessing`, because a fold-derived append has no single trigger).
+  Both validate against `contract.emits`, home stream or sibling, so every
+  forward is a declared, typo-checked fact of the contract. Build keys with
+  `this.idempotencyKey(key, event?)` — `<slug>/<key>@<path>:<offset>` —
+  unless the key is deliberately shared with another appender lane for
+  cross-lane dedupe, in which case it stays hand-rolled byte-identically.
 - **Host machinery is a facet, composition is one line.** A domain DO
   embeds its processors as facets (private storage, no checkpoint
   wiring in the host) or as a processor-composition subclass — the host

@@ -90,7 +90,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interrupted = previousState.currentRequest;
         if (interrupted === null) return;
-        blockProcessorWhile(() => append(cancelEventForCurrentRequest(interrupted)));
+        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interrupted)));
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
@@ -100,7 +100,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           try {
             await append({
               type: "events.iterate.com/agent/llm-request-requested",
-              idempotencyKey: this.idempotencyKey("llm-request-requested", event),
+              idempotencyKey: this.#llmRequestRequestedKey(event.offset),
               payload: {
                 model: event.payload.model,
                 provider: event.payload.provider,
@@ -246,15 +246,50 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // makes this safe if the timer also fires concurrently.
     await args.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      idempotencyKey: this.idempotencyKey(
-        `llm-request-requested@${state.currentRequest.scheduledOffset}`,
-      ),
+      idempotencyKey: this.#llmRequestRequestedKey(state.currentRequest.scheduledOffset),
       payload: {
         model: state.llmConfig.model,
         provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
       },
     });
+  }
+
+  /**
+   * The debounce timer and the restart-recovery lane both fire the request for
+   * one llm-request-scheduled event; the SHARED key (per scheduled offset) is
+   * what collapses the race to a single llm-request-requested.
+   */
+  #llmRequestRequestedKey(scheduledOffset: number): string {
+    return this.idempotencyKey(`llm-request-requested@${scheduledOffset}`);
+  }
+
+  #cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
+    if (request.phase === "scheduled") {
+      return {
+        type: "events.iterate.com/agent/llm-request-cancelled" as const,
+        idempotencyKey: this.idempotencyKey(
+          `llm-request-cancelled@scheduled:${request.scheduledOffset}`,
+        ),
+        payload: {
+          phase: "scheduled" as const,
+          reason: "interrupted-by-user-input" as const,
+          requestId: request.requestId,
+        },
+      };
+    }
+
+    return {
+      type: "events.iterate.com/agent/llm-request-cancelled" as const,
+      idempotencyKey: this.idempotencyKey(
+        `llm-request-cancelled@requested:${request.llmRequestId}`,
+      ),
+      payload: {
+        phase: "requested" as const,
+        reason: "interrupted-by-user-input" as const,
+        llmRequestId: request.llmRequestId,
+      },
+    };
   }
 }
 
@@ -456,30 +491,6 @@ function agentInputTriggerSource(
   return agentLoopKeyPrefixes.some((prefix) => event.idempotencyKey?.startsWith(prefix))
     ? "agent-loop"
     : "user";
-}
-
-function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
-  if (request.phase === "scheduled") {
-    return {
-      type: "events.iterate.com/agent/llm-request-cancelled" as const,
-      idempotencyKey: `agent/llm-request-cancelled@scheduled:${request.scheduledOffset}`,
-      payload: {
-        phase: "scheduled" as const,
-        reason: "interrupted-by-user-input" as const,
-        requestId: request.requestId,
-      },
-    };
-  }
-
-  return {
-    type: "events.iterate.com/agent/llm-request-cancelled" as const,
-    idempotencyKey: `agent/llm-request-cancelled@requested:${request.llmRequestId}`,
-    payload: {
-      phase: "requested" as const,
-      reason: "interrupted-by-user-input" as const,
-      llmRequestId: request.llmRequestId,
-    },
-  };
 }
 
 const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";

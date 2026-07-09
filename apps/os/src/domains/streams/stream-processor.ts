@@ -441,7 +441,7 @@ export abstract class StreamProcessor<
   protected async prepare(): Promise<void> {}
 
   /** Build and validate an append input for an event listed in `contract.emits`. */
-  protected buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
+  #buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
     if (!this.contract.emits.includes(event.type)) {
       throw new Error(
         `Processor "${this.contract.slug}" cannot build emitted event "${event.type}".`,
@@ -686,7 +686,7 @@ export abstract class StreamProcessor<
   ): Promise<StreamEvent[]> {
     const processor = this.#processorStamp(args.whileProcessing);
     const events = input.map((event) => {
-      const built = this.buildEmittedEvent(event) as StreamEventInput;
+      const built = this.#buildEmittedEvent(event) as StreamEventInput;
       return { ...built, source: { ...built.source, processor } };
     });
     return args.target.append(...events);

@@ -65,10 +65,10 @@ type HostedProcessorDeps = {
 export type AnyHostedProcessor = {
   contract: {
     slug: string;
-    version?: string;
-    description?: string;
+    version: string;
+    description: string;
     consumes: readonly string[];
-    emits?: readonly string[];
+    emits: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
   ingest(args: {
@@ -239,18 +239,18 @@ export function createStreamProcessorHost(
  */
 export function announceContract(contract: {
   slug: string;
-  version?: string;
-  description?: string;
+  version: string;
+  description: string;
   consumes: readonly string[];
-  emits?: readonly string[];
+  emits: readonly string[];
   events: Record<string, { description?: string; payloadSchema?: unknown }>;
 }): ProcessorContractAnnouncement {
   return {
     slug: contract.slug,
-    version: contract.version ?? "0",
-    description: contract.description ?? "",
+    version: contract.version,
+    description: contract.description,
     consumes: [...contract.consumes],
-    emits: [...(contract.emits ?? [])],
+    emits: [...contract.emits],
     ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
       type,
       ...(definition.description === undefined ? {} : { description: definition.description }),
