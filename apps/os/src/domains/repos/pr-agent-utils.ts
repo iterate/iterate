@@ -14,19 +14,19 @@ const PR_AGENT_PATH_PREFIX = "/agents/repos/";
 const PULL_REQUESTS_SEGMENT = "/pull-requests/";
 
 /**
- * The agent-path slug for one repo path: `/` (the project repo) becomes
- * "root", a `/repos/…` path drops that conventional prefix, and any remaining
- * slashes flatten to dashes — `/repos/foo` → "foo", `/tools/bar` →
- * "tools-bar". Pretty over injective: distinct repo paths CAN collide (`/a/b`
- * vs `/a-b`, `/repos/root` vs `/`), interleaving their PR agents on one
- * stream. Accepted for v1 — collisions need two linked repos with colliding
- * names AND colliding PR numbers, and the coordinate-keyed
- * `github-pr/route-configured` facts keep the folded state on the latest
- * writer rather than wedging. The fact carries the real repoPath.
+ * The agent-path slug for one repo path: a `/repos/…` path drops that
+ * conventional prefix, and any remaining slashes flatten to dashes —
+ * `/repos/config` → "config", `/tools/bar` → "tools-bar". Pretty over
+ * injective: distinct repo paths CAN collide (`/a/b` vs `/a-b`), interleaving
+ * their PR agents on one stream. Accepted for v1 — collisions need two linked
+ * repos with colliding names AND colliding PR numbers, and the
+ * coordinate-keyed `github-pr/route-configured` facts keep the folded state
+ * on the latest writer rather than wedging. The fact carries the real
+ * repoPath.
  */
 export function repoSlugForAgentPath(repoPath: string): string {
   const trimmed = repoPath.replace(/^\/+/, "").replace(/\/+$/, "");
-  if (trimmed === "") return "root";
+  if (trimmed === "") throw new Error("PR agent paths need a non-root repo path.");
   const withoutReposPrefix = trimmed.startsWith("repos/")
     ? trimmed.slice("repos/".length)
     : trimmed;

@@ -158,7 +158,7 @@ export interface Project {
   schedulers: SchedulerCollection;
   /** Secret catalog by path. */
   secrets: SecretCollection;
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for `repos.get("/repos/config")`. */
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
@@ -564,6 +564,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        connectTelegram: string;
         disconnect: string;
         getConnection: string;
         github: string;
@@ -572,6 +573,7 @@ export interface ProjectIntegrations {
         parallel: string;
         slack: string;
         startOAuthFlow: string;
+        telegram: string;
       };
       parent: string;
     }
@@ -581,10 +583,21 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * `ok: false, error: "telegram_bot_already_claimed"` arm so the caller can
+   * confirm and retry with `steal: true` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
+   */
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -596,7 +609,7 @@ export interface ProjectIntegrations {
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
@@ -814,11 +827,11 @@ export interface DynamicWorkerCollection {
  * `/repos/...`: an agent's workspace is the agent path under the prefix
  * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
  * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * Getting a workspace is cheap; the first call on it clones the config repo.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path (clones the config repo on first use). */
   get(path: string): Workspace;
 }
 
@@ -1056,10 +1069,11 @@ export interface Secret {
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
  * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at `/` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. `git` publishes commits to the workspace's
- * own branch in the project repo (`workspaces/<path>`), never to main.
+ * the config repo at `/repos/config` — every call waits for that clone, so a
+ * read that returns proves the checkout exists. Read, write, and edit files
+ * freely; nothing is shared until pushed. `git` publishes commits to the
+ * workspace's own branch in the config repo (`workspaces/<path>`), never to
+ * main.
  *
  * Constraints: the `.git` directory is platform-managed — read it if you
  * like, but writes there are rejected (use the `git` methods). Large files
@@ -1653,7 +1667,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1661,6 +1675,40 @@ export type IntegrationConnectionStatus = {
   externalId: string | null;
   metadata: Record<string, unknown>;
 };
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured `ok: false` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. `steal: true` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
+ */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with `steal: true` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+/** The built-ins that connect via a redirect flow (OAuth code exchange or
+ * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
+ * Telegram is excluded: it connects by bot-token paste (`connectTelegram`),
+ * with no redirect and no signed state. */
+export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }

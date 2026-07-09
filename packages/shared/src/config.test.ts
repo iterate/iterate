@@ -255,6 +255,36 @@ describe("parseAppConfigFromEnv", () => {
       },
     });
   });
+
+  it("walks nested overrides through prefault-wrapped objects (like default/optional)", () => {
+    // apps/os wraps whole config sections in `.prefault({})` when `{}` is
+    // valid input but not valid output (nested keys fill their own defaults).
+    // The override walker must unwrap ZodPrefault exactly like ZodDefault, or
+    // every APP_CONFIG_INTEGRATIONS__* / APP_CONFIG_EMAIL__* env var explodes.
+    const Config = z.object({
+      integrations: z
+        .object({
+          telegram: z
+            .object({ apiBaseUrl: z.string().default("https://api.telegram.org") })
+            .prefault({}),
+          slack: z.object({ token: z.string() }).optional(),
+        })
+        .prefault({}),
+    });
+
+    expect(
+      parseAppConfigFromEnv({
+        configSchema: Config,
+        prefix: "APP_CONFIG_",
+        env: { APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({ token: "xoxb-1" }) },
+      }),
+    ).toEqual({
+      integrations: {
+        slack: { token: "xoxb-1" },
+        telegram: { apiBaseUrl: "https://api.telegram.org" },
+      },
+    });
+  });
 });
 
 describe("pickAppConfigEnv", () => {
