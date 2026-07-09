@@ -53,9 +53,8 @@ export interface StreamProcessorRpc<State = unknown> {
 }
 
 /**
- * Live handle for one live-state subscription. Same contract as
- * {@link ProcessorStateSubscriptionHandle}: `ping()` reports liveness (and the
- * call rejects when the hosting incarnation is gone), `unsubscribe()` closes it.
+ * Live handle for one live-state subscription. `ping()` reports liveness (and
+ * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
  */
 export type LiveStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
@@ -220,7 +219,7 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
 /**
  * Live subscription handle returned by `Stream.subscribe`.
  *
- * `ping()` mirrors {@link ProcessorStateSubscriptionHandle.ping}: `true` while
+ * `ping()` reports liveness: `true` while
  * the connection is still open on the live stream, `false` after it closed
  * (replaced, delivery failure, unsubscribe); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the

@@ -24,14 +24,19 @@ describe("StreamDatabase", () => {
     expect(db.all()["/b"]).toMatchObject({ eventCount: 3, lastType: "y" });
   });
 
-  it("accumulates eventCount and never moves lastActivityAt backwards (replay-safe)", () => {
+  it("eventCount tracks max offset — idempotent on redelivery, grows with new events", () => {
     const db = new StreamDatabase(sqlStorage());
-    db.touch("/a", "2026-01-02T00:00:00.000Z", "x", 2);
-    db.touch("/a", "2026-01-01T00:00:00.000Z", "y", 1); // older/replayed — must not regress
+    db.touch("/a", "2026-01-02T00:00:00.000Z", "x", 5); // through offset 5
+    db.touch("/a", "2026-01-01T00:00:00.000Z", "y", 5); // redelivery: same maxOffset, older at — no inflation, no regress
     expect(db.all()["/a"]).toMatchObject({
       lastActivityAt: "2026-01-02T00:00:00.000Z",
       lastType: "y",
-      eventCount: 3,
+      eventCount: 5,
+    });
+    db.touch("/a", "2026-01-03T00:00:00.000Z", "z", 8); // new events through offset 8
+    expect(db.all()["/a"]).toMatchObject({
+      eventCount: 8,
+      lastActivityAt: "2026-01-03T00:00:00.000Z",
     });
   });
 

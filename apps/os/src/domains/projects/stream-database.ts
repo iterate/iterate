@@ -49,22 +49,25 @@ export class StreamDatabase {
   }
 
   /**
-   * Record activity on a stream. Idempotent in the way that matters: replayed
-   * batches only ever push `lastActivityAt` forward (SQLite `max`), never back.
+   * Record activity on a stream from a delivered batch. FULLY idempotent:
+   * `maxOffset` is the stream's highest offset (monotonic, 1-based), and it
+   * drives BOTH `lastActivityAt` and `eventCount` through SQLite `max` — so a
+   * redelivered or retried batch can neither move recency backwards nor inflate
+   * the count. (Offsets are sequential, so the max offset IS the event count.)
    */
-  touch(path: string, at: string, type: string, count: number): void {
+  touch(path: string, at: string, type: string, maxOffset: number): void {
     this.#sql.exec(
       `INSERT INTO streams (path, created_at, last_activity_at, last_type, event_count)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
          last_activity_at = max(excluded.last_activity_at, streams.last_activity_at),
          last_type = excluded.last_type,
-         event_count = streams.event_count + excluded.event_count`,
+         event_count = max(excluded.event_count, streams.event_count)`,
       path,
       at,
       at,
       type,
-      count,
+      maxOffset,
     );
     const prev = this.#projection[path];
     this.#projection = {
@@ -74,7 +77,7 @@ export class StreamDatabase {
         createdAt: prev?.createdAt ?? at,
         lastActivityAt: prev && prev.lastActivityAt > at ? prev.lastActivityAt : at,
         lastType: type,
-        eventCount: (prev?.eventCount ?? 0) + count,
+        eventCount: Math.max(prev?.eventCount ?? 0, maxOffset),
       },
     };
   }
@@ -85,7 +88,10 @@ export class StreamDatabase {
    * Insert-missing only — real activity via `touch` always wins.
    */
   ensureSeeded(catalog: readonly { path: string; createdAt: string }[]): void {
-    if (this.#seeded) return;
+    // A cold DO may call this before the fold has loaded (its catalog reads
+    // empty); don't burn the one-shot flag on nothing — wait for a loaded,
+    // non-empty catalog so pre-existing idle streams actually get backfilled.
+    if (this.#seeded || catalog.length === 0) return;
     this.#seeded = true;
     for (const stream of catalog) {
       this.#sql.exec(

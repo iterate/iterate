@@ -983,10 +983,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** The repo's live state — its reduced processor state. See {@link WritableLiveStateRpc}. */
   get liveState(): WritableLiveStateRpc<RepoProcessorState> {
     return new LiveStateRelayRpcTarget<RepoProcessorState>(
-      () =>
-        this.#durableObjectStub as unknown as {
-          liveState: PromiseLike<WritableLiveStateRpc<RepoProcessorState>>;
-        },
+      () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<RepoProcessorState>,
     );
   }
 }
@@ -1659,10 +1656,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link WritableLiveStateRpc}. */
   get liveState(): WritableLiveStateRpc<SecretDescription> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
-      () =>
-        this.durableObjectStub as unknown as {
-          liveState: PromiseLike<WritableLiveStateRpc<SecretDescription>>;
-        },
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
   }
 }
@@ -3790,7 +3784,7 @@ type ProjectRpcTargetProps = {
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<WritableLiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
-  touchStreamActivity(path: string, at: string, type: string, count: number): Promise<void>;
+  touchStreamActivity(path: string, at: string, type: string, maxOffset: number): Promise<void>;
 };
 
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
@@ -4145,11 +4139,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
     void Promise.resolve(
+      // streamMaxOffset (not events.length) so a redelivered batch is idempotent.
       this.#projectDo.touchStreamActivity(
         batch.path,
         last.createdAt,
         last.type,
-        batch.events.length,
+        batch.streamMaxOffset,
       ),
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
@@ -4824,7 +4819,7 @@ export class LiveStateRpcTarget<State = unknown>
   }
 }
 
-/** RPC ownership handle for one live-state subscription — the `.live` twin of {@link ProcessorStateSubscriptionRpcTarget}. */
+/** RPC ownership handle for one live-state subscription — the `.liveState` twin of {@link StreamSubscriptionRpcTarget}. */
 class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscriptionHandle"> {
   readonly #handle: LiveStateSubscription;
 
@@ -4846,18 +4841,21 @@ class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscript
   }
 }
 
+/** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
+type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<WritableLiveStateRpc<State>> };
+
 /**
- * Isolate-side relay for a DO-hosted `.live` node — awaits the DO stub's `.live`
- * property (a Workers RPC property read can't be pipelined through) then
- * forwards. Mirrors {@link ProcessorRelayRpcTarget}.
+ * Isolate-side relay for a DO-hosted `.liveState` node — awaits the DO stub's
+ * `.liveState` property (a Workers RPC property read can't be pipelined through)
+ * then forwards. Mirrors {@link ProcessorRelayRpcTarget}.
  */
 class LiveStateRelayRpcTarget<State>
   extends IterateRpcRelay<"WritableLiveStateRpc">
   implements WritableLiveStateRpc<State>
 {
-  readonly #stub: () => { liveState: PromiseLike<WritableLiveStateRpc<State>> };
+  readonly #stub: () => LiveStateDurableObjectStub<State>;
 
-  constructor(stub: () => { liveState: PromiseLike<WritableLiveStateRpc<State>> }) {
+  constructor(stub: () => LiveStateDurableObjectStub<State>) {
     super();
     this.#stub = stub;
   }

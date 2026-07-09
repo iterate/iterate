@@ -197,8 +197,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * events flow through it). Idempotent — `StreamDatabase.touch` only advances
    * recency — so a redelivered batch is harmless.
    */
-  touchStreamActivity(path: string, at: string, type: string, count: number): void {
-    this.#streamDatabase.touch(path, at, type, count);
+  touchStreamActivity(path: string, at: string, type: string, maxOffset: number): void {
+    this.#streamDatabase.touch(path, at, type, maxOffset);
     this.#processorHost.refreshLive();
   }
 
