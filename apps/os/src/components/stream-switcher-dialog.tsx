@@ -201,14 +201,18 @@ export function StreamSwitcherDialog({
       for (const path of touchedPaths) next.set(path, deadline);
       return next;
     });
-    const timer = setTimeout(() => {
+    // Deliberately NOT cleaned up: each batch's prune must fire even when the
+    // next push re-runs this effect first — a cleanup would keep cancelling
+    // the prune under a steady push stream and expired flashes would glow
+    // forever. Prunes are idempotent (drop only past-deadline entries), and a
+    // prune landing after close/unmount is a no-op.
+    setTimeout(() => {
       setFlashUntil((current) => {
         const cutoff = Date.now();
         const next = new Map([...current].filter(([, until]) => until > cutoff));
         return next.size === current.size ? current : next;
       });
     }, FLASH_MS + 50);
-    return () => clearTimeout(timer);
   }, [open, streamsIndex.value]);
   // Default view (untouched): streams active in the last few minutes — ⌘K, glance,
   // jump. Start typing and it becomes a substring search over the whole index.
