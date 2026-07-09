@@ -20,6 +20,11 @@ export const RepoProcessorContract = defineProcessorContract({
   description: "Tiny fake repo projection for the ITX reference implementation.",
   stateSchema: z.object({
     artifactName: z.string().nullable().default(null),
+    /** An open creation OBLIGATION: `create-requested` folded, `created` not
+     * yet. The end-of-batch reconciler compares this pair at head — never
+     * event-time state, which a journal refold replays with `created` still
+     * false (docs/writing-stream-processors.md, "Refold safety"). */
+    createRequested: z.boolean().default(false),
     created: z.boolean().default(false),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),

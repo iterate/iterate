@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
-import { readRecord, readString, slackThreadStreamPath } from "./utils.ts";
+import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
 
 type SlackProcessorDeps = {
@@ -19,6 +19,8 @@ type SlackProcessorDeps = {
    * being forwarded". Best-effort: failures must not affect routing.
    */
   acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
+  /** Injectable clock for the acknowledgement freshness gate. */
+  now?: () => number;
   /**
    * The named connection this router serves — a projection of the host DO's
    * own name (`/integrations/slack/{connection}`), not folded state, so it is
@@ -87,9 +89,16 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
 
     // Independent of the forwarding appends below so the user-visible ack
     // races ahead of (possibly cold) stream creation rather than behind it.
-    runInBackground(async () => {
-      await this.deps.acknowledgeRoutedWebhook?.({ payload: event.payload });
-    });
+    // Fresh webhooks only: a refold or late wake replays historical webhooks,
+    // and re-acking those would resurrect 👀 on old messages, one Slack call
+    // per journaled webhook (see WEBHOOK_ACK_FRESHNESS_MS). The forwards below
+    // deliberately have no such gate — they are durable, idempotency-keyed
+    // obligations whose replays dedupe at the append layer.
+    if (webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) {
+      runInBackground(async () => {
+        await this.deps.acknowledgeRoutedWebhook?.({ payload: event.payload });
+      });
+    }
 
     const forwardedWebhookEvent: StreamEventInput = {
       type: "events.iterate.com/slack/webhook-received",
