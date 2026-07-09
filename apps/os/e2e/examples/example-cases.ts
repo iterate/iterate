@@ -10,7 +10,7 @@
 //                   (and the Playwright REPL specs) execute in a project scope
 //                   where the Session's __describe().principal / itx.projects
 //                   do not exist. Session behavior is proven by the itx e2e
-//                   suites (apps/os/e2e/itx/itx.e2e.test.ts).
+//                   suites (apps/os/e2e/vitest/itx-core.e2e.test.ts).
 //   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading

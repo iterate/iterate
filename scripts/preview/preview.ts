@@ -13,7 +13,7 @@ import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
-import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import { OS_PREVIEW_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -1261,12 +1261,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // files were removed at the top of this script) for preview.ts to
         // fold into the PR body alongside Playwright's
         // playwright-results.json.
-        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
+        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not
         // hide (or orphan) the vitest results.
-        "SPEC_OK=0; pnpm --dir ../.. spec || SPEC_OK=$?",
+        `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         "cat /tmp/os-preview-vitest.log",
         '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
