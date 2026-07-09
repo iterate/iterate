@@ -215,6 +215,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm || gh || history ? "ghost" : "secondary"}
           size="icon"
           title="Files"
+          aria-label="Files"
           // The Files view browses working-tree files; leaving the SCM,
           // GitHub, or History view also leaves any pseudo-file (Index,
           // commit diff) it had open.
@@ -235,6 +236,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           variant={scm ? "secondary" : "ghost"}
           size="icon"
           title="Source control"
+          // Explicit name: the dirty-count badge inside would otherwise BE the
+          // accessible name ("1"), beating the title.
+          aria-label="Source control"
           onClick={() =>
             patchSearch({ scm: true, gh: undefined, history: undefined, commit: undefined })
           }
