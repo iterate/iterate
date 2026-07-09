@@ -277,10 +277,42 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     await agent.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
 
     const backstop = stream.events.find((event) => event.type === T.completed);
-    expect(backstop?.idempotencyKey).toBe("agent/backstop-completed@2");
+    expect(backstop?.idempotencyKey).toBe("agent/llm-request-completed@2");
     expect(backstop?.payload).toMatchObject({
       llmRequestOffset: 2,
       result: { status: "failure", error: { message: expect.stringContaining("backstop") } },
+    });
+  });
+
+  it("a request past BOTH the expiry and the backstop horizon settles exactly once", async () => {
+    const stream = new MemoryStream();
+    // requestedAt comes from the journaled event's wall-clock createdAt; run
+    // the processor's clock far enough ahead that the expired-obligation pass
+    // AND the backstop both want to settle this request in the same reconcile.
+    const now = Date.now() + AGENT_LLM_REQUEST_BACKSTOP_MS + 60_000;
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          throw new Error("must not dial a long-expired request");
+        },
+      },
+      now: () => now,
+    });
+    const [requested] = await stream.append({
+      type: T.requested,
+      payload: { model: "m", requestId: "r", expiresAt: now - 1 },
+    });
+    await agent.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const completions = stream.events.filter((event) => event.type === T.completed);
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.payload).toMatchObject({
+      llmRequestOffset: requested!.offset,
+      result: { status: "failure" },
     });
   });
 });

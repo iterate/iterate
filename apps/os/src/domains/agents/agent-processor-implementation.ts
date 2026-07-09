@@ -422,16 +422,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // settles every open request (attempts self-cap at the expiry deadline,
       // crashed attempts cancel, expired intents fail), so this only fires
       // for folds the lifecycle didn't produce — hand-seeded checkpoints,
-      // raw-append journals — or a reconciliation bug. Idempotent completion
-      // keys make the backstop and any late real settle converge to one
-      // durable outcome.
+      // raw-append journals — or a reconciliation bug. The completion key is
+      // the SAME one every other settle lane uses, so the backstop, the
+      // obligation pass, and any late real settle collapse to one durable
+      // outcome instead of double-failing the request.
       const requestedAt = state.currentRequest.requestedAt;
       if (requestedAt === undefined) return;
       if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
       const llmRequestOffset = state.currentRequest.llmRequestOffset;
       await args.append({
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: this.idempotencyKey(`backstop-completed@${llmRequestOffset}`),
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
         payload: {
           durationMs: this.#now() - requestedAt,
           llmRequestOffset,
