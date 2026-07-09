@@ -104,11 +104,14 @@ export class SlackAgentProcessor extends StreamProcessor<
       case "events.iterate.com/slack/webhook-received": {
         // The webhook transcribes into the unified inbound message event —
         // Slack messages are messages FROM a user, `from` carries the facts.
+        // The sender is extracted here, once, wherever the payload shape
+        // carries it (event_callback events vs interactivity payloads), so
+        // button presses and reactions keep their sender too.
+        const senderUserId = slackWebhookSenderUserId(event.payload.body);
         const appendAgentMessage = async (
           input: {
             files?: AgentFileAttachment[];
             llmRequestPolicy?: { behaviour: "dont-trigger-request" };
-            userId?: string;
           } = {},
         ) => {
           await append({
@@ -116,7 +119,7 @@ export class SlackAgentProcessor extends StreamProcessor<
             idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: slackWebhookAgentInput(event.payload),
-              from: { kind: "slack", ...(input.userId == null ? {} : { userId: input.userId }) },
+              from: { kind: "slack", ...(senderUserId == null ? {} : { userId: senderUserId }) },
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
                 ? {}
@@ -206,11 +209,7 @@ export class SlackAgentProcessor extends StreamProcessor<
               });
             }
           }
-          const userId = readStringField(slackEvent, "user");
-          await appendAgentMessage({
-            ...(files == null ? {} : { files }),
-            ...(userId == null ? {} : { userId }),
-          });
+          await appendAgentMessage(files == null ? {} : { files });
           await this.#addEyesReactionForMessageTarget(target, event);
         });
         return;
@@ -315,6 +314,22 @@ export class SlackAgentProcessor extends StreamProcessor<
       throw error;
     }
   }
+}
+
+/**
+ * The human sender of a slack webhook, wherever the payload shape carries
+ * it: event_callback events (messages, reactions, joins) put it at
+ * `event.user`; interactivity payloads (block_actions, view submissions)
+ * at `user.id`. Undefined when the payload names no human (or is off-shape).
+ */
+function slackWebhookSenderUserId(body: unknown): string | undefined {
+  const record = readRecord(body);
+  if (record == null) return undefined;
+  return (
+    readString(readRecord(record.event)?.user) ??
+    readString(readRecord(record.user)?.id) ??
+    undefined
+  );
 }
 
 function slackWebhookAgentInput(payload: unknown) {
