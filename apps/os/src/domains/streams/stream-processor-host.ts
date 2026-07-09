@@ -56,13 +56,13 @@
 // incarnation left behind.
 
 import type { Stream } from "../../itx-api.generated.ts";
+import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
   StreamEventBatch,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "./rpc-types.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
-import { LiveState } from "../../lib/live-state/engine.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 

@@ -1,9 +1,9 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
+import { disposeIgnoredRpcResult, isThenable } from "../../lib/rpc/retain.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
-import { disposeIgnoredRpcResult, isThenable } from "../../lib/rpc/retain.ts";
 import {
   assertObjectProcessorState,
   cachedEventSchema,

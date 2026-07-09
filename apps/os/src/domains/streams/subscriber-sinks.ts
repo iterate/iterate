@@ -28,6 +28,7 @@
 // stream-wire.e2e.test.ts.
 
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
+import { disposeIgnoredRpcResult, isThenable } from "../../lib/rpc/retain.ts";
 import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
@@ -39,7 +40,6 @@ import type {
   StreamWebhookDelivery,
 } from "./rpc-types.ts";
 import type { SubscriberDial } from "./stream-subscribers.ts";
-import { disposeIgnoredRpcResult, isThenable } from "../../lib/rpc/retain.ts";
 
 /** An RPC callback after retention: callable, disposable, with optional broken-transport signal. */
 type RetainedRpcCallback<T extends (...args: any[]) => unknown> = T &
