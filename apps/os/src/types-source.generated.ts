@@ -1077,6 +1077,13 @@ export interface Workspace {
    * on the workspace branch).
    */
   reset(): Promise<void>;
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void>;
   /** Every file path in the merged view (local layer over latest main), sorted. */
   listAllFiles(): Promise<string[]>;
   writeFile(path: string, content: string): Promise<void>;

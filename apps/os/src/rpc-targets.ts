@@ -1326,6 +1326,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
         reset:
           "Wipe the local layer and deletions — back to a pristine view of main. Unpublished work is LOST.",
+        revert: "Un-pin ONE path: drop the local copy/deletion so it follows latest main again.",
         rm: "Remove a path ({ recursive, force }).",
         stat: "Metadata for one path; null when missing.",
         whoami: "Workspace identity string (debug).",
@@ -1374,6 +1375,16 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    */
   reset(): Promise<void> {
     return this.durableObjectStub.reset();
+  }
+
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void> {
+    return this.durableObjectStub.revert(path);
   }
 
   /** Every file path in the merged view (local layer over latest main), sorted. */

@@ -82,6 +82,17 @@ describe("itx workspaces", () => {
     expect((await workspace.readDir("/")).map((entry) => entry.name)).not.toContain("worker.ts");
     expect(await root.exists("/worker.ts")).toBe(true);
 
+    // revert un-pins one path: a shadowed file follows main again, a deleted
+    // one comes back — the surgical sibling of reset().
+    await workspace.revert("/docs/freshness.md");
+    expect(await workspace.readFile("/docs/freshness.md")).toBe("fresh off main");
+    await workspace.revert("/worker.ts");
+    expect(await workspace.exists("/worker.ts")).toBe(true);
+    // Re-delete so the publish below still exercises whiteouts.
+    expect(await workspace.deleteFile("/worker.ts")).toBe(true);
+    // Re-shadow so the publish below still exercises copy-up content.
+    await workspace.appendFile("/docs/freshness.md", " + overlay addendum");
+
     // .git stays reserved: writes are rejected (platform-managed name).
     await expect(workspace.writeFile("/.git/config", "[remote]")).rejects.toThrow(/not writable/);
     await expect(workspace.rm("/", { recursive: true })).rejects.toThrow(/not writable/);

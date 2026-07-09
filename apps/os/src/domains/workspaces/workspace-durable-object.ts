@@ -284,6 +284,35 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     await this.#wipeFilesystem();
   }
 
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and clear the
+   * whiteouts at or below it, so the path resumes following latest main
+   * through the fall-through. The surgical sibling of `reset()` — reverting
+   * "/worker.ts" after an edit brings back main's version, reverting a
+   * deleted path un-deletes it. Scoped strictly at-or-below: an ancestor
+   * whiteout (a deleted parent directory) still masks the path until that
+   * ancestor is reverted too.
+   */
+  async revert(path: string): Promise<void> {
+    this.#assertWritablePath(path);
+    await this.#ensureOverlay();
+    return this.#serializeWrite(async () => {
+      if (await this.#workspace.exists(path)) {
+        await this.#workspace.rm(path, { force: true, recursive: true });
+      }
+      const resolved = resolveAbsolutePath(path);
+      const whiteouts = this.#whiteouts();
+      let changed = false;
+      for (const key of Object.keys(whiteouts)) {
+        if (key === resolved || key.startsWith(`${resolved}/`)) {
+          delete whiteouts[key];
+          changed = true;
+        }
+      }
+      if (changed) this.ctx.storage.kv.put(WHITEOUTS_KEY, whiteouts);
+    });
+  }
+
   // -- write discipline -----------------------------------------------------
 
   // ALL mutations serialize on this chain: whiteout read-modify-writes and
