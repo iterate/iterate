@@ -207,7 +207,7 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
   slug: BrowserRawEventsContract.slug,
   schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   tables: ["events"],
-  createProcessor({ stream, sql, subscriptionKey }) {
+  createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
     const storage = browserProcessorStateStorage<BrowserRawEventsState>({
       sql,
       processorSlug: BrowserRawEventsContract.slug,
@@ -215,6 +215,8 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
     });
     return new BrowserRawEventsProcessor({
       stream,
+      path,
+      projectId,
       sql,
       readState: storage.readState,
       writeState: storage.writeState,
