@@ -3,7 +3,6 @@ import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
   AgentUiState,
@@ -44,7 +43,7 @@ import {
   type StreamInterrupt,
   type StreamMessageComposer,
 } from "~/components/stream-view-composer.tsx";
-import { StreamViewHeader } from "~/components/stream-view-header.tsx";
+import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import {
   defaultPresetForMode,
   feedItemsFilterFromSearch,
@@ -54,13 +53,10 @@ import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
-  defaultModeForStream,
   modeCapabilities,
-  modesForStream,
   streamViewMode,
   useStreamViewPanels,
   useStreamViewSearch,
-  type StreamViewMode,
 } from "~/lib/stream-view-search.ts";
 
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
@@ -165,12 +161,9 @@ export function ProjectStreamView({
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
-  const agentPauseState = useStreamPauseState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
-  const [pauseMutationPending, setPauseMutationPending] = useState(false);
-  const [killMutationPending, setKillMutationPending] = useState(false);
 
-  const { search, setSearch } = useStreamViewSearch();
+  const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
   const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
@@ -231,54 +224,17 @@ export function ProjectStreamView({
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
   const presence = agentUiState?.presence ?? [];
-  const agentPauseControl = streamPath.startsWith("/agents/")
-    ? {
-        paused: agentPauseState.paused,
-        reason: agentPauseState.reason,
-        pending: pauseMutationPending,
-        setPaused: async (paused: boolean) => {
-          if (pauseMutationPending) return;
-          setPauseMutationPending(true);
-          try {
-            const stream = await resolvedStreamSource(streamPath);
-            await stream.append({
-              type: paused
-                ? "events.iterate.com/stream/paused"
-                : "events.iterate.com/stream/resumed",
-              payload: {
-                reason: paused ? "Paused by operator from the agent UI." : "Resumed by operator.",
-              },
-            });
-            nudgeDeliveries();
-          } finally {
-            setPauseMutationPending(false);
-          }
-        },
-      }
-    : undefined;
-  const streamKillControl = {
-    pending: killMutationPending,
-    kill: async () => {
-      if (killMutationPending) return;
-      setKillMutationPending(true);
-      try {
-        const stream = await resolvedStreamSource(streamPath);
-        await stream.kill();
-        toast.success("Stream killed");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.toLowerCase().includes("kill requested")) {
-          toast.success("Stream killed");
-        } else {
-          toast.error(`Failed to kill stream: ${message}`);
-          return;
-        }
-      } finally {
-        setKillMutationPending(false);
-      }
-      nudgeDeliveries();
-    },
-  };
+  const agentPauseControl = useAgentPauseControl({
+    database: store.streamDatabase,
+    resolvedStreamSource,
+    streamPath,
+    onNudgeDeliveries: nudgeDeliveries,
+  });
+  const streamKillControl = useStreamKillControl({
+    resolvedStreamSource,
+    streamPath,
+    onNudgeDeliveries: nudgeDeliveries,
+  });
 
   const filterRow =
     search.filter !== true ? null : (
@@ -396,8 +352,6 @@ export function ProjectStreamView({
     />
   );
 
-  const eventsSheetModes = modesForStream(streamPath);
-
   if (layout === "fullPanel") {
     return (
       <section className="flex min-h-0 flex-1 flex-col bg-background">
@@ -412,72 +366,10 @@ export function ProjectStreamView({
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
         {processorsSheet}
-        <Sheet
-          open={search.events === true}
-          onOpenChange={(open) => setSearch({ events: open ? true : undefined })}
-        >
-          <SheetContent
-            side="right"
-            className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
-            showCloseButton={false}
-          >
-            <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
-            <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
-              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                {streamPath}
-              </span>
-              <div className="ml-auto flex items-center gap-1">
-                {eventsSheetModes.length > 0 ? (
-                  <Tabs
-                    value={activeMode}
-                    onValueChange={(value) => {
-                      const mode = value as StreamViewMode;
-                      const defaultMode = defaultModeForStream(streamPath);
-                      setSearch({
-                        mode: mode === defaultMode ? undefined : mode,
-                        types: undefined,
-                        components: undefined,
-                        raw: undefined,
-                        from: undefined,
-                        to: undefined,
-                        preset: undefined,
-                      });
-                    }}
-                  >
-                    <TabsList className="h-8">
-                      {eventsSheetModes.map((mode) => (
-                        <TabsTrigger key={mode.id} value={mode.id} className="px-2.5 text-xs">
-                          {mode.label}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Search & filter"
-                  aria-expanded={search.filter === true}
-                  onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
-                  className="rounded-full text-muted-foreground"
-                >
-                  <FilterIcon className="size-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Close events"
-                  onClick={() => setSearch({ events: undefined })}
-                  className="rounded-full text-muted-foreground"
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
-              </div>
-            </div>
-            {filterRow}
-            {feedColumn}
-          </SheetContent>
-        </Sheet>
+        <StreamEventsSheet streamPath={streamPath}>
+          {filterRow}
+          {feedColumn}
+        </StreamEventsSheet>
       </section>
     );
   }
@@ -507,6 +399,135 @@ export function ProjectStreamView({
       {processorsSheet}
     </section>
   );
+}
+
+/**
+ * Full-panel layouts relegate the feed to this right-edge sheet behind the
+ * header's Events button (`?events=true`). Children are the filter row +
+ * feed column the split layout renders inline.
+ */
+function StreamEventsSheet({ children, streamPath }: { children: ReactNode; streamPath: string }) {
+  const { search, setSearch } = useStreamViewSearch();
+  return (
+    <Sheet
+      open={search.events === true}
+      onOpenChange={(open) => setSearch({ events: open ? true : undefined })}
+    >
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
+        showCloseButton={false}
+      >
+        <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
+        <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {streamPath}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <StreamModeTabs streamPath={streamPath} />
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Search & filter"
+              aria-expanded={search.filter === true}
+              onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
+              className="rounded-full text-muted-foreground"
+            >
+              <FilterIcon className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Close events"
+              onClick={() => setSearch({ events: undefined })}
+              className="rounded-full text-muted-foreground"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+        {children}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * The header's pause/resume affordance for agent streams — appends the
+ * paused/resumed control events. Undefined on non-agent paths (no pause
+ * semantics), so the header hides the action.
+ */
+function useAgentPauseControl(args: {
+  database: StreamBrowserDatabase;
+  resolvedStreamSource: ItxStreamSource;
+  streamPath: string;
+  onNudgeDeliveries: () => void;
+}):
+  | {
+      paused: boolean;
+      pending: boolean;
+      reason: string | null;
+      setPaused: (paused: boolean) => Promise<void>;
+    }
+  | undefined {
+  const { database, resolvedStreamSource, streamPath, onNudgeDeliveries } = args;
+  const pauseState = useStreamPauseState(database);
+  const [pending, setPending] = useState(false);
+  if (!streamPath.startsWith("/agents/")) return undefined;
+  return {
+    paused: pauseState.paused,
+    reason: pauseState.reason,
+    pending,
+    setPaused: async (paused: boolean) => {
+      if (pending) return;
+      setPending(true);
+      try {
+        const stream = await resolvedStreamSource(streamPath);
+        await stream.append({
+          type: paused ? "events.iterate.com/stream/paused" : "events.iterate.com/stream/resumed",
+          payload: {
+            reason: paused ? "Paused by operator from the agent UI." : "Resumed by operator.",
+          },
+        });
+        onNudgeDeliveries();
+      } finally {
+        setPending(false);
+      }
+    },
+  };
+}
+
+/** The header's kill-stream action; "kill requested" from a prior kill still reads as success. */
+function useStreamKillControl(args: {
+  resolvedStreamSource: ItxStreamSource;
+  streamPath: string;
+  onNudgeDeliveries: () => void;
+}): { kill: () => Promise<void>; pending: boolean } {
+  const { resolvedStreamSource, streamPath, onNudgeDeliveries } = args;
+  const [pending, setPending] = useState(false);
+  return {
+    pending,
+    kill: async () => {
+      if (pending) return;
+      setPending(true);
+      try {
+        const stream = await resolvedStreamSource(streamPath);
+        await stream.kill();
+        toast.success("Stream killed");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.toLowerCase().includes("kill requested")) {
+          toast.success("Stream killed");
+        } else {
+          toast.error(`Failed to kill stream: ${message}`);
+          return;
+        }
+      } finally {
+        setPending(false);
+      }
+      onNudgeDeliveries();
+    },
+  };
 }
 
 function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {

@@ -74,8 +74,6 @@ export function StreamViewHeader({
 }) {
   const { search, setSearch } = useStreamViewSearch();
   const { focusedProcessorKey, focusProcessor, openProcessorsOverview } = useStreamViewPanels();
-  const modes = modesForStream(streamPath);
-  const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
   const toolsOpen = search.filter === true;
   const showFilterToggle = eventsToggle == null && caps.filters;
@@ -157,34 +155,7 @@ export function StreamViewHeader({
           </Button>
         ) : (
           <>
-            {modes.length > 0 ? (
-              <Tabs
-                value={activeMode}
-                onValueChange={(value) => {
-                  const mode = value as StreamViewMode;
-                  const defaultMode = defaultModeForStream(streamPath);
-                  setSearch({
-                    mode: mode === defaultMode ? undefined : mode,
-                    // Mode switch clears feed-items-only filters so they don't
-                    // stick invisibly under Pretty; keep `q` for search continuity.
-                    types: undefined,
-                    components: undefined,
-                    raw: undefined,
-                    from: undefined,
-                    to: undefined,
-                    preset: undefined,
-                  });
-                }}
-              >
-                <TabsList className="h-8">
-                  {modes.map((mode) => (
-                    <TabsTrigger key={mode.id} value={mode.id} className="px-2.5 text-xs">
-                      {mode.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            ) : null}
+            <StreamModeTabs streamPath={streamPath} />
             {showFilterToggle ? (
               <Button
                 variant="ghost"
@@ -208,6 +179,45 @@ export function StreamViewHeader({
         <StreamActionMenu kill={streamKill} pause={agentPause} />
       </div>
     </header>
+  );
+}
+
+/**
+ * The Pretty / Pretty+raw / Raw mode switch — URL-backed, hidden on streams
+ * that offer only the implicit raw feed. Shared by the page header and the
+ * full-panel Events sheet. Switching modes clears feed-items-only filters so
+ * they don't stick invisibly under Pretty; `q` is kept for search continuity.
+ */
+export function StreamModeTabs({ streamPath }: { streamPath: string }) {
+  const { search, setSearch } = useStreamViewSearch();
+  const modes = modesForStream(streamPath);
+  const activeMode = streamViewMode(search, streamPath);
+  if (modes.length === 0) return null;
+  return (
+    <Tabs
+      value={activeMode}
+      onValueChange={(value) => {
+        const mode = value as StreamViewMode;
+        const defaultMode = defaultModeForStream(streamPath);
+        setSearch({
+          mode: mode === defaultMode ? undefined : mode,
+          types: undefined,
+          components: undefined,
+          raw: undefined,
+          from: undefined,
+          to: undefined,
+          preset: undefined,
+        });
+      }}
+    >
+      <TabsList className="h-8">
+        {modes.map((mode) => (
+          <TabsTrigger key={mode.id} value={mode.id} className="px-2.5 text-xs">
+            {mode.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
   );
 }
 

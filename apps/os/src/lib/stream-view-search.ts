@@ -88,13 +88,6 @@ type StreamModeCapabilities = {
   rawOffsets: boolean;
 };
 
-/** One header mode tab offered by a stream path. */
-type StreamModeDefinition = {
-  id: StreamViewMode;
-  label: string;
-  capabilities: StreamModeCapabilities;
-};
-
 const PRETTY_CAPS: StreamModeCapabilities = {
   agentFeed: true,
   agentShowDebug: false,
@@ -132,6 +125,13 @@ const RAW_CAPS: StreamModeCapabilities = {
   rawEventTypes: true,
   rawComponents: true,
   rawOffsets: true,
+};
+
+/** One header mode tab offered by a stream path. */
+type StreamModeDefinition = {
+  id: StreamViewMode;
+  label: string;
+  capabilities: StreamModeCapabilities;
 };
 
 /**

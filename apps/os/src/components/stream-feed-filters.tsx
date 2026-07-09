@@ -310,15 +310,14 @@ function TypeCheckboxGrid({
   dataTestId: string;
 }) {
   const selected = value ?? EMPTY_SELECTION;
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   const merged = useMemo(() => {
-    const selectedList = value ?? EMPTY_SELECTION;
-    const staleSelections = selectedList.filter(
-      (type) => !options.some((entry) => entry.type === type),
-    );
+    const optionTypes = new Set(options.map((entry) => entry.type));
+    const staleSelections = selected.filter((type) => !optionTypes.has(type));
     return [...staleSelections.map((type) => ({ count: 0, type })), ...options].sort((a, b) =>
       shortLabel(a.type).localeCompare(shortLabel(b.type)),
     );
-  }, [options, shortLabel, value]);
+  }, [options, shortLabel, selected]);
 
   function toggle(type: string, checked: boolean) {
     const current = value ?? EMPTY_SELECTION;
@@ -334,7 +333,7 @@ function TypeCheckboxGrid({
         ) : (
           <div className="grid grid-cols-1 gap-0.5 sm:grid-cols-2">
             {merged.map((entry) => {
-              const checked = selected.includes(entry.type);
+              const checked = selectedSet.has(entry.type);
               return (
                 <label
                   key={entry.type}
@@ -442,7 +441,8 @@ function OffsetInput({
           return;
         }
         const parsed = Number(raw);
-        if (Number.isFinite(parsed)) onChange(Math.trunc(parsed));
+        // Offsets are non-negative; clamp so hand-typed negatives can't empty the feed.
+        if (Number.isFinite(parsed)) onChange(Math.max(0, Math.trunc(parsed)));
       }}
       className="w-14 rounded-md border border-border bg-background px-1.5 py-0.5 text-center outline-none focus-visible:ring-1 focus-visible:ring-ring"
     />
