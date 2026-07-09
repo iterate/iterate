@@ -219,10 +219,8 @@ import type { StreamProcessorHost } from "./domains/streams/stream-processor-hos
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
-import type {
-  ProjectLiveState,
-  ProjectProcessorState,
-} from "./domains/projects/project-processor-contract.ts";
+import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
+import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {

@@ -308,14 +308,3 @@ export type ProjectProcessorContract = typeof ProjectProcessorContract;
  * methods read.
  */
 export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;
-
-/**
- * The project's LIVE state (`itx.live`) — its reduced processor state plus
- * non-folded slices the Durable Object maintains outside the event fold: a demo
- * counter today, a streams index next. A superset of {@link ProjectProcessorState}
- * so a watcher can select either the folded fields or the extras.
- */
-export type ProjectLiveState = ProjectProcessorState & {
-  /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`. */
-  liveDemo: { count: number; lastActor: string | null };
-};

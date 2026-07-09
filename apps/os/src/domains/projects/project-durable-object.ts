@@ -52,9 +52,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
-    // `itx.live` = the project's reduced state, plus demo/extra slices.
+    // `itx.live` = the project's composite live state (see ProjectLiveState):
+    // the processor's fold is ONE peer slice, alongside the demo counter (and,
+    // soon, the streams index the DO keeps in SQLite).
     getLiveState: () => ({
-      ...(this.#projectProcessor.currentState as Record<string, unknown>),
+      reduced: this.#projectProcessor.currentState,
       liveDemo: this.#liveDemo,
     }),
   });
