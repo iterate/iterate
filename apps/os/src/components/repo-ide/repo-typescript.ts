@@ -147,17 +147,13 @@ class RepoTypeScriptSession {
    * `declare module "*"` wildcard (bare imports stay `any`), never the editor.
    */
   #maybeAcquireTypes(desired: Map<string, string>, delayMs: number): void {
-    const packageJsonText = desired.get("package.json");
-    if (packageJsonText === undefined) {
-      // package.json removed: cancel any pending debounced acquisition so a
-      // timer armed by an earlier edit can't fire and re-acquire types for a
-      // manifest that no longer exists, and reset the guard so re-adding a
-      // package.json acquires again.
-      if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
-      this.#acquireTimer = null;
-      this.#lastRequestedPackageJson = null;
-      return;
-    }
+    // A removed (or empty) package.json means "no dependencies", NOT "keep
+    // whatever was acquired": running the normal flow with an empty manifest
+    // makes the worker evict every previously-acquired type (its stale-path
+    // diff against an empty acquisition) and report the change for a relint,
+    // and the ordinary debounce/cancel logic below retires any timer armed by
+    // a pre-deletion edit. Re-adding a package.json re-acquires as usual.
+    const packageJsonText = desired.get("package.json") || "{}";
     if (packageJsonText === this.#lastRequestedPackageJson) return;
     this.#lastRequestedPackageJson = packageJsonText;
     if (this.#acquireTimer) clearTimeout(this.#acquireTimer);
