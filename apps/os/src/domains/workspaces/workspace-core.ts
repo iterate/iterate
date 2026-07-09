@@ -199,6 +199,11 @@ export class WorkspaceCore {
    */
   async #materializeRoot(expectedHead: string): Promise<void> {
     const repo = await this.#repo().gitAccess();
+    // The head key comes off BEFORE the wipe: if every attempt below fails,
+    // the workspace must read as "never materialized" (reads error and retry)
+    // — a lingering key over a wiped filesystem would serve an empty tree as
+    // if it were main.
+    this.#kv.delete(ROOT_HEAD_KEY);
     for (let attempt = 1, staleAttempt = 1; ; ) {
       // A previous attempt may have died mid-checkout; start from empty so
       // isomorphic-git never sees a half-written .git.
@@ -452,13 +457,13 @@ export class WorkspaceCore {
       return this.#workspace.readDir(dir);
     }
     await this.#ensureOverlay();
-    const local = await this.#workspace.readDir(dir).catch(() => [] as WorkspaceFileInfo[]);
+    // No defensive catches: a missing directory is an empty listing on both
+    // sides (plain SQL, never a throw), so any error here is REAL — a parent
+    // RPC failure must fail the merged read, not masquerade as an empty or
+    // local-only tree.
+    const local = await this.#workspace.readDir(dir);
     const target = dir ?? "/";
-    const parent = this.#isMaskedFromParent(target)
-      ? []
-      : await this.#parent()
-          .readDir(dir)
-          .catch(() => [] as WorkspaceFileInfo[]);
+    const parent = this.#isMaskedFromParent(target) ? [] : await this.#parent().readDir(dir);
     return mergeEntries({
       local,
       parent: parent.filter((entry) => !this.#isMaskedFromParent(entry.path)),
@@ -471,10 +476,9 @@ export class WorkspaceCore {
       return this.#workspace.glob(pattern);
     }
     await this.#ensureOverlay();
+    // Same rule as readDir: no-match is [], so an error is real and surfaces.
     const local = await this.#workspace.glob(pattern);
-    const parent = await this.#parent()
-      .glob(pattern)
-      .catch(() => [] as WorkspaceFileInfo[]);
+    const parent = await this.#parent().glob(pattern);
     return mergeEntries({
       local,
       parent: parent.filter((entry) => !this.#isMaskedFromParent(entry.path)),
@@ -538,9 +542,14 @@ export class WorkspaceCore {
     this.#assertWritablePath(path);
     await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
+      // Whiteout FIRST (synchronous), so an unserialized read arriving after
+      // the local delete below can never fall through and resurrect the
+      // parent copy mid-delete. Retracted at the end if nothing was hidden.
+      const wasMasked = this.#isMaskedFromParent(path);
+      this.#addWhiteout(path);
       const localDeleted = await this.#workspace.deleteFile(path);
-      const parentHas = await this.#parentExists(path);
-      if (parentHas) this.#addWhiteout(path);
+      const parentHas = !wasMasked && (await this.#parent().exists(path));
+      if (!parentHas) this.#clearWhiteout(path);
       return localDeleted || parentHas;
     });
   }
@@ -592,10 +601,13 @@ export class WorkspaceCore {
     this.#assertWritablePath(path);
     await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
+      // Same whiteout-first ordering as deleteFile (no mid-delete resurrect).
+      const wasMasked = this.#isMaskedFromParent(path);
+      this.#addWhiteout(path);
       const localExists = await this.#workspace.exists(path);
       if (localExists) await this.#workspace.rm(path, opts);
-      const parentHas = await this.#parentExists(path);
-      if (parentHas) this.#addWhiteout(path);
+      const parentHas = !wasMasked && (await this.#parent().exists(path));
+      if (!parentHas) this.#clearWhiteout(path);
       if (!localExists && !parentHas && !opts?.force) {
         throw new Error(`Workspace path does not exist: "${path}".`);
       }
@@ -724,17 +736,45 @@ export class WorkspaceCore {
       }
 
       const repo = await this.#repo().gitAccess();
-      const filesystem = new InMemoryFs();
-      const git = createGit(filesystem, "/repo");
-      // Full (non-shallow) clone: pushing needs the object walk to reach a
-      // commit the remote already has.
-      await git.clone({
-        branch: repo.defaultBranch,
-        singleBranch: true,
-        url: repo.remote,
-        username: "x",
-        password: repo.token,
-      });
+      // Same read-your-write guard as #materializeRoot: the publish base must
+      // observe at least the head cursor, or a post-commit publish could
+      // snapshot pre-commit main under the overlay (the Artifacts remote is
+      // eventually consistent). Same 503-retry as every other clone lane.
+      const expectedHead = (await this.#repo().getHead()).commitOid;
+      let filesystem: InMemoryFs;
+      let git: ReturnType<typeof createGit>;
+      for (let attempt = 1, staleAttempt = 1; ; ) {
+        filesystem = new InMemoryFs();
+        git = createGit(filesystem, "/repo");
+        try {
+          // Full (non-shallow) clone: pushing needs the object walk to reach
+          // a commit the remote already has.
+          await git.clone({
+            branch: repo.defaultBranch,
+            singleBranch: true,
+            url: repo.remote,
+            username: "x",
+            password: repo.token,
+          });
+        } catch (error) {
+          if (attempt >= CLONE_ATTEMPTS) throw error;
+          console.warn(`publish clone attempt ${attempt} failed, retrying: ${String(error)}`);
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          attempt++;
+          continue;
+        }
+        const [tip] = await git.log({ depth: 1 });
+        if (!tip) throw new Error("Publish clone has no commits.");
+        if (tip.oid !== expectedHead && staleAttempt <= 5) {
+          console.warn(
+            `publish clone is behind the head cursor (saw ${tip.oid}, expected ${expectedHead}); retry ${staleAttempt}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 500 * staleAttempt));
+          staleAttempt++;
+          continue;
+        }
+        break;
+      }
       await git.checkout({ branch: this.#branch });
 
       const changedPaths: string[] = [];
@@ -767,6 +807,14 @@ export class WorkspaceCore {
         }
       }
 
+      // The pre-clone guard only proved SOMETHING existed locally; deletions
+      // main already applied stage nothing, so re-check what actually staged
+      // rather than pushing an empty snapshot (or failing inside git.commit).
+      if (changedPaths.length === 0) {
+        throw new Error(
+          "Nothing to publish — the workspace's deletions have already landed on main.",
+        );
+      }
       const commit = await git.commit({
         author: input.author ?? DEFAULT_COMMIT_AUTHOR,
         message: input.message,
@@ -790,9 +838,14 @@ export class WorkspaceCore {
     if (this.#isRoot) {
       throw new Error('The root workspace ("/") mirrors main — read main\'s log via itx.repo.log.');
     }
+    // Only "branch does not exist yet" reads as no-publishes; anything else
+    // (a bad limit, a broken remote) is the caller's error to see.
     const result = await this.#repo()
       .log({ branch: this.#branch, limit: input.limit })
-      .catch(() => null);
+      .catch((error: unknown) => {
+        if (/not.?found|could not find/i.test(String(error))) return null;
+        throw error;
+      });
     if (result === null) return [];
     return result.commits.map((commit) => ({
       author: commit.author,
