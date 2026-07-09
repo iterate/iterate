@@ -152,7 +152,8 @@ export interface Project {
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
-  /** Path-addressed sandboxes (\`itx.sandboxes.get("/sandboxes/cloudflare/whatever")\`). */
+  /** The project's sandboxes — explicitly created, sized Linux containers
+   * (\`itx.sandboxes.create\` / \`get\` / \`list\`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   /** The default project Scheduler — shorthand for \`schedulers.get("/scheduler/primary")\`. */
   scheduler: Scheduler;
@@ -415,6 +416,8 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
+  /** The platform's default agent policy, as data. */
+  defaults: AgentDefaults;
 }
 
 /**
@@ -622,18 +625,28 @@ export interface ProjectRepoCollection extends RepoCollection {
  * The \`itx.sandboxes\` built-in. Sandboxes are PETS:
  * \`create({ name, instanceType })\` is the only way one comes to exist
  * (nothing mints a sandbox implicitly — \`get\` refuses paths that were never
- * created), the instance type is Cloudflare's, verbatim, and fixed for life
- * as the path's second segment (\`/sandboxes/<instanceType>/<name>\`), and the
- * sandbox itself carries the imperative lifecycle (\`start\`/\`sleep\`/\`destroy\`).
+ * created), names are one path segment (\`/sandboxes/<name>\` — no intermediate
+ * folders in the stream tree), and the sandbox itself carries the imperative
+ * lifecycle (\`start\`/\`sleep\`/\`destroy\`).
  *
  * \`get(path)\` returns the sandbox Durable Object's own RPC stub —
  * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
  * \`@cloudflare/sandbox\` SDK exposes and new SDK methods need no forwarding
  * code here. Confinement is by name: the stub is minted from this project's
  * id plus the validated path, after the same project-access assert every
- * collection performs. Each instance type is its own Durable Object namespace
- * (Cloudflare fixes instance type per container class — instance-types.ts),
- * so the path's instance-type segment is also the namespace routing key.
+ * collection performs.
+ *
+ * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
+ * instance type per container class (instance-types.ts), so each type is its
+ * own Durable Object namespace and routing needs the type. The \`/sandboxes\`
+ * catalogue stream is the directory: \`create\` journals \`create-requested\`
+ * there (idempotency-keyed by path, so the stream's native dedup makes the
+ * FIRST claim on a name authoritative — races settle atomically in one
+ * append) BEFORE touching any container namespace, and \`get\` routes by the
+ * claim's instance type. The catalogue and not the sandbox's own stream
+ * because reads materialize streams (any wake appends \`created\`/\`woken\`):
+ * routing a \`get\` through the sandbox's own stream would mint a junk stream
+ * for every typo'd path, and addressing must never create.
  */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
@@ -705,10 +718,24 @@ export interface Repo {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   /**
-   * Committed file contents at HEAD; null when the path does not exist.
-   * \`encoding: "base64"\` reads raw bytes (images, PDFs) base64-encoded.
+   * Commit history of a branch, newest first — oid, message, author,
+   * timestamp (epoch ms), parent oids. Deliberately without per-commit file
+   * stats (those cost tree checkouts per commit); fetch them lazily per
+   * commit through \`commitDetails\`.
    */
-  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
+  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (the whole tree for the root commit), with \`git diff --numstat\`-shaped
+   * +/- line counts; binary files are flagged instead of counted.
+   */
+  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;
+  /**
+   * Committed file contents at HEAD — or, with \`commitOid\`, pinned to that
+   * commit — null when the path does not exist there. \`encoding: "base64"\`
+   * reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -736,8 +763,13 @@ export interface Repo {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless \`force: true\` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * Public repositories transfer server-side (any history size); private
+   * ones transfer in-process, where big histories need \`depth\`. \`depth\`
+   * prunes to the newest N commits — GitHub retains the full history, and a
+   * later deeper sync can always widen the window.
    */
-  syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult>;
+  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: StreamProcessorRpc<RepoProcessorState>;
 }
@@ -785,7 +817,16 @@ export interface WorkspaceCollection {
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  processEvent(input: { event: StreamEvent }): Promise<void>;
+  /**
+   * Checkpointed event delivery: every project-scoped stream pumps its
+   * committed events here (see ProjectWorkerDelivery). Batches arrive in
+   * per-stream order, at-least-once — each event carries the \`path\` of the
+   * stream it lives on, so \`\${event.path}@\${event.offset}\` identifies a
+   * delivery globally and is the idempotency-key idiom for reactions. The
+   * stream only advances its checkpoint when this resolves; throwing means
+   * the whole batch is redelivered later.
+   */
+  processEventBatch(batch: StreamEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
@@ -828,11 +869,16 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
+      workerDelivery: {
+        checkpoint: number;
+        consecutiveFailures: number;
+        retryScheduled: boolean;
+      } | null;
     };
   }>;
   /**
@@ -851,6 +897,25 @@ export interface Stream {
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle>;
+}
+
+/**
+ * The \`itx.agents.defaults\` built-in: default agent POLICY as data. The
+ * project worker owns applying it — the seeded template reacts to
+ * \`stream/child-stream-created\` for \`/agents/**\` by appending
+ * \`forPath(path).events\` to the new agent stream (and edits the result to
+ * customize agents). The platform appends only mechanics (processor
+ * subscriptions); an agent nobody configures runs on stock defaults.
+ */
+export interface AgentDefaults {
+  __describe(): Promise<Description>;
+  /**
+   * The default policy for one agent path: the named pieces plus the exact
+   * event batch that applies them. Events are idempotency-keyed on
+   * (projectId, path), so appending them twice — or racing a redelivery — is
+   * a no-op.
+   */
+  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1332,6 +1397,7 @@ export type StreamEvent = {
   idempotencyKey?: string | undefined;
   offset: number;
   createdAt: string;
+  path: string;
 };
 
 /**
@@ -1455,8 +1521,9 @@ export type OpenApiConnectInput = {
 /** What \`itx.sandboxes.create\` takes — Cloudflare's own vocabulary
  * (instance types, \`SandboxOptions.sleepAfter\`/\`keepAlive\`) plus a name. */
 export type SandboxCreateInput = {
-  /** The sandbox's name; its path becomes \`/sandboxes/<instanceType>/<name>\`.
-   * Destroyed names are retired, not recycled — pick a new one. */
+  /** The sandbox's name — a single path segment (no \`/\`); its path becomes
+   * \`/sandboxes/<name>\`. Names are unique per project (across instance
+   * types), and destroyed names are retired, not recycled — pick a new one. */
   name: string;
   /** Cloudflare instance type; defaults to \`basic\`. Cannot be changed later. */
   instanceType?: SandboxInstanceType;
@@ -1585,6 +1652,20 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   path: string;
 };
 
+/** What \`repo.log\` returns: newest-first commits on one branch. */
+export type RepoLogResult = {
+  branch: string;
+  commits: RepoLogCommit[];
+};
+
+/** What \`repo.commitDetails\` returns: one commit's metadata plus the files it
+ * changed versus its first parent (versus an empty tree for the root commit). */
+export type RepoCommitDetails = RepoLogCommit & {
+  /** First parent oid — the diff baseline; null for the root commit. */
+  parentOid: string | null;
+  files: RepoCommitFileChange[];
+};
+
 /** What \`repo.linkGithub\` returns: the recorded link, whether the GitHub
  * repository was created by this call, and the initial mirror push's outcome
  * (a failed initial push does not fail the link — it is journaled on the repo
@@ -1644,6 +1725,20 @@ export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorker
 export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
+};
+
+/**
+ * Batch delivered to stream processors and live subscribers.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
 };
 
 export type StreamEventInput = {
@@ -1748,6 +1843,22 @@ export type FlattenedCapabilityInvocation = {
 /** Durable expression over the project ITX surface. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  provider?: AgentLlmProvider;
+  model?: string;
+};
+
+/** The default policy for one agent path: the named pieces plus the exact
+ * event batch that applies them (idempotency-keyed, safe to re-append). */
+export type AgentDefaultPolicy = {
+  systemPrompt: string;
+  provider: AgentLlmProvider;
+  model: string;
+  events: AgentPolicyEventInput[];
+};
+
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
   contentType: string;
@@ -1832,6 +1943,30 @@ export type RepoFileChange =
       delete: true;
     };
 
+/** One commit in a repo's history, as returned by \`repo.log\`. */
+export type RepoLogCommit = {
+  oid: string;
+  /** Full commit message, trailing newline trimmed. */
+  message: string;
+  author: { email: string; name: string };
+  /** Author timestamp in epoch milliseconds. */
+  timestamp: number;
+  /** Parent commit oids — empty for the root commit, 2+ for merges. */
+  parents: string[];
+};
+
+/** One changed file in a commit — \`git diff --numstat\`-shaped counts. */
+export type RepoCommitFileChange = {
+  path: string;
+  status: "added" | "deleted" | "modified";
+  /** Lines added; 0 for binary files. */
+  additions: number;
+  /** Lines removed; 0 for binary files. */
+  deletions: number;
+  /** True when either side of the diff sniffs binary (NUL byte). */
+  binary: boolean;
+};
+
 /**
  * The GitHub repository a repo is linked to: the named GitHub connection (an
  * App installation) whose token authenticates mirror pushes, its installation
@@ -1914,22 +2049,19 @@ export type WorkspaceFileInfo = {
   updatedAt: number;
 };
 
-/**
- * Batch delivered to stream processors and live subscribers.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
- */
-export type StreamEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  state: unknown;
-};
-
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
+
+export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
+
+/** The policy events an agent is born with, as append inputs. Typed
+ * structurally (not against the full event catalog) so the SDK projection
+ * stays self-contained. */
+export type AgentPolicyEventInput = {
+  type: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+};
 
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;

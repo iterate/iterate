@@ -81,6 +81,26 @@ it("sends itx paths on the OS host to the api lane", async () => {
   }
 });
 
+it("sends integration webhook ingress paths to the api lane", async () => {
+  // The webhook door lives in the api pipeline (worker.ts), NOT the app
+  // router: a webhook path that stays on the "os" lane 404s in the SSR app —
+  // which is exactly how prd GitHub webhooks were silently dead until
+  // 2026-07-08 (the path below was missing from the lane predicate).
+  for (const path of [
+    "/api/integrations/slack/webhook",
+    "/api/integrations/slack/interactivity-webhook",
+    "/api/integrations/github/webhook",
+  ]) {
+    const route = await decideIngressRoute({
+      config: DEV_CONFIG,
+      method: "POST",
+      resolvers: resolversThatShouldNotBeUsed(),
+      url: `http://localhost:56455${path}`,
+    });
+    expect(route).toMatchObject({ lane: "api" });
+  }
+});
+
 it("rewrites the /prj_<id> path lane to the project sub-path", async () => {
   const route = await decideIngressRoute({
     config: DEV_CONFIG,

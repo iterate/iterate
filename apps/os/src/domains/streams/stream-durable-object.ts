@@ -7,12 +7,19 @@ import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { DynamicWorkerRef } from "../workers/schemas.ts";
+import { defaultProjectWorkerRef } from "../repos/utils.ts";
+import { buildCrossPostAppendInput, type CrossPostProvenanceChain } from "./cross-post.ts";
 import type { ProcessorRuntimeState, StreamSubscriptionHandle } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest } from "./stream-processor-host.ts";
 import { StreamEventLog } from "./stream-storage.ts";
 import { StreamConnections, type ConnectionRuntimeState } from "./stream-connections.ts";
+import {
+  ProjectWorkerDelivery,
+  type ProjectWorkerDeliveryRuntimeState,
+} from "./project-worker-delivery.ts";
+import type { StreamEventBatch } from "./rpc-types.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -26,6 +33,14 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+
+/** DO-KV key holding the project worker delivery checkpoint (see ProjectWorkerDelivery). */
+const WORKER_DELIVERY_CHECKPOINT_KEY = "project-worker-delivery:checkpoint";
+
+// A delivery that needs a cold worker build gives up after this long and
+// retries later; the build itself survives via waitUntil, so the retry hits
+// the warm cache (see withBuildBudget in worker-loader.ts).
+const WORKER_DELIVERY_BUILD_BUDGET_MS = 15_000;
 
 /**
  * Backstop cap on a cross-post provenance chain. The structural cycle guard
@@ -81,7 +96,7 @@ function compileCrossPostCondition(condition: string): jsonata.Expression {
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
-  readonly #log = new StreamEventLog(this.ctx.storage.sql);
+  readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   readonly #connections = new StreamConnections({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -100,6 +115,24 @@ export class StreamDurableObject extends DurableObject<Env> {
       onConfiguredConnectionLost: () => this.#reconcileConnections(),
     },
   });
+  /**
+   * Checkpointed delivery of every committed event to the project's default
+   * worker (`processEventBatch`). Derived, not configured: every project-scoped
+   * stream has exactly this one delivery, so it needs no subscription event and
+   * cannot drift. Global streams have no project worker to deliver to.
+   */
+  readonly #workerDelivery: ProjectWorkerDelivery | null =
+    this.name.projectId === null
+      ? null
+      : new ProjectWorkerDelivery({
+          readEvents: (args) => this.getEvents(args),
+          coreState: () => this.#coreProcessorState,
+          readCheckpoint: () =>
+            this.ctx.storage.kv.get<number>(WORKER_DELIVERY_CHECKPOINT_KEY) ?? 0,
+          writeCheckpoint: (offset) =>
+            this.ctx.storage.kv.put(WORKER_DELIVERY_CHECKPOINT_KEY, offset),
+          deliver: (batch) => this.#deliverToProjectWorker(batch),
+        });
   // subscriptionKeys with a configured subscriber wakeup in flight, so concurrent
   // reconciliation runs never wake the same subscriber twice.
   readonly #connecting = new Set<string>();
@@ -196,6 +229,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ...body,
         offset: workingState.maxOffset + 1,
         createdAt: new Date().toISOString(),
+        path: this.name.path,
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
         throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
@@ -232,6 +266,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // async, so nothing here can fail the append.
     for (const reduced of reducedEvents) this.#processEvent(reduced);
     this.#connections.wake();
+    this.#workerDelivery?.wake();
 
     // Re-wake any configured subscription left without a live connection (idle
     // teardown, clean unsubscribe, …). The subscriber re-handshakes from its
@@ -680,7 +715,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const sourceProjectId = args.state.projectId ?? this.name.projectId;
     const sourcePath = args.state.path ?? this.name.path;
-    const { createdAt, offset, ...copy } = args.event;
+    const { createdAt, offset } = args.event;
 
     this.#runInBackground(async () => {
       await Promise.all(
@@ -697,7 +732,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             projectId: sourceProjectId,
             type: args.event.type,
           };
-          const crossPostedFrom = [...chain, hop];
+          const crossPostedFrom: CrossPostProvenanceChain = [...chain, hop];
           const targetOnChain = crossPostedFrom.some(
             (entry) => entry.projectId === target.projectId && entry.path === target.path,
           );
@@ -723,11 +758,14 @@ export class StreamDurableObject extends DurableObject<Env> {
             if (matched !== true) return;
           }
 
-          await this.#appendToStreamCoordinate(target, {
-            ...copy,
-            source: { ...copy.source, crossPostedFrom },
-            idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
-          });
+          await this.#appendToStreamCoordinate(
+            target,
+            buildCrossPostAppendInput({
+              event: args.event,
+              crossPostedFrom,
+              idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
+            }),
+          );
         }),
       );
     });
@@ -891,6 +929,31 @@ export class StreamDurableObject extends DurableObject<Env> {
       args: [request],
       path: ["wakeStreamSubscriber"],
       ref: workerRef,
+    });
+  }
+
+  /**
+   * One checkpointed delivery into the project's default worker. The batch is
+   * plain serializable data and the call is ordinary capability dispatch, so
+   * the worker sees exactly the envelope live subscribers get. Throws propagate
+   * to ProjectWorkerDelivery, which holds the checkpoint and retries.
+   */
+  async #deliverToProjectWorker(batch: StreamEventBatch): Promise<void> {
+    const projectId = this.name.projectId;
+    if (projectId === null) {
+      throw new Error("project worker delivery requires a project-scoped stream");
+    }
+    const ref = defaultProjectWorkerRef();
+    await new DynamicWorkerRunner({
+      exports: this.ctx.exports,
+      projectId,
+      scopePath: ref.path,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    }).invokeCapability({
+      args: [batch],
+      buildBudgetMs: WORKER_DELIVERY_BUILD_BUDGET_MS,
+      path: ["processEventBatch"],
+      ref,
     });
   }
 
@@ -1211,11 +1274,17 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   runtimeState(): {
     coreProcessorState: CoreProcessorState;
-    runtime: { connections: Record<string, ConnectionRuntimeState> };
+    runtime: {
+      connections: Record<string, ConnectionRuntimeState>;
+      workerDelivery: ProjectWorkerDeliveryRuntimeState | null;
+    };
   } {
     return {
       coreProcessorState: this.#coreProcessorState,
-      runtime: { connections: this.#connections.runtimeState() },
+      runtime: {
+        connections: this.#connections.runtimeState(),
+        workerDelivery: this.#workerDelivery?.runtimeState() ?? null,
+      },
     };
   }
 

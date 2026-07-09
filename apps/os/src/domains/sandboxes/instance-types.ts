@@ -16,10 +16,12 @@ import { z } from "zod";
  *
  * Cloudflare fixes the instance type PER CONTAINER CLASS in wrangler config —
  * there is no per-sandbox option on the SDK — so each instance type is its
- * own Durable Object class (all sharing one implementation) and the type is a
- * segment of the sandbox path (`/sandboxes/<instanceType>/<name>`): the path
- * alone names the namespace, no registry needed, and it is honest about the
- * one thing a sandbox can never change.
+ * own Durable Object class (all sharing one implementation). The type is
+ * CONFIGURATION, not identity: it never appears in the sandbox path
+ * (`/sandboxes/<name>` — a type segment would materialize meaningless
+ * intermediate folder streams like `/sandboxes/lite`). The collection
+ * journals it on `create-requested` and routes every `get` by reading the
+ * journal — honest about the one thing a sandbox can never change.
  */
 export const SANDBOX_INSTANCE_TYPES = [
   "lite",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -31,9 +31,11 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@iterate-com/ui/components/sheet";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
+  Activity,
   AlertCircle,
   Brain,
   Circle,
@@ -43,13 +45,17 @@ import {
   KeyRound,
   Mail,
   MessageSquare,
+  Plus,
   Search as SearchIcon,
   Sparkles,
+  type LucideIcon,
+  Unplug,
 } from "lucide-react";
 import { z } from "zod";
 import type { Project } from "../../../../itx-api.generated.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
@@ -63,12 +69,30 @@ type ConnectionEntry = Awaited<ReturnType<Project["integrations"]["list"]>>[numb
   status: Connection | null;
 };
 
+type FeedPanel = {
+  emptyLabel: string;
+  streamPath: string;
+};
+
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
   /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
    * flow on mount, then clears itself so a refresh never re-triggers. */
   connect: z.string().optional(),
 });
+
+const STREAM_VIEW_SEARCH_RESET = {
+  event: undefined,
+  filter: undefined,
+  from: undefined,
+  panel: undefined,
+  preset: undefined,
+  processor: undefined,
+  q: undefined,
+  tab: undefined,
+  to: undefined,
+  types: undefined,
+} satisfies Partial<z.infer<typeof StreamViewSearch>>;
 
 const BUILTIN_API_INTEGRATIONS = [
   {
@@ -165,6 +189,8 @@ function ProjectIntegrationsContent() {
   const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
+  const [feedPanel, setFeedPanel] = useState<FeedPanel | null>(null);
+  const feedOpenRequestId = useRef(0);
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -254,153 +280,151 @@ function ProjectIntegrationsContent() {
     // Unknown slug: ignored.
   }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
-  const panel = (
-    <div className="space-y-4">
-      {oauthErrorLabel ? (
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Integration failed</AlertTitle>
-          <AlertDescription>{oauthErrorLabel}</AlertDescription>
-        </Alert>
-      ) : null}
-      <section className="space-y-3">
-        <div className="space-y-1">
-          <h2 className="text-sm font-medium">Built-in API integrations</h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Iterate-managed keys stay server-side. Use the first-party target where one exists, or
-            an allowlisted <code>getSecret(...)</code> header reference through project egress.
-            Usage is charged to this project.
-          </p>
-        </div>
-        <ItemGroup className="space-y-3">
-          {BUILTIN_API_INTEGRATIONS.map((integration) => (
-            <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
-          ))}
-        </ItemGroup>
-      </section>
-      <ItemGroup className="space-y-3">
-        <Item variant="outline" className="items-start justify-between gap-4 p-4">
-          <ItemMedia variant="icon">
-            <MessageSquare className="size-4" />
-          </ItemMedia>
-          <ItemContent className="min-w-0">
-            <ItemTitle>Slack</ItemTitle>
-            <ItemDescription>
-              {connectedCount(slackConnections) > 0
-                ? `${connectedCount(slackConnections)} connected workspace${connectedCount(slackConnections) === 1 ? "" : "s"}`
-                : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
-            </ItemDescription>
-            {slackConnections.map((entry) => (
-              <ConnectionRow
-                key={entry.path}
-                entry={entry}
-                provider="slack"
-                disconnecting={disconnectSlack.isPending}
-                onDisconnect={() => disconnectSlack.mutate(entry.connection)}
-              />
-            ))}
-          </ItemContent>
-          <ItemActions>
-            <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
-              {startSlack.isPending ? <Spinner /> : null}
-              Connect Slack
-            </Button>
-          </ItemActions>
-        </Item>
-
-        <Item variant="outline" className="items-start justify-between gap-4 p-4">
-          <ItemMedia variant="icon">
-            <Mail className="size-4" />
-          </ItemMedia>
-          <ItemContent className="min-w-0">
-            <ItemTitle>Google</ItemTitle>
-            <ItemDescription>
-              {connectedCount(googleConnections) > 0
-                ? `${connectedCount(googleConnections)} connected account${connectedCount(googleConnections) === 1 ? "" : "s"}`
-                : "Connect Google for Gmail API tools."}
-            </ItemDescription>
-            {googleConnections.map((entry) => (
-              <ConnectionRow
-                key={entry.path}
-                entry={entry}
-                provider="google"
-                disconnecting={disconnectGoogle.isPending}
-                onDisconnect={() => disconnectGoogle.mutate(entry.connection)}
-              />
-            ))}
-          </ItemContent>
-          <ItemActions>
-            <Button size="sm" disabled={startGoogle.isPending} onClick={() => startGoogle.mutate()}>
-              {startGoogle.isPending ? <Spinner /> : null}
-              Connect Google
-            </Button>
-          </ItemActions>
-        </Item>
-
-        <Item variant="outline" className="items-start justify-between gap-4 p-4">
-          <ItemMedia variant="icon">
-            <Github className="size-4" />
-          </ItemMedia>
-          <ItemContent className="min-w-0">
-            <ItemTitle>GitHub</ItemTitle>
-            <ItemDescription>
-              {connectedCount(githubConnections) > 0
-                ? `${connectedCount(githubConnections)} connected account${connectedCount(githubConnections) === 1 ? "" : "s"}`
-                : "Connect GitHub for the REST API and repo webhooks, plus gh/git inside sandboxes."}
-            </ItemDescription>
-            {githubConnections.map((entry) => (
-              <ConnectionRow
-                key={entry.path}
-                entry={entry}
-                provider="github"
-                disconnecting={disconnectGithub.isPending}
-                onDisconnect={() => disconnectGithub.mutate(entry.connection)}
-              />
-            ))}
-          </ItemContent>
-          <ItemActions>
-            <Button size="sm" disabled={startGithub.isPending} onClick={() => startGithub.mutate()}>
-              {startGithub.isPending ? <Spinner /> : null}
-              Connect GitHub
-            </Button>
-          </ItemActions>
-        </Item>
-
-        {providedConnections.length > 0 ? (
-          <Item variant="outline" className="items-start justify-between gap-4 p-4">
-            <ItemMedia variant="icon">
-              <Circle className="size-4" />
-            </ItemMedia>
-            <ItemContent className="min-w-0">
-              <ItemTitle>Project integrations</ItemTitle>
-              <ItemDescription>
-                Mounted by this project through provideCapability; manage them in project code.
-              </ItemDescription>
-              <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
-                {providedConnections.map((entry) => (
-                  <IntegrationMetadataRow
-                    key={entry.path}
-                    label={entry.integration}
-                    value={entry.path}
-                  />
-                ))}
-              </div>
-            </ItemContent>
-          </Item>
-        ) : null}
-
-        <AccountConnectionsItem />
-      </ItemGroup>
-    </div>
-  );
+  const resetFeedViewSearch = () => {
+    return navigate({
+      search: (previous) => ({ ...previous, ...STREAM_VIEW_SEARCH_RESET }),
+      replace: true,
+    });
+  };
+  const openFeed = async (panel: FeedPanel) => {
+    const requestId = ++feedOpenRequestId.current;
+    if (feedPanel == null || feedPanel.streamPath !== panel.streamPath) {
+      await resetFeedViewSearch();
+    }
+    if (feedOpenRequestId.current !== requestId) return;
+    setFeedPanel(panel);
+  };
+  const openProjectFeed = () =>
+    openFeed({
+      emptyLabel: "No events on the integrations stream yet.",
+      streamPath: "/integrations",
+    });
 
   return (
-    <ProjectStreamView
-      panel={panel}
-      projectId={project.id}
-      streamPath="/integrations"
-      emptyLabel="No events on the integrations stream yet."
-    />
+    <main className="min-h-0 flex-1 overflow-y-auto bg-background">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 md:px-6">
+        <header className="flex items-center gap-2 pb-2">
+          <SidebarTrigger className="-ml-1 md:hidden" />
+          <StreamPathPill streamPath="/integrations" />
+          <Button
+            className="ml-auto shrink-0"
+            size="sm"
+            variant="outline"
+            onClick={openProjectFeed}
+          >
+            <Activity data-icon="inline-start" />
+            Show stream
+          </Button>
+        </header>
+
+        {oauthErrorLabel ? (
+          <Alert variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Integration failed</AlertTitle>
+            <AlertDescription>{oauthErrorLabel}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <section className="space-y-3">
+          <div className="space-y-1">
+            <h2 className="text-base font-medium">Connectable integrations</h2>
+            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              OAuth and app-installation connections create their own stream at
+              <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                /integrations/&lt;provider&gt;/&lt;connection&gt;
+              </code>
+              for lifecycle facts, routed webhooks, and provider-specific activity.
+            </p>
+          </div>
+          <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <ConnectableIntegrationCard
+              connectionNoun="workspace"
+              connections={slackConnections}
+              description="Receive Slack events and call Slack Web API methods with project-scoped credentials."
+              disconnecting={disconnectSlack.isPending}
+              icon={MessageSquare}
+              name="Slack"
+              onConnect={() => startSlack.mutate()}
+              onDisconnect={(connection) => disconnectSlack.mutate(connection)}
+              onOpenFeed={openFeed}
+              provider="slack"
+              startPending={startSlack.isPending}
+            />
+            <ConnectableIntegrationCard
+              connectionNoun="account"
+              connections={googleConnections}
+              description="Use Gmail API tools through a connected Google account."
+              disconnecting={disconnectGoogle.isPending}
+              icon={Mail}
+              name="Google"
+              onConnect={() => startGoogle.mutate()}
+              onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
+              onOpenFeed={openFeed}
+              provider="google"
+              startPending={startGoogle.isPending}
+            />
+            <ConnectableIntegrationCard
+              connectionNoun="installation"
+              connections={githubConnections}
+              description="Use the GitHub REST API, route repo webhooks, and enable gh/git inside sandboxes."
+              disconnecting={disconnectGithub.isPending}
+              icon={Github}
+              name="GitHub"
+              onConnect={() => startGithub.mutate()}
+              onDisconnect={(connection) => disconnectGithub.mutate(connection)}
+              onOpenFeed={openFeed}
+              provider="github"
+              startPending={startGithub.isPending}
+            />
+            <AccountConnectionsItem />
+          </ItemGroup>
+        </section>
+
+        {providedConnections.length > 0 ? (
+          <section className="space-y-3">
+            <div className="space-y-1">
+              <h2 className="text-base font-medium">Project integrations</h2>
+              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                Mounted by this project through <code>provideCapability</code>; manage these in
+                project code.
+              </p>
+            </div>
+            <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {providedConnections.map((entry) => (
+                <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openFeed} />
+              ))}
+            </ItemGroup>
+          </section>
+        ) : null}
+
+        <section className="space-y-3">
+          <div className="space-y-1">
+            <h2 className="text-base font-medium">Built-in Integrations</h2>
+            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              Iterate-managed capabilities are available without creating a connection. Keys stay
+              server-side and usage is charged to this project.
+            </p>
+          </div>
+          <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {BUILTIN_API_INTEGRATIONS.map((integration) => (
+              <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+            ))}
+          </ItemGroup>
+        </section>
+      </div>
+
+      <IntegrationFeedSheet
+        feedPanel={feedPanel}
+        onOpenChange={(open) => {
+          if (!open) {
+            feedOpenRequestId.current += 1;
+            void resetFeedViewSearch();
+            setFeedPanel(null);
+          }
+        }}
+        projectId={project.id}
+      />
+    </main>
   );
 }
 
@@ -449,31 +473,194 @@ function BuiltInApiIntegrationRow({
   );
 }
 
+function ConnectableIntegrationCard({
+  connectionNoun,
+  connections,
+  description,
+  disconnecting,
+  icon: Icon,
+  name,
+  onConnect,
+  onDisconnect,
+  onOpenFeed,
+  provider,
+  startPending,
+}: {
+  connectionNoun: string;
+  connections: (ConnectionEntry & { connection: string; source: "builtin" })[];
+  description: string;
+  disconnecting: boolean;
+  icon: LucideIcon;
+  name: string;
+  onConnect: () => void;
+  onDisconnect: (connection: string) => void;
+  onOpenFeed: (panel: FeedPanel) => void;
+  provider: "github" | "google" | "slack";
+  startPending: boolean;
+}) {
+  const connected = connectedCount(connections);
+  const connectionSummary =
+    connected > 0
+      ? `${connected} connected ${connectionNoun}${connected === 1 ? "" : "s"}`
+      : "Not connected";
+
+  return (
+    <Item variant="outline" className="min-w-0 items-start gap-4 p-4">
+      <ItemMedia variant="icon">
+        <Icon className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0 gap-3">
+        <div className="min-w-0 space-y-1">
+          <ItemTitle>{name}</ItemTitle>
+          <ItemDescription className="line-clamp-3">{description}</ItemDescription>
+          <div className="text-xs text-muted-foreground">{connectionSummary}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={startPending} onClick={onConnect}>
+            {startPending ? <Spinner /> : <Plus className="size-4" />}
+            Connect
+          </Button>
+        </div>
+        {connections.length > 0 ? (
+          <div className="grid gap-0.5 border-t pt-2">
+            {connections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                disconnecting={disconnecting}
+                entry={entry}
+                onDisconnect={() => onDisconnect(entry.connection)}
+                onOpenFeed={() =>
+                  onOpenFeed({
+                    emptyLabel: `No events on ${entry.path} yet.`,
+                    streamPath: entry.path,
+                  })
+                }
+                provider={provider}
+              />
+            ))}
+          </div>
+        ) : null}
+      </ItemContent>
+    </Item>
+  );
+}
+
+function ProvidedIntegrationCard({
+  entry,
+  onOpenFeed,
+}: {
+  entry: ConnectionEntry;
+  onOpenFeed: (panel: FeedPanel) => void;
+}) {
+  return (
+    <Item variant="outline" className="min-w-0 items-start gap-4 p-4">
+      <ItemMedia variant="icon">
+        <Circle className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0 gap-3">
+        <div className="min-w-0 space-y-1">
+          <ItemTitle>{entry.integration}</ItemTitle>
+          <ItemDescription className="line-clamp-3">
+            {entry.connection == null
+              ? "Integration-level mount provided by project code."
+              : `Connection ${entry.connection} provided by project code.`}
+          </ItemDescription>
+        </div>
+        <div className="grid gap-1.5 text-xs text-muted-foreground">
+          <IntegrationMetadataRow label="Path" value={entry.path} />
+          <IntegrationMetadataRow label="Source" value={entry.source} />
+        </div>
+        <Button
+          className="w-fit"
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            onOpenFeed({
+              emptyLabel: `No events on ${entry.path} yet.`,
+              streamPath: entry.path,
+            })
+          }
+        >
+          <Activity className="size-4" />
+          Feed
+        </Button>
+      </ItemContent>
+    </Item>
+  );
+}
+
 function ConnectionRow({
   disconnecting,
   entry,
   onDisconnect,
+  onOpenFeed,
   provider,
 }: {
   disconnecting: boolean;
   entry: ConnectionEntry;
   onDisconnect: () => void;
+  onOpenFeed: () => void;
   provider: "github" | "google" | "slack";
 }) {
   return (
-    <div className="mt-2 flex items-start justify-between gap-2 rounded-md border p-2">
+    <div className="flex min-w-0 items-start justify-between gap-3 py-2">
       <div className="min-w-0">
         <div className="truncate text-xs font-medium">{entry.connection}</div>
         <div className="truncate text-xs text-muted-foreground">{entry.path}</div>
         <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
       </div>
-      {entry.status?.connected ? (
-        <Button size="sm" variant="outline" disabled={disconnecting} onClick={onDisconnect}>
-          {disconnecting ? <Spinner /> : null}
-          Disconnect
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button
+          size="icon-sm"
+          variant="outline"
+          aria-label={`Open ${entry.connection} feed`}
+          onClick={onOpenFeed}
+        >
+          <Activity className="size-4" />
         </Button>
-      ) : null}
+        {entry.status?.connected ? (
+          <Button
+            size="icon-sm"
+            variant="outline"
+            disabled={disconnecting}
+            aria-label={`Disconnect ${entry.connection}`}
+            onClick={onDisconnect}
+          >
+            {disconnecting ? <Spinner /> : <Unplug className="size-4" />}
+          </Button>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+function IntegrationFeedSheet({
+  feedPanel,
+  onOpenChange,
+  projectId,
+}: {
+  feedPanel: FeedPanel | null;
+  onOpenChange: (open: boolean) => void;
+  projectId: string;
+}) {
+  return (
+    <Sheet open={feedPanel != null} onOpenChange={onOpenChange}>
+      {feedPanel == null ? null : (
+        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(92vw,56rem)] data-[side=right]:sm:max-w-[min(92vw,56rem)]">
+          <SheetHeader className="sr-only">
+            <SheetTitle>{feedPanel.streamPath} feed</SheetTitle>
+          </SheetHeader>
+          <div className="flex min-h-0 flex-1">
+            <ProjectStreamView
+              showHeader={false}
+              projectId={projectId}
+              streamPath={feedPanel.streamPath}
+              emptyLabel={feedPanel.emptyLabel}
+            />
+          </div>
+        </SheetContent>
+      )}
+    </Sheet>
   );
 }
 
@@ -722,7 +909,7 @@ function AccountConnectionsItem() {
                   origin.
                 </SheetDescription>
               </SheetHeader>
-              <FieldGroup className="flex-1 space-y-4 p-4">
+              <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
                 {fieldInput("slug", "Integration", {
                   description: "The integration this account belongs to.",
                   placeholder: "waitrose",

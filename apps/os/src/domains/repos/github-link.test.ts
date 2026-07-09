@@ -104,6 +104,24 @@ const network = vi.hoisted(() => {
               return Response.json({ message: "Not Found" }, { status: 404 });
             }
             if (request.method === "POST" && /^\/orgs\/[^/]+\/repos$/.test(url.pathname)) {
+              if (network.state.githubCreateStatus === 422) {
+                // What real GitHub answers when the name is taken — the shape
+                // the exists-but-not-selected detection keys off.
+                return Response.json(
+                  {
+                    errors: [
+                      {
+                        code: "custom",
+                        field: "name",
+                        message: "name already exists on this account",
+                        resource: "Repository",
+                      },
+                    ],
+                    message: "Repository creation failed.",
+                  },
+                  { status: 422 },
+                );
+              }
               if (network.state.githubCreateStatus !== 201) {
                 return Response.json(
                   { message: "Resource not accessible by integration" },
@@ -254,6 +272,25 @@ describe("linkRepoToGithub", () => {
     ).toBe(false);
   });
 
+  test("names the real cause when the repo exists but the installation cannot see it", async () => {
+    seedConnectedFact();
+    // GET /repos 404s (unselected repos are invisible to the installation)
+    // while the create 422s on the taken name — the exists-but-no-access case.
+    network.state.githubRepoExists = false;
+    network.state.githubCreateStatus = 422;
+
+    await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
+      /exists, but connection "install-789" \(App installation 789\) has no access to it.*github\.com\/organizations\/acme\/settings\/installations\/789/,
+    );
+    // Nothing was linked and no rule was installed.
+    expect(network.repoCalls).toEqual([]);
+    expect(
+      network.streams
+        .get(CONNECTION_STREAM)
+        ?.some((event) => event.type === "events.iterate.com/stream/rule-configured"),
+    ).toBe(false);
+  });
+
   test("a failed initial push does not fail the link", async () => {
     seedConnectedFact();
     network.state.pushShouldFail = true;
@@ -306,6 +343,15 @@ describe("linkRepoToGithub", () => {
       },
     });
 
+    // A failed old-rule removal aborts the re-link BEFORE anything changes:
+    // the link still names the old connection and a retry starts clean.
+    network.state.ruleRemoveAppendShouldFail = true;
+    await expect(linkRepoToGithub({ ...linkInput(), connection: otherConnection })).rejects.toThrow(
+      /rule-removed append exploded/,
+    );
+    expect(network.state.githubLink).toMatchObject({ connection: CONNECTION });
+    network.state.ruleRemoveAppendShouldFail = false;
+
     await linkRepoToGithub({ ...linkInput(), connection: otherConnection });
 
     // The new connection stream holds the rule; the old one got the removal.
@@ -318,6 +364,50 @@ describe("linkRepoToGithub", () => {
       ?.find((e) => e.type === "events.iterate.com/stream/rule-removed");
     expect(oldRemoved?.payload).toEqual({ ruleId: "github-repo:/repos/project" });
     expect(network.state.githubLink).toMatchObject({ connection: otherConnection });
+  });
+
+  test("a failed re-link restores the previous connection's rule", async () => {
+    seedConnectedFact();
+    await linkRepoToGithub(linkInput());
+
+    const otherConnection = "install-456";
+    const otherConnectionStream = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: `/integrations/github/${otherConnection}`,
+    });
+    network.seedStream(otherConnectionStream, {
+      type: GITHUB_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection: otherConnection,
+        externalId: "456",
+        installationId: "456",
+        projectId: PROJECT_ID,
+      },
+    });
+
+    // The old rule is removed first; when recording the new link then fails,
+    // the compensation must put the OLD connection's rule back so the still-
+    // recorded old link keeps its webhook lane.
+    network.state.configureLinkShouldFail = true;
+    await expect(linkRepoToGithub({ ...linkInput(), connection: otherConnection })).rejects.toThrow(
+      /link write exploded/,
+    );
+    expect(network.state.githubLink).toMatchObject({ connection: CONNECTION });
+
+    const oldStreamEvents = network.streams.get(CONNECTION_STREAM) ?? [];
+    const lastRuleFact = [...oldStreamEvents]
+      .reverse()
+      .find(
+        (e) =>
+          e.type === "events.iterate.com/stream/rule-configured" ||
+          e.type === "events.iterate.com/stream/rule-removed",
+      );
+    // The restore (a rule-configured) landed AFTER the removal.
+    expect(lastRuleFact?.type).toBe("events.iterate.com/stream/rule-configured");
+    expect(lastRuleFact?.payload).toMatchObject({
+      condition: 'payload.body.repository.full_name = "acme/widgets"',
+      ruleId: "github-repo:/repos/project",
+    });
   });
 });
 
