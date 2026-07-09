@@ -40,6 +40,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
 } from "./rpc-types.ts";
+import { isStreamReceiverUnavailableError } from "./rpc-types.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -647,6 +648,19 @@ export class StreamSubscribers {
     error: unknown;
   }): "continue" | "stop" {
     const { subscriptionKey, config, matched, error } = args;
+    // A receiver that DECLARED itself unavailable (see
+    // StreamReceiverUnavailableError) is down, not poisoned: no bisecting, no
+    // skip confirmation — the same batch backs off and redelivers whole, and
+    // sustained unavailability parks loudly like any other outage. Known
+    // wrinkle: the backoff attempts accrued here share the row's counter with
+    // skip confirmation, so a genuine poison event arriving the moment the
+    // receiver recovers can confirm in fewer than SKIP_CONFIRM_ATTEMPTS lone
+    // tries — a mis-skip needs a poison event racing the recovery boundary,
+    // versus today's guaranteed skip of healthy events during the outage.
+    if (isStreamReceiverUnavailableError(error)) {
+      this.#onDeliveryFailure(subscriptionKey, error);
+      return "stop";
+    }
     if (config.onPoison === "skip") {
       if (matched.length > 1) {
         // Bisect: retry immediately with a halved batch. Bounded by
