@@ -1077,8 +1077,6 @@ class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
-  async kill(): Promise<void> {}
-
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
