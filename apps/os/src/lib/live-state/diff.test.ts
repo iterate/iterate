@@ -112,12 +112,24 @@ describe("applyPatch", () => {
     const prev = withProtoKey({ admin: false });
     const next = withProtoKey({ admin: true });
     const patch = diff(prev, next)!;
+    // The patch must stay WIRE-SERIALIZABLE: capnweb accepts exactly
+    // Object.prototype objects, so the fields bag can't be null-proto (that
+    // variant shipped briefly and killed every push — the panel froze).
+    if ("set" in patch) throw new Error("expected a fields patch, got a leaf replacement");
+    expect(Object.getPrototypeOf(patch.fields)).toBe(Object.prototype);
     const applied = applyPatch(prev, patch) as Record<string, unknown>;
     expect(Object.hasOwn(applied, "__proto__")).toBe(true);
     expect(applied).toEqual(next);
     // The prototype chain stayed clean — nothing was injected.
     expect(Object.getPrototypeOf(applied)).toBe(Object.prototype);
     expect(({} as { admin?: boolean }).admin).toBeUndefined();
+
+    // Removal direction: `"__proto__" in next` is true for EVERY object (the
+    // inherited accessor), so an `in`-based presence check would never record
+    // the drop and the stale field would survive the round-trip.
+    const removed = applyPatch(prev, diff(prev, {})!) as Record<string, unknown>;
+    expect(Object.hasOwn(removed, "__proto__")).toBe(false);
+    expect(removed).toEqual({});
 
     // A hostile patch against a state that never had the key: still no pollution.
     const polluted = applyPatch({} as Record<string, unknown>, {

@@ -22,30 +22,33 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
   if (Object.is(prev, next)) return undefined;
   if (!isPlainObject(prev) || !isPlainObject(next)) return { set: next };
 
-  // Null-prototype bag: with a plain `{}`, `fields["__proto__"] = childPatch`
-  // would SET ITS PROTOTYPE instead of recording the field — the change would
-  // silently vanish from the patch. (applyPatch has the mirror-image guard.)
-  const fields: Record<string, LiveStatePatch> = Object.create(null) as Record<
-    string,
-    LiveStatePatch
-  >;
+  // Entries + fromEntries, not `bag[key] = …`: assignment with key "__proto__"
+  // would SET THE BAG'S PROTOTYPE instead of recording the field — the change
+  // would silently vanish from the patch. `Object.fromEntries` DEFINES own
+  // properties (safe for any key) and yields an ordinary Object.prototype
+  // object — which matters, because patches cross capnweb, whose serializer
+  // accepts exactly Object.prototype (a null-proto bag reads as unsupported
+  // and kills the push). (applyPatch has the mirror-image write guard.)
+  // Own-property checks throughout (`Object.hasOwn`, not `in` / bare reads):
+  // `"__proto__" in x` is true for EVERY object via inheritance, so `in` would
+  // misread that key's presence in both directions.
+  const fields: [string, LiveStatePatch][] = [];
   const drop: string[] = [];
   for (const key of Object.keys(next)) {
     if (next[key] === undefined) {
-      if (key in prev) drop.push(key); // a key set to `undefined` reads as removed
+      if (Object.hasOwn(prev, key)) drop.push(key); // a key set to `undefined` reads as removed
       continue;
     }
-    const childPatch = diff(prev[key], next[key]);
-    if (childPatch !== undefined) fields[key] = childPatch;
+    const childPatch = diff(Object.hasOwn(prev, key) ? prev[key] : undefined, next[key]);
+    if (childPatch !== undefined) fields.push([key, childPatch]);
   }
   for (const key of Object.keys(prev)) {
-    if (!(key in next)) drop.push(key);
+    if (!Object.hasOwn(next, key)) drop.push(key);
   }
 
-  const hasFields = Object.keys(fields).length > 0;
-  if (!hasFields && drop.length === 0) return undefined;
+  if (fields.length === 0 && drop.length === 0) return undefined;
   const patch: { fields?: Record<string, LiveStatePatch>; drop?: string[] } = {};
-  if (hasFields) patch.fields = fields;
+  if (fields.length > 0) patch.fields = Object.fromEntries(fields);
   if (drop.length > 0) patch.drop = drop;
   return patch;
 }
