@@ -5,8 +5,8 @@
 //
 //   cd apps/os && doppler run -- pnpm exec tsx e2e/tui-test/data-layer-smoke.ts
 //
-// Requires an LLM provider on the deployment under test (local dev with the
-// OpenAI key, or a preview). Exits 0 on PASS, 1 on timeout/failure.
+// Requires Workers AI on the deployment under test (local dev or a preview).
+// Exits 0 on PASS, 1 on timeout/failure.
 
 import process from "node:process";
 import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
@@ -62,7 +62,7 @@ try {
   );
 
   // 3. Assistant reply appears as a settled feed item (full loop: agent
-  //    processor -> LLM provider -> web-message-sent -> reducer).
+  //    processor -> LLM (env.AI) -> web-message-sent -> reducer).
   await waitFor("assistant reply appears", REPLY_TIMEOUT_MS, () =>
     model
       .snapshot()

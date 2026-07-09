@@ -1968,12 +1968,6 @@ describe("itx", () => {
         wakeExpressionRoot(event) === "agents" &&
         String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
     )?.offset;
-    const cloudflareAiSubscriptionOffset = events.find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-configured" &&
-        wakeExpressionRoot(event) === "agents" &&
-        String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#cloudflare-ai"),
-    )?.offset;
     const itxSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
@@ -1988,7 +1982,6 @@ describe("itx", () => {
 
     expect(outputOffset).toBe(historicalOutput.offset);
     expect(agentSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
-    expect(cloudflareAiSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(itxSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(modelSelectionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);

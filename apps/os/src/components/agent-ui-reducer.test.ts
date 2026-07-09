@@ -41,30 +41,27 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
           llmRequestId: 10,
           sequence: 0,
-          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+          chunk: { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
           llmRequestId: 10,
           sequence: 1,
-          chunk: { type: "response.output_text.delta", delta: "const n = await " },
+          chunk: { choices: [{ delta: { content: "const n = await " } }] },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
           llmRequestId: 10,
           sequence: 2,
-          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
+          chunk: { choices: [{ delta: { content: "stream.count();" } }] },
         },
       },
     ]);
@@ -105,7 +102,6 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
           llmRequestId: 5,
-          provider: "openai-ws",
           durationMs: 2100,
           result: { status: "success", usage: { input_tokens: 9400, output_tokens: 300 } },
         },
@@ -219,7 +215,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
+  it("streams legacy openai-ws llm-response-chunk frames into the live llm step", () => {
     // itx journals every raw Responses-WS frame as llm-response-chunk
     // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
     // showed only a bare spinner because the reducer ignored these frames.
@@ -267,7 +263,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("accumulates cloudflare-ai chunk deltas", () => {
+  it("accumulates agent llm-response-chunk deltas", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -275,15 +271,15 @@ describe("agent-ui reducer", () => {
         payload: { model: "test-model" },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: { llmRequestId: 3, sequence: 0, chunk: { response: "Hel" } },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: { llmRequestId: 3, sequence: 1, chunk: { response: "lo" } },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
           llmRequestId: 3,
           sequence: 2,
@@ -430,7 +426,6 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
           llmRequestId: 7,
-          provider: "openai-ws",
           durationMs: 250,
           result: { status: "success" },
         },
@@ -503,7 +498,6 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
           llmRequestId: 7,
-          provider: "openai-ws",
           durationMs: 100,
           result: { status: "success" },
         },

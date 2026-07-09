@@ -697,7 +697,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     id: "agent-send-message",
     title: "Send a message to an agent",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). sendMessage appends the user-message event to the agent's stream and returns it; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when an LLM provider is configured).",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). sendMessage appends the user-message event to the agent's stream and returns it; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured).",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

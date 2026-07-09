@@ -11,17 +11,12 @@ import {
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-processor-contract.ts";
-import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
-import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
-import {
-  MemoryStream,
-  deliverNewEvents,
-  fakeResponsesWebSocket,
-  type FakeResponsesWebSocket,
-  type ProcessorLike,
-} from "./test-helpers.ts";
+import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
-function openAiWsRequestEvents(content: string): StreamEventInput[] {
+function agentRequestEvents(
+  content: string,
+  model = "@cf/moonshotai/kimi-k2.7-code",
+): StreamEventInput[] {
   return [
     {
       type: "events.iterate.com/agent/input-added",
@@ -31,14 +26,13 @@ function openAiWsRequestEvents(content: string): StreamEventInput[] {
       type: "events.iterate.com/agent/llm-request-scheduled",
       payload: {
         debounceMs: 0,
-        model: "gpt-5.5",
-        provider: "openai-ws",
+        model,
         requestId: "llm-request:1",
       },
     },
     {
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-5.5", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model, requestId: "llm-request:1" },
     },
   ];
 }
@@ -334,8 +328,7 @@ describe("minimal web-chat agent processors", () => {
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];
-    const agent = new AgentProcessor({ stream });
-    const cloudflareAi = new CloudflareAiProcessor({
+    const agent = new AgentProcessor({
       stream,
       ai: {
         async run(_model, body) {
@@ -354,26 +347,25 @@ describe("minimal web-chat agent processors", () => {
       readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
-    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
       type: "events.iterate.com/agents/user-message-received",
       payload: { origin: "web", content: "hello" },
     });
-    await deliver(agent);
-    await deliver(agent);
-    await deliver(agent);
+    await deliver();
+    await deliver();
+    await deliver();
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
       timeoutMs: 2_000,
     });
-    await deliver(agent);
-    await deliver(cloudflareAi);
+    await deliver();
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
-    await deliver(agent);
+    await deliver();
 
     expect(stream.events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
@@ -381,9 +373,8 @@ describe("minimal web-chat agent processors", () => {
         "events.iterate.com/agent/input-added",
         "events.iterate.com/agent/llm-request-scheduled",
         "events.iterate.com/agent/llm-request-requested",
-        "events.iterate.com/cloudflare-ai/llm-request-started",
+        "events.iterate.com/agent/llm-request-started",
         "events.iterate.com/agent/output-added",
-        "events.iterate.com/cloudflare-ai/llm-request-completed",
         "events.iterate.com/agent/llm-request-completed",
         "events.iterate.com/capability-host/script-execution-requested",
       ]),
@@ -544,8 +535,7 @@ describe("minimal web-chat agent processors", () => {
     const firstCallInFlight = new Promise<void>((resolve) => {
       resolveFirstCall = resolve;
     });
-    const agent = new AgentProcessor({ stream });
-    const cloudflareAi = new CloudflareAiProcessor({
+    const agent = new AgentProcessor({
       stream,
       ai: {
         async run(_model, body) {
@@ -557,41 +547,40 @@ describe("minimal web-chat agent processors", () => {
       readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
-    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     // First user message — triggers llm-request-scheduled (with debounce)
     await stream.append({
       type: "events.iterate.com/agents/user-message-received",
       payload: { origin: "web", content: "message one" },
     });
-    await deliver(agent);
-    await deliver(agent);
-    await deliver(agent);
+    await deliver();
+    await deliver();
+    await deliver();
 
     // Second user message arrives before debounce fires — queued as pending
     await stream.append({
       type: "events.iterate.com/agents/user-message-received",
       payload: { origin: "web", content: "message two" },
     });
-    await deliver(agent);
+    await deliver();
 
     // Wait for the LLM call to complete (both messages included in it)
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
       timeoutMs: 2_000,
     });
-    await deliver(agent);
-    await deliver(cloudflareAi);
+    await deliver();
     await firstCallInFlight;
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
-    await deliver(agent);
+    await deliver();
 
     // Give the processor time to fire a spurious second request if the bug is present
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await deliver(agent);
+    await deliver();
 
     expect(aiCalls).toHaveLength(1);
     const firstCall = aiCalls[0] as { messages: Array<{ role: string; content: string }> };
@@ -613,7 +602,6 @@ describe("minimal web-chat agent processors", () => {
         payload: {
           debounceMs: 250,
           model: "@cf/moonshotai/kimi-k2.7-code",
-          provider: "cloudflare-ai",
           requestId: "llm-request:1",
         },
       },
@@ -622,7 +610,7 @@ describe("minimal web-chat agent processors", () => {
     const stuckState = AgentProcessorContract.stateSchema.parse({
       history: [{ role: "user", content: "hello" }],
       currentRequest: { phase: "scheduled", requestId: "llm-request:1", scheduledOffset: 2 },
-      llmProviderConfigured: true,
+      llmConfigConfigured: true,
     });
     const agent = new AgentProcessor({
       stream,
@@ -643,7 +631,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("treats Workers AI terminal stream chunks without choices as successful completion", async () => {
     const stream = new MemoryStream();
-    const cloudflareAi = new CloudflareAiProcessor({
+    const agent = new AgentProcessor({
       stream,
       ai: {
         async run() {
@@ -682,7 +670,6 @@ describe("minimal web-chat agent processors", () => {
         payload: {
           debounceMs: 0,
           model: "@cf/moonshotai/kimi-k2.7-code",
-          provider: "cloudflare-ai",
           requestId: "llm-request:1",
         },
       },
@@ -690,14 +677,13 @@ describe("minimal web-chat agent processors", () => {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: {
           model: "@cf/moonshotai/kimi-k2.7-code",
-          provider: "cloudflare-ai",
           requestId: "llm-request:1",
         },
       },
     );
 
     await deliverNewEvents({
-      processor: cloudflareAi,
+      processor: agent,
       stream,
       cursors: new Map<object, number>(),
     });
@@ -718,224 +704,24 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
-  it("executes openai-ws requests over the Responses WebSocket and records every frame", async () => {
+  it("fails LLM requests politely when no AI binding is configured", async () => {
     const stream = new MemoryStream();
-    const sockets: FakeResponsesWebSocket[] = [];
-    const openAiWs = new OpenAiWsProcessor({
+    const agent = new AgentProcessor({
       stream,
-      apiKey: "sk-test",
-      createResponsesWebSocketClient: async () => {
-        const socket = fakeResponsesWebSocket(() => [
-          { type: "response.output_text.delta", delta: "```js\nasync (itx) => {}" },
-          { type: "response.output_text.delta", delta: "\n```" },
-          {
-            type: "response.completed",
-            // The real API sends incomplete_details as an explicit null on
-            // completed responses; a schema that rejects null here makes the
-            // consumer skip the terminal frame and wait forever.
-            response: { id: "resp_1", incomplete_details: null, usage: { total_tokens: 7 } },
-          },
-        ]);
-        sockets.push(socket);
-        return socket;
-      },
       readStreamEvents: () => stream.getEvents(),
     });
 
-    await stream.append(...openAiWsRequestEvents("hello over ws"));
-    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
-    const completed = await stream.waitForEvent({
-      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
-      timeoutMs: 2_000,
-    });
-    const output = await stream.waitForEvent({
-      eventTypes: ["events.iterate.com/agent/output-added"],
-      timeoutMs: 2_000,
-    });
-
-    expect(sockets).toHaveLength(1);
-    expect(sockets[0]!.sent[0]).toMatchObject({ type: "response.create", model: "gpt-5.5" });
-    expect(stream.events.map((event) => event.type)).toEqual(
-      expect.arrayContaining([
-        "events.iterate.com/openai-ws/llm-request-started",
-        "events.iterate.com/openai-ws/llm-response-chunk",
-        "events.iterate.com/openai-ws/llm-request-completed",
-      ]),
-    );
-    expect(
-      stream.events.filter(
-        (event) => event.type === "events.iterate.com/openai-ws/llm-response-chunk",
-      ),
-    ).toHaveLength(3);
-    expect(completed.payload).toMatchObject({
-      provider: "openai-ws",
-      result: { status: "success", usage: { total_tokens: 7 } },
-    });
-    expect(output.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
-  });
-
-  it("fails an openai-ws request that ends incomplete instead of keeping partial output", async () => {
-    const stream = new MemoryStream();
-    const openAiWs = new OpenAiWsProcessor({
-      stream,
-      apiKey: "sk-test",
-      createResponsesWebSocketClient: async () =>
-        fakeResponsesWebSocket(() => [
-          { type: "response.output_text.delta", delta: '```js\nasync (itx) => { const s = "cut' },
-          {
-            type: "response.incomplete",
-            response: {
-              id: "resp_1",
-              incomplete_details: { reason: "max_output_tokens" },
-              status: "incomplete",
-              usage: { total_tokens: 9 },
-            },
-          },
-        ]),
-      readStreamEvents: () => stream.getEvents(),
-    });
-
-    await stream.append(...openAiWsRequestEvents("hello over ws"));
-    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    await stream.append(...agentRequestEvents("hello without ai"));
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
     const completed = await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
 
     expect(completed.payload).toMatchObject({
-      provider: "openai-ws",
       result: {
         status: "failure",
-        error: { message: expect.stringContaining("max_output_tokens") },
-      },
-    });
-    // A truncated response must never become an assistant turn — executing a
-    // prefix of a script is worse than failing the request and retrying.
-    expect(
-      stream.events.some((event) => event.type === "events.iterate.com/agent/output-added"),
-    ).toBe(false);
-  });
-
-  it("retries openai-ws once with full input when a previous response id expires", async () => {
-    const stream = new MemoryStream();
-    const sockets: FakeResponsesWebSocket[] = [];
-    let responseCreateCount = 0;
-    const openAiWs = new OpenAiWsProcessor({
-      stream,
-      apiKey: "sk-test",
-      createResponsesWebSocketClient: async () => {
-        const socket = fakeResponsesWebSocket(() => {
-          responseCreateCount += 1;
-          if (responseCreateCount === 1) {
-            return [
-              { type: "response.output_text.delta", delta: "first answer" },
-              { type: "response.completed", response: { id: "resp_1" } },
-            ];
-          }
-          if (responseCreateCount === 2) {
-            return [
-              {
-                type: "response.failed",
-                error: { message: "Previous response with id 'resp_1' not found." },
-              },
-            ];
-          }
-          return [
-            { type: "response.output_text.delta", delta: "second answer" },
-            { type: "response.completed", response: { id: "resp_2" } },
-          ];
-        });
-        sockets.push(socket);
-        return socket;
-      },
-      readStreamEvents: () => stream.getEvents(),
-    });
-    const cursors = new Map<object, number>();
-
-    await stream.append(...openAiWsRequestEvents("first"));
-    await deliverNewEvents({ processor: openAiWs, stream, cursors });
-    const firstCompleted = await stream.waitForEvent({
-      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
-      timeoutMs: 2_000,
-    });
-
-    await stream.append(...openAiWsRequestEvents("second"));
-    await deliverNewEvents({ processor: openAiWs, stream, cursors });
-    const secondCompleted = await stream.waitForEvent({
-      afterOffset: firstCompleted.offset,
-      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
-      timeoutMs: 2_000,
-    });
-
-    expect(sockets).toHaveLength(1);
-    expect(sockets[0]!.sent).toHaveLength(3);
-    expect(sockets[0]!.sent[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(sockets[0]!.sent[2]).not.toHaveProperty("previous_response_id");
-    expect(sockets[0]!.sent[2]).toMatchObject({
-      input: expect.arrayContaining([
-        expect.objectContaining({ role: "user", content: "first" }),
-        expect.objectContaining({ role: "user", content: "second" }),
-      ]),
-    });
-    expect(secondCompleted.payload).toMatchObject({
-      provider: "openai-ws",
-      result: { status: "success" },
-    });
-  });
-
-  it("does not answer llm requests addressed to cloudflare-ai", async () => {
-    const stream = new MemoryStream();
-    let dialed = 0;
-    const openAiWs = new OpenAiWsProcessor({
-      stream,
-      apiKey: "sk-test",
-      createResponsesWebSocketClient: async () => {
-        dialed += 1;
-        throw new Error("should not dial");
-      },
-      readStreamEvents: () => stream.getEvents(),
-    });
-
-    await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: {
-        model: "@cf/moonshotai/kimi-k2.7-code",
-        provider: "cloudflare-ai",
-        requestId: "llm-request:1",
-      },
-    });
-    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(dialed).toBe(0);
-    expect(stream.events.map((event) => event.type)).not.toEqual(
-      expect.arrayContaining(["events.iterate.com/openai-ws/llm-request-started"]),
-    );
-  });
-
-  it("fails openai-ws requests politely when no API key is configured", async () => {
-    const stream = new MemoryStream();
-    const openAiWs = new OpenAiWsProcessor({
-      stream,
-      apiKey: null,
-      createResponsesWebSocketClient: async () => {
-        throw new Error("should not dial without a key");
-      },
-      readStreamEvents: () => stream.getEvents(),
-    });
-
-    await stream.append(...openAiWsRequestEvents("hello without a key"));
-    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
-    const completed = await stream.waitForEvent({
-      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
-      timeoutMs: 2_000,
-    });
-
-    expect(completed.payload).toMatchObject({
-      provider: "openai-ws",
-      result: {
-        status: "failure",
-        error: { message: expect.stringContaining("OpenAI API key is not configured") },
+        error: { message: expect.stringContaining("no AI binding") },
       },
     });
     expect(stream.events.map((event) => event.type)).not.toEqual(
@@ -945,30 +731,38 @@ describe("minimal web-chat agent processors", () => {
 
   it("turns a failed LLM request into an error input and schedules a retry", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    const agent = new AgentProcessor({
+      stream,
+      ai: {
+        async run() {
+          throw new Error("provider exploded");
+        },
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
-    await stream.append(
-      {
-        type: "events.iterate.com/agent/llm-provider-selected",
-        payload: { ifUnset: true, model: "gpt-5.5", provider: "openai-ws" },
-      },
-      ...openAiWsRequestEvents("hello"),
-    );
-    const requested = stream.events.at(-1)!;
-    await deliver();
     await stream.append({
-      type: "events.iterate.com/agent/llm-request-completed",
+      type: "events.iterate.com/agent/input-added",
       payload: {
-        durationMs: 10,
-        llmRequestId: requested.offset,
-        provider: "openai-ws",
-        result: { status: "failure", error: { message: "provider exploded" } },
+        content: "hello",
+        llmRequestPolicy: { behaviour: "after-current-request" },
       },
     });
-    await deliver();
-    await deliver();
+    await deliver(); // input -> schedule
+    await deliver(); // schedule starts debounce timer
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
+    });
+    await deliver(); // requested -> AI fails -> completion
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    await deliver(); // completion -> error input
+    await deliver(); // error input -> retry schedule
 
     const errorInput = stream.events.find(
       (event) =>
@@ -991,50 +785,56 @@ describe("minimal web-chat agent processors", () => {
 
   it("stops auto-retrying after three consecutive failures", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream });
+    let boom = 0;
+    const agent = new AgentProcessor({
+      stream,
+      ai: {
+        async run() {
+          boom += 1;
+          throw new Error(`boom ${boom}`);
+        },
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
     const cursors = new Map<object, number>();
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
-    await stream.append(
-      {
-        type: "events.iterate.com/agent/llm-provider-selected",
-        payload: { ifUnset: true, model: "gpt-5.5", provider: "openai-ws" },
-      },
-      ...openAiWsRequestEvents("hello"),
-    );
-    let requestedOffset = stream.events.at(-1)!.offset;
-    await deliver();
-
-    for (let failure = 1; failure <= 3; failure++) {
-      await stream.append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestId: requestedOffset,
-          provider: "openai-ws",
-          result: { status: "failure", error: { message: `boom ${failure}` } },
-        },
-      });
-      const completedOffset = stream.events.at(-1)!.offset;
-      await deliver(); // completion -> error input appended
-      await deliver(); // error input -> retry scheduled (failures 1-2 only)
-      if (failure < 3) {
-        await deliver(); // scheduled -> agent starts its debounce timer
-        // The retry's debounce timer fires llm-request-requested for the new
-        // generation. (The seeded request's own timer also fires a duplicate
-        // requested event for "llm-request:1" — reduce ignores it, and so
-        // must this wait.)
-        const requested = await stream.waitForEvent({
-          afterOffset: completedOffset,
-          predicate: (event) =>
-            event.type === "events.iterate.com/agent/llm-request-requested" &&
-            (event.payload as any)?.requestId === `llm-request:gen-${failure}`,
-          timeoutMs: 2_000,
-        });
-        requestedOffset = requested.offset;
+    let afterOffset = 0;
+    async function driveFailingTurn(failure: number) {
+      // Drain until a new completion lands past afterOffset.
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline) {
         await deliver();
+        const completed = stream.events.find(
+          (event) =>
+            event.offset > afterOffset &&
+            event.type === "events.iterate.com/agent/llm-request-completed",
+        );
+        if (completed !== undefined) {
+          expect(completed.payload).toMatchObject({
+            result: { status: "failure", error: { message: `boom ${failure}` } },
+          });
+          afterOffset = completed.offset;
+          await deliver(); // completion -> error input
+          await deliver(); // error input -> maybe retry schedule
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
       }
+      throw new Error(`Timed out waiting for failure #${failure}`);
     }
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "hello",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+
+    await driveFailingTurn(1);
+    await driveFailingTurn(2);
+    await driveFailingTurn(3);
 
     const errorInputs = stream.events.filter(
       (event) =>
@@ -1066,17 +866,16 @@ describe("minimal web-chat agent processors", () => {
         payload: {
           debounceMs: 0,
           model: "gpt-5.5",
-          provider: "openai-ws",
           requestId: `llm-request:${base}`,
         },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-5.5", provider: "openai-ws", requestId: `llm-request:${base}` },
+        payload: { model: "gpt-5.5", requestId: `llm-request:${base}` },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 1, llmRequestId: base + 1, provider: "openai-ws", result },
+        payload: { durationMs: 1, llmRequestId: base + 1, result },
       },
     ];
     const stream = new MemoryStream();
@@ -1100,27 +899,28 @@ describe("minimal web-chat agent processors", () => {
     // simulated by writing the events directly, never running a processor.
     const [requested] = await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-1" },
+      payload: { model: "gpt-test", requestId: "llm-request:gen-1" },
     });
     await stream.append({
-      type: "events.iterate.com/openai-ws/llm-request-started",
+      type: "events.iterate.com/agent/llm-request-started",
       payload: { llmRequestId: requested!.offset, model: "gpt-test" },
     });
 
-    // Incarnation 2: fresh processor (empty #liveExecutions), catching up.
-    const openAiWs = new OpenAiWsProcessor({
+    // Incarnation 2: fresh processor (empty #liveLlmExecutions), catching up.
+    // Hang forever if a live execution is wrongly started for the orphan.
+    const agent = new AgentProcessor({
       stream,
-      apiKey: "sk-test",
-      createResponsesWebSocketClient: async () => {
-        throw new Error("should not dial during orphan recovery");
+      ai: {
+        async run() {
+          await new Promise(() => {});
+          return { response: "unreachable" };
+        },
       },
       readStreamEvents: () => stream.getEvents(),
     });
-    // Deliver the dead incarnation's events; the fold shows the obligation at
-    // `started` and the reconciler settles it WITHOUT starting an attempt
-    // (started + nobody live = orphaned, never re-driven — hence the throwing
-    // websocket factory above proving no dial happens).
-    await openAiWs.ingest({
+    // At-head fold of the dead incarnation's events: obligation is `started`
+    // with nobody live → reconciler settles as orphan without re-driving AI.
+    await agent.ingest({
       events: stream.events,
       streamMaxOffset: stream.events.length,
     });
@@ -1132,7 +932,6 @@ describe("minimal web-chat agent processors", () => {
     expect(completions).toHaveLength(1);
     expect(completions[0]!.payload).toMatchObject({
       llmRequestId: requested!.offset,
-      provider: "openai-ws",
       result: { status: "failure", error: { message: expect.stringContaining("orphaned") } },
     });
 
@@ -1141,9 +940,9 @@ describe("minimal web-chat agent processors", () => {
     // completion appears for it while it runs.
     const [second] = await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-2" },
+      payload: { model: "gpt-test", requestId: "llm-request:gen-2" },
     });
-    await openAiWs.ingest({
+    await agent.ingest({
       events: [second!],
       streamMaxOffset: stream.events.length,
     });
@@ -1182,13 +981,12 @@ describe("file attachments in the LLM request", () => {
         payload: {
           debounceMs: 0,
           model: "gpt-5.5",
-          provider: "openai-ws",
           requestId: "llm-request:1",
         },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-5.5", provider: "openai-ws", requestId: "llm-request:1" },
+        payload: { model: "gpt-5.5", requestId: "llm-request:1" },
       },
     );
 

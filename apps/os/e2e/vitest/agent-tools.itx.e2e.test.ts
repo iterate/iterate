@@ -60,19 +60,19 @@ test(
 );
 
 test(
-  "provider toggle: cloudflare-ai answers after llm-provider-selected",
+  "agent answers after llm model is selected",
   // See above — heavy-test ceiling.
   { timeout: 240_000 },
   async ({ expect }) => {
-    await using handle = await createTestProject({ slugPrefix: "provider-toggle" });
-    using agent = handle.agent("/agents/e2e-provider");
+    await using handle = await createTestProject({ slugPrefix: "agent-model" });
+    using agent = handle.agent("/agents/e2e-model");
 
-    // Force the toggle regardless of the deployment's default provider.
+    // Force a known Workers AI model for the assertion.
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires the model alongside the provider; a model-less
+      // The contract requires a model; a model-less
       // append is schema-invalid and wedges the agent processor's ingest.
-      payload: { model: "@cf/moonshotai/kimi-k2.7-code", provider: "cloudflare-ai" },
+      payload: { model: "@cf/moonshotai/kimi-k2.7-code" },
     });
 
     const response = await agent.ask({ message: "Reply with a short greeting." });
@@ -80,9 +80,7 @@ test(
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     expect(
-      agentEvents.some(
-        (event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started",
-      ),
+      agentEvents.some((event) => event.type === "events.iterate.com/agent/llm-request-started"),
     ).toBe(true);
   },
 );

@@ -1,7 +1,5 @@
 import { z } from "zod";
 import { AgentProcessorContract } from "~/domains/agents/agent-processor-contract.ts";
-import { CloudflareAiProcessorContract } from "~/domains/agents/cloudflare-ai-processor-contract.ts";
-import { OpenAiWsProcessorContract } from "~/domains/agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "~/domains/capability-host/capability-host-processor-contract.ts";
 import { SlackAgentProcessorContract } from "~/domains/integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "~/domains/integrations/slack-processor-contract.ts";
@@ -38,8 +36,6 @@ const processorContracts = [
   ProjectProcessorContract,
   RepoProcessorContract,
   AgentProcessorContract,
-  CloudflareAiProcessorContract,
-  OpenAiWsProcessorContract,
   CapabilityHostProcessorContract,
   SecretProcessorContract,
   SandboxProcessorContract,

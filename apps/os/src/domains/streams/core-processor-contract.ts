@@ -113,7 +113,7 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
     expression: DeliveryExpression,
     /**
      * Which hosted processor the wake is for — multi-processor hosts (an
-     * agent DO hosts agent + llm-provider + more) resolve on it;
+     * agent DO hosts agent + slack-agent + more) resolve on it;
      * single-processor hosts may omit it. Rides the wake request verbatim.
      */
     processorSlug: z.string().trim().min(1).optional(),

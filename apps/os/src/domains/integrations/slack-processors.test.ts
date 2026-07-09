@@ -726,7 +726,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model: "gpt-test", requestId: "llm-request:1" },
     });
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
@@ -747,7 +747,6 @@ describe("SlackAgentProcessor", () => {
       payload: {
         durationMs: 10,
         llmRequestId: 1,
-        provider: "openai-ws",
         result: { status: "success" },
       },
     });

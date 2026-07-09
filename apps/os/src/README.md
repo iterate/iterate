@@ -298,13 +298,12 @@ calling methods on them.
 ## Agents
 
 An agent is a stream (`/agents/<name>`) plus processors. `agent.sendMessage()`
-appends `events.iterate.com/agents/user-message-received`; the agent core
+appends `events.iterate.com/agents/user-message-received`; the single agent
 processor renders inputs into history, applies the input policy, debounces,
 and appends `events.iterate.com/agent/llm-request-requested` — **by
-reference**: no prompt body, the offset is the `llmRequestId`. A subscribed
-provider processor (`cloudflare-ai` or `openai-ws`; default computed in the
-project DO — openai-ws when the OpenAI key is present) rebuilds the request by
-reducing committed history up to that offset, executes the call, and appends
+reference**: no prompt body, the offset is the `llmRequestId`. That same
+processor rebuilds the request by reducing committed history up to that
+offset, runs it through the Cloudflare AI binding (`env.AI`), and appends
 started/chunk/output/completed events. The agent contract: respond with
 exactly one fenced JavaScript block containing a single
 `async (itx) => { … }`, which the ITX processor executes; replies reach the

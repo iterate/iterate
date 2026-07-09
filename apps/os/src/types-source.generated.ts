@@ -1268,7 +1268,7 @@ export type ProjectDescription = Description & {
  * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
  * processor wakes from the request's \`processorSlug\` — the inspection half of
  * this node reads the host's main processor.
  */
@@ -1480,9 +1480,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 
 /**
  * The agent processor's reduced state, inferred from the contract's
- * \`stateSchema\` — the one definition of the shape (the old hand-written copy
- * in the former types.ts silently omitted \`llmProviderConfigured\` and
- * \`requestGeneration\`).
+ * \`stateSchema\`.
  */
 export type AgentProcessorState = {
   systemPrompt: string;
@@ -1494,8 +1492,7 @@ export type AgentProcessorState = {
       | undefined;
   }[];
   llmConfig: { model: string };
-  llmProvider: "cloudflare-ai" | "openai-ws";
-  llmProviderConfigured: boolean;
+  llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
     | {
@@ -1510,6 +1507,7 @@ export type AgentProcessorState = {
   autonomousTurnCount: number;
   requestGeneration: number;
   consecutiveLlmFailures: number;
+  llmRequests: Record<string, { status: "completed" | "requested" | "started" }>;
   inProgressScriptExecutions: {
     code: string;
     executionId: string;
@@ -2047,7 +2045,6 @@ export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 /** Caller-supplied policy overrides, baked into the returned events. */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
-  provider?: AgentLlmProvider;
   model?: string;
 };
 
@@ -2055,7 +2052,6 @@ export type AgentDefaultsOverrides = {
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
   systemPrompt: string;
-  provider: AgentLlmProvider;
   model: string;
   events: AgentPolicyEventInput[];
 };
@@ -2263,8 +2259,6 @@ export type StreamEventBatch = {
   streamMaxOffset: number;
   state: unknown;
 };
-
-export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
 
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection

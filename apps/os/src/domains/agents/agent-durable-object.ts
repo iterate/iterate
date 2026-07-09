@@ -19,10 +19,8 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
-import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
-import { parseAgentDurableObjectName, readOpenAiApiKeyFromAppConfig } from "./utils.ts";
+import { parseAgentDurableObjectName } from "./utils.ts";
 
 const AGENT_PROMPT_EVENT_PAGE_SIZE = 500;
 
@@ -41,6 +39,8 @@ export class AgentDurableObject extends DurableObject<Env> {
     (deps) =>
       new AgentProcessor({
         ...deps,
+        ai: this.env.AI,
+        readStreamEvents: () => this.#readAgentPromptEvents(),
         // Oversized script results spill into the agent's OWN workspace (the
         // same checkout itx.workspace resolves to), so the model can page
         // through the file instead of blowing its context window. The first
@@ -52,24 +52,6 @@ export class AgentDurableObject extends DurableObject<Env> {
               projectId: this.#name.projectId,
             }),
           ).writeFile(path, content),
-      }),
-  );
-  readonly cloudflareAiProcessor = this.#processorHost.add(
-    (deps) =>
-      new CloudflareAiProcessor({
-        ...deps,
-        ai: this.env.AI,
-        readStreamEvents: () => this.#readAgentPromptEvents(),
-      }),
-  );
-  // Registered even without an OpenAI key: the processor then fails requests
-  // with a clear llm-request-completed error instead of crashing the host.
-  readonly openAiWsProcessor = this.#processorHost.add(
-    (deps) =>
-      new OpenAiWsProcessor({
-        ...deps,
-        apiKey: readOpenAiApiKeyFromAppConfig(this.env),
-        readStreamEvents: () => this.#readAgentPromptEvents(),
       }),
   );
 

@@ -15,13 +15,21 @@ type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
 /**
- * Host-provided deps beyond the stream plumbing. `writeWorkspaceFile` writes
- * one file into THIS agent's own workspace (the same checkout `itx.workspace`
- * resolves to) so oversized script results can spill to a file the model pages
- * through with plain JavaScript. Optional: without it (bare test hosts),
- * oversized results fall back to inline truncation.
+ * Host-provided deps beyond the stream plumbing.
+ *
+ * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
+ * - `writeWorkspaceFile` writes one file into THIS agent's own workspace (the
+ *   same checkout `itx.workspace` resolves to) so oversized script results can
+ *   spill to a file the model pages through with plain JavaScript. Optional:
+ *   without it (bare test hosts), oversized results fall back to inline
+ *   truncation.
+ * - `readStreamEvents` rebuilds the chat request by reducing committed history
+ *   up to the llmRequestId offset. Production pages the agent's stream; tests
+ *   pass the in-memory event list.
  */
 type AgentProcessorDeps = {
+  ai?: { run(model: string, body: unknown): Promise<unknown> };
+  readStreamEvents?: () => Promise<StreamEvent[]>;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   /** Injected clock (expiry stamps + backstop deadline); defaults to Date.now. */
   now?: () => number;
@@ -34,6 +42,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   #now(): number {
     return (this.deps.now ?? Date.now)();
   }
+
+  /**
+   * llmRequestIds with an execution alive in THIS incarnation. End-of-batch
+   * reconciliation compares the fold's open obligations against this set.
+   */
+  readonly #liveLlmExecutions = new Set<number>();
 
   protected override reduce({
     event,
@@ -114,7 +128,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             await append(
               this.#buildLlmRequestRequested({
                 model: event.payload.model,
-                provider: event.payload.provider,
                 requestId: event.payload.requestId,
                 scheduledOffset: event.offset,
               }),
@@ -123,6 +136,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
           }
         });
+        return;
+      // LLM starts at end-of-batch reconciliation (#reconcileLlmRequests), not
+      // here — so a mid-refold never dials env.AI for a long-settled request.
+      case "events.iterate.com/agent/llm-request-requested":
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
@@ -182,7 +199,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             idempotencyKey: `agent/render-llm-failure@${event.offset}`,
             payload: {
               content:
-                `Your LLM request failed (${event.payload.provider}):\n\`\`\`\n${result.error.message}\n\`\`\`` +
+                `Your LLM request failed:\n\`\`\`\n${result.error.message}\n\`\`\`` +
                 (retry
                   ? ""
                   : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
@@ -203,7 +220,62 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
+    await this.#reconcileLlmRequests(args);
     await this.#settleLlmRequestScheduling(args);
+  }
+
+  /**
+   * End-of-batch reconciliation of open LLM obligations against this
+   * incarnation's live executions (at-head only — mid-refold never dials AI
+   * or journals false failures):
+   *
+   * - `requested`, not live, not expired → START the attempt
+   * - `requested` but expired → settle as expired failure
+   * - `started`, not live → orphaned failure (never re-drive)
+   */
+  async #reconcileLlmRequests(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    if (args.checkpointOffset < args.streamMaxOffset) return;
+    const now = this.#now();
+    const settle: { llmRequestId: number; message: string }[] = [];
+    for (const [id, request] of Object.entries(args.state.llmRequests)) {
+      const llmRequestId = Number(id);
+      if (this.#liveLlmExecutions.has(llmRequestId)) continue;
+      if (request.status === "requested" && now < request.expiresAt) {
+        this.#liveLlmExecutions.add(llmRequestId);
+        args.runInBackground(async () => {
+          try {
+            await this.#executeLlmRequest({ llmRequestId, model: request.model });
+          } finally {
+            this.#liveLlmExecutions.delete(llmRequestId);
+          }
+        });
+        continue;
+      }
+      settle.push({
+        llmRequestId,
+        message:
+          request.status === "started"
+            ? "LLM request orphaned: the incarnation executing it went away before completing (eviction or wedged call). Failed by the reconciler; the agent's next trigger reschedules."
+            : "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
+      });
+    }
+    if (settle.length === 0) return;
+    args.blockProcessorWhile(async () => {
+      for (const { llmRequestId, message } of settle) {
+        console.error("[agent] settling undriven llm request", { llmRequestId, message });
+        await args.append({
+          type: "events.iterate.com/agent/llm-request-completed",
+          idempotencyKey: `agent/llm-request-completed@${llmRequestId}`,
+          payload: {
+            durationMs: 0,
+            llmRequestId,
+            result: { status: "failure", error: { message } },
+          },
+        });
+      }
+    });
   }
 
   /**
@@ -218,10 +290,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   async #settleLlmRequestScheduling(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
-    // At-head gate (see OpenAiWsProcessor.processEventBatch): scheduling
-    // decisions and the backstop must never fire from a mid-catch-up fold —
-    // a long-settled request transiently looks `requested` mid-refold, and
-    // backstopping it would journal a false failure.
+    // At-head gate: scheduling decisions and the backstop must never fire
+    // from a mid-catch-up fold — a long-settled request transiently looks
+    // `requested` mid-refold, and backstopping it would journal a false failure.
     if (args.checkpointOffset < args.streamMaxOffset) return;
     const { state } = args;
     if (state.currentRequest === null) {
@@ -247,17 +318,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         payload: {
           debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
           model: state.llmConfig.model,
-          provider: state.llmProvider,
           requestId: `llm-request:gen-${state.requestGeneration}`,
         },
       });
       return;
     }
     if (state.currentRequest.phase === "requested") {
-      // The BACKSTOP: providers settle their own undriven requests, so a
-      // `requested` this old means the provider layer never answered at all.
-      // Settling it un-wedges the queue — the failure input (rendered by
-      // processEvent above on the next batch) tells the model what happened.
+      // Outer backstop if reconciliation never settled (should be rare with
+      // a single processor that both schedules and runs LLM turns).
       const requestedAt = state.currentRequest.requestedAt;
       if (requestedAt === undefined) return;
       if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
@@ -268,11 +336,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         payload: {
           durationMs: this.#now() - requestedAt,
           llmRequestId,
-          provider: state.currentRequest.provider ?? state.llmProvider,
           result: {
             status: "failure",
             error: {
-              message: `No LLM provider settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
+              message: `No LLM attempt settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
             },
           },
         },
@@ -286,7 +353,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     await args.append(
       this.#buildLlmRequestRequested({
         model: state.llmConfig.model,
-        provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
         scheduledOffset: state.currentRequest.scheduledOffset,
       }),
@@ -297,7 +363,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * paths), so the expiry stamp and idempotency key can never drift apart. */
   #buildLlmRequestRequested(input: {
     model: string;
-    provider: AgentState["llmProvider"];
     requestId: string;
     scheduledOffset: number;
   }) {
@@ -306,11 +371,148 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       idempotencyKey: `agent/llm-request-requested@${input.scheduledOffset}`,
       payload: {
         model: input.model,
-        provider: input.provider,
         requestId: input.requestId,
         expiresAt: this.#now() + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
       },
     };
+  }
+
+  async #executeLlmRequest(input: { llmRequestId: number; model: string }): Promise<void> {
+    const { llmRequestId, model } = input;
+    const startedAt = this.#now();
+    // Started-evidence outside the inner try: if this append fails the model
+    // was never dialed, so no completion may be appended — the obligation
+    // stays `requested` and a later reconciliation retries the attempt.
+    await this.stream.append({
+      type: "events.iterate.com/agent/llm-request-started",
+      idempotencyKey: `agent/llm-request-started@${llmRequestId}`,
+      payload: { llmRequestId, model },
+    });
+
+    try {
+      if (this.deps.ai === undefined) {
+        throw new Error("Agent processor has no AI binding configured.");
+      }
+      const events =
+        this.deps.readStreamEvents !== undefined
+          ? await this.deps.readStreamEvents()
+          : await this.stream.getEvents({ limit: 5_000 });
+      const body = buildAgentLlmRequestBody({ events, llmRequestId });
+      // Workers AI chat bodies are text-only here: file attachments flatten
+      // to hint lines telling the agent how to fetch/convert the bytes.
+      const messages = body.messages.map((message) => ({
+        role: message.role,
+        content: flattenMessageToText(message),
+      }));
+      const raw = await this.deps.ai.run(model, { messages, stream: true });
+      const completion =
+        raw instanceof ReadableStream
+          ? await this.#consumeStream({ body: raw, llmRequestId })
+          : {
+              text: extractAssistantText(raw),
+              rawResponse: jsonCompatible(raw),
+              usage: extractUsage(raw),
+            };
+
+      const durationMs = Date.now() - startedAt;
+      const result = {
+        status: "success" as const,
+        rawResponse: completion.rawResponse,
+        ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+      };
+
+      if (await this.#isRequestStillCurrent({ llmRequestId })) {
+        await this.stream.append({
+          type: "events.iterate.com/agent/output-added",
+          idempotencyKey: `agent/output-added@${llmRequestId}`,
+          payload: { content: completion.text, llmRequestId },
+        });
+      }
+
+      await this.stream.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `agent/llm-request-completed@${llmRequestId}`,
+        payload: { durationMs, llmRequestId, result },
+      });
+    } catch (error) {
+      await this.stream.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `agent/llm-request-completed@${llmRequestId}`,
+        payload: {
+          durationMs: Date.now() - startedAt,
+          llmRequestId,
+          result: {
+            status: "failure",
+            error: { message: stringifyError(error) },
+          },
+        },
+      });
+    }
+  }
+
+  async #consumeStream(input: {
+    body: ReadableStream;
+    llmRequestId: number;
+  }): Promise<{ rawResponse: unknown; text: string; usage?: unknown }> {
+    const reader = input.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    let sequence = 0;
+    let text = "";
+    let usage: unknown;
+
+    const handleChunk = async (chunk: unknown) => {
+      text += extractChunkText(chunk);
+      usage = extractUsage(chunk) ?? usage;
+      await this.stream.append({
+        type: "events.iterate.com/agent/llm-response-chunk",
+        idempotencyKey: `agent/llm-response-chunk@${input.llmRequestId}:${sequence}`,
+        payload: {
+          chunk: jsonCompatible(chunk),
+          llmRequestId: input.llmRequestId,
+          sequence,
+        },
+      });
+      sequence += 1;
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += typeof value === "string" ? value : decoder.decode(value, { stream: true });
+      const frames = buffered.split(/\r?\n\r?\n/);
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) {
+        const chunk = parseSseFrame(frame);
+        if (chunk !== undefined) await handleChunk(chunk);
+      }
+    }
+    buffered += decoder.decode();
+    const finalChunk = parseSseFrame(buffered);
+    if (finalChunk !== undefined) await handleChunk(finalChunk);
+
+    return {
+      rawResponse: {
+        streamed: true,
+        chunkCount: sequence,
+        response: text,
+        ...(usage === undefined ? {} : { usage }),
+      },
+      text,
+      ...(usage === undefined ? {} : { usage }),
+    };
+  }
+
+  async #isRequestStillCurrent(input: { llmRequestId: number }) {
+    const events =
+      this.deps.readStreamEvents !== undefined
+        ? await this.deps.readStreamEvents()
+        : await this.stream.getEvents({ limit: 5_000 });
+    const state = reduceAgentEvents(events);
+    return (
+      state.currentRequest?.phase === "requested" &&
+      state.currentRequest.llmRequestId === input.llmRequestId
+    );
   }
 }
 
@@ -329,7 +531,7 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
   return state;
 }
 
-/** One agent-history message as providers receive it. */
+/** One agent-history message as the model receives it. */
 export type AgentChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -407,12 +609,11 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         history: [...state.history, { role: "assistant", content: event.payload.content }],
       };
     case "events.iterate.com/agent/llm-provider-selected":
-      if (event.payload.ifUnset && state.llmProviderConfigured) return state;
+      if (event.payload.ifUnset && state.llmConfigConfigured) return state;
       return {
         ...state,
         llmConfig: { model: event.payload.model },
-        llmProvider: event.payload.provider,
-        llmProviderConfigured: true,
+        llmConfigConfigured: true,
       };
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
@@ -427,36 +628,68 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         autonomousTurnCount:
           state.pendingTriggerSource === "agent-loop" ? state.autonomousTurnCount + 1 : 0,
       };
-    case "events.iterate.com/agent/llm-request-requested":
+    case "events.iterate.com/agent/llm-request-requested": {
+      const key = String(event.offset);
+      const expiresAt =
+        event.payload.expiresAt ??
+        Date.parse(event.createdAt) + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS;
+      const withLifecycle: AgentState = {
+        ...state,
+        llmRequests: {
+          ...state.llmRequests,
+          [key]: {
+            status: "requested" as const,
+            model: event.payload.model,
+            expiresAt,
+          },
+        },
+      };
       if (
         state.currentRequest?.phase !== "scheduled" ||
         state.currentRequest.requestId !== event.payload.requestId
-      )
-        return state;
+      ) {
+        return withLifecycle;
+      }
       return {
-        ...state,
+        ...withLifecycle,
         currentRequest: {
           phase: "requested",
           llmRequestId: event.offset,
           requestedAt: Date.parse(event.createdAt),
-          provider: event.payload.provider,
         },
         pendingTriggerOffset: null,
       };
-    case "events.iterate.com/agent/llm-request-completed":
+    }
+    case "events.iterate.com/agent/llm-request-started": {
+      const key = String(event.payload.llmRequestId);
+      const existing = state.llmRequests[key];
+      if (existing === undefined) return state;
+      return {
+        ...state,
+        llmRequests: {
+          ...state.llmRequests,
+          [key]: { ...existing, status: "started" as const },
+        },
+      };
+    }
+    case "events.iterate.com/agent/llm-request-completed": {
+      const llmRequests = { ...state.llmRequests };
+      delete llmRequests[String(event.payload.llmRequestId)];
+      const next: AgentState = { ...state, llmRequests };
       if (
         state.currentRequest?.phase !== "requested" ||
         state.currentRequest.llmRequestId !== event.payload.llmRequestId
       ) {
-        return state;
+        return next;
       }
       return {
-        ...state,
+        ...next,
         consecutiveLlmFailures:
           event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
         currentRequest: null,
         requestGeneration: state.requestGeneration + 1,
       };
+    }
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
@@ -470,7 +703,14 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         state.currentRequest?.phase === "requested" &&
         state.currentRequest.llmRequestId === event.payload.llmRequestId
       ) {
-        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
+        const llmRequests = { ...state.llmRequests };
+        delete llmRequests[String(event.payload.llmRequestId)];
+        return {
+          ...state,
+          currentRequest: null,
+          requestGeneration: state.requestGeneration + 1,
+          llmRequests,
+        };
       }
       return state;
     case "events.iterate.com/agent/loop-stopped":
@@ -667,4 +907,89 @@ function extractAsyncJsSnippet(content: string): string | null {
   );
   const code = (fenced?.[1] ?? content).trim();
   return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
+}
+
+function parseSseFrame(frame: string): unknown | undefined {
+  const data = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .join("\n");
+  if (data === "" || data === "[DONE]") return undefined;
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return data;
+  }
+}
+
+function extractAssistantText(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("AI response did not contain assistant text.");
+  }
+  if ("response" in raw && typeof raw.response === "string") return raw.response;
+
+  const choices = (raw as { choices?: unknown }).choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const first = choices[0] as
+      | { message?: { content?: unknown }; delta?: { content?: unknown } }
+      | undefined;
+    const content = first?.message?.content ?? first?.delta?.content;
+    if (typeof content === "string") return content;
+  }
+
+  const content = (raw as { content?: unknown }).content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) =>
+        typeof block === "object" &&
+        block !== null &&
+        "type" in block &&
+        block.type === "text" &&
+        "text" in block &&
+        typeof block.text === "string"
+          ? block.text
+          : "",
+      )
+      .join("");
+  }
+
+  throw new Error("AI response did not contain assistant text.");
+}
+
+function extractChunkText(chunk: unknown): string {
+  if (typeof chunk === "string") return chunk;
+  if (typeof chunk !== "object" || chunk === null) return "";
+  if ("response" in chunk && typeof chunk.response === "string") return chunk.response;
+
+  const choices = (chunk as { choices?: unknown }).choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const first = choices[0] as { delta?: { content?: unknown } } | undefined;
+    if (typeof first?.delta?.content === "string") return first.delta.content;
+  }
+
+  const delta = (chunk as { delta?: { text?: unknown } }).delta;
+  return typeof delta?.text === "string" ? delta.text : "";
+}
+
+function extractUsage(raw: unknown): unknown | undefined {
+  return typeof raw === "object" && raw !== null && "usage" in raw ? raw.usage : undefined;
+}
+
+function jsonCompatible(value: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return String(value);
+  }
+}
+
+function stringifyError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }

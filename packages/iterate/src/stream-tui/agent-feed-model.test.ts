@@ -33,10 +33,15 @@ describe("createAgentFeedModel", () => {
     });
 
     model.applyEvents([
+      event("events.iterate.com/agent/llm-request-completed", {
+        llmRequestId: 2,
+        durationMs: 10,
+        result: { status: "success" },
+      }),
       event("events.iterate.com/agents/web-message-sent", { message: "hi human" }),
     ]);
 
-    // The assistant reply settles the live activity, then itself.
+    // LLM completion settles the live activity; the assistant reply follows.
     snapshot = model.snapshot();
     expect(snapshot.live).toBeNull();
     expect(snapshot.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
@@ -49,13 +54,13 @@ describe("createAgentFeedModel", () => {
     const llmRequestId = requested.offset;
     model.applyEvents([
       requested,
-      event("events.iterate.com/openai-ws/llm-response-chunk", {
+      event("events.iterate.com/agent/llm-response-chunk", {
         llmRequestId,
-        chunk: { type: "response.output_text.delta", delta: "par" },
+        chunk: { response: "par" },
       }),
-      event("events.iterate.com/openai-ws/llm-response-chunk", {
+      event("events.iterate.com/agent/llm-response-chunk", {
         llmRequestId,
-        chunk: { type: "response.output_text.delta", delta: "tial" },
+        chunk: { response: "tial" },
       }),
     ]);
 

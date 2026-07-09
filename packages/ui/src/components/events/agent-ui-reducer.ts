@@ -184,13 +184,14 @@ const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancel
 const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
 const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
-const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
-// The openai-ws processor journals every raw Responses-WS frame as
-// llm-response-chunk ({llmRequestId, sequence, chunk}); the frames stream
-// into the live activity below.
-const OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
-const CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
-const CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
+const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
+const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+// Historical journals (pre single-agent-processor) still stream under these
+// types; keep reading them so old chats render correctly.
+const LEGACY_OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
+const LEGACY_OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
+const LEGACY_CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
+const LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-execution-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-execution-completed";
 const CODEMODE_SCRIPT_EXECUTION_REQUESTED =
@@ -289,15 +290,16 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return { ...base, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case OPENAI_WS_REQUEST_STARTED:
-    case CLOUDFLARE_AI_REQUEST_STARTED: {
+    case AGENT_LLM_REQUEST_STARTED:
+    case LEGACY_OPENAI_WS_REQUEST_STARTED:
+    case LEGACY_CLOUDFLARE_AI_REQUEST_STARTED: {
       const llmRequestId = readNumber(event, "llmRequestId");
       const model = readString(event, "model");
       if (llmRequestId == null || model == null) return state;
       return updateLlmStep(state, llmRequestId, (step) => ({ ...step, model }));
     }
 
-    case OPENAI_WS_RESPONSE_CHUNK: {
+    case LEGACY_OPENAI_WS_RESPONSE_CHUNK: {
       const llmRequestId = readNumber(event, "llmRequestId");
       const message = readRecord(event, "chunk");
       if (llmRequestId == null || message == null) return state;
@@ -332,7 +334,8 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return state;
     }
 
-    case CLOUDFLARE_AI_RESPONSE_CHUNK: {
+    case AGENT_LLM_RESPONSE_CHUNK:
+    case LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK: {
       const llmRequestId = readNumber(event, "llmRequestId");
       const chunk = readPayloadRecord(event)?.chunk;
       if (llmRequestId == null) return state;
@@ -377,7 +380,6 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
                 ...step,
                 status: "done",
                 outcome: status === "success" ? "completed" : "failed",
-                ...(typeof payload?.provider === "string" ? { provider: payload.provider } : {}),
                 ...(typeof payload?.durationMs === "number"
                   ? { durationMs: payload.durationMs }
                   : {}),

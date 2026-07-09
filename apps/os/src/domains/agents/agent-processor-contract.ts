@@ -70,7 +70,7 @@ const AGENT_SNIPPET_GUIDE = [
   "  ]);",
   "  const messages = await Promise.all(",
   "    (inbox.data.messages ?? []).map((m) =>",
-  '      itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
+  '      itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
   "    ),",
   "  );",
   "  return messages.map((m) => ({ id: m.data.id, snippet: m.data.snippet, headers: m.data.payload?.headers }));",
@@ -149,9 +149,6 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "```",
 ].join("\n");
 
-export const AgentLlmProvider = z.enum(["cloudflare-ai", "openai-ws"]);
-export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
-
 /**
  * A file reference riding on an agent input: where the bytes live in project
  * file storage plus the signed public URL minted when it was attached. The
@@ -181,11 +178,24 @@ const LlmRequestPolicy = z
   ])
   .default({ behaviour: "after-current-request" });
 
+const LlmRequestResult = z.discriminatedUnion("status", [
+  z.object({
+    rawResponse: z.unknown().optional(),
+    status: z.literal("success"),
+    usage: z.unknown().optional(),
+  }),
+  z.object({
+    error: z.object({ message: z.string() }),
+    rawResponse: z.unknown().optional(),
+    status: z.literal("failure"),
+  }),
+]);
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.3.1",
+  version: "0.4.0",
   description:
-    "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
+    "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
     systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
     history: z.array(ChatMessage).default([]),
@@ -194,8 +204,7 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
       })
       .default({ model: DEFAULT_AGENT_MODEL }),
-    llmProvider: AgentLlmProvider.default("cloudflare-ai"),
-    llmProviderConfigured: z.boolean().default(false),
+    llmConfigConfigured: z.boolean().default(false),
     currentRequest: z
       .discriminatedUnion("phase", [
         z.object({
@@ -210,10 +219,6 @@ export const AgentProcessorContract = defineProcessorContract({
            * the reconciler's backstop deadline. Optional: raw appends and
            * pre-backstop checkpoints lack it, and the backstop then skips. */
           requestedAt: z.number().int().positive().optional(),
-          /** The provider the request was addressed to, so a backstop
-           * settlement attributes the failure honestly even if the agent's
-           * configured provider changed while the request sat unanswered. */
-          provider: AgentLlmProvider.optional(),
         }),
       ])
       .nullable()
@@ -235,6 +240,25 @@ export const AgentProcessorContract = defineProcessorContract({
      * not retry-loop forever.
      */
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
+    /**
+     * Open LLM obligations: every request that has not reached a terminal
+     * event, keyed by llmRequestId. End-of-batch reconciliation compares
+     * this fold against the incarnation's live execution set. Entries carry
+     * model + expiresAt so recovery can START an attempt from state alone.
+     * Terminal events delete the entry (not mark completed).
+     */
+    llmRequests: z
+      .record(
+        z.string(),
+        z.object({
+          status: z.enum(["requested", "started"]),
+          model: z.string().min(1),
+          /** Epoch ms past which no attempt may START; stale intent settles
+           * as an expired failure instead. */
+          expiresAt: z.number().int().positive(),
+        }),
+      )
+      .default({}),
     inProgressScriptExecutions: z
       .array(
         z.object({
@@ -350,7 +374,7 @@ export const AgentProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/agent/output-added": {
-      description: "The LLM provider produced assistant output.",
+      description: "The LLM produced assistant output.",
       payloadSchema: z.object({
         content: z.string(),
         llmRequestId: z.number().int().positive().optional(),
@@ -372,7 +396,6 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         ifUnset: z.boolean().optional(),
         model: z.string().min(1),
-        provider: AgentLlmProvider,
       }),
       examples: [
         {
@@ -381,12 +404,11 @@ export const AgentProcessorContract = defineProcessorContract({
           payload: {
             ifUnset: true,
             model: "@cf/moonshotai/kimi-k2.7-code",
-            provider: "cloudflare-ai",
           },
         },
         {
-          description: "The project explicitly switches the agent to an OpenAI model.",
-          payload: { model: "gpt-5.5", provider: "openai-ws" },
+          description: "The project explicitly selects a Workers AI model.",
+          payload: { model: "openai/gpt-5.5" },
         },
       ],
     },
@@ -395,7 +417,6 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         debounceMs: z.number().int().nonnegative(),
         model: z.string().min(1),
-        provider: AgentLlmProvider,
         requestId: z.string(),
       }),
       examples: [
@@ -405,7 +426,6 @@ export const AgentProcessorContract = defineProcessorContract({
           payload: {
             debounceMs: 250,
             model: "@cf/moonshotai/kimi-k2.7-code",
-            provider: "cloudflare-ai",
             requestId: "llm-request:gen-3",
           },
         },
@@ -413,55 +433,55 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The agent has prepared an LLM request. The event offset is the llmRequestId; providers rebuild the prompt from history.",
+        "The agent has prepared an LLM request. The event offset is the llmRequestId; the processor rebuilds the prompt from history.",
       payloadSchema: z.object({
         model: z.string().min(1),
-        provider: AgentLlmProvider,
         requestId: z.string(),
-        /** Epoch ms past which no provider may START an attempt; stale intent
-         * settles as an expired failure instead. Absent (raw appends), the
-         * providers default to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
+        /** Epoch ms past which no attempt may START; stale intent settles as
+         * an expired failure instead. Absent (raw appends), reconciliation
+         * defaults to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
         expiresAt: z.number().int().positive().optional(),
       }),
       examples: [
         {
           description:
-            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestId the provider answers to.",
+            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestId the processor answers to.",
           payload: {
             model: "@cf/moonshotai/kimi-k2.7-code",
-            provider: "cloudflare-ai",
             requestId: "llm-request:gen-3",
           },
         },
       ],
     },
+    "events.iterate.com/agent/llm-request-started": {
+      description: "The agent processor started an LLM request through the AI binding.",
+      payloadSchema: z.object({
+        llmRequestId: z.number().int().positive(),
+        model: z.string().min(1),
+      }),
+    },
+    "events.iterate.com/agent/llm-response-chunk": {
+      description: "One streamed provider chunk received from the AI binding.",
+      payloadSchema: z.object({
+        chunk: z.unknown(),
+        llmRequestId: z.number().int().positive(),
+        sequence: z.number().int().nonnegative(),
+      }),
+    },
     "events.iterate.com/agent/llm-request-completed": {
-      description: "A provider processor finished an LLM request.",
+      description: "The agent processor finished an LLM request.",
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative(),
         llmRequestId: z.number().int().positive(),
-        provider: AgentLlmProvider,
-        result: z.discriminatedUnion("status", [
-          z.object({
-            rawResponse: z.unknown().optional(),
-            status: z.literal("success"),
-            usage: z.unknown().optional(),
-          }),
-          z.object({
-            error: z.object({ message: z.string() }),
-            rawResponse: z.unknown().optional(),
-            status: z.literal("failure"),
-          }),
-        ]),
+        result: LlmRequestResult,
       }),
       examples: [
         {
           description:
-            "The provider returned assistant output, with token usage as the model reported it.",
+            "The LLM returned assistant output, with token usage as the model reported it.",
           payload: {
             durationMs: 2340,
             llmRequestId: 57,
-            provider: "cloudflare-ai",
             result: {
               status: "success",
               usage: { completion_tokens: 118, prompt_tokens: 4096, total_tokens: 4214 },
@@ -470,13 +490,12 @@ export const AgentProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "The provider call failed; the error becomes a model-visible input so the agent can react.",
+            "The LLM call failed; the error becomes a model-visible input so the agent can react.",
           payload: {
             durationMs: 30012,
             llmRequestId: 61,
-            provider: "openai-ws",
             result: {
-              error: { message: "Provider request timed out after 30000ms" },
+              error: { message: "LLM request timed out after 30000ms" },
               status: "failure",
             },
           },
@@ -544,6 +563,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
@@ -555,6 +575,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-started",
+    "events.iterate.com/agent/llm-response-chunk",
+    "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     // The reconciler's backstop: normally providers append the completion,
     // but a request whose provider layer never answers at all is settled by
@@ -574,8 +598,6 @@ export type AgentProcessorContract = typeof AgentProcessorContract;
 
 /**
  * The agent processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape (the old hand-written copy
- * in the former types.ts silently omitted `llmProviderConfigured` and
- * `requestGeneration`).
+ * `stateSchema`.
  */
 export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
