@@ -164,6 +164,49 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
   }
 
+  it("migrates existing subscription tables that predate epoch fencing", () => {
+    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
+    sql.exec(`
+      create table subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        updated_at text not null
+      )
+    `);
+    sql.exec(
+      "insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at) values (?, ?, ?, ?, ?, ?)",
+      "legacy",
+      4,
+      2,
+      123,
+      "old failure",
+      new Date(0).toISOString(),
+    );
+
+    const store = new SqliteSubscriptionCursorStore(sql);
+
+    expect(store.get("legacy")).toMatchObject({
+      ackedOffset: 4,
+      attempt: 2,
+      epoch: 0,
+      lastError: "old failure",
+      nextAttemptAt: 123,
+    });
+
+    store.setCursor("legacy", 7);
+
+    expect(store.get("legacy")).toMatchObject({
+      ackedOffset: 7,
+      attempt: 0,
+      lastError: null,
+      nextAttemptAt: null,
+    });
+    expect(store.get("legacy")!.epoch).toBeGreaterThan(0);
+  });
+
   it("acks fenced on a stale epoch no-op; unfenced acks still land", () => {
     const store = makeStore();
     store.ensure("k", 0);
