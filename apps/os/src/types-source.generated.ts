@@ -951,13 +951,13 @@ export interface Stream {
    * appends the batch's events into THIS stream with provenance stamping,
    * structural loop protection, and source-derived idempotency keys. A source
    * stream cross-posts here by configuring
-   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }\`.
+   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }\`.
    */
-  ingest(batch: StreamPushEventBatch): Promise<void>;
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
   /**
    * "When events matching this land HERE, post them onto stream \`path\`" — the
    * cross-post verb. Pure sugar over appending a \`subscription-configured\`
-   * push subscription targeting the destination's \`ingest\` sink; the appended
+   * push subscription targeting the destination's \`acceptCrossPost\` sink; the appended
    * event (returned) is the real interface and shows in the log like any
    * other config. Same-\`key\` calls replace the previous cross-post; remove
    * with \`removeCrossPost\`. Copies carry the full provenance chain

@@ -4,7 +4,7 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildIngestAppendInputs } from "./cross-post.ts";
+import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
@@ -805,12 +805,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Cross-post receiving end — an ordinary push SINK on the target stream
    * (`(batch) => void`, the same shape every subscriber provides), reached by
    * a source stream's push subscription (sugar: `crossPostTo`). All
-   * cross-post semantics — provenance, loop protection, idempotency keys, the
-   * optional JSONata transform — live in `cross-post.ts`; this method only
-   * appends the built inputs in its own synchronous turn.
+   * cross-post semantics — provenance, loop protection, idempotency keys,
+   * the optional JSONata transform — live in `cross-post.ts`; this method
+   * only appends the built inputs in its own synchronous turn.
    */
-  ingest(batch: StreamPushEventBatch): void {
-    const inputs = buildIngestAppendInputs(batch, {
+  acceptCrossPost(batch: StreamPushEventBatch): void {
+    const inputs = buildAcceptCrossPostAppendInputs(batch, {
       projectId: this.name.projectId,
       path: this.name.path,
     });
