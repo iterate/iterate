@@ -2242,12 +2242,22 @@ describe("itx", () => {
     expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
     expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
 
-    // The subscriptions (mechanics) still come from the platform, not the worker.
+    // Birth mechanics: project-worker (every project stream) + agent processor +
+    // capability-host. One agent processor owns history, scheduling, and the
+    // Workers AI call — no separate LLM provider processors.
     const events = await agentStream.getEvents({ afterOffset: 0 });
     const subscriptions = events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
-    expect(subscriptions.length).toBeGreaterThanOrEqual(4);
+    expect(subscriptions.length).toBeGreaterThanOrEqual(3);
+    const processorSlugs = subscriptions
+      .map(
+        (event) =>
+          (event.payload as { delivery?: { processorSlug?: string } } | undefined)?.delivery
+            ?.processorSlug,
+      )
+      .filter((slug): slug is string => typeof slug === "string");
+    expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
   });
 
   test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {

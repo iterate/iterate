@@ -22,6 +22,8 @@ test(
     using agent = handle.agent("/agents/e2e-tools");
 
     const marker = crypto.randomUUID().slice(0, 8);
+    // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
+    // default under preview load; wait with the same ceiling as the test.
     await agent.ask({
       message: [
         `Run a script that appends one event of type ${PROOF_TYPE} with payload`,
@@ -29,6 +31,7 @@ test(
         `itx.streams.get(${JSON.stringify(PROOF_STREAM)}).append(...). After the script`,
         `runs, send a chat message that contains exactly the word done.`,
       ].join(" "),
+      timeoutMs: 180_000,
     });
 
     // The reply may arrive before or after the script completes depending on
@@ -75,7 +78,11 @@ test(
       payload: { model: "@cf/moonshotai/kimi-k2.7-code" },
     });
 
-    const response = await agent.ask({ message: "Reply with a short greeting." });
+    const response = await agent.ask({
+      message: "Reply with a short greeting.",
+      // Workers AI under preview load can sit past the 45s default.
+      timeoutMs: 120_000,
+    });
     expect(response.type).toBe("events.iterate.com/agents/web-message-sent");
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
