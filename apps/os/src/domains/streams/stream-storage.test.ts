@@ -95,6 +95,29 @@ describe("StreamEventLog.getRange", () => {
     expect(read(log, { afterOffset: 0, eventTypes: [], limit: 3 })).toEqual([]);
   });
 
+  it("insert reports serialized byte lengths and getRangeSized reads the same sizes back", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const committedEvents = [
+      event(1, "events.iterate.com/test/sized"),
+      event(2, "events.iterate.com/test/sized"),
+    ];
+
+    const insertedByteLengths = log.insert(committedEvents);
+    expect(insertedByteLengths).toEqual(
+      committedEvents.map((entry) => new TextEncoder().encode(JSON.stringify(entry)).byteLength),
+    );
+
+    // The sized read sums the chunk rows already in hand — no re-stringify —
+    // and must agree exactly with what insert serialized.
+    const sized = log.getRangeSized({
+      afterOffset: 0,
+      beforeOffset: Number.MAX_SAFE_INTEGER,
+      limit: 10,
+    });
+    expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
+    expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+  });
+
   it("adds the stream path when reading legacy stored events", () => {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
     const log = new StreamEventLog(sql, "/legacy/stream");
