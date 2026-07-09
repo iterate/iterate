@@ -10,8 +10,8 @@ import { createProjectFixture as createForgedProjectFixture } from "./forged-ses
 
 type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
 
-const addPagePlugins = (page: Page, testInfo: TestInfo) =>
-  addPlugins({
+const addPagePlugins = async (page: Page, testInfo: TestInfo) => {
+  const pageWithPlugins = await addPlugins({
     page,
     testInfo,
     plugins: [
@@ -28,6 +28,48 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
   });
+  armVideoAutoStart(pageWithPlugins);
+  return pageWithPlugins;
+};
+
+/**
+ * Trim the blank startup lead-in from `VIDEO_MODE=1` demo videos.
+ *
+ * The raw webm begins at browser-context creation, so a recording opens on a
+ * few seconds of `about:blank` + loading shell before the app navigates,
+ * hydrates and paints (the forged-session cookie is set with no navigation, so
+ * there's nothing to see up front). After the first `goto`, once the app flips
+ * its server-rendered `<body data-hydrated="false">` marker to "true" — the
+ * same hydration contract `hydrationWaiter` gates on — mark that moment as the
+ * default video start, so demos open on real content.
+ *
+ * Best-effort and last-write-wins: a spec that wants a different anchor just
+ * calls `page.videoMode.setStartTime()` afterwards (as `repl-examples` does),
+ * and because that runs later it overrides this default. A no-op unless
+ * `VIDEO_MODE=1` put a `videoMode` control on the page, and detection never
+ * throws into the test.
+ */
+const armVideoAutoStart = (page: PageWithVideoMode) => {
+  const control = page.videoMode;
+  if (!control) return;
+
+  const goto = page.goto.bind(page);
+  let armed = true;
+  page.goto = async (url, options) => {
+    const response = await goto(url, options);
+    if (armed) {
+      armed = false;
+      await page
+        .locator('[data-hydrated="false"]')
+        .waitFor({ state: "hidden", timeout: 30_000 })
+        .catch(() => {});
+      control.setStartTime();
+    }
+    return response;
+  };
+};
+
+type PageWithVideoMode = Page & { videoMode?: { setStartTime: (ms?: number) => void } };
 
 export const test = base.extend<{
   helpers: {
