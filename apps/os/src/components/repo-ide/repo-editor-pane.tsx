@@ -9,7 +9,8 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { changedLinesGutter } from "./change-gutter.ts";
-import { repoFileKind } from "./repo-file-kinds.ts";
+import { HtmlPreview } from "./html-preview.tsx";
+import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -48,7 +49,8 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
-  /** Markdown only: show the rendered preview instead of the editor. */
+  /** Markdown and html files: show the rendered preview (markdown HTML, or the
+   * sandboxed html iframe) instead of the editor. */
   previewOpen: boolean;
   onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
@@ -255,16 +257,19 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
-    // Markdown gets a vscode-style Code | Preview toggle in the header's top
-    // left; the preview renders the CURRENT buffer (unsaved edits included).
-    const showPreview = previewOpen && kind.language === "markdown";
+    // Markdown and html files get a vscode-style Code | Preview toggle; the
+    // preview renders the CURRENT buffer (unsaved edits included). Diff wins if
+    // a hand-edited URL sets both `preview` and `diff` (the toggles keep them
+    // mutually exclusive, but honor that invariant here too) so the pane never
+    // renders Preview while the header shows the Diff/"Working Tree" state.
+    const showPreview = previewOpen && !diffOpen && isPreviewablePath(path);
     return (
       <FileChrome
         path={path}
-        {...(diffOpen ? { suffix: "(Working Tree)" } : {})}
+        {...(diffOpen ? { suffix: "(Working Tree)" } : showPreview ? { suffix: "(Preview)" } : {})}
         status={status}
         leading={
-          kind.language === "markdown" ? (
+          isPreviewablePath(path) ? (
             <CodePreviewToggle preview={showPreview} onChange={onTogglePreview} />
           ) : undefined
         }
@@ -286,7 +291,11 @@ export function RepoEditorPane({
         }
       >
         {showPreview ? (
-          <MarkdownPreview markdown={value} />
+          kind.language === "markdown" ? (
+            <MarkdownPreview markdown={value} />
+          ) : (
+            <HtmlPreview html={value} />
+          )
         ) : (
           <SourceCodeBlock
             key={path}
@@ -362,7 +371,9 @@ export function RepoEditorPane({
   );
 }
 
-function FileChrome({
+/** Shared editor-pane chrome (path header + status badge + actions slot) —
+ * exported for the sibling readonly commit-diff pane so every pane matches. */
+export function FileChrome({
   path,
   suffix,
   readonly = false,
@@ -376,7 +387,7 @@ function FileChrome({
   suffix?: string;
   readonly?: boolean;
   status?: "added" | "deleted" | "modified";
-  /** Top-left slot before the path, e.g. the markdown Code | Preview toggle. */
+  /** Top-left slot before the path — the Code | Preview toggle lives here. */
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -405,7 +416,7 @@ function FileChrome({
   );
 }
 
-/** vscode's "Code | Preview" tab pair for markdown files. */
+/** vscode's "Code | Preview" tab pair for previewable (markdown / html) files. */
 function CodePreviewToggle({
   preview,
   onChange,
@@ -453,7 +464,7 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
   );
 }
 
-function EmptyPane({ label }: { label: string }) {
+export function EmptyPane({ label }: { label: string }) {
   return (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       {label}

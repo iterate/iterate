@@ -1,0 +1,37 @@
+/**
+ * The Preview half of the repo IDE's Code/Preview toggle for html files:
+ * renders the current buffer (unsaved working-tree edits included) in a
+ * sandboxed iframe.
+ *
+ * Sandbox stance: `allow-scripts` and NOTHING else — crucially no
+ * `allow-same-origin`, so the document runs in an opaque origin and its
+ * scripts cannot reach the dashboard's cookies, storage, or DOM. Top
+ * navigation, popups, forms, and modals stay denied, and no-referrer keeps
+ * subresource requests from learning the dashboard URL.
+ *
+ * Why scripts at all: interactive previews are half the point of an html
+ * renderer. Repos are project-scoped, so the author isn't necessarily the
+ * viewer — a collaborator's (or agent's) committed HTML runs in YOUR browser
+ * when you click Preview. The opaque origin contains that, and the accepted
+ * residual risk is the one every script-enabled HTML preview accepts (VS Code
+ * live preview, htmlpreview.github.io): the frame can render a convincing
+ * fake UI and fetch() out whatever the viewer types into it. no-referrer
+ * doesn't mitigate that — the author already knows where the file lives.
+ *
+ * srcdoc, not a blob URL: the Chrome quirk that forced the PDF renderer onto
+ * blob URLs is specific to the PDF viewer. srcdoc carries the live buffer
+ * with no object-URL lifecycle to manage.
+ */
+export function HtmlPreview({ html }: { html: string }) {
+  return (
+    <iframe
+      title="HTML preview"
+      sandbox="allow-scripts"
+      referrerPolicy="no-referrer"
+      srcDoc={html}
+      // White canvas: standalone html assumes a browser-default white page,
+      // and iframes are transparent by default (ugly against a dark app).
+      className="min-h-0 flex-1 bg-white"
+    />
+  );
+}

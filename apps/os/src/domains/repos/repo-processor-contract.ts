@@ -97,6 +97,26 @@ export const RepoProcessorContract = defineProcessorContract({
         repo: z.string(),
       }),
     },
+    "events.iterate.com/github/webhook-received": {
+      description:
+        "One GitHub webhook delivery, captured verbatim on the connection stream and cross-posted here by the repo's linkGithub rule. Maximally loose: bodies are GitHub's, stored rows must always re-parse.",
+      payloadSchema: z.object({}).loose(),
+    },
+    "events.iterate.com/github-pr/route-configured": {
+      description:
+        "Binds one PR agent stream to its pull request: the GitHub coordinates (via the repo's link), the PR number, and the repo path the webhooks route from. Appended to the agent stream by the repo processor's PR webhook forward.",
+      payloadSchema: z
+        .object({
+          connection: z.string(),
+          installationId: z.string(),
+          number: z.number(),
+          owner: z.string(),
+          repo: z.string(),
+          repoPath: z.string(),
+          streamPath: z.string(),
+        })
+        .loose(),
+    },
   },
   processorDeps: [CoreProcessorContract],
   consumes: [
@@ -107,9 +127,14 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-push-completed",
     "events.iterate.com/repo/github-push-failed",
     "events.iterate.com/repo/github-synced",
+    "events.iterate.com/github/webhook-received",
     "events.iterate.com/stream/created",
   ],
-  emits: ["events.iterate.com/repo/created"],
+  emits: [
+    "events.iterate.com/repo/created",
+    "events.iterate.com/github/webhook-received",
+    "events.iterate.com/github-pr/route-configured",
+  ],
 });
 
 /**
