@@ -19,12 +19,13 @@ import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.
 import {
   platformReferencesFromHeaders,
   secretErrorResponse,
-  secretReferencePathsFromHeaders,
+  secretReferencePathsFromRequest,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
 import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -102,6 +103,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   });
 
+  // The Telegram webhook router — same hosting shape as the Slack router: it
+  // only ever WAKES on `/integrations/telegram/{connection}` instances, where
+  // connectTelegram configured its subscription. No routed-webhook ack dep:
+  // Telegram has no reaction primitive; the telegram-agent processor's
+  // "typing…" chat action covers acknowledgement.
+  protected readonly telegramRouterRegistration = this.#processorHost.add((deps) => {
+    return new TelegramProcessor({
+      ...deps,
+      connection: connectionFromIntegrationStreamPath(this.#name.path),
+    });
+  });
+
   // The email thread router — same hosting shape as the Slack router: it only
   // ever WAKES on the Durable Object instance addressed at
   // `/integrations/email`, where project bootstrap (or the email ingress
@@ -156,7 +169,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     let secretPaths: string[];
     try {
-      secretPaths = secretReferencePathsFromHeaders(request.headers);
+      // Placeholders live in the request envelope: headers, or the URL for
+      // providers that authenticate in the URL path (Telegram).
+      secretPaths = secretReferencePathsFromRequest(request);
     } catch {
       return secretErrorResponse("secret_reference_required");
     }

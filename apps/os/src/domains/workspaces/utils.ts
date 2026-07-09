@@ -12,7 +12,7 @@ const WORKSPACE_PATH_PREFIX = "/workspaces";
 
 /**
  * The project's ROOT workspace: the always-fresh, read-only materialization of
- * the project repo's main branch that every other workspace falls through to
+ * the config repo's main branch that every other workspace falls through to
  * on missing reads. Callers spell it `"/"` (`itx.workspaces.get("/")`); the
  * bare prefix is its Durable Object identity — previously unmintable (the
  * normalizer required a path UNDER the prefix), so no existing workspace can

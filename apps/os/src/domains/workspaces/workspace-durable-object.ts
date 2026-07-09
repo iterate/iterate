@@ -3,7 +3,7 @@ import { WorkspaceFileSystem } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { PROJECT_REPO_PATH } from "../repos/utils.ts";
+import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -21,7 +21,7 @@ import { ROOT_WORKSPACE_PATH, isRootWorkspacePath, workspaceBranchName } from ".
  * two modes decided by its path:
  *
  * ROOT (`/workspaces`, spelled `"/"` by callers): the project's always-fresh,
- * READ-ONLY materialization of the project repo's main branch. Every read
+ * READ-ONLY materialization of the config repo's main branch. Every read
  * checks the Repo Durable Object's durable head cache (one cheap RPC — the
  * repo's read-your-write boundary, so a commit is visible here the moment
  * `commitFiles` returns) and re-clones only when main actually moved.
@@ -81,7 +81,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
 
   whoami(): string {
     return this.#isRoot
-      ? `workspace ${this.#name.projectId}:/ (root — read-only mirror of the project repo's main branch)`
+      ? `workspace ${this.#name.projectId}:/ (root — read-only mirror of the config repo's main branch)`
       : `workspace ${this.#name.projectId}:${this.#name.path} (overlay over "/")`;
   }
 
@@ -93,7 +93,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
   #projectRepoStub() {
     return this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
-        path: PROJECT_REPO_PATH,
+        path: CONFIG_REPO_PATH,
         projectId: this.#name.projectId,
       }),
     );
@@ -221,7 +221,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
 
   /**
    * Publish the merged view as ONE snapshot commit on this workspace's own
-   * branch in the project repo. Implementation: clone main, replay the local
+   * branch in the config repo. Implementation: clone main, replay the local
    * layer (minus .gitignored paths) and whiteout deletions onto it, commit,
    * force-push. Force because each publish is a fresh snapshot on the current
    * main — the branch always shows "main as this workspace sees it", not an

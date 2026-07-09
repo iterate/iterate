@@ -21,10 +21,10 @@ full semantics.
    per repo (the root is the `{"/", main}` instance), filled by shallow clone
    only when its recorded head lags the repo's cursor. Reserved DO paths under
    `/workspaces/.repo<repoPath>`; user paths there are rejected.
-3. **Multi-repo overlays**: every agent workspace sees ALL project repos at
+3. **Multi-repo overlays**: every agent workspace sees ALL config repos at
    their repo paths — copy-on-write, fall-through per subtree to that repo's
    cache. Repos live at arbitrary paths, so the router longest-prefix-matches
-   an injected repo list (= project processor state's `repos`, served via `projectProcessorState(projectId)` — see rpc-targets.ts ~992); default route is the project repo at "/". Publish
+   an injected repo list (= project processor state's `repos`, served via `projectProcessorState(projectId)` — see rpc-targets.ts ~992); default route is the config repo at "/". Publish
    routes per mount: changes under a mounted repo commit to THAT repo's
    `workspaces/<path>` branch. Per-file git laziness is impossible
    (isomorphic-git has no partial clone) — laziness lives at the cache layer.
@@ -48,7 +48,7 @@ storage })`) hosted by any DO — not a DO class — over a content-addressed
   content-source mounts at absolute, non-nesting roots (`{ "/skills":
 R2Bucket(...), "/project": GitHubRepo(...) }`). Our parent fall-through is,
   in that vocabulary, an overlay mount at "/". The future picture we want:
-  an agent workspace with all project repos mounted as overlay mounts
+  an agent workspace with all config repos mounted as overlay mounts
   (`/config`, `/website`, ...). Config-level change once mounts exist; do not
   build a second composition mechanism.
 - **Sandbox mounting via git refs.** `cloudflare/artifact-fs` (a container-side

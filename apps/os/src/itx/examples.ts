@@ -8,7 +8,7 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
-//   project-worker  the body baked into the project repo's worker.ts,
+//   project-worker  the body baked into the config repo's worker.ts,
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
@@ -415,7 +415,7 @@ return {
     id: "workspace-edit-and-push",
     title: "Edit files in a workspace, then publish its branch",
     description:
-      'A workspace is an instant copy-on-write overlay over the project repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) publishes the whole overlay as ONE snapshot commit on the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) publishes the whole overlay as ONE snapshot commit on the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -487,7 +487,7 @@ return {
   },
   {
     id: "repo-commit-files",
-    title: "Commit files into the project repo",
+    title: "Commit files into the config repo",
     description:
       "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
     context: "project",
@@ -513,14 +513,14 @@ return {
   },
   {
     id: "repo-read-file",
-    title: "Read a file from the project repo",
+    title: "Read a file from the config repo",
     description:
-      "Read committed file contents from the project repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
+      "Read committed file contents from the config repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const path = vars.path ?? "README.md";
-const repo = itx.repos.get(vars.repoPath ?? "/");
+const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const file = await repo.readFile({ path });
 
 if (file === null) {
@@ -537,18 +537,18 @@ return {
   },
   {
     id: "repo-edit-file",
-    title: "Read then edit a project repo file",
+    title: "Read then edit a config repo file",
     description:
       "Use readFile to inspect the current content, then edit to replace an exact string and commit the change. edit is safe for coding-agent workflows: oldString must match exactly once unless replaceAll is true.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const path = vars.path ?? "notes/edit-example.md";
-const repo = itx.repos.get(vars.repoPath ?? "/");
+const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
 
-// Path-scoped repos need first-use creation; the default project repo already exists.
+// Path-scoped repos need first-use creation; the default config repo already exists.
 if (vars.repoPath) await repo.create();
 
 // Seed a known starting point. Agents can skip this when editing an existing file.

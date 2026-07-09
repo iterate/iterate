@@ -89,7 +89,7 @@ interface WorkspaceKv {
 }
 
 type WorkspaceCoreOptions = {
-  /** The workspace's own publish branch in the project repo (`workspaces/<path>`). */
+  /** The workspace's own publish branch in the config repo (`workspaces/<path>`). */
   branch: string;
   /** git bound to `workspace`'s filesystem — the root materialization's clone lane. */
   git: ReturnType<typeof createGit>;
@@ -102,7 +102,7 @@ type WorkspaceCoreOptions = {
    */
   parent: () => ParentReads;
   /**
-   * The project repo — a thunk for the same reason as `parent`. Clone
+   * The config repo — a thunk for the same reason as `parent`. Clone
    * coordinates come from its `gitAccess()` (the documented internal DO-to-DO
    * surface, same as the sandbox domain), so repo tokens never appear on any
    * public surface.
@@ -161,7 +161,7 @@ export class WorkspaceCore {
 
   // In-flight materialization, shared by every concurrent read that finds the
   // head stale. Reset on completion or failure so the next read retries (the
-  // common transient: the project repo is still seeding).
+  // common transient: the config repo is still seeding).
   #rootRefresh: Promise<void> | undefined;
 
   async #ensureFreshRoot(): Promise<void> {
@@ -174,7 +174,7 @@ export class WorkspaceCore {
         // repo DO hiccups; a root that never materialized has nothing to give.
         if (this.#kv.get(ROOT_HEAD_KEY) === undefined) {
           throw new Error(
-            `Root workspace source is not available (the project repo may still be seeding; retry shortly): ${String(error)}`,
+            `Root workspace source is not available (the config repo may still be seeding; retry shortly): ${String(error)}`,
           );
         }
         return null;
@@ -383,7 +383,7 @@ export class WorkspaceCore {
   #assertWritable(): void {
     if (this.#isRoot) {
       throw new Error(
-        'The root workspace ("/") is read-only — it always mirrors the project repo\'s main ' +
+        'The root workspace ("/") is read-only — it always mirrors the config repo\'s main ' +
           "branch. Write in your own workspace (itx.workspace, or itx.workspaces.get" +
           '("/workspaces/<name>")), or commit to main via itx.repo.',
       );
@@ -706,7 +706,7 @@ export class WorkspaceCore {
 
   /**
    * Publish the merged view as ONE snapshot commit on this workspace's own
-   * branch in the project repo. Implementation: clone main, replay the local
+   * branch in the config repo. Implementation: clone main, replay the local
    * layer (minus .gitignored paths) and whiteout deletions onto it, commit,
    * force-push. Force because each publish is a fresh snapshot on the current
    * main — the branch always shows "main as this workspace sees it", not an

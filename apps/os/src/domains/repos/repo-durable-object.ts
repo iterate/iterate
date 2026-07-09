@@ -31,7 +31,7 @@ import type {
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { diffFileMaps } from "./line-diff.ts";
-import { PROJECT_REPO_PATH, RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
+import { CONFIG_REPO_PATH, RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -459,7 +459,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   // projectId-less legacy repos) stays on the clone lane — serving them from
   // the project root's checkout returns the WRONG repo's files.
   #hasRootWorkspaceCache(): boolean {
-    return this.#name.projectId !== null && this.#name.path === PROJECT_REPO_PATH;
+    return this.#name.projectId !== null && this.#name.path === CONFIG_REPO_PATH;
   }
 
   #rootWorkspaceStub() {

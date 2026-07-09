@@ -156,7 +156,7 @@ describe("provided integrations", () => {
               path: "/",
               entrypoint: "WaitroseIntegration",
               source: {
-                files: { type: "repo", repoPath: "/" },
+                files: { type: "repo", repoPath: "/repos/config" },
                 options: { entryPoint: "integrations/waitrose.js" },
               },
             },

@@ -11,7 +11,7 @@ describe("itx workspaces", () => {
     });
     using project = itx.projects.create({ slug: `workspace-${crypto.randomUUID()}` });
 
-    // The root workspace materializes from the project repo, which seeds
+    // The root workspace materializes from the config repo, which seeds
     // asynchronously after project creation — wait for the seed so the
     // materialization has a source. readFile THROWS (not null) until the repo
     // artifact exists, so swallow errors while polling; cold slots can take a
@@ -21,7 +21,7 @@ describe("itx workspaces", () => {
         const read = await project.repo.readFile({ path: "package.json" }).catch(() => null);
         return read !== null;
       },
-      { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
+      { description: "config repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
     );
 
     // -- the root workspace: read-only, always latest main --------------------
@@ -116,7 +116,7 @@ describe("itx workspaces", () => {
     expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();
     expect(await project.repo.readFile({ path: "worker.ts" })).not.toBeNull();
 
-    // Secondary repos are NOT the project repo: their reads must serve their
+    // Secondary repos are NOT the config repo: their reads must serve their
     // own files, never the root workspace cache (which mirrors only "/").
     using sideRepo = project.repos.get("/repos/e2e-side");
     await sideRepo.create();

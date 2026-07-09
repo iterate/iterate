@@ -77,9 +77,9 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
       'itx.integrations.google["<connection>"].gmail.request',
     );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("PROJECT REPO EDITS");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("CONFIG REPO EDITS");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      'const repo = itx.repos.get(vars.repoPath ?? "/")',
+      'const repo = itx.repos.get(vars.repoPath ?? "/repos/config")',
     );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
       "repo.edit({ path, message, oldString, newString })",

@@ -1,9 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@iterate-com/ui/components/alert-dialog";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Item,
@@ -47,6 +57,7 @@ import {
   MessageSquare,
   Plus,
   Search as SearchIcon,
+  Send,
   Sparkles,
   type LucideIcon,
   Unplug,
@@ -187,6 +198,9 @@ function ProjectIntegrationsContent() {
   const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
   const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
   const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
+  const telegramConnections = builtinConnections.filter(
+    (entry) => entry.integration === "telegram",
+  );
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
   const [feedPanel, setFeedPanel] = useState<FeedPanel | null>(null);
@@ -261,6 +275,31 @@ function ProjectIntegrationsContent() {
     },
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
+  const [telegramSheetOpen, setTelegramSheetOpen] = useState(false);
+  const connectTelegram = useMutation({
+    // No OAuth: Telegram's BotFather token IS the credential. The verb
+    // validates it with getMe and points the bot's webhook at this deployment.
+    mutationFn: async (input: { botToken: string; steal?: boolean }) =>
+      await itx.integrations.connectTelegram(input),
+    onSuccess: async (result) => {
+      if (!result.ok) return; // already claimed — the steal dialog derives from .data
+      setTelegramSheetOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
+      toast.success(
+        `Telegram bot ${result.botUsername ? `@${result.botUsername}` : result.botId} connected`,
+      );
+    },
+    onError: (error) => toast.error(`Failed to connect Telegram: ${error.message}`),
+  });
+  const disconnectTelegram = useMutation({
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "telegram" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
+      toast.success("Telegram disconnected");
+    },
+    onError: (error) => toast.error(`Failed to disconnect Telegram: ${error.message}`),
+  });
 
   // Deep link: `?connect=<slug>` auto-starts the matching connect flow — the same
   // mutation a click on that Connect button fires — then clears the param so a
@@ -277,6 +316,7 @@ function ProjectIntegrationsContent() {
     if (slug === "slack") connectSlack();
     else if (slug === "google") connectGoogle();
     else if (slug === "github") connectGithub();
+    else if (slug === "telegram") setTelegramSheetOpen(true); // token paste, not a redirect
     // Unknown slug: ignored.
   }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
@@ -344,11 +384,19 @@ function ProjectIntegrationsContent() {
               disconnecting={disconnectSlack.isPending}
               icon={MessageSquare}
               name="Slack"
-              onConnect={() => startSlack.mutate()}
               onDisconnect={(connection) => disconnectSlack.mutate(connection)}
               onOpenFeed={openFeed}
               provider="slack"
-              startPending={startSlack.isPending}
+              connectControl={
+                <Button
+                  size="sm"
+                  disabled={startSlack.isPending}
+                  onClick={() => startSlack.mutate()}
+                >
+                  {startSlack.isPending ? <Spinner /> : <Plus className="size-4" />}
+                  Connect
+                </Button>
+              }
             />
             <ConnectableIntegrationCard
               connectionNoun="account"
@@ -357,11 +405,19 @@ function ProjectIntegrationsContent() {
               disconnecting={disconnectGoogle.isPending}
               icon={Mail}
               name="Google"
-              onConnect={() => startGoogle.mutate()}
               onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
               onOpenFeed={openFeed}
               provider="google"
-              startPending={startGoogle.isPending}
+              connectControl={
+                <Button
+                  size="sm"
+                  disabled={startGoogle.isPending}
+                  onClick={() => startGoogle.mutate()}
+                >
+                  {startGoogle.isPending ? <Spinner /> : <Plus className="size-4" />}
+                  Connect
+                </Button>
+              }
             />
             <ConnectableIntegrationCard
               connectionNoun="installation"
@@ -370,11 +426,37 @@ function ProjectIntegrationsContent() {
               disconnecting={disconnectGithub.isPending}
               icon={Github}
               name="GitHub"
-              onConnect={() => startGithub.mutate()}
               onDisconnect={(connection) => disconnectGithub.mutate(connection)}
               onOpenFeed={openFeed}
               provider="github"
-              startPending={startGithub.isPending}
+              connectControl={
+                <Button
+                  size="sm"
+                  disabled={startGithub.isPending}
+                  onClick={() => startGithub.mutate()}
+                >
+                  {startGithub.isPending ? <Spinner /> : <Plus className="size-4" />}
+                  Connect
+                </Button>
+              }
+            />
+            <ConnectableIntegrationCard
+              connectionNoun="bot"
+              connections={telegramConnections}
+              description="Connect a Telegram bot (via @BotFather) so agents can chat in Telegram."
+              disconnecting={disconnectTelegram.isPending}
+              icon={Send}
+              name="Telegram"
+              onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
+              onOpenFeed={openFeed}
+              provider="telegram"
+              connectControl={
+                <TelegramConnectSheet
+                  connect={connectTelegram}
+                  open={telegramSheetOpen}
+                  onOpenChange={setTelegramSheetOpen}
+                />
+              }
             />
             <AccountConnectionsItem />
           </ItemGroup>
@@ -474,29 +556,29 @@ function BuiltInApiIntegrationRow({
 }
 
 function ConnectableIntegrationCard({
+  connectControl,
   connectionNoun,
   connections,
   description,
   disconnecting,
   icon: Icon,
   name,
-  onConnect,
   onDisconnect,
   onOpenFeed,
   provider,
-  startPending,
 }: {
+  /** The provider's own connect affordance: a redirect button for the OAuth
+   * providers, a token-paste sheet for Telegram. */
+  connectControl: ReactNode;
   connectionNoun: string;
   connections: (ConnectionEntry & { connection: string; source: "builtin" })[];
   description: string;
   disconnecting: boolean;
   icon: LucideIcon;
   name: string;
-  onConnect: () => void;
   onDisconnect: (connection: string) => void;
   onOpenFeed: (panel: FeedPanel) => void;
-  provider: "github" | "google" | "slack";
-  startPending: boolean;
+  provider: "github" | "google" | "slack" | "telegram";
 }) {
   const connected = connectedCount(connections);
   const connectionSummary =
@@ -515,12 +597,7 @@ function ConnectableIntegrationCard({
           <ItemDescription className="line-clamp-3">{description}</ItemDescription>
           <div className="text-xs text-muted-foreground">{connectionSummary}</div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={startPending} onClick={onConnect}>
-            {startPending ? <Spinner /> : <Plus className="size-4" />}
-            Connect
-          </Button>
-        </div>
+        <div className="flex flex-wrap gap-2">{connectControl}</div>
         {connections.length > 0 ? (
           <div className="grid gap-0.5 border-t pt-2">
             {connections.map((entry) => (
@@ -600,7 +677,7 @@ function ConnectionRow({
   entry: ConnectionEntry;
   onDisconnect: () => void;
   onOpenFeed: () => void;
-  provider: "github" | "google" | "slack";
+  provider: "github" | "google" | "slack" | "telegram";
 }) {
   return (
     <div className="flex min-w-0 items-start justify-between gap-3 py-2">
@@ -669,7 +746,7 @@ function IntegrationMetadata({
   provider,
 }: {
   connection?: Connection;
-  provider: "github" | "google" | "slack";
+  provider: "github" | "google" | "slack" | "telegram";
 }) {
   if (!connection?.connected) return null;
 
@@ -946,5 +1023,139 @@ function AccountConnectionsItem() {
         </Sheet>
       </ItemActions>
     </Item>
+  );
+}
+
+/**
+ * Telegram's connect affordance: no OAuth redirect — a token-paste sheet. The
+ * BotFather token IS the credential; connectTelegram validates it with getMe,
+ * points the bot's webhook at this deployment, and stores the token write-only
+ * (it only ever leaves toward api.telegram.org).
+ */
+function TelegramConnectSheet({
+  connect,
+  onOpenChange,
+  open,
+}: {
+  /** The connectTelegram mutation: `data`/`variables` drive the steal-confirm
+   * dialog (an `ok: false` result means the bot is claimed by another
+   * project), so no extra dialog state exists. */
+  connect: {
+    data: Awaited<ReturnType<Project["integrations"]["connectTelegram"]>> | undefined;
+    isPending: boolean;
+    mutate: (input: { botToken: string; steal?: boolean }) => void;
+    reset: () => void;
+    variables: { botToken: string; steal?: boolean } | undefined;
+  };
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+}) {
+  const stealPrompt = connect.data !== undefined && !connect.data.ok ? connect.data : null;
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetTrigger render={<Button type="button" size="sm" />}>
+        <Plus className="size-4" />
+        Connect
+      </SheetTrigger>
+      <SheetContent side="right" className="overflow-y-auto">
+        <form
+          className="flex h-full flex-col"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const botToken = String(new FormData(event.currentTarget).get("botToken") || "");
+            connect.mutate({ botToken });
+          }}
+        >
+          <SheetHeader>
+            <SheetTitle>Connect a Telegram bot</SheetTitle>
+            <SheetDescription>
+              First-time setup happens in Telegram — create the bot there, then come back with its
+              token:
+            </SheetDescription>
+          </SheetHeader>
+          {/* Abbreviated first-time setup: a user who has never made a Telegram
+              bot lands here needing to be told the bot is created IN Telegram. */}
+          <ol className="list-decimal space-y-1 py-2 pr-4 pl-9 text-sm text-muted-foreground">
+            <li>
+              Open Telegram and message{" "}
+              <a
+                className="font-medium text-foreground underline underline-offset-2"
+                href="https://t.me/BotFather"
+                rel="noreferrer"
+                target="_blank"
+              >
+                @BotFather
+              </a>
+              .
+            </li>
+            <li>
+              Send <code className="rounded bg-muted px-1 font-mono text-xs">/newbot</code> and
+              follow the prompts (or{" "}
+              <code className="rounded bg-muted px-1 font-mono text-xs">/token</code> for an
+              existing bot).
+            </li>
+            <li>Copy the token BotFather gives you and paste it below.</li>
+          </ol>
+          <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
+            <Field>
+              <FieldLabel htmlFor="telegram-bot-token">Bot token</FieldLabel>
+              <Input
+                id="telegram-bot-token"
+                name="botToken"
+                type="password"
+                autoComplete="off"
+                placeholder="123456789:AAF..."
+                required
+              />
+              <FieldDescription>
+                The token is stored write-only and only ever leaves toward api.telegram.org. Note:
+                by default, bots in group chats only see commands and mentions (Telegram&apos;s
+                privacy mode); direct messages always work.
+              </FieldDescription>
+            </Field>
+          </FieldGroup>
+          <SheetFooter>
+            <Button type="submit" disabled={connect.isPending}>
+              {connect.isPending ? <Spinner /> : null}
+              {connect.isPending ? "Connecting..." : "Connect"}
+            </Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+      {/* A bot has exactly one webhook, so connecting it here would take it
+          from wherever it lives now. Possession of the token is the
+          authorization; this confirm is the foot-gun gate. */}
+      <AlertDialog
+        open={stealPrompt !== null}
+        onOpenChange={(dialogOpen) => {
+          if (!dialogOpen) connect.reset();
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Steal {stealPrompt?.botUsername ? `@${stealPrompt.botUsername}` : "this bot"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This bot is already connected to another project. Steal it? The other project will
+              lose the connection.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => connect.reset()}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={connect.isPending}
+              onClick={() => {
+                if (connect.variables !== undefined) {
+                  connect.mutate({ botToken: connect.variables.botToken, steal: true });
+                }
+              }}
+            >
+              Steal it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Sheet>
   );
 }

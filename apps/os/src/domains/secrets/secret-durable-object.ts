@@ -18,9 +18,9 @@ import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   secretErrorResponse,
-  secretReferencesFromHeaders,
+  secretReferencesFromRequest,
   selectSecretField,
-  substituteSecretHeaders,
+  substituteSecretRequest,
   SecretSubstitutionError,
 } from "./utils.ts";
 
@@ -133,7 +133,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     let references;
     try {
-      references = secretReferencesFromHeaders(request.headers);
+      references = secretReferencesFromRequest(request);
     } catch {
       return secretErrorResponse("secret_reference_required");
     }
@@ -190,11 +190,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Substitute this secret's placeholders from decrypted material. */
+  /** Substitute this secret's placeholders (headers + URL) from decrypted material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
     const material =
       state.encryptedMaterial === null ? null : await this.#decrypt(state.encryptedMaterial);
-    return substituteSecretHeaders(request, (reference) => {
+    return substituteSecretRequest(request, (reference) => {
       if (material === null) throw new SecretSubstitutionError("secret_not_found");
       return selectSecretField(material, reference.field);
     });
