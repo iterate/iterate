@@ -443,6 +443,12 @@ sessionPath` from the connection-stream sent-claims; route everything
     the same snippet with the other stream's path.
   - The two new event-type constants live on the contracts, not utils.ts
     (contract catalogs need literal keys; knip flagged the unused mirrors).
+- 2026-07-09: main moved again mid-implementation (the PR silently flipped to
+  CONFLICTING — CI runs with an empty merge sha are the tell). Merged
+  origin/main: #1784's one-subscription-concept means connectTelegram's wake
+  subscription now persists the itx processor expression
+  (["integrations", "telegram", <connection>, "processor"]) and the telegram
+  dispatch gained the ProcessorRelayRpcTarget node mirroring Slack's.
 - 2026-07-08 (night): CI "Preview / deploy + e2e" flaked once on the new
   births-agents test (timed out right after deploy; passes in ~7s when run
   against the live slot) — re-dispatched, green. Misha verified the round trip
