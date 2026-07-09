@@ -221,6 +221,10 @@ export function useRepoFileJsonSchema(input: {
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 60 * 60 * 1000,
     retry: 1,
+    // Keep the prior schema's data (and thus the squigglies) applied while the
+    // new URL's fetch is in flight, matching the settle step's own
+    // keepPreviousData — switching `$schema` shouldn't blink diagnostics off.
+    placeholderData: keepPreviousData,
     queryFn: async (): Promise<JSONSchema7> => {
       if (settledUrl === null) throw new Error("unreachable: query disabled without a url");
       const response = await fetch(settledUrl);

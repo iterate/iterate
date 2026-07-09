@@ -89,13 +89,22 @@ export function RepoEditorPane({
   // buffer so adding a $schema line applies before any commit; the schema
   // itself is fetched from schemastore/wherever by the browser and failure
   // just means no squigglies.
+  const schemaLanguage =
+    kind.kind === "text" && (kind.language === "json" || kind.language === "yaml")
+      ? kind.language
+      : null;
   const jsonSchema = useRepoFileJsonSchema({
     path,
-    language:
-      kind.kind === "text" && (kind.language === "json" || kind.language === "yaml")
-        ? kind.language
-        : null,
+    language: schemaLanguage,
     content: working?.type === "write" ? working.content : (textBaseline ?? ""),
+  });
+  // The readonly Index view renders the STAGED snapshot, so it must validate
+  // against the schema that snapshot declares — not the working buffer's, whose
+  // `$schema` may have diverged (e.g. added/changed after staging).
+  const stagedJsonSchema = useRepoFileJsonSchema({
+    path,
+    language: schemaLanguage,
+    content: staged?.type === "write" ? staged.content : "",
   });
 
   // The plain editor carries vscode-style gutter bars for lines differing
@@ -162,22 +171,25 @@ export function RepoEditorPane({
     [editorExtensions, jsonSchema.extensions],
   );
   const stagedDiffExtensionsWithSchema = useMemo(
-    () => [...stagedDiffExtensions, jsonSchema.extensions],
-    [stagedDiffExtensions, jsonSchema.extensions],
+    () => [...stagedDiffExtensions, stagedJsonSchema.extensions],
+    [stagedDiffExtensions, stagedJsonSchema.extensions],
   );
 
   // Subtle header note: which schema is validating the buffer, or that the
-  // fetch failed (in which case there are simply no squigglies).
-  const schemaNote =
-    jsonSchema.status === "active" ? (
-      <span title={jsonSchema.url} className="text-[10px] text-muted-foreground">
-        {new URL(jsonSchema.url).pathname.split("/").pop() || jsonSchema.url}
+  // fetch failed (in which case there are simply no squigglies). The Index view
+  // names its own (staged-snapshot) schema.
+  const schemaNoteFor = (result: typeof jsonSchema) =>
+    result.status === "active" ? (
+      <span title={result.url} className="text-[10px] text-muted-foreground">
+        {new URL(result.url).pathname.split("/").pop() || result.url}
       </span>
-    ) : jsonSchema.status === "unavailable" ? (
-      <span title={jsonSchema.url} className="text-[10px] text-muted-foreground italic">
+    ) : result.status === "unavailable" ? (
+      <span title={result.url} className="text-[10px] text-muted-foreground italic">
         schema unavailable
       </span>
     ) : null;
+  const schemaNote = schemaNoteFor(jsonSchema);
+  const stagedSchemaNote = schemaNoteFor(stagedJsonSchema);
 
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
@@ -255,7 +267,7 @@ export function RepoEditorPane({
         }
         actions={
           <>
-            {schemaNote}
+            {stagedSchemaNote}
             <Button variant="secondary" size="sm" className="text-xs" disabled>
               Diff
             </Button>
