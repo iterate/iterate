@@ -224,10 +224,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
   switch (event.type) {
     // THE inbound message event, every source: `from.kind` picks the
     // treatment. Users and agents render as chat bubbles (agents with a via
-    // label naming the sender path). Transcribed domain messages (slack,
-    // email, github) carry a model-facing YAML transcription as content —
-    // the human-facing copy renders from the raw domain event instead (e.g.
-    // the slack webhook bubble), so only their stored attachments surface.
+    // label naming the sender path). Transcribed domain messages carry a
+    // model-facing YAML transcription as content; whether that text shows
+    // depends on whether the domain has a prettier bubble: slack and
+    // telegram render the RAW webhook event as the human-facing copy, so
+    // only their stored attachments surface here — email and github have no
+    // other bubble, so their transcription text stays visible.
     case "events.iterate.com/agents/message-received": {
       const text = readString(event, "content");
       if (text == null) return state;
@@ -246,7 +248,8 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         });
       }
       if (kind === "slack" || kind === "telegram" || kind === "email" || kind === "github") {
-        if (files.length === 0) return state;
+        const rendersFromRawEvent = kind === "slack" || kind === "telegram";
+        if (rendersFromRawEvent && files.length === 0) return state;
         const senderValue =
           kind === "slack"
             ? from?.userId
@@ -259,8 +262,8 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         return emitUserMessageItem(state, ops, {
           kind: "user",
           id: `user-${event.offset}`,
-          text: "",
-          files,
+          text: rendersFromRawEvent ? "" : text,
+          ...(files.length === 0 ? {} : { files }),
           timestampMs,
           via: { service: kind, ...(sender === undefined ? {} : { sender }) },
         });

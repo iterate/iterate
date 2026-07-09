@@ -841,6 +841,27 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
+  it("keeps email/github transcription text visible — they have no raw-event bubble", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/message-received",
+        payload: {
+          content:
+            "`events.iterate.com/email/received` event received\n\n```yaml\nsubject: hi\n```",
+          from: { kind: "email", address: "dana@example.com" },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: expect.stringContaining("subject: hi"),
+        via: { service: "email", sender: "dana@example.com" },
+      },
+    ]);
+  });
+
   it("renders inter-agent mail as a labeled user bubble", () => {
     const state = reduceAll([
       {
