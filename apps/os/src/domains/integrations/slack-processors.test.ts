@@ -770,7 +770,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model: "gpt-test", requestId: "llm-request:1" },
     });
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
@@ -790,8 +790,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/agent/llm-request-completed",
       payload: {
         durationMs: 10,
-        llmRequestId: 1,
-        provider: "openai-ws",
+        llmRequestOffset: 1,
         result: { status: "success" },
       },
     });
@@ -824,14 +823,13 @@ describe("SlackAgentProcessor", () => {
     await stream.append(
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+        payload: { model: "gpt-test", requestId: "llm-request:1" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
           durationMs: 10,
-          llmRequestId: 1,
-          provider: "openai-ws",
+          llmRequestOffset: 1,
           result: { status: "success" },
         },
       },
@@ -869,8 +867,7 @@ describe("SlackAgentProcessor", () => {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
           durationMs: 10,
-          llmRequestId: 1,
-          provider: "openai-ws",
+          llmRequestOffset: 1,
           result: { status: "success" },
         },
       },
@@ -930,15 +927,14 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model: "gpt-test", requestId: "llm-request:1" },
     });
     await deliverNewEvents({ cursors, processor, stream });
     await stream.append({
       type: "events.iterate.com/agent/llm-request-completed",
       payload: {
         durationMs: 10,
-        llmRequestId: 1,
-        provider: "openai-ws",
+        llmRequestOffset: 1,
         result: { status: "success" },
       },
     });

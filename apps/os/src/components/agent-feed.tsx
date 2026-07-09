@@ -739,7 +739,7 @@ function llmResponseVisible(step: AgentUiLlmStep): boolean {
 
 function stepLabel(step: AgentUiStep): string {
   if (step.kind === "code") return step.status === "running" ? "Running code" : "Ran code";
-  return step.model ?? step.provider ?? "LLM request";
+  return step.model ?? "LLM request";
 }
 
 function stepMeta(step: AgentUiStep): string {
@@ -796,12 +796,10 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
 function llmStepRawSummary(step: AgentUiLlmStep) {
   return {
     ...(step.model == null ? {} : { model: step.model }),
-    ...(step.provider == null ? {} : { provider: step.provider }),
     usage: { input_tokens: step.inputTokens ?? null, output_tokens: step.outputTokens ?? null },
     ...(step.durationMs == null ? {} : { duration_ms: step.durationMs }),
     status: step.outcome ?? step.status,
     ...(step.errorMessage == null ? {} : { error: step.errorMessage }),
-    ...(step.providerResponseId == null ? {} : { provider_response_id: step.providerResponseId }),
   };
 }
 

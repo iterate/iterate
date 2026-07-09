@@ -33,10 +33,15 @@ describe("createAgentFeedModel", () => {
     });
 
     model.applyEvents([
+      event("events.iterate.com/agent/llm-request-completed", {
+        llmRequestOffset: 2,
+        durationMs: 10,
+        result: { status: "success" },
+      }),
       event("events.iterate.com/agents/web-message-sent", { message: "hi human" }),
     ]);
 
-    // The assistant reply settles the live activity, then itself.
+    // LLM completion settles the live activity; the assistant reply follows.
     snapshot = model.snapshot();
     expect(snapshot.live).toBeNull();
     expect(snapshot.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
@@ -46,16 +51,16 @@ describe("createAgentFeedModel", () => {
   test("accumulates streamed response deltas on the live step", () => {
     const model = createAgentFeedModel();
     const requested = event("events.iterate.com/agent/llm-request-requested", {});
-    const llmRequestId = requested.offset;
+    const llmRequestOffset = requested.offset;
     model.applyEvents([
       requested,
-      event("events.iterate.com/openai-ws/llm-response-chunk", {
-        llmRequestId,
-        chunk: { type: "response.output_text.delta", delta: "par" },
+      event("events.iterate.com/agent/llm-response-chunk", {
+        llmRequestOffset,
+        chunk: { response: "par" },
       }),
-      event("events.iterate.com/openai-ws/llm-response-chunk", {
-        llmRequestId,
-        chunk: { type: "response.output_text.delta", delta: "tial" },
+      event("events.iterate.com/agent/llm-response-chunk", {
+        llmRequestOffset,
+        chunk: { response: "tial" },
       }),
     ]);
 

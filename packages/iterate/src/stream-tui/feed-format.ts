@@ -25,7 +25,7 @@ export function formatActivitySummary(activity: AgentUiActivity): string {
 }
 
 export function formatStepLine(step: AgentUiStep): string {
-  const label = step.kind === "code" ? "Ran code" : (step.model ?? step.provider ?? "LLM request");
+  const label = step.kind === "code" ? "Ran code" : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
     if (step.inputTokens != null || step.outputTokens != null) {

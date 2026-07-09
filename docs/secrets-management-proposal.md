@@ -108,13 +108,6 @@ OAuth state for Slack and Google is stateless HMAC-signed data, not D1 state.
 Slack team routing is stored in the deployment-wide
 `/integrations/slack-team-directory` stream.
 
-## Mock HTTP proxy note
-
-`packages/mock-http-proxy` still preserves `getIterateSecret({...})`-shaped
-values in HAR sanitization. That is a HAR safety carve-out for historical proxy
-placeholder tokens; it is not the current OS egress placeholder. Current OS
-egress uses `getSecret({ path: "/secrets/..." })` in request headers.
-
 ## Current limits
 
 These are not implemented in the current itx surface:

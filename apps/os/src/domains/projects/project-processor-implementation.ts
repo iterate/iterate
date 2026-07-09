@@ -9,8 +9,6 @@ import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CloudflareAiProcessorContract } from "../agents/cloudflare-ai-processor-contract.ts";
-import { OpenAiWsProcessorContract } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
@@ -230,7 +228,7 @@ export class ProjectProcessor extends StreamProcessor<
           }
           if (childPath.startsWith("/agents/")) {
             // MECHANICS only: the processor subscriptions that make a stream
-            // an agent. POLICY — system prompt, model/provider, capability
+            // an agent. POLICY — system prompt, model, capability
             // mounts, boot context — is appended by the PROJECT WORKER, which
             // sees this same child-stream-created event through its stream
             // delivery and applies itx.agents.defaults (see
@@ -297,7 +295,7 @@ export class ProjectProcessor extends StreamProcessor<
           );
           // THE onboarding-agent birth, deliberately after the worker probe:
           // the pump delivers the birth announcement to an already-built
-          // worker, so the policy (prompt, provider, kickoff) lands
+          // worker, so the policy (prompt, model, kickoff) lands
           // immediately — no window where the agent runs on stock defaults.
           await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
             appendTo(ONBOARDING_AGENT_PATH, ...onboardingAgentStartEvents(this.deps)),
@@ -366,11 +364,8 @@ function agentSubscriptionEvents(input: {
       processorSlug,
     });
   return [
+    // One agent processor owns history, scheduling, and the Cloudflare AI call.
     subscription(AgentProcessorContract.slug, "agent"),
-    // Both provider processors subscribe; only the one matching the agent's
-    // selected llmProvider answers llm-request-requested events.
-    subscription(CloudflareAiProcessorContract.slug, "agent"),
-    subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),

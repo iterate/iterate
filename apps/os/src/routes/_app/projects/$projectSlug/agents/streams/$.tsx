@@ -66,13 +66,13 @@ function ProjectAgentDetailContent() {
     });
   }
 
-  async function interruptAgentMessage(llmRequestId: number) {
+  async function interruptAgentMessage(llmRequestOffset: number) {
     const itx = await connectItxBrowser({ projectId: project.id });
     await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agent/llm-request-cancelled",
       payload: {
         phase: "requested",
-        llmRequestId,
+        llmRequestOffset,
         reason: "interrupted-by-user-input",
       },
     });

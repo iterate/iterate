@@ -53,7 +53,7 @@ export type ProcessorStateSubscriptionHandle = Disposable & {
  * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
  * processor wakes from the request's `processorSlug` — the inspection half of
  * this node reads the host's main processor.
  */

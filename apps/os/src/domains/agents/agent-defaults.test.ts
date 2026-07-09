@@ -10,7 +10,6 @@ function defaultsFor(
 ) {
   return agentDefaultsForPath({
     agentPath,
-    deploymentLlmProvider: "cloudflare-ai",
     projectId: PROJECT_ID,
     ...(overrides === undefined ? {} : { overrides }),
   });
@@ -53,8 +52,7 @@ describe("agentDefaultsForPath", () => {
   it("bakes overrides into the returned events", () => {
     const custom = defaultsFor("/agents/demo", {
       systemPrompt: "Answer only in pirate speak.",
-      model: "gpt-5.5",
-      provider: "openai-ws",
+      model: "@cf/moonshotai/kimi-k2.7-code",
     });
     expect(custom.systemPrompt).toBe("Answer only in pirate speak.");
     const config = custom.events.find(
@@ -64,7 +62,7 @@ describe("agentDefaultsForPath", () => {
     const provider = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );
-    expect(provider?.payload).toMatchObject({ model: "gpt-5.5", provider: "openai-ws" });
+    expect(provider?.payload).toMatchObject({ model: "@cf/moonshotai/kimi-k2.7-code" });
   });
 
   it("keys every event on (projectId, agentPath) so re-appends dedupe", () => {

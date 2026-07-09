@@ -26,19 +26,7 @@ import {
 import { isEmailAgentPath } from "../email/utils.ts";
 import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
-import {
-  DEFAULT_AGENT_MODEL,
-  DEFAULT_AGENT_SYSTEM_PROMPT,
-  type AgentLlmProvider,
-} from "./agent-processor-contract.ts";
-import { DEFAULT_OPENAI_WS_MODEL } from "./openai-ws-processor-contract.ts";
-import { readOpenAiApiKeyFromAppConfig } from "./utils.ts";
-
-/** New agents default to openai-ws when the deployment has an OpenAI key
- * configured; otherwise they fall back to Workers AI. */
-export function deploymentDefaultLlmProvider(env: unknown): AgentLlmProvider {
-  return readOpenAiApiKeyFromAppConfig(env) === null ? "cloudflare-ai" : "openai-ws";
-}
+import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -226,15 +214,9 @@ function agentSystemPromptForPath(agentPath: string): string {
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
-const DEFAULT_MODEL_BY_LLM_PROVIDER = {
-  "cloudflare-ai": DEFAULT_AGENT_MODEL,
-  "openai-ws": DEFAULT_OPENAI_WS_MODEL,
-} satisfies Record<AgentLlmProvider, string>;
-
 /** Caller-supplied policy overrides, baked into the returned events. */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
-  provider?: AgentLlmProvider;
   model?: string;
 };
 
@@ -242,7 +224,6 @@ export type AgentDefaultsOverrides = {
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
   systemPrompt: string;
-  provider: AgentLlmProvider;
   model: string;
   events: AgentPolicyEventInput[];
 };
@@ -257,20 +238,17 @@ export type AgentPolicyEventInput = {
 };
 
 /**
- * The default agent policy for a path. `deploymentLlmProvider` is the
- * deployment-wide provider choice (openai-ws when the deployment has an
- * OpenAI key); `overrides` bake caller customization into the returned
- * events so the common case stays one append.
+ * The default agent policy for a path. Every agent runs through the single
+ * agent processor's Cloudflare AI binding; `overrides` bake caller
+ * customization into the returned events so the common case stays one append.
  */
 export function agentDefaultsForPath(input: {
   agentPath: string;
-  deploymentLlmProvider: AgentLlmProvider;
   projectId: string;
   overrides?: AgentDefaultsOverrides;
 }): AgentDefaultPolicy {
   const { agentPath, projectId } = input;
-  const provider = input.overrides?.provider ?? input.deploymentLlmProvider;
-  const model = input.overrides?.model ?? DEFAULT_MODEL_BY_LLM_PROVIDER[provider];
+  const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
   const parentAgentPath = subagentParentPath(agentPath);
   const basePrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
   const systemPrompt =
@@ -287,7 +265,7 @@ export function agentDefaultsForPath(input: {
     {
       type: "events.iterate.com/agent/llm-provider-selected",
       idempotencyKey: `agent/llm-provider-selected:${projectId}:${agentPath}`,
-      payload: { ifUnset: true, model, provider },
+      payload: { ifUnset: true, model },
     },
     // The agent's own workspace, a durable itx-expression re-evaluated per
     // call, so agent birth never touches the workspace Durable Object. (No
@@ -347,5 +325,5 @@ export function agentDefaultsForPath(input: {
       : []),
   ];
 
-  return { systemPrompt, provider, model, events };
+  return { systemPrompt, model, events };
 }
