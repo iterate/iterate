@@ -9,11 +9,6 @@
 /** The `env.AI` surface one attempt needs. */
 export type WorkersAiBinding = { run(model: string, body: unknown): Promise<unknown> };
 
-type WorkersAiChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
-
 type WorkersAiCompletion = {
   /** Assistant text — concatenated across chunks for streamed responses. */
   text: string;
@@ -36,7 +31,7 @@ type WorkersAiCompletion = {
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
   deadlineMs: number;
-  messages: WorkersAiChatMessage[];
+  messages: { role: "system" | "user" | "assistant"; content: string }[];
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
 }): Promise<WorkersAiCompletion> {
