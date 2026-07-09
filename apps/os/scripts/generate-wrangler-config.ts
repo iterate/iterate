@@ -95,6 +95,17 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+    // Newborn-agent default model. Only the prd Cloudflare account can run
+    // OpenAI partner models over env.AI (the preview/dev account gets
+    // `2021: Invalid User Credentials`; verified live 2026-07-10, prd
+    // answered in seconds on identical code) — so every non-prd env pins a
+    // Workers-AI-native model and prd omits the var to use the platform
+    // default (openai/gpt-5.5). Delete this override — and the config knob
+    // it feeds (config.ts defaultAgentModel) — when the preview/dev account
+    // gains partner-model access.
+    ...(env.cloudflareAccountId === envs.prd.cloudflareAccountId
+      ? {}
+      : { APP_CONFIG_DEFAULT_AGENT_MODEL: "@cf/moonshotai/kimi-k2.7-code" }),
   };
 }
 
@@ -414,6 +425,10 @@ function localDevBindings() {
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.
       ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
+      // Same partner-model gap as the deployed non-prd envs (see
+      // envShapedVars): local dev's env.AI remote proxy runs under wrangler
+      // user auth on the preview/dev account and rejects openai/* with 2021.
+      APP_CONFIG_DEFAULT_AGENT_MODEL: "@cf/moonshotai/kimi-k2.7-code",
     },
   };
 }
