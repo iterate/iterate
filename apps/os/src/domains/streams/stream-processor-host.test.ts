@@ -216,6 +216,55 @@ describe("filtered wake-lane delivery", () => {
     const lastBatch = h.processors.a.batches.at(-1)!;
     expect(lastBatch).toContain("events.iterate.com/other/presence-fact");
   });
+
+  it("a failed trailing pull reads as a FAILURE; the next fire revives and converges", async () => {
+    // The trailing pull is the ONLY delivery owed for a non-consumed tail. If
+    // its failure settled clean, the keepalive would disarm with the
+    // checkpoint stranded behind the at-head gate and no future dial owed —
+    // the zero-lag wedge reborn one layer up. It must poison the quiet-clean
+    // window instead, so the alarm's next fire takes the revival lane, whose
+    // unfiltered catch-up is the pull's retry.
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
+    });
+    const [ping] = await h.stream.append({ type: PING, payload: {} });
+    await h.stream.append({ type: "events.iterate.com/other/presence-fact", payload: {} });
+    const wake = await h.host.wakeStreamSubscriber({
+      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 2 },
+      subscriptionKey: "wake:recorder-a",
+      processorSlug: "recorder-a",
+    });
+
+    // One transient stream-read failure, timed to hit exactly the trailing pull.
+    const readEvents = h.stream.readEvents.bind(h.stream);
+    let readFailures = 0;
+    h.stream.readEvents = (input) => {
+      if (readFailures === 0) {
+        readFailures += 1;
+        throw new Error("transient stream read failure");
+      }
+      return readEvents(input);
+    };
+    await wake.sink({
+      projectId: "prj_test",
+      path: h.stream.path,
+      events: [ping!],
+      streamMaxOffset: 2,
+    } as Parameters<typeof wake.sink>[0]);
+    await vi.waitFor(() => expect(readFailures).toBe(1));
+    expect((await h.processors.a.snapshot()).offset).toBe(1); // stranded behind head
+    expect(h.store.alarm.at).not.toBeNull();
+
+    await h.advance(60_000);
+    // Not a quiet-clean disarm: the fire revived, and the revival's catch-up
+    // (stream healed) pulled the tail plus its own fact through to head…
+    expect(h.stream.events.some((event) => event.type === PROCESSOR_HOST_REVIVED_EVENT_TYPE)).toBe(
+      true,
+    );
+    expect((await h.processors.a.snapshot()).offset).toBe(3);
+    // …and the confirmation fire then stood the alarm down for good.
+    expect(h.store.alarm.at).toBeNull();
+  });
 });
 
 describe("catch-up head reporting", () => {

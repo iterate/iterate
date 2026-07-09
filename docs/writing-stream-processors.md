@@ -249,4 +249,4 @@ Scenarios every obligation-carrying processor should have (crib from
 - [ ] A failed started-append never settles and never leaks the live-set.
 - [ ] Injected `now` dep for anything clock-dependent.
 - [ ] Hosting DO wires `alarm()` (and alarm slices if it schedules).
-- [ ] Harness scenarios 1–5 above.
+- [ ] Harness scenarios 1–6 above.

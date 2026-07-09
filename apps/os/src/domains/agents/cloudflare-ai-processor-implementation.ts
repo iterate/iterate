@@ -163,15 +163,22 @@ export class CloudflareAiProcessor extends StreamProcessor<
           role: message.role,
           content: flattenMessageToText(message),
         }));
-        const raw = await withRequestDeadline(this.deps.ai.run(model, { messages, stream: true }));
-        const completion =
-          raw instanceof ReadableStream
-            ? await withRequestDeadline(this.#consumeStream({ body: raw, llmRequestId }))
-            : {
-                text: extractAssistantText(raw),
-                rawResponse: jsonCompatible(raw),
-                usage: extractUsage(raw),
-              };
+        // ONE deadline over the whole vendor phase (dial + stream drain), so
+        // "no attempt outlives 10 minutes" stays a per-attempt invariant —
+        // the keepalive's busy-refire cap and the agent's 30-minute backstop
+        // are both sized against it (worst legit settle = expiry + deadline).
+        const completion = await withRequestDeadline(
+          (async () => {
+            const raw = await this.deps.ai.run(model, { messages, stream: true });
+            return raw instanceof ReadableStream
+              ? await this.#consumeStream({ body: raw, llmRequestId })
+              : {
+                  text: extractAssistantText(raw),
+                  rawResponse: jsonCompatible(raw),
+                  usage: extractUsage(raw),
+                };
+          })(),
+        );
 
         if (await this.#isRequestStillCurrent({ llmRequestId })) {
           await this.stream.append({

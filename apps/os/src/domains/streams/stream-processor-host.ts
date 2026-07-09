@@ -443,17 +443,23 @@ export function createStreamProcessorHost(
         // and its final page is at-head, guaranteeing the deferred
         // reconciliation runs. Already-at-head batches pay one snapshot read.
         keepalive.track(
-          attempt
-            .then(async () => {
+          attempt.then(
+            async () => {
               const { offset } = await entry.processor.snapshot();
               if (offset < batch.streamMaxOffset) {
-                await catchUpInternal(name, { rethrow: false });
+                // Rethrown into the tracked promise: a failed trailing pull
+                // leaves the checkpoint behind a head nothing will re-push,
+                // so it must read as a FAILURE to the keepalive — blocking
+                // the quiet-clean disarm and routing the next alarm fire to
+                // revival, whose unfiltered catch-up is this pull's retry.
+                await catchUpInternal(name, { rethrow: true });
               }
-            })
-            .catch(() => {
+            },
+            () => {
               // A failed ingest is the spine's problem (nack → backoff →
               // redelivery); the trailing pull only follows success.
-            }),
+            },
+          ),
         );
         return attempt;
       };
