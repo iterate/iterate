@@ -197,9 +197,10 @@ const removeMember = os.organization.removeMember
 const createInvite = os.organization.createInvite
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
+    const inviteEmail = input.email.trim().toLowerCase();
     const existingInvite = await getInviteByOrganizationAndEmail(context.db, {
       organizationId: context.organization.id,
-      email: input.email,
+      email: inviteEmail,
     });
     if (existingInvite) {
       throw new ORPCError("CONFLICT", { message: "Invite already exists" });
@@ -207,7 +208,7 @@ const createInvite = os.organization.createInvite
 
     const existingMember = await getOrganizationMemberPresenceByEmail(context.db, {
       organizationId: context.organization.id,
-      email: input.email,
+      email: inviteEmail,
     });
     if (existingMember) {
       throw new ORPCError("CONFLICT", { message: "User is already a member" });
@@ -221,7 +222,7 @@ const createInvite = os.organization.createInvite
     await insertInvite(context.db, {
       id: inviteId,
       organizationId: context.organization.id,
-      email: input.email,
+      email: inviteEmail,
       role,
       status: "pending",
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
@@ -231,7 +232,7 @@ const createInvite = os.organization.createInvite
 
     try {
       await sendOrganizationInvitationEmail({
-        email: input.email,
+        email: inviteEmail,
         role,
         organizationName: context.organization.name,
         inviterName: context.user.name,
@@ -249,7 +250,7 @@ const createInvite = os.organization.createInvite
 
     return {
       id: inviteId,
-      email: input.email,
+      email: inviteEmail,
       role,
       invitedBy: {
         id: context.user.id,
