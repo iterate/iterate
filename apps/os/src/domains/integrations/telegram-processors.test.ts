@@ -1098,10 +1098,6 @@ class MemoryStream implements Stream {
     throw new Error("MemoryStream does not implement subscribe().");
   }
 
-  async ingest(): Promise<never> {
-    throw new Error("MemoryStream does not implement ingest().");
-  }
-
   async crossPostTo(): Promise<never> {
     throw new Error("MemoryStream does not implement crossPostTo().");
   }

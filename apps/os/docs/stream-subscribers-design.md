@@ -229,7 +229,7 @@ onPoison: "skip", delivery: {mode: "push", expression: ["worker", "processEventB
   by #1761) and #1761's derived pump special-case. Worker return = ack; throw = nack. The project
   processor's `child-stream-created` hook keeps appending only the _other_ subscriptions.
 - **Cross-post** — `{subscriptionKey: "cross-post:<id>", selector, onPoison: "park", delivery:
-{mode: "push", expression: ["streams", ["get", targetPath], "ingest"]}}`. New first-party
+{mode: "push", expression: ["streams", ["get", targetPath], "acceptCrossPost"]}}`. New first-party
   `Stream.ingest({from, events})` on the receiving stream carries what `#crossPostMatchingRules`
   does today: `crossPostedFrom` hop chain, cycle guard, `MAX_CROSS_POST_HOPS`, idempotency keys
   `xpost:{fromProject}:{fromPath}:{offset}` (at-least-once delivery collapses to exactly-once
