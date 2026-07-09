@@ -9,12 +9,12 @@
 /** The `env.AI` surface one attempt needs. */
 export type WorkersAiBinding = { run(model: string, body: unknown): Promise<unknown> };
 
-export type WorkersAiChatMessage = {
+type WorkersAiChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
-export type WorkersAiCompletion = {
+type WorkersAiCompletion = {
   /** Assistant text — concatenated across chunks for streamed responses. */
   text: string;
   /** JSON-safe response evidence for the journal (never a live object graph). */
