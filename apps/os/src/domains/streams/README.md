@@ -14,7 +14,7 @@ for B's events to be **cross-posted onto A** — real copies, appended to A's
 own log, each carrying the full provenance chain in
 `source.crossPostedFrom` (source stream, offset, type, the subscription that
 carried the hop; multi-hop chains are legal up to a cap of 5, and loops are
-structurally impossible — a copy is never ingested by a stream already on its
+structurally impossible — a copy is never accepted by a stream already on its
 chain). Copying with provenance IS the mechanism; design around it, not
 against it.
 
@@ -38,9 +38,9 @@ await itx.streams.get("/integrations/github/mine").crossPostTo({
 ```
 
 `crossPostTo` is sugar for a **push subscription** (below) whose expression
-addresses the destination stream's `ingest` sink; the appended
+addresses the destination stream's `acceptCrossPost` sink; the appended
 `subscription-configured` event is the real interface. Delivery is durable and
-at-least-once (cursor + retries + parking), and `ingest` derives idempotency
+at-least-once (cursor + retries + parking), and `acceptCrossPost` derives idempotency
 keys from the source coordinate, so at-least-once delivery collapses to
 exactly-once appends.
 
@@ -101,21 +101,21 @@ with**. Wake and push share ONE addressing grammar: a persisted itx
 expression naming the method to invoke on the ordinary domain surface
 (`["agents", ["get", path], "processor", "wakeStreamSubscriber"]`,
 `["processEventBatch"]` — the project root's own dispatch point, which
-delegates to the project worker — `["streams", ["get", path], "ingest"]`);
+delegates to the project worker — `["streams", ["get", path], "acceptCrossPost"]`);
 webhook is the same cursor machinery pointed at plain HTTP:
 
-|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                  | durable `webhook`                                |
-| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
-| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, cross-post `ingest` | external HTTP receivers                          |
-| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`             | config event, `delivery: {mode:"webhook", url}`  |
-| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log              | **stream** — same cursor row, advanced per EVENT |
-| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                            | authoritative cursor                             |
-| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                             | the configured URL                               |
-| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                                    | one `fetch` POST per event                       |
-| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)             | the 2xx response (**the ack**), per event        |
-| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)           | same spine, same machine, per-event granularity  |
-| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`       | same as push                                     |
-| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                 | same selector shape                              |
+|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                | durable `webhook`                                |
+| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
+| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost` | external HTTP receivers                          |
+| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`           | config event, `delivery: {mode:"webhook", url}`  |
+| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log            | **stream** — same cursor row, advanced per EVENT |
+| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                          | authoritative cursor                             |
+| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                           | the configured URL                               |
+| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                                  | one `fetch` POST per event                       |
+| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)           | the 2xx response (**the ack**), per event        |
+| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)         | same spine, same machine, per-event granularity  |
+| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
+| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
 
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
@@ -157,7 +157,7 @@ Doctrine, worth memorizing:
   code.** A selector (`{eventTypes?, condition?}` — one shape on every lane,
   [JSONata](https://jsonata.org/) conditions must evaluate to exactly `true`)
   may reject events, never construct output. Transforms live in named
-  receivers: `ingest` documents its own `params.transform`. When an effect
+  receivers: `acceptCrossPost` documents its own `params.transform`. When an effect
   needs real code, it goes in the project worker — typed, reviewed, in the
   repo.
 - **Persist the name, re-derive the authority.** A delivery expression
@@ -262,21 +262,21 @@ announcements and checkpoints.
 
 ## File map
 
-| File                         | Role                                                                                                                       |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, webhooks), `ingest` |
-| `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                |
-| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                         |
-| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                |
-| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                   |
-| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                             |
-| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                             |
-| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                               |
-| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                                      |
-| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                                       |
-| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                                        |
-| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                                   |
-| `client-libraries/`          | Browser mirror host and browser-side processors                                                                            |
+| File                         | Role                                                                                                                                |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, webhooks), `acceptCrossPost` |
+| `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                         |
+| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                  |
+| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                         |
+| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                            |
+| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                      |
+| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                      |
+| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                        |
+| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                                               |
+| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                                                |
+| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                                                 |
+| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                                            |
+| `client-libraries/`          | Browser mirror host and browser-side processors                                                                                     |
 
 Public capability surface (`Stream`, `StreamEventBatch`, `ProcessEventBatch`,
 …) is defined in `src/domains/streams/rpc-types.ts` (and projected into the
