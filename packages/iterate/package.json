@@ -1,7 +1,7 @@
 {
   "name": "iterate",
-  "version": "0.2.7",
-  "description": "CLI for iterate",
+  "version": "0.3.0",
+  "description": "CLI and SDK for iterate",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -26,6 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts",
     "./worker": "./src/worker.ts"
   },
   "publishConfig": {
@@ -34,6 +35,10 @@
       ".": {
         "import": "./dist/index.mjs",
         "types": "./dist/index.d.mts"
+      },
+      "./sdk": {
+        "import": "./dist/sdk.mjs",
+        "types": "./dist/sdk.d.ts"
       },
       "./worker": {
         "import": "./dist/worker.mjs",
@@ -47,7 +52,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && tsc -p tsconfig.sdk.json",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "prepack": "pnpm build"
@@ -69,6 +74,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
     "tsdown": "0.22.2",
+    "typescript": "^5.9.3",
     "vitest": "4.0.15"
   }
 }

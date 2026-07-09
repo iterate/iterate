@@ -42,12 +42,17 @@ describe("itx repo binary files", () => {
     expect(read).toMatchObject({ content: base64, path: "assets/pixel.png" });
 
     // The base64 lane reads text files too — same bytes, different encoding.
+    // atob yields one CHAR PER BYTE (latin-1), so UTF-8 decode those bytes
+    // before comparing to the text lane — the template contains non-ASCII.
     const packageJson = await project.repo.readFile({ path: "package.json" });
     const packageJsonBase64 = await project.repo.readFile({
       path: "package.json",
       encoding: "base64",
     });
-    expect(atob(packageJsonBase64!.content)).toBe(packageJson!.content);
+    const packageJsonBytes = Uint8Array.from(atob(packageJsonBase64!.content), (char) =>
+      char.charCodeAt(0),
+    );
+    expect(new TextDecoder().decode(packageJsonBytes)).toBe(packageJson!.content);
 
     // Missing paths are null on the base64 lane as well.
     expect(await project.repo.readFile({ path: "nope.png", encoding: "base64" })).toBeNull();

@@ -52,9 +52,9 @@ a dispatch convention **on top of** RPC. Its "nodes" are not workerd objects:
   userspace. `worker.slack.chat.postMessage(x)` delivers
   `{ path: ["slack", "chat", "postMessage"], args: [x] }`; nothing named
   `slack` exists on either side of the wire. This is what lets the seeded
-  template hand back the raw Slack SDK — but it also means intermediate
-  segments are not addressable, describable, or protocol-capable. They are
-  strings.
+  template hand back a raw `WebClient` — but it also means
+  intermediate segments are not addressable, describable, or
+  protocol-capable. They are strings.
 
 Either way, the transport is RPC method calls. Therefore **no name in the
 capability tree is protocol-special — `fetch` included**. A capability method

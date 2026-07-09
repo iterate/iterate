@@ -10,6 +10,16 @@ export default defineConfig([
     sourcemap: true,
   },
   {
+    // No dts here: the generated itx contract crashes rolldown-plugin-dts's
+    // babel printer (getter signatures). Declarations come from
+    // `tsc -p tsconfig.sdk.json` in the build script instead.
+    entry: ["src/sdk.ts"],
+    format: "esm",
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
     entry: ["src/worker.ts"],
     format: "esm",
     deps: {
