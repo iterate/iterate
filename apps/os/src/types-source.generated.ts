@@ -1093,14 +1093,13 @@ export interface Secret {
  * read-only, always-fresh materialization of the config repo's main branch.
  * Every other workspace is an OVERLAY over the root: reads see latest main
  * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. \`git\` publishes
- * the overlay as snapshot commits on the workspace's own branch in the
- * config repo (\`workspaces/<path>\`), never to main.
+ * there is no clone — a new workspace is usable instantly. \`git.commit\`
+ * commits the overlay's changes straight to the config repo's MAIN branch
+ * (the same lane as \`itx.repo.commitFiles\`, so the project worker/website
+ * redeploys automatically), then the overlay resets to mirror the new main.
  *
  * Constraints: the \`.git\` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
- * branches are for durability and handoff, not worker builds: point worker
- * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
+ * are fine (past ~1.5MB they are stored in R2 transparently).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
@@ -1115,8 +1114,8 @@ export interface Workspace {
   /**
    * Wipe the workspace back to pristine: the local layer and every deletion
    * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Unpublished work is LOST (published snapshots survive
-   * on the workspace branch).
+   * re-materializes). Uncommitted work is LOST (committed changes live on
+   * main).
    */
   reset(): Promise<void>;
   /**
@@ -1199,24 +1198,23 @@ export interface CfVideosCapability {
 }
 
 /**
- * The publish surface of an overlay workspace. There is no staging area and
- * no separate push: \`commit({ message })\` snapshots the whole merged view
- * (latest main + the local layer, minus deletions and \`.gitignore\`d paths)
- * as ONE commit force-pushed to the workspace's own branch in the project
- * repo. Push credentials are injected inside the workspace Durable Object
- * (from the config repo's \`gitAccess()\`), so no token ever rides this
- * surface.
+ * The commit surface of an overlay workspace. There is no staging area, no
+ * branch, and no separate push: \`commit({ message })\` turns the workspace's
+ * changes (local files minus \`.gitignore\`d paths, plus deletions) into ONE
+ * ordinary commit on the config repo's MAIN branch — the same lane as
+ * \`itx.repo.commitFiles\`, so the project worker/website redeploys
+ * automatically. Credentials are internal; no token rides this surface.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
   /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
   status(): Promise<WorkspaceChange[]>;
-  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
+  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
   }): Promise<WorkspacePublishResult>;
-  /** Published snapshots of this workspace, newest first. */
+  /** The config repo's main-branch history, newest first. */
   log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
 }
 
@@ -2516,15 +2514,16 @@ export type WorkspaceChange = {
   path: string;
 };
 
-/** Result of \`WorkspaceGit.commit\` — the published snapshot. */
+/** Result of \`WorkspaceGit.commit\` — the commit landed on the config repo's main. */
 export type WorkspacePublishResult = {
+  /** The repo branch the commit landed on — the config repo's default (main). */
   branch: string;
   /** Paths committed (after .gitignore filtering) plus deletions applied. */
   changedPaths: string[];
   commitOid: string;
 };
 
-/** One commit returned by \`WorkspaceGit.log\` (the workspace branch's history). */
+/** One commit returned by \`WorkspaceGit.log\` (the config repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;

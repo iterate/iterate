@@ -13,7 +13,7 @@ import type {
   WorkspacePublishResult,
 } from "./types.ts";
 import { UnboundedWorkspace, WorkspaceCore } from "./workspace-core.ts";
-import { ROOT_WORKSPACE_PATH, isRootWorkspacePath, workspaceBranchName } from "./utils.ts";
+import { ROOT_WORKSPACE_PATH, isRootWorkspacePath } from "./utils.ts";
 
 /**
  * A durable workspace: a private virtual filesystem living in this Durable
@@ -33,11 +33,13 @@ import { ROOT_WORKSPACE_PATH, isRootWorkspacePath, workspaceBranchName } from ".
  * overlay workspace is usable instantly and always sees latest main through
  * the fall-through, until a local write pins a path.
  *
- * Truth lives in the filesystem; git is the PUBLISH mechanism, not the
- * storage: `gitCommit` snapshots the merged view (main + local layer, minus
- * whiteouts and .gitignored paths) as one commit force-pushed to this
- * workspace's own branch in the project's Artifacts repo — never to main —
- * which keeps the local layer disposable.
+ * Truth lives in the filesystem; git is the COMMIT mechanism, not the
+ * storage: `gitCommit` turns the overlay's changes (local layer minus
+ * whiteouts and .gitignored paths) into ONE ordinary commit on the config
+ * repo's main branch, through the Repo Durable Object's own `commitFiles`
+ * lane — so the durable head cache, worker rebuilds, and any GitHub mirror
+ * fire exactly as for a direct `itx.repo` commit. There are no workspace
+ * branches; commit = live on main.
  *
  * Clone coordinates come from the project Repo Durable Object's `gitAccess()`
  * (the documented internal DO-to-DO surface, same as the sandbox domain), so
@@ -47,11 +49,6 @@ import { ROOT_WORKSPACE_PATH, isRootWorkspacePath, workspaceBranchName } from ".
  * library object constructed with explicit deps (cloudflare/workspace's
  * shape). This DO is the thin host: it parses its name, wires its storage,
  * git, and sibling-DO stubs into the core, and delegates.
- *
- * Deliberate non-goal: workspace branches are for durability and handoff, NOT
- * for worker builds. Worker refs resolve branch heads through the Repo DO's
- * durable head cache, which only pushes through that DO keep fresh — a worker
- * ref pointed at a workspace branch would go permanently stale.
  */
 export class WorkspaceDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -70,7 +67,6 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     r2Prefix: `workspace/${this.ctx.id.name!}`,
   });
   readonly #core = new WorkspaceCore({
-    branch: workspaceBranchName(this.#name.path),
     git: createGit(new WorkspaceFileSystem(this.#workspace), "/"),
     kv: this.ctx.storage.kv,
     mode: this.#isRoot ? "root" : "overlay",
@@ -114,8 +110,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
    * Wipe this workspace back to pristine. Root: the next read re-materializes
    * main (the escape hatch for a wedged checkout). Overlay: the local layer
    * and every whiteout vanish, so the workspace shows exactly the parent
-   * again — unpublished work is lost (published state survives on the
-   * workspace branch).
+   * again — uncommitted work is lost (committed state lives on main).
    */
   reset(): Promise<void> {
     return this.#core.reset();
@@ -220,12 +215,10 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Publish the merged view as ONE snapshot commit on this workspace's own
-   * branch in the config repo. Implementation: clone main, replay the local
-   * layer (minus .gitignored paths) and whiteout deletions onto it, commit,
-   * force-push. Force because each publish is a fresh snapshot on the current
-   * main — the branch always shows "main as this workspace sees it", not an
-   * incremental history.
+   * Commit the workspace's changes (local layer minus .gitignored paths, plus
+   * whiteout deletions) as ONE ordinary commit on the config repo's main
+   * branch, via the Repo DO's `commitFiles` lane. On success the overlay is
+   * cleared — the workspace mirrors the new main.
    */
   gitCommit(input: {
     author?: { email: string; name: string };
@@ -234,7 +227,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     return this.#core.gitCommit(input);
   }
 
-  /** Published snapshots of this workspace, newest first ([] before the first publish). */
+  /** The config repo's main-branch history, newest first. */
   gitLog(input: { limit?: number } = {}): Promise<WorkspaceGitLogEntry[]> {
     return this.#core.gitLog(input);
   }
