@@ -22,7 +22,23 @@ export type SendEmailOtpOptions = {
   emailBinding: CloudflareEmailBinding | undefined;
 };
 
-export function shouldUseTestOtp(email: string) {
+export type SendOrganizationInvitationEmailOptions = {
+  email: string;
+  role: string;
+  organizationName: string;
+  inviterName: string;
+  inviterEmail: string;
+  invitationUrl: string;
+  senderDomain: string;
+  emailBinding: CloudflareEmailBinding | undefined;
+};
+
+export function shouldUseTestOtp(input: { email: string; fixedTestOtpEnabled: boolean }) {
+  if (!input.fixedTestOtpEnabled) {
+    return false;
+  }
+
+  const email = input.email;
   const atIndex = email.indexOf("@");
   if (atIndex <= 0) {
     return false;
@@ -51,4 +67,47 @@ export async function sendEmailOtp(options: SendEmailOtpOptions) {
     subject: `Your verification code: ${options.otp}`,
     text: `Your verification code is: ${options.otp}\n\nThis code expires in 5 minutes.`,
   });
+}
+
+export async function sendOrganizationInvitationEmail(
+  options: SendOrganizationInvitationEmailOptions,
+) {
+  if (!options.emailBinding) {
+    console.warn("Organization invitation email not sent: missing Cloudflare EMAIL binding");
+    return;
+  }
+  if (!options.senderDomain.trim()) {
+    console.warn("Organization invitation email not sent: missing APP_CONFIG_EMAIL_SENDER_DOMAIN");
+    return;
+  }
+
+  const fromEmail = getEmailOtpSenderAddress(options.senderDomain);
+  const inviterName = options.inviterName || options.inviterEmail;
+  const roleLabel = options.role || "member";
+  await options.emailBinding.send({
+    from: { email: fromEmail, name: "Iterate" },
+    to: options.email,
+    subject: `${inviterName} invited you to ${options.organizationName} on Iterate`,
+    text: [
+      `${inviterName} (${options.inviterEmail}) invited you to join ${options.organizationName} on Iterate as ${roleLabel}.`,
+      "",
+      `Accept the invitation: ${options.invitationUrl}`,
+      "",
+      "You need to sign in with this email address before accepting.",
+    ].join("\n"),
+    html: [
+      `<p>${escapeHtml(inviterName)} (${escapeHtml(options.inviterEmail)}) invited you to join <strong>${escapeHtml(options.organizationName)}</strong> on Iterate as ${escapeHtml(roleLabel)}.</p>`,
+      `<p><a href="${escapeHtml(options.invitationUrl)}">Accept the invitation</a></p>`,
+      "<p>You need to sign in with this email address before accepting.</p>",
+    ].join(""),
+  });
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }

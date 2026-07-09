@@ -42,6 +42,7 @@ import {
   type CloudflareEmailBinding,
   TEST_OTP_CODE,
   sendEmailOtp,
+  sendOrganizationInvitationEmail,
   shouldUseTestOtp,
 } from "./email.ts";
 
@@ -78,7 +79,9 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
  * `AppConfig`) so the sqlfu schema-generation entry (auth.schema-only.ts) can
  * build the same plugin set without real secrets. */
 export type AuthPluginOptions = {
+  authAppOrigin: string;
   emailOtpEnabled: boolean;
+  fixedTestOtpEnabled: boolean;
   emailBinding: CloudflareEmailBinding | undefined;
   emailSenderDomain: string;
 };
@@ -96,7 +99,25 @@ export function getAuthPlugins(options: AuthPluginOptions) {
     jwt(),
     bearer(),
     admin(),
-    organization(),
+    organization({
+      sendInvitationEmail: async (data, request) => {
+        const invitationUrl = new URL(
+          `/invitations/${data.id}`,
+          request?.url ?? options.authAppOrigin,
+        );
+
+        await sendOrganizationInvitationEmail({
+          email: data.email,
+          role: data.role,
+          organizationName: data.organization.name,
+          inviterName: data.inviter.user.name,
+          inviterEmail: data.inviter.user.email,
+          invitationUrl: invitationUrl.toString(),
+          senderDomain: options.emailSenderDomain,
+          emailBinding: options.emailBinding,
+        });
+      },
+    }),
     multiSession({ maximumSessions: 10 }),
     deviceAuthorization({
       verificationUri: "/device",
@@ -117,13 +138,13 @@ export function getAuthPlugins(options: AuthPluginOptions) {
             otpLength: 6,
             expiresIn: 300,
             generateOTP: ({ email }) => {
-              if (shouldUseTestOtp(email)) {
+              if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
                 return TEST_OTP_CODE;
               }
               return undefined;
             },
             sendVerificationOTP: async ({ email, otp }) => {
-              if (shouldUseTestOtp(email)) {
+              if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
                 return;
               }
 

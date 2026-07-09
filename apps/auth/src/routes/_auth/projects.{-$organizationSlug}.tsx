@@ -5,6 +5,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { orpcClient } from "../../utils/query.tsx";
+import { useSession } from "../../utils/auth-client.ts";
 import {
   DeleteOrganizationDialog,
   DeleteProjectDialog,
@@ -28,6 +29,7 @@ export const Route = createFileRoute("/_auth/projects/{-$organizationSlug}")({
 function ProjectsPage() {
   const { organizationSlug } = Route.useParams();
   const navigate = Route.useNavigate();
+  const session = useSession();
   const queryClient = useQueryClient();
   const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
   const [projectDialog, setProjectDialog] = useState<{ organizationSlug: string } | null>(null);
@@ -157,6 +159,7 @@ function ProjectsPage() {
               canManage={
                 selectedOrganization.role === "owner" || selectedOrganization.role === "admin"
               }
+              currentUserId={session.user.id}
               onCreateProject={() =>
                 setProjectDialog({ organizationSlug: selectedOrganization.slug })
               }

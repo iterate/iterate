@@ -4,15 +4,16 @@ import {
   deviceAuthorizationClient,
   emailOTPClient,
   multiSessionClient,
+  organizationClient,
 } from "better-auth/client/plugins";
 import { useRouteContext } from "@tanstack/react-router";
 import { getAuthAppOrigin } from "./auth-app-origin.ts";
 
 // Only the client plugins the UI actually calls: oauth2.* (consent flows),
-// device.* (CLI authorization), emailOtp.* (sign-in), and multiSession.* (the
-// OAuth account chooser). Organization/project management goes through the
-// typed oRPC client (utils/query.tsx), not better-auth's organization client
-// plugin.
+// device.* (CLI authorization), emailOtp.* (sign-in), multiSession.* (the
+// OAuth account chooser), and organization.* (native Better Auth membership
+// and invitation management). Project management stays in the typed oRPC
+// surface because projects are Iterate-specific rows.
 export const authClient = createAuthClient({
   baseURL: getAuthAppOrigin(),
   plugins: [
@@ -20,6 +21,7 @@ export const authClient = createAuthClient({
     deviceAuthorizationClient(),
     emailOTPClient(),
     multiSessionClient(),
+    organizationClient(),
   ],
   // Kills better-auth's redirectPlugin, which auto-navigates whenever a
   // response carries `{redirect: true, url}`. Our mutation handlers navigate
