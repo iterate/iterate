@@ -7,11 +7,15 @@ size: medium
 
 ## Status summary
 
-Implemented and verified. The `iterate chat` TUI now **shares the human's
-filesystem/machine with the agent by default** (session-scoped), and `/share`
-widens that to the whole project. Live-verified against prod: both mounts land,
-the Workspace-aligned method surface is invocable, and the plumbing (connect at
-project scope → derive agent → mount on both scopes) works.
+Implemented, verified, and self-reviewed for merge. The `iterate chat` TUI now
+**shares the human's filesystem/machine with the agent by default**
+(session-scoped), and `/share` widens that to the whole project. Live-verified
+against prod: both mounts land, the Workspace-aligned method surface is
+invocable, and the plumbing (connect at project scope → derive agent → mount on
+both scopes) works. A pre-merge review pass hardened the share/unshare lifecycle
+(reconcile races so `/unshare` can't leave a mount live), aligned `edit` with
+`itx.workspace` (throw on ambiguous multi-match), fixed `notify` shell quoting,
+and added connection-lifecycle tests.
 
 Design in one paragraph: a live capability at `itx.usersMachine` — an ephemeral,
 session-scoped sibling of `itx.sandbox` (a real machine with a shell). On chat
@@ -124,3 +128,11 @@ reducer test semantics — that needs the feed-model author's intent. Flagged.
   filesystem verbs copy `itx.workspace` signatures (positional, `readFile →
 string|null`, `glob`/`readDir → file-info`), added `edit`.
 - (v2) Live-verified the two-scope plumbing against prod with the admin secret.
+- (v3, review pass) Re-merged `main`; took its `FeedItem` (drops that function
+  from our diff). Self-review + a second-opinion adversarial review found and
+  fixed: a share/unshare race that could leave a project mount live (now
+  reconciled after the async provide, with in-flight guards); `edit` now throws
+  on ambiguous multi-match like `itx.workspace` instead of corrupting the first
+  match; `notify` no longer breaks/injects on apostrophes (execFile, no shell);
+  `/unshare` failure reverts the header. Added `agent-connection.test.ts` (fake
+  connect via DI) covering the `/share`→`/unshare` interleave and happy path.
