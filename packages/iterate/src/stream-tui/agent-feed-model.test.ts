@@ -34,7 +34,7 @@ describe("createAgentFeedModel", () => {
 
     model.applyEvents([
       event("events.iterate.com/agent/llm-request-completed", {
-        llmRequestId: 2,
+        llmRequestOffset: 2,
         durationMs: 10,
         result: { status: "success" },
       }),
@@ -51,15 +51,15 @@ describe("createAgentFeedModel", () => {
   test("accumulates streamed response deltas on the live step", () => {
     const model = createAgentFeedModel();
     const requested = event("events.iterate.com/agent/llm-request-requested", {});
-    const llmRequestId = requested.offset;
+    const llmRequestOffset = requested.offset;
     model.applyEvents([
       requested,
       event("events.iterate.com/agent/llm-response-chunk", {
-        llmRequestId,
+        llmRequestOffset,
         chunk: { response: "par" },
       }),
       event("events.iterate.com/agent/llm-response-chunk", {
-        llmRequestId,
+        llmRequestOffset,
         chunk: { response: "tial" },
       }),
     ]);

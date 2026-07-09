@@ -181,7 +181,7 @@ export function ProjectStreamView({
   }, [store, agentStore, feedStore]);
 
   const runningLlmRequestId =
-    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestId ?? null;
+    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
   const interrupt = useAgentInterrupt({
     onInterrupt: messageComposer?.onInterrupt,
     runningLlmRequestId,
@@ -454,7 +454,7 @@ function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {
  * (or the stream has no interrupt hook), so consumers can gate on existence.
  */
 function useAgentInterrupt(args: {
-  onInterrupt: ((llmRequestId: number) => Promise<void>) | undefined;
+  onInterrupt: ((llmRequestOffset: number) => Promise<void>) | undefined;
   runningLlmRequestId: number | null;
   onNudgeDeliveries: () => void;
 }): StreamInterrupt | null {

@@ -21,7 +21,8 @@ import type { Event } from "./types.ts";
 export type AgentUiLlmStep = {
   kind: "llm";
   id: string;
-  llmRequestId: number;
+  /** Offset of the llm-request-requested event this step tracks. */
+  llmRequestOffset: number;
   status: "running" | "done";
   model?: string;
   provider?: string;
@@ -187,7 +188,9 @@ const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 // Historical journals (pre single-agent-processor) still stream under these
-// types; keep reading them so old chats render correctly.
+// types; keep reading them so old chats render correctly. This is data
+// compat, not code compat: delete these lanes once no journals predate the
+// PR #1808 cutover (e.g. after the next prd reset).
 const LEGACY_OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
 const LEGACY_OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
 const LEGACY_CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
@@ -280,7 +283,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const step: AgentUiLlmStep = {
         kind: "llm",
         id: `llm-${event.offset}`,
-        llmRequestId: event.offset,
+        llmRequestOffset: event.offset,
         status: "running",
         ...(model == null ? {} : { model }),
         thinkingText: "",
@@ -293,21 +296,21 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case AGENT_LLM_REQUEST_STARTED:
     case LEGACY_OPENAI_WS_REQUEST_STARTED:
     case LEGACY_CLOUDFLARE_AI_REQUEST_STARTED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+      const llmRequestOffset = readLlmRequestOffset(event);
       const model = readString(event, "model");
-      if (llmRequestId == null || model == null) return state;
-      return updateLlmStep(state, llmRequestId, (step) => ({ ...step, model }));
+      if (llmRequestOffset == null || model == null) return state;
+      return updateLlmStep(state, llmRequestOffset, (step) => ({ ...step, model }));
     }
 
     case LEGACY_OPENAI_WS_RESPONSE_CHUNK: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+      const llmRequestOffset = readLlmRequestOffset(event);
       const message = readRecord(event, "chunk");
-      if (llmRequestId == null || message == null) return state;
+      if (llmRequestOffset == null || message == null) return state;
       const frameType = typeof message.type === "string" ? message.type : "";
       const delta = typeof message.delta === "string" ? message.delta : "";
 
       if (frameType === "response.output_text.delta" && delta !== "") {
-        return updateLlmStep(state, llmRequestId, (step) => ({
+        return updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           responseText: step.status === "running" ? step.responseText + delta : step.responseText,
         }));
@@ -317,13 +320,13 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           frameType === "response.reasoning_text.delta") &&
         delta !== ""
       ) {
-        return updateLlmStep(state, llmRequestId, (step) => ({
+        return updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           thinkingText: step.status === "running" ? step.thinkingText + delta : step.thinkingText,
         }));
       }
       if (frameType === "response.reasoning_summary_part.added") {
-        return updateLlmStep(state, llmRequestId, (step) => ({
+        return updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           thinkingText:
             step.status !== "running" || step.thinkingText === ""
@@ -336,12 +339,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
 
     case AGENT_LLM_RESPONSE_CHUNK:
     case LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+      const llmRequestOffset = readLlmRequestOffset(event);
       const chunk = readPayloadRecord(event)?.chunk;
-      if (llmRequestId == null) return state;
+      if (llmRequestOffset == null) return state;
       const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(chunk);
       if (responseDelta === "" && thinkingDelta === "") return state;
-      return updateLlmStep(state, llmRequestId, (step) => ({
+      return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
           step.status === "running" ? step.responseText + responseDelta : step.responseText,
@@ -351,19 +354,19 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     }
 
     case AGENT_OUTPUT_ADDED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+      const llmRequestOffset = readLlmRequestOffset(event);
       const content = readString(event, "content");
-      if (llmRequestId == null || content == null) return state;
+      if (llmRequestOffset == null || content == null) return state;
       // Authoritative full text: replaces whatever streamed in (or fills it
       // in for providers that never streamed).
-      return updateLlmStep(state, llmRequestId, (step) =>
+      return updateLlmStep(state, llmRequestOffset, (step) =>
         step.status === "running" ? { ...step, responseText: content } : step,
       );
     }
 
     case AGENT_LLM_REQUEST_COMPLETED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
-      if (llmRequestId == null) return state;
+      const llmRequestOffset = readLlmRequestOffset(event);
+      if (llmRequestOffset == null) return state;
       const payload = readPayloadRecord(event);
       const result = isRecord(payload?.result) ? payload.result : undefined;
       const status = typeof result?.status === "string" ? result.status : "success";
@@ -373,7 +376,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           ? result.error.message
           : undefined;
       return settleLiveIfIdle(
-        updateLlmStep(state, llmRequestId, (step) =>
+        updateLlmStep(state, llmRequestOffset, (step) =>
           step.outcome === "cancelled"
             ? step
             : {
@@ -397,10 +400,10 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     }
 
     case AGENT_LLM_REQUEST_CANCELLED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
-      if (llmRequestId == null) return state;
+      const llmRequestOffset = readLlmRequestOffset(event);
+      if (llmRequestOffset == null) return state;
       return settleLiveIfIdle(
-        updateLlmStep(state, llmRequestId, (step) => ({
+        updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           status: "done",
           outcome: "cancelled",
@@ -634,12 +637,12 @@ function emitUserMessageItem(
 
 function updateLlmStep(
   state: AgentUiState,
-  llmRequestId: number,
+  llmRequestOffset: number,
   update: (step: AgentUiLlmStep) => AgentUiLlmStep,
 ): AgentUiState {
   if (state.live == null) return state;
   const index = state.live.steps.findIndex(
-    (step) => step.kind === "llm" && step.llmRequestId === llmRequestId,
+    (step) => step.kind === "llm" && step.llmRequestOffset === llmRequestOffset,
   );
   const step = state.live.steps[index];
   if (step == null || step.kind !== "llm") return state;
@@ -851,6 +854,14 @@ function readOptionalReason(event: Event): { reason: string } | Record<string, n
 function readNumber(event: Event, key: string): number | null {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** The llm-request-requested offset an LLM lifecycle event references.
+ * Current events carry `llmRequestOffset`; journals written before the
+ * agent-contract 0.5.0 rename (and the legacy provider events) carry
+ * `llmRequestId`. */
+function readLlmRequestOffset(event: Event): number | null {
+  return readNumber(event, "llmRequestOffset") ?? readNumber(event, "llmRequestId");
 }
 
 function readRecord(event: Event, key: string): Record<string, unknown> | null {
