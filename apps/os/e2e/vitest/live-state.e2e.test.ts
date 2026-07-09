@@ -41,7 +41,7 @@ test("itx.live pushes a snapshot then a minimal diff; the DO-backed counter is s
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();
-  using subscription = await project.live.subscribe(track.onUpdate);
+  using subscription = await project.liveState.subscribe(track.onUpdate);
 
   // The subscribe-time frame is a full snapshot: current state IS the first paint.
   await waitForCondition(() => track.state() !== undefined, {
@@ -90,7 +90,7 @@ test("itx.live indexes stream activity as a peer slice", async () => {
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();
-  using subscription = await project.live.subscribe(track.onUpdate);
+  using subscription = await project.liveState.subscribe(track.onUpdate);
   await waitForCondition(() => track.state() !== undefined, {
     description: "the initial snapshot",
   });

@@ -41,15 +41,15 @@ function ProjectReactivityContent() {
     (state) => state.tick,
   );
   const counter = useLiveState(
-    (itx) => itx.live,
+    (itx) => itx.liveState,
     (state) => state.liveDemo,
   );
   const reduced = useLiveState(
-    (itx) => itx.live,
+    (itx) => itx.liveState,
     (state) => state.reduced,
   );
   const streamsIndex = useLiveState(
-    (itx) => itx.live,
+    (itx) => itx.liveState,
     (state) => state.streamsIndex,
   );
   const events = useReactivityTestStream();
@@ -168,7 +168,7 @@ function ProjectReactivityContent() {
         </section>
 
         <JsonPanel
-          title="itx.live (project live state)"
+          title="itx.liveState (project live state)"
           value={{
             reduced: reduced.value,
             streamsIndex: streamsIndex.value,

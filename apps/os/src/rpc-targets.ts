@@ -204,6 +204,7 @@ import type {
   GetProcessorRuntimeState,
   LiveStateRpc,
   LiveStateSubscriptionHandle,
+  WritableLiveStateRpc,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -3858,12 +3859,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
-  get live(): LiveStateRpc<ProjectLiveState> {
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link WritableLiveStateRpc}. */
+  get liveState(): WritableLiveStateRpc<ProjectLiveState> {
     return new LiveStateRelayRpcTarget<ProjectLiveState>(
       () =>
         this.durableObjectStub as unknown as {
-          live: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+          liveState: PromiseLike<WritableLiveStateRpc<ProjectLiveState>>;
         },
     );
   }
@@ -4841,15 +4842,16 @@ class ProcessorStateSubscriptionRpcTarget extends IterateRpcRelay<"ProcessorStat
 }
 
 /**
- * DO-side RpcTarget over a host's live-state engine — the READ-ONLY surface a
- * `.live` node exposes to clients: `getState()` one-shot + `subscribe()` live.
- * (Writes — `setState`/`assign` — stay on the engine, server-side only.) Each
- * call first seeds the engine from committed processor state, so the first paint
+ * DO-side RpcTarget over a host's live-state engine — the surface a `.liveState`
+ * node exposes: `get()`/`subscribe()` read, `set()`/`assign()` write. Because the
+ * DO reassembles its state from its fold (see `getLiveState`), a client write is
+ * transient — it sticks until the next server update (see WritableLiveStateRpc).
+ * `get`/`subscribe` first seed the engine from committed state so the first paint
  * is never stale after a DO restart.
  */
 export class LiveStateRpcTarget<State = unknown>
-  extends IterateRpcRelay<"LiveStateRpc">
-  implements LiveStateRpc<State>
+  extends IterateRpcRelay<"WritableLiveStateRpc">
+  implements WritableLiveStateRpc<State>
 {
   readonly #host: Pick<StreamProcessorHost, "live" | "refreshLiveState">;
 
@@ -4858,9 +4860,17 @@ export class LiveStateRpcTarget<State = unknown>
     this.#host = host;
   }
 
-  async getState(): Promise<State> {
+  async get(): Promise<State> {
     await this.#host.refreshLiveState();
     return this.#host.live.getState() as State;
+  }
+
+  async set(next: State): Promise<void> {
+    this.#host.live.setState(next as Record<string, unknown>);
+  }
+
+  async assign(partial: Partial<State>): Promise<void> {
+    this.#host.live.assign(partial as Partial<Record<string, unknown>>);
   }
 
   async subscribe(
@@ -4903,24 +4913,32 @@ class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscript
  * forwards. Mirrors {@link ProcessorRelayRpcTarget}.
  */
 class LiveStateRelayRpcTarget<State>
-  extends IterateRpcRelay<"LiveStateRpc">
-  implements LiveStateRpc<State>
+  extends IterateRpcRelay<"WritableLiveStateRpc">
+  implements WritableLiveStateRpc<State>
 {
-  readonly #stub: () => { live: PromiseLike<LiveStateRpc<State>> };
+  readonly #stub: () => { liveState: PromiseLike<WritableLiveStateRpc<State>> };
 
-  constructor(stub: () => { live: PromiseLike<LiveStateRpc<State>> }) {
+  constructor(stub: () => { liveState: PromiseLike<WritableLiveStateRpc<State>> }) {
     super();
     this.#stub = stub;
   }
 
-  async getState(): Promise<State> {
-    return await (await this.#stub().live).getState();
+  async get(): Promise<State> {
+    return await (await this.#stub().liveState).get();
+  }
+
+  async set(next: State): Promise<void> {
+    return await (await this.#stub().liveState).set(next);
+  }
+
+  async assign(partial: Partial<State>): Promise<void> {
+    return await (await this.#stub().liveState).assign(partial);
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await (await this.#stub().live).subscribe(onUpdate);
+    return await (await this.#stub().liveState).subscribe(onUpdate);
   }
 }
 
@@ -4939,7 +4957,7 @@ class LiveDemoTickerRpcTarget
 {
   readonly #startedAt = Date.now();
 
-  async getState(): Promise<{ tick: number; startedAt: number }> {
+  async get(): Promise<{ tick: number; startedAt: number }> {
     return { tick: 0, startedAt: this.#startedAt };
   }
 

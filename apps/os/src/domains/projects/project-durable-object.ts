@@ -180,8 +180,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** The project's live state — the read/subscribe surface behind `itx.live`. */
-  get live() {
+  /** The project's live state — the get/set/assign/subscribe surface behind `itx.liveState`. */
+  get liveState() {
     return new LiveStateRpcTarget(this.#processorHost);
   }
 
