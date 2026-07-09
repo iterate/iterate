@@ -1,9 +1,9 @@
 import { z } from "zod";
-import type { StreamEvent, StreamEventInput } from "./stream-events.ts";
+import type { StreamEvent, StreamEventInput } from "./stream-events";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
-} from "./stream-events.ts";
+} from "./stream-events";
 
 // =============================================================================
 // Processor contracts.

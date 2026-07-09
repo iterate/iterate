@@ -1,7 +1,7 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { Stream } from "./itx-api.generated";
-import type { StreamEvent, StreamEventInput } from "./stream-events.ts";
+import type { StreamEvent, StreamEventInput } from "./stream-events";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./itx-api.generated";
 import {
   assertObjectProcessorState,
@@ -13,7 +13,7 @@ import {
   type EmittedInput,
   type EventCatalog,
   type ProcessorState,
-} from "./processor-contracts.ts";
+} from "./processor-contracts";
 
 // =============================================================================
 // Class-based stream processor runtime.

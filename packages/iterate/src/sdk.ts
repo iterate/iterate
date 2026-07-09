@@ -12,8 +12,8 @@ export type * from "./itx-api.generated";
 // The stream-processor machinery: define contracts and processors in project
 // code with the exact runtime the platform's own processors run on. The
 // platform consumes this same copy (apps/os/src/domains/streams re-exports).
-export * from "./processor-contracts.ts";
-export * from "./stream-processor.ts";
+export * from "./processor-contracts";
+export * from "./stream-processor";
 
 // The stream event envelope schemas, under Schema-suffixed names — the
 // inferred TYPES already ship under their own names via the generated itx API.
@@ -21,7 +21,7 @@ export {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
   StreamListItem as StreamListItemSchema,
-} from "./stream-events.ts";
+} from "./stream-events";
 
 // The zod instance the SDK machinery validates with. Author contract schemas
 // with THIS z, so userspace payload schemas and the SDK's envelope schemas
