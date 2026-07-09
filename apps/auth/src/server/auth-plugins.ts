@@ -22,6 +22,7 @@ import { APIError, betterAuth } from "better-auth";
 import {
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
+  updateInviteStatusById,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 import {
@@ -121,16 +122,21 @@ export function getAuthPlugins(options: AuthPluginOptions) {
             options.authAppOrigin,
           );
 
-          await sendOrganizationInvitationEmail({
-            email: data.invitation.email,
-            role: data.invitation.role,
-            organizationName: data.organization.name,
-            inviterName: data.inviter.name,
-            inviterEmail: data.inviter.email,
-            invitationUrl: invitationUrl.toString(),
-            senderDomain: options.emailSenderDomain,
-            emailBinding: options.emailBinding,
-          });
+          try {
+            await sendOrganizationInvitationEmail({
+              email: data.invitation.email,
+              role: data.invitation.role,
+              organizationName: data.organization.name,
+              inviterName: data.inviter.name,
+              inviterEmail: data.inviter.email,
+              invitationUrl: invitationUrl.toString(),
+              senderDomain: options.emailSenderDomain,
+              emailBinding: options.emailBinding,
+            });
+          } catch (error) {
+            await updateInviteStatusById(db, { status: "canceled" }, { id: data.invitation.id });
+            throw error;
+          }
         },
       },
     }),
