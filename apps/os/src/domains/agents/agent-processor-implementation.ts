@@ -18,7 +18,7 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  * through with plain JavaScript. Optional: without it (bare test hosts),
  * oversized results fall back to inline truncation.
  */
-export type AgentProcessorDeps = {
+type AgentProcessorDeps = {
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
 };
 
