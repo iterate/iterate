@@ -41,6 +41,11 @@ function CodeMirror({
 }: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // Handoff between the rebuild effect's cleanup (which destroys the old
+  // view) and the next effect body (which restores into the new one).
+  const preservedViewStateRef = useRef<{ state: EditorView["state"]; hadFocus: boolean } | null>(
+    null,
+  );
   const onChangeRef = useRef(onChange);
   const onModEnterRef = useRef(onModEnter);
   const initialSelectAllSignalRef = useRef(selectAllSignal);
@@ -60,6 +65,14 @@ function CodeMirror({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // Extension changes (e.g. a lint schema arriving, diff mode toggling)
+    // rebuild the whole view. The previous effect's CLEANUP has already
+    // destroyed it by the time this body runs, so restoration state comes
+    // from the stash the cleanup left behind — carrying selection and focus
+    // over so a rebuild mid-edit doesn't dump the user's cursor (or send
+    // their keystrokes to <body>).
+    const preserved = preservedViewStateRef.current;
+    preservedViewStateRef.current = null;
     viewRef.current?.destroy();
 
     const view = new EditorView({
@@ -95,6 +108,10 @@ function CodeMirror({
     });
 
     viewRef.current = view;
+    if (preserved !== null && preserved.state.doc.eq(view.state.doc)) {
+      view.dispatch({ selection: preserved.state.selection, scrollIntoView: true });
+      if (preserved.hadFocus) view.focus();
+    }
     if (
       latestSelectAllSignalRef.current !== undefined &&
       latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
@@ -128,7 +145,12 @@ function CodeMirror({
 
     return () => {
       view.dom.removeEventListener("keydown", handleKeyDown);
-      viewRef.current?.destroy();
+      const current = viewRef.current;
+      if (current !== null) {
+        // Stash for the rebuild that may immediately follow (see above).
+        preservedViewStateRef.current = { state: current.state, hadFocus: current.hasFocus };
+      }
+      current?.destroy();
       viewRef.current = null;
     };
   }, [editable, extensions]);

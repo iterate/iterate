@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { HtmlPreview } from "./html-preview.tsx";
 import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
+import { useRepoFileJsonSchema } from "./repo-json-schema.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -82,6 +83,30 @@ export function RepoEditorPane({
   // snapshot when one exists, else HEAD.
   const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
 
+  // json-schema diagnostics/hover/completion for JSON and YAML buffers: an
+  // explicit $schema (prop or yaml modeline) wins, else the well-known
+  // filename map (package.json, tsconfig, …). Resolved against the live
+  // buffer so adding a $schema line applies before any commit; the schema
+  // itself is fetched from schemastore/wherever by the browser and failure
+  // just means no squigglies.
+  const schemaLanguage =
+    kind.kind === "text" && (kind.language === "json" || kind.language === "yaml")
+      ? kind.language
+      : null;
+  const jsonSchema = useRepoFileJsonSchema({
+    path,
+    language: schemaLanguage,
+    content: working?.type === "write" ? working.content : (textBaseline ?? ""),
+  });
+  // The readonly Index view renders the STAGED snapshot, so it must validate
+  // against the schema that snapshot declares — not the working buffer's, whose
+  // `$schema` may have diverged (e.g. added/changed after staging).
+  const stagedJsonSchema = useRepoFileJsonSchema({
+    path,
+    language: schemaLanguage,
+    content: staged?.type === "write" ? staged.content : "",
+  });
+
   // The plain editor carries vscode-style gutter bars for lines differing
   // from the baseline; diff mode swaps in the unified (inline) merge view on
   // the same document, whose per-chunk "+" controls STAGE the chunk — the
@@ -140,6 +165,31 @@ export function RepoEditorPane({
         : [],
     [stagedView, staged, headContent],
   );
+
+  const editorExtensionsWithSchema = useMemo(
+    () => [...editorExtensions, jsonSchema.extensions],
+    [editorExtensions, jsonSchema.extensions],
+  );
+  const stagedDiffExtensionsWithSchema = useMemo(
+    () => [...stagedDiffExtensions, stagedJsonSchema.extensions],
+    [stagedDiffExtensions, stagedJsonSchema.extensions],
+  );
+
+  // Subtle header note: which schema is validating the buffer, or that the
+  // fetch failed (in which case there are simply no squigglies). The Index view
+  // names its own (staged-snapshot) schema.
+  const schemaNoteFor = (result: typeof jsonSchema) =>
+    result.status === "active" ? (
+      <span title={result.url} className="text-[10px] text-muted-foreground">
+        {new URL(result.url).pathname.split("/").pop() || result.url}
+      </span>
+    ) : result.status === "unavailable" ? (
+      <span title={result.url} className="text-[10px] text-muted-foreground italic">
+        schema unavailable
+      </span>
+    ) : null;
+  const schemaNote = schemaNoteFor(jsonSchema);
+  const stagedSchemaNote = schemaNoteFor(stagedJsonSchema);
 
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
@@ -217,6 +267,7 @@ export function RepoEditorPane({
         }
         actions={
           <>
+            {stagedSchemaNote}
             <Button variant="secondary" size="sm" className="text-xs" disabled>
               Diff
             </Button>
@@ -259,7 +310,7 @@ export function RepoEditorPane({
             wrapLongLines={false}
             code={staged.content}
             language={kind.language}
-            codeMirrorExtensions={stagedDiffExtensions}
+            codeMirrorExtensions={stagedDiffExtensionsWithSchema}
             onChange={() => {}}
           />
         )}
@@ -292,6 +343,7 @@ export function RepoEditorPane({
         }
         actions={
           <>
+            {schemaNote}
             {/* The preview replaces the editor, diff and all. */}
             {!showPreview && (headHasPath || staged !== undefined) ? (
               <Button
@@ -323,7 +375,7 @@ export function RepoEditorPane({
             wrapLongLines={false}
             code={value}
             language={kind.language}
-            codeMirrorExtensions={editorExtensions}
+            codeMirrorExtensions={editorExtensionsWithSchema}
             onChange={stageText}
           />
         )}
