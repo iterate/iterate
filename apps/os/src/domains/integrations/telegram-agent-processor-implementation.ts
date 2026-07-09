@@ -167,7 +167,14 @@ export class TelegramAgentProcessor extends StreamProcessor<
           }
           // The unified inbound message event: a Telegram update is a message
           // FROM its sender, `from` carries the facts (see agents/message-received).
-          const sender = readRecord(readRecord(readRecord(event.payload.body)?.message)?.from);
+          // The sender's location depends on the update kind: messages carry
+          // message.from, button presses callback_query.from, edits
+          // edited_message.from.
+          const update = readRecord(event.payload.body);
+          const sender =
+            readRecord(readRecord(update?.message)?.from) ??
+            readRecord(readRecord(update?.callback_query)?.from) ??
+            readRecord(readRecord(update?.edited_message)?.from);
           const senderId = sender?.id;
           const senderUsername = readString(sender?.username);
           await append({

@@ -521,9 +521,16 @@ describe("TelegramAgentProcessor", () => {
       (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload as {
+      content: string;
+      from?: unknown;
+      llmRequestPolicy?: unknown;
+    };
     expect(payload.content).toContain("approve");
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+    // The sender is the button PRESSER (callback_query.from), never the
+    // bot that authored the embedded message.
+    expect(payload.from).toEqual({ kind: "telegram", userId: "7" });
   });
 
   it("transcribes media as bracketed placeholders", async () => {

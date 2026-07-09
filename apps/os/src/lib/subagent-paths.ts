@@ -15,6 +15,13 @@ export const SUBAGENTS_PATH_SEGMENT = "subagents";
  * parent of `/agents/a/subagents/b/subagents/c` is `/agents/a/subagents/b`),
  * and the parent must itself be an agent path, so `/agents/subagents/x` —
  * whose "parent" would be the `/agents` directory — is not a subagent.
+ *
+ * A multi-segment relative path implies intermediate streams (spawning
+ * `team/researcher` announces `…/subagents/team` too), and those
+ * intermediates are subagents of the same parent by this rule — deliberate:
+ * every intermediate under `/agents/**` is already an agent stream today
+ * (`/agents/slack/main` gets agent mechanics), they just never run without
+ * inputs. Addresses are paths, not names; the folder is part of the address.
  */
 export function subagentParentPath(agentPath: string): string | null {
   const marker = `/${SUBAGENTS_PATH_SEGMENT}/`;
