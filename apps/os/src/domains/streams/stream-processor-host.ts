@@ -5,7 +5,7 @@
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
 //   host = createStreamProcessorHost(this.ctx, { stream, version: workerVersion(this.env) });
-//   agent = this.host.add((deps) => new AgentProcessor({ ...deps, openai }));
+//   agent = this.host.add((deps) => new AgentProcessor({ ...deps, ai }));
 //   search = this.host.add((deps) => new SearchProcessor(deps));
 //
 //   wakeStreamSubscriber(args: StreamSubscriberWakeRequest) {

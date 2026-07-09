@@ -22,6 +22,8 @@ test(
     using agent = handle.agent("/agents/e2e-tools");
 
     const marker = crypto.randomUUID().slice(0, 8);
+    // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
+    // default under preview load; wait with the same ceiling as the test.
     await agent.ask({
       message: [
         `Run a script that appends one event of type ${PROOF_TYPE} with payload`,
@@ -29,6 +31,7 @@ test(
         `itx.streams.get(${JSON.stringify(PROOF_STREAM)}).append(...). After the script`,
         `runs, send a chat message that contains exactly the word done.`,
       ].join(" "),
+      timeoutMs: 180_000,
     });
 
     // The reply may arrive before or after the script completes depending on
@@ -60,29 +63,31 @@ test(
 );
 
 test(
-  "provider toggle: cloudflare-ai answers after llm-provider-selected",
+  "agent answers after llm model is selected",
   // See above — heavy-test ceiling.
   { timeout: 240_000 },
   async ({ expect }) => {
-    await using handle = await createTestProject({ slugPrefix: "provider-toggle" });
-    using agent = handle.agent("/agents/e2e-provider");
+    await using handle = await createTestProject({ slugPrefix: "agent-model" });
+    using agent = handle.agent("/agents/e2e-model");
 
-    // Force the toggle regardless of the deployment's default provider.
+    // Force a known Workers AI model for the assertion.
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires the model alongside the provider; a model-less
+      // The contract requires a model; a model-less
       // append is schema-invalid and wedges the agent processor's ingest.
-      payload: { model: "@cf/moonshotai/kimi-k2.7-code", provider: "cloudflare-ai" },
+      payload: { model: "@cf/moonshotai/kimi-k2.7-code" },
     });
 
-    const response = await agent.ask({ message: "Reply with a short greeting." });
+    const response = await agent.ask({
+      message: "Reply with a short greeting.",
+      // Workers AI under preview load can sit past the 45s default.
+      timeoutMs: 120_000,
+    });
     expect(response.type).toBe("events.iterate.com/agents/web-message-sent");
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     expect(
-      agentEvents.some(
-        (event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started",
-      ),
+      agentEvents.some((event) => event.type === "events.iterate.com/agent/llm-request-started"),
     ).toBe(true);
   },
 );

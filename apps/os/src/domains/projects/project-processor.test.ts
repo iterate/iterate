@@ -260,13 +260,12 @@ describe("ProjectProcessor agent birth", () => {
       streamMaxOffset: 1,
     });
 
-    // Mechanics only. System prompt, provider selection, capability mounts,
+    // Mechanics only. System prompt, model selection, capability mounts,
     // and boot context are appended by the project worker via
     // itx.agents.defaults (see agents/agent-defaults.test.ts).
     const born = network.eventsAt("/agents/demo").map((streamEvent) => streamEvent.type);
+    // agent processor + capability-host — no separate LLM provider processors.
     expect(born).toEqual([
-      "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
     ]);

@@ -248,7 +248,6 @@ import { EmailProcessorContract } from "./domains/email/email-processor-contract
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
   agentDefaultsForPath,
-  deploymentDefaultLlmProvider,
   type AgentDefaultPolicy,
   type AgentDefaultsOverrides,
 } from "./domains/agents/agent-defaults.ts";
@@ -1080,7 +1079,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, provider, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, provider selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, provider?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -1100,7 +1099,6 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
-      deploymentLlmProvider: deploymentDefaultLlmProvider(env),
       projectId: this.props.projectId,
       ...(overrides === undefined ? {} : { overrides }),
     });
