@@ -88,7 +88,7 @@ export interface WorkspaceKv {
   delete(key: string): void;
 }
 
-export type WorkspaceCoreOptions = {
+type WorkspaceCoreOptions = {
   /** The workspace's own publish branch in the project repo (`workspaces/<path>`). */
   branch: string;
   /** git bound to `workspace`'s filesystem — the root materialization's clone lane. */
