@@ -223,7 +223,7 @@ export type StreamProcessorConstructorArgs<
  * blocking work has completed.
  *
  * `ingest` is host plumbing; the `process*` family is the authoring surface.
- * Subclasses override up to three hooks:
+ * Subclasses override up to four hooks:
  *
  * - `reduce` — pure projection of one consumed event into the next state
  * - `processEvent` — synchronous per-event side effects; what most processors
@@ -231,6 +231,9 @@ export type StreamProcessorConstructorArgs<
  * - `processEventBatch` — batch-level side effects (e.g. one SQLite
  *   transaction); the default implementation calls `processEvent` once per
  *   reduced event
+ * - `reconcile` — desired-vs-actual reconciliation over the batch's final
+ *   fold; the base calls it only for AT-HEAD batches, so overrides never
+ *   need their own mid-refold gate
  *
  * plus an optional one-time `prepare` for setup that must land before the
  * checkpoint is first read (e.g. schema migrations that reset it).
@@ -487,6 +490,22 @@ export abstract class StreamProcessor<
   }
 
   /**
+   * Desired-vs-actual reconciliation hook — the obligation pattern's home
+   * (docs/writing-stream-processors.md): compare the batch's final fold (open
+   * obligations, schedules that should fire) against this incarnation's live
+   * work, then start undriven attempts and settle dead ones through
+   * idempotent appends.
+   *
+   * The base calls it after `processEventBatch`, and ONLY when the batch
+   * reaches the stream head (`checkpointOffset >= streamMaxOffset`). A
+   * mid-catch-up fold shows obligations whose outcomes sit in later pages;
+   * reconciling it would re-drive real vendor calls and journal false
+   * failures — the gate lives here so no override can forget it. Defaults to
+   * a no-op.
+   */
+  protected async reconcile(_args: ProcessEventBatchArgs<Contract>): Promise<void> {}
+
+  /**
    * Reduce one raw stream event against explicit state, without touching the
    * processor's own state or checkpoint. Returns `undefined` for events this
    * processor does not consume, and a {@link ConsumedEventParseFailure} for
@@ -556,7 +575,7 @@ export abstract class StreamProcessor<
 
     const blockingWork: Promise<unknown>[] = [];
     try {
-      await this.processEventBatch({
+      const batchArgs: ProcessEventBatchArgs<Contract> = {
         events,
         reducedEvents,
         previousState,
@@ -568,7 +587,13 @@ export abstract class StreamProcessor<
           blockingWork.push(this.#runKeepAliveBackedWork(work));
         },
         runInBackground: (work) => this.runInBackground(work),
-      });
+      };
+      await this.processEventBatch(batchArgs);
+      // Reconciliation sees only at-head folds; the final catch-up page
+      // qualifies by construction (see the reconcile doc comment).
+      if (checkpointOffset >= args.streamMaxOffset) {
+        await this.reconcile(batchArgs);
+      }
       await Promise.all(blockingWork);
     } catch (error) {
       // A failed batch must still settle work it already registered so nothing

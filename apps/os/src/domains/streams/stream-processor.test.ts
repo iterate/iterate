@@ -323,6 +323,41 @@ describe("StreamProcessor parse-failure skipping", () => {
   });
 });
 
+describe("StreamProcessor.reconcile", () => {
+  class ReconcilingCounter extends CounterProcessor {
+    reconciledStates: { count: number }[] = [];
+    protected override async reconcile(
+      args: Parameters<StreamProcessor<typeof CounterContract>["reconcile"]>[0],
+    ): Promise<void> {
+      this.reconciledStates.push(args.state);
+    }
+  }
+
+  it("runs after at-head batches with the batch's final fold", async () => {
+    nextOffset = 0;
+    const processor = new ReconcilingCounter({ stream: neverStream });
+    await processor.ingest({
+      events: [incrementedEvent(2), incrementedEvent(3)],
+      streamMaxOffset: 2,
+    });
+    expect(processor.reconciledStates).toEqual([{ count: 5 }]);
+  });
+
+  it("never runs for a mid-catch-up batch (behind streamMaxOffset)", async () => {
+    nextOffset = 0;
+    const processor = new ReconcilingCounter({ stream: neverStream });
+    // A refold in progress: the head sits at offset 10, this page ends at 2.
+    await processor.ingest({
+      events: [incrementedEvent(2), incrementedEvent(3)],
+      streamMaxOffset: 10,
+    });
+    expect(processor.reconciledStates).toEqual([]);
+    // The final catch-up page reaches the head; reconciliation gets its pass.
+    await processor.ingest({ events: [incrementedEvent(5, 10)], streamMaxOffset: 10 });
+    expect(processor.reconciledStates).toEqual([{ count: 10 }]);
+  });
+});
+
 describe("StreamProcessor checkpoint loading", () => {
   it("treats a snapshot that fails the current state schema as a cache miss and refolds", async () => {
     // The deploy-a-schema-change scenario: the stored checkpoint carries the
