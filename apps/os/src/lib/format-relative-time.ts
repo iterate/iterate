@@ -1,6 +1,11 @@
-/** Coarse "3 days ago" / "in 2 hours" relative time, shared by list views. */
-export function formatRelativeTime(value: string) {
-  const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000);
+/**
+ * Coarse "3 days ago" / "in 2 hours" relative time, shared by list views.
+ * Pass `nowMs` when the caller re-renders on its own clock tick (a live list),
+ * so the label is a pure function of its inputs instead of reading the clock
+ * mid-render.
+ */
+export function formatRelativeTime(value: string, nowMs: number = Date.now()) {
+  const seconds = Math.round((nowMs - new Date(value).getTime()) / 1000);
   const absoluteSeconds = Math.abs(seconds);
   const units = [
     { label: "year", seconds: 31_536_000 },
