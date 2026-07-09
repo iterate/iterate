@@ -493,8 +493,11 @@ test("global cross-posts stay in the global namespace — a project stream is un
   });
   await globalSource.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
 
-  // The copy lands on the GLOBAL stream at the target path, provenance intact...
-  await waitFor(
+  // The copy lands on the GLOBAL stream at the target path, provenance
+  // intact... (waitForCondition, not expect.poll: expect.poll loses the test
+  // context on vitest retry in this lane and turns any first-attempt flake
+  // into a hard "expect.poll() must be called inside a test" failure.)
+  await waitForCondition(
     async () => {
       const events = await globalTarget.getEvents({ afterOffset: 0 });
       return events.some(
@@ -502,8 +505,7 @@ test("global cross-posts stay in the global namespace — a project stream is un
           event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPostedFrom !== undefined,
       );
     },
-    () => "global cross-post copy to land with provenance",
-    15_000,
+    { description: "cross-posted copy to land on the global target stream", timeoutMs: 15_000 },
   );
 
   // ...and the PROJECT stream at the same path never sees anything.

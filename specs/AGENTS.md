@@ -14,6 +14,8 @@ Avoid doing `await myButton.waitFor()` and then `await runButton.click()`. It's 
 
 The default `actionTimeout` in your playwright config should be _very aggressive_ and short. The `spinner-waiter` plugin allows this. If and when test fail because of this, there are two recommended courses of action, neither of which involves just bumping an assertion timeout. The first is of course to just figure out why the UI is sometimes slow and fix it. But if that's not possible, or beyond the scope of the work you're doing, the second recommended fix is to add a loading spinner to the product UI - we've identified a slow part of your app, so real users should also see a loading spinner, or some text like "Loading..."/"Pending..."/"Creating foobar..." etc.
 
+If you've really come up against a case where you truly think it's better to add `{ timeout: 10_000 }` or some such, you MUST leave a // comment explaining why so we can more easily fix the underlying issue later.
+
 ## Error UI
 
 For common developer pitfalls, instead of littering your test code with defensive try/catch statements and custom selectors for app error UI, just add the `data-type="error"` attribute to relevant UI elements. Then, the `ui-error-reporter` plugin will pick up any errors on screen automatically (including toasts rendered using the `sonner` library). The plugin will find elements annotated in this way and include their text content in error reports, so agents and humans will quickly be able to get an indication of what went wrong.

@@ -31,27 +31,37 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
   const kept: Promise<unknown>[] = [];
   let sinkAlive = true;
 
+  let lastEpoch = 0;
   const store: SubscriptionCursorStore = {
     get: (k) => rows.get(k),
     list: () => [...rows.values()],
     ensure: (k, acked) => {
       if (!rows.has(k)) {
+        lastEpoch += 1;
         rows.set(k, {
           subscriptionKey: k,
           ackedOffset: acked,
           attempt: 0,
           nextAttemptAt: null,
           lastError: null,
+          epoch: lastEpoch,
         });
       }
     },
-    ack: (k, acked) => {
+    ack: (k, acked, epoch) => {
       const row = rows.get(k);
       if (!row) return;
+      if (epoch !== undefined && row.epoch !== epoch) return;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
       row.attempt = 0;
       row.nextAttemptAt = null;
       row.lastError = null;
+    },
+    advanceWatermark: (k, acked) => {
+      const row = rows.get(k);
+      if (!row) return;
+      row.ackedOffset = Math.max(row.ackedOffset, acked);
+      row.nextAttemptAt = null;
     },
     nack: (k, args) => {
       const row = rows.get(k);
@@ -65,7 +75,14 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     setCursor: (k, acked) => {
       const row = rows.get(k);
       if (!row) return;
-      Object.assign(row, { ackedOffset: acked, attempt: 0, nextAttemptAt: null, lastError: null });
+      lastEpoch += 1;
+      Object.assign(row, {
+        ackedOffset: acked,
+        attempt: 0,
+        nextAttemptAt: null,
+        lastError: null,
+        epoch: lastEpoch,
+      });
     },
     delete: (k) => void rows.delete(k),
     minNextAttemptAt: () => {
@@ -126,6 +143,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       },
       appendFact: append,
       now: () => Date.now(),
+      random: () => 0.5,
       armAlarm: () => undefined,
       keepAlive: (promise) => void kept.push(promise),
     },
@@ -199,6 +217,47 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
     h.append({ type: "test/event", payload: {} });
     await h.settle();
     expect(h.pokes.length).toBe(pokesBefore + 1);
+  });
+
+  it("idle teardown of a WEDGED sink keeps the watermark honest and re-pokes", async () => {
+    // "Delivered into the sink" is not "ingested": a sink whose last batch
+    // never settles belongs to a wedged subscriber. The old teardown ack'd
+    // its watermark to maxOffset anyway, deferring redelivery until the next
+    // append — indefinitely on a quiet stream.
+    let pokes = 0;
+    const h = makeFaithfulHarness(async () => {
+      pokes += 1;
+      const sink = Object.assign(() => undefined, {
+        pendingDeliveries: () => 1, // permanently unsettled delivery
+        [Symbol.dispose]() {},
+      }) as RetainedProcessEventBatch;
+      return { checkpointOffset: 0, sink };
+    });
+    h.configured["k"] = {
+      latestConfiguredEvent: {
+        offset: 1,
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: h.wakePayload,
+        createdAt: new Date(1).toISOString(),
+      },
+    };
+    h.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: h.wakePayload,
+    });
+    h.subscribers.onSubscriptionConfigured(h.wakePayload as never, 1);
+    await h.settle();
+    expect(pokes).toBe(1);
+    const watermarkBefore = h.row("k")?.ackedOffset ?? 0;
+
+    h.subscribers.runIdleTeardownNow();
+    await h.settle();
+
+    // No over-ack past the wedged batch...
+    expect(h.row("k")?.ackedOffset).toBe(watermarkBefore);
+    // ...and the teardown itself queued the re-poke (supersede the wedged
+    // connection) instead of leaving the stream asleep until the next append.
+    expect(pokes).toBeGreaterThanOrEqual(2);
   });
 
   it("a poke fenced off by a config replacement re-reconciles immediately (liveness)", async () => {

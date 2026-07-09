@@ -181,9 +181,16 @@ export type SubscriptionCursorRow = {
   ackedOffset: number;
   /** Consecutive delivery/poke failures since the last success. */
   attempt: number;
-  /** Epoch ms before which the spine must not retry; null when not backing off. */
+  /** Wall-clock ms before which the spine must not retry; null when not backing off. */
   nextAttemptAt: number | null;
   lastError: string | null;
+  /**
+   * Seek fence. Bumped by every explicit cursor move (`setCursor`) and fresh
+   * on every row creation, so an ack fenced on the epoch a drain READ cannot
+   * clobber a seek (or a remove+recreate) that landed while its delivery was
+   * in flight — `ack`'s monotonic max alone would silently swallow the seek.
+   */
+  epoch: number;
 };
 
 /**
@@ -196,14 +203,28 @@ export type SubscriptionCursorStore = {
   list(): SubscriptionCursorRow[];
   /** Create the row if absent (configure); never resets an existing cursor. */
   ensure(subscriptionKey: string, ackedOffset: number): void;
-  /** Successful delivery: advance the cursor (monotonic), clear failure state. */
-  ack(subscriptionKey: string, ackedOffset: number): void;
+  /**
+   * Successful delivery: advance the cursor (monotonic), clear failure state.
+   * With `epoch`, the ack is FENCED: it no-ops unless the row's epoch still
+   * matches the one the caller read before dialing — a seek that landed while
+   * the delivery was in flight wins over the delivery's ack.
+   */
+  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  /**
+   * Advance the wake lane's observational watermark (monotonic) after a poke
+   * whose checkpoint did NOT progress. Clears the retry schedule (the poke
+   * consumed it; a live connection has no pending retry to arm) but KEEPS the
+   * failure streak — a successful handshake proves the host is reachable, not
+   * that deliveries succeed, and resetting the counter here is what let a
+   * deterministically failing subscriber spin forever without ever parking.
+   */
+  advanceWatermark(subscriptionKey: string, ackedOffset: number): void;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
   ): void;
-  /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state. */
+  /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
   delete(subscriptionKey: string): void;
   /** Earliest pending retry across all rows, for arming the DO alarm. */
@@ -212,6 +233,9 @@ export type SubscriptionCursorStore = {
 
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
+  /** Monotonic within this instance; wall-clock floor covers restarts. */
+  #lastEpoch = 0;
+
   constructor(readonly sql: SqlStorage) {
     this.sql.exec(`
       -- Delivery cursors for durable subscriptions (the spine's rows). One row
@@ -223,15 +247,21 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         attempt integer not null default 0,
         next_attempt_at integer,
         last_error text,
+        epoch integer not null default 0,
         updated_at text not null
       )
     `);
   }
 
+  #nextEpoch(): number {
+    this.#lastEpoch = Math.max(this.#lastEpoch + 1, Date.now());
+    return this.#lastEpoch;
+  }
+
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
     return this.sql
       .exec<SubscriptionCursorRowRecord>(
-        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error from subscriptions where subscription_key = ?",
+        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch from subscriptions where subscription_key = ?",
         subscriptionKey,
       )
       .toArray()
@@ -241,7 +271,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   list(): SubscriptionCursorRow[] {
     return this.sql
       .exec<SubscriptionCursorRowRecord>(
-        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error from subscriptions",
+        "select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch from subscriptions",
       )
       .toArray()
       .map(rowFromRecord);
@@ -249,16 +279,29 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
 
   ensure(subscriptionKey: string, ackedOffset: number): void {
     this.sql.exec(
-      "insert into subscriptions (subscription_key, acked_offset, updated_at) values (?, ?, ?) on conflict (subscription_key) do nothing",
+      "insert into subscriptions (subscription_key, acked_offset, epoch, updated_at) values (?, ?, ?, ?) on conflict (subscription_key) do nothing",
       subscriptionKey,
       ackedOffset,
+      // Fresh rows get a fresh epoch, so an ack fenced on a DELETED row's
+      // epoch cannot land on a same-key recreation (the remove+recreate
+      // deliver:"all" clobber).
+      this.#nextEpoch(),
       new Date().toISOString(),
     );
   }
 
-  ack(subscriptionKey: string, ackedOffset: number): void {
+  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
     this.sql.exec(
-      "update subscriptions set acked_offset = max(acked_offset, ?), attempt = 0, next_attempt_at = null, last_error = null, updated_at = ? where subscription_key = ?",
+      `update subscriptions set acked_offset = max(acked_offset, ?), attempt = 0, next_attempt_at = null, last_error = null, updated_at = ? where subscription_key = ?${epoch === undefined ? "" : " and epoch = ?"}`,
+      ...(epoch === undefined
+        ? [ackedOffset, new Date().toISOString(), subscriptionKey]
+        : [ackedOffset, new Date().toISOString(), subscriptionKey, epoch]),
+    );
+  }
+
+  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
+    this.sql.exec(
+      "update subscriptions set acked_offset = max(acked_offset, ?), next_attempt_at = null, updated_at = ? where subscription_key = ?",
       ackedOffset,
       new Date().toISOString(),
       subscriptionKey,
@@ -282,8 +325,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
     this.sql.exec(
-      "update subscriptions set acked_offset = ?, attempt = 0, next_attempt_at = null, last_error = null, updated_at = ? where subscription_key = ?",
+      "update subscriptions set acked_offset = ?, attempt = 0, next_attempt_at = null, last_error = null, epoch = ?, updated_at = ? where subscription_key = ?",
       ackedOffset,
+      this.#nextEpoch(),
       new Date().toISOString(),
       subscriptionKey,
     );
@@ -334,6 +378,7 @@ type SubscriptionCursorRowRecord = {
   attempt: number;
   next_attempt_at: number | null;
   last_error: string | null;
+  epoch: number;
 };
 
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
@@ -343,6 +388,7 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
     attempt: record.attempt,
     nextAttemptAt: record.next_attempt_at,
     lastError: record.last_error,
+    epoch: record.epoch,
   };
 }
 

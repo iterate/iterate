@@ -113,6 +113,7 @@ import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
+import { compileJsonataExpression } from "./domains/streams/event-selector.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import type {
   DynamicWorkerCapability,
@@ -189,10 +190,11 @@ import type {
 } from "./domains/capability-host/types.ts";
 import type { SecretDescription, SecretUpdateInput } from "./domains/secrets/types.ts";
 import type {
+  GetProcessorRuntimeState,
   ProcessEventBatch,
+  StreamPushEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
-  StreamEventBatch,
   StreamEventReadInput,
   StreamProcessorRpc,
   StreamSubscriberWakeRequest,
@@ -452,6 +454,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
+    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */
+    getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle> {
     // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
     // and invokes the delivery callback over Workers RPC, and Workers RPC
@@ -480,17 +484,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * stream cross-posts here by configuring
    * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
    */
-  ingest(batch: {
-    projectId: string | null;
-    path: string;
-    events: StreamEvent[];
-    streamMaxOffset: number;
-    state: unknown;
-    subscriptionKey: string;
-    deliveryId: string;
-    attempt: number;
-    configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
-  }): Promise<void> {
+  ingest(batch: StreamPushEventBatch): Promise<void> {
     // Only the platform's own delivery spine dials ingest: it arrives through
     // a push expression evaluated against the project's trusted itx root. A
     // session principal appending copies would bypass provenance stamping.
@@ -526,6 +520,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     deliver?: "all" | "new" | { afterOffset: number };
   }): Promise<StreamEvent> {
     const destination = normalizePath(args.path);
+    if (args.transform !== undefined) {
+      // Same configure-time posture as selector conditions (#validateAppend
+      // compiles them): an unparseable transform must fail THIS call, not
+      // park the subscription at delivery time hours later.
+      compileJsonataExpression(args.transform);
+    }
     const selector = {
       ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
       ...(args.condition === undefined ? {} : { condition: args.condition }),
@@ -1285,9 +1285,9 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
  * nothing is shared until pushed. `git` publishes commits to the workspace's
  * own branch in the project repo (`workspaces/<path>`), never to main.
  *
- * Constraints: individual files are capped at ~1.5MB (store large blobs with
- * `itx.files`), and the `.git` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the `git` methods). Workspace
+ * Constraints: the `.git` directory is platform-managed — read it if you
+ * like, but writes there are rejected (use the `git` methods). Large files
+ * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
  */
@@ -3932,7 +3932,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Same trust model as `worker.processEventBatch` itself: any project
    * principal may call it.
    */
-  processEventBatch(batch: StreamEventBatch): Promise<void> {
+  processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     return this.worker.processEventBatch(batch);
   }
 
