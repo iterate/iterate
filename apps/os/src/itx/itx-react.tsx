@@ -17,11 +17,11 @@
  *                                                            server-push subscription: reconnect,
  *                                                            liveness watchdog, re-subscribe, retry —
  *                                                            see its docstring)
- *   5. LIVE STATE       → useItxState((itx) => itx.processor)
- *                                                           (the React spelling of
- *                                                            itx.processor.onStateChange(setState):
- *                                                            the initial push is the first paint, every
- *                                                            state change repaints — see its docstring)
+ *   5. LIVE STATE       → useLiveState((itx) => itx.liveState, selector)
+ *                                                           (subscribe to any `.liveState` node; the
+ *                                                            server pushes a snapshot then minimal
+ *                                                            diffs and the selector picks the slice you
+ *                                                            render — see its docstring)
  *
  *   (useItxEffect — the reconnect-aware raw effect — is the internal foundation
  *   under the live hooks; it stops being module-private the day a consumer
@@ -76,16 +76,19 @@
 import {
   createContext,
   use,
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { ProcessorSnapshot } from "../domains/streams/rpc-types.ts";
+import type { LiveStateRpc } from "../domains/streams/rpc-types.ts";
 import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
+import { createLiveStateStore } from "../lib/live-state/store.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project
@@ -384,9 +387,9 @@ export function useItxQuery<T>({
  * `useItx()` handle and wants the server to push into it for as long as it's
  * mounted.
  *
- * THE LOAD-BEARING REASON it exists (not just sugar over `useEffect`): it injects
- * the connected `itx` handle and threads it into the effect deps, so when the
- * socket dies and re-dials, the effect RE-RUNS and re-subscribes on the fresh
+ * THE LOAD-BEARING REASON it exists (not just sugar over `useEffect`): it keys
+ * the effect on the connection's own connecting promise, so when the socket
+ * dies and re-dials, the effect RE-RUNS and re-subscribes on the fresh
  * socket — its subscription's first push is the recovery. A hand-rolled
  * `useEffect` that reaches itx through a closure silently omits that dep and does
  * NOT recover on reconnect (the codebase has exactly that bug, papered over with
@@ -394,70 +397,113 @@ export function useItxQuery<T>({
  * hook is also the universal shape — Apollo/urql/tRPC/Relay/Convex all ship one
  * rather than asking callers to wire raw effects.
  *
- * NOT for the must-NOT-suspend case: a component whose main content does not
- * depend on itx (e.g. the agent feed, the ⌘K tree) dials lazily via
- * {@link connectItxBrowser} inside a closure instead, so a slow/down socket degrades
- * just that widget and never suspends the page.
+ * For the must-NOT-suspend case — a component whose main content does not
+ * depend on itx (the ⌘K palette in the app shell) — pass `opts.address`: the
+ * effect then awaits the connection instead of the render unwrapping it, so a
+ * slow/down socket degrades just that widget and never suspends the page.
+ * One-off closures (the agent feed) can still dial {@link connectItxBrowser}
+ * directly.
  *
  * Subscribe to live pushes:
- *   const [state, setState] = useState<ProjectState>();
  *   useItxEffect((itx) => {
- *     const sub = itx.project.onStateChange(setState); // server now pushes to setState
- *     return () => sub[Symbol.dispose]();              // dispose = tell the server to stop
+ *     const sub = itx.streams.get("/logs").subscribe({ processEventBatch });
+ *     return () => sub.unsubscribe();                 // tell the server to stop
  *   }, []);
  *
  * Async setup (await, then subscribe) — same hook, no extra ceremony:
  *   useItxEffect(async (itx) => {
  *     const cfg = await itx.project.getConfig();
- *     const sub = itx.project.onStateChange((s) => setState({ ...s, cfg }));
- *     return () => sub[Symbol.dispose]();
+ *     const sub = await itx.streams.get("/logs").subscribe({ processEventBatch: onBatch(cfg) });
+ *     return () => sub.unsubscribe();
  *   }, []);
  *
  * The callback may be sync OR async; you don't pick. An async setup's late cleanup
  * still runs if you unmounted mid-await (React's documented async-effect guard).
  * Cleanup contract = `useEffect`'s: return a cleanup function (or nothing) —
  * typically disposing a capnweb stub via `Symbol.dispose`. `itx` defaults to the
- * provider; `[itx]` is added to the deps internally.
+ * provider; the connection is added to the deps internally. `enabled: false`
+ * renders the hook fully inert — no dial, no setup.
  */
 function useItxEffect(
   setup: (itx: ItxHandle) => void | (() => void) | Promise<void | (() => void)>,
   deps: unknown[],
-  opts?: { itx?: ItxHandle },
+  opts?: {
+    itx?: ItxHandle;
+    address?: ItxAddress;
+    enabled?: boolean;
+    onDialError?: (error: unknown) => void;
+  },
 ): void {
-  const fallback = useItx();
-  const itx = opts?.itx ?? fallback; // an explicit { itx } override wins
+  const contextAddress = use(ItxAddressContext);
+  const address = opts?.address;
+  const enabled = opts?.enabled ?? true;
+  const context = (address ?? contextAddress).projectId;
+  // ONE subscription to the socket map, keyed on the connection this effect
+  // rides — a socket death re-renders us with a FRESH connecting promise, and
+  // that promise in the effect deps is what re-runs the effect on it (the
+  // reconnect recovery, for both lanes). Reading dials (socketFor memoizes, so
+  // render replays are safe); a disabled effect — or one handed `{ itx }` —
+  // must not even dial. On the server there is no socket, ever.
+  const promise = useSyncExternalStore(
+    subscribeSockets,
+    () => (enabled && opts?.itx === undefined ? socketFor(context) : undefined),
+    () => undefined,
+  );
+  // Only the AMBIENT lane unwraps in render — the suspend-OK case (the page IS
+  // this connection's content). The `address` lane awaits the same promise
+  // inside the effect, so mounting never suspends the surrounding tree (the ⌘K
+  // contract: the palette lives in the app shell and must not blank it — not
+  // even while a socket re-dials). `use()`, unlike a hook, is legal here.
+  const itx =
+    opts?.itx ?? (promise !== undefined && address === undefined ? use(promise) : undefined);
   useEffect(() => {
+    if (!enabled) return;
     let disposed = false;
     let cleanup: void | (() => void);
-    const result = setup(itx);
-    if (result instanceof Promise) {
-      // Async: the cleanup lands later. If we unmounted in the meantime, run it
-      // immediately so nothing leaks (React's documented async-effect guard).
-      void result.then(
-        (c) => {
-          if (disposed) c?.();
-          else cleanup = c;
-        },
-        // A rejected async setup has no resource to clean up — surface it rather
-        // than leave an unhandled rejection. A setup that wants to RENDER the
-        // failure should try/catch and setState itself (see itx-activity-tail).
-        (error: unknown) => {
-          if (!disposed) console.error("useItxEffect: async setup failed", error);
-        },
-      );
-    } else {
-      cleanup = result; // sync: cleanup captured now, like a normal effect
+    const apply = (handle: ItxHandle) => {
+      if (disposed) return;
+      const result = setup(handle);
+      if (result instanceof Promise) {
+        // Async: the cleanup lands later. If we unmounted in the meantime, run it
+        // immediately so nothing leaks (React's documented async-effect guard).
+        void result.then(
+          (c) => {
+            if (disposed) c?.();
+            else cleanup = c;
+          },
+          // A rejected async setup has no resource to clean up — surface it rather
+          // than leave an unhandled rejection. A setup that wants to RENDER the
+          // failure should try/catch and setState itself (see itx-activity-tail).
+          (error: unknown) => {
+            if (!disposed) console.error("useItxEffect: async setup failed", error);
+          },
+        );
+      } else {
+        cleanup = result; // cleanup captured now, like a normal effect
+      }
+    };
+    if (itx !== undefined) {
+      apply(itx); // synchronous, exactly like a plain effect
+    } else if (promise !== undefined) {
+      // Address lane: the dial resolves inside the effect. A FAILED dial never
+      // reaches `setup`, so a caller owning status (useItxSubscription) must
+      // take `onDialError` to surface + retry it — else it can only be logged.
+      void promise.then(apply, (error: unknown) => {
+        if (disposed) return;
+        if (opts?.onDialError) opts.onDialError(error);
+        else console.error("useItxEffect: dial failed", error);
+      });
     }
     return () => {
       disposed = true;
       cleanup?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- [itx] + caller's deps; setup read fresh per run
-  }, [itx, ...deps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connection + caller's deps; setup read fresh per run
+  }, [enabled, opts?.itx ?? promise, ...deps]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. Live processor state: useItxProcessorState() — snapshot + push + watchdog
+// 4. Live subscriptions: useItxSubscription() — recovery + watchdog; useLiveState() — live values
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** How often a mounted subscription verifies it is still alive server-side. */
@@ -548,7 +594,7 @@ function watchItxSubscription(
 
 /**
  * The live handle shape every itx subscription API returns — `Stream.subscribe`
- * and `StreamProcessorRpc.onStateChange` both hand back `ping()` + `unsubscribe()`.
+ * and `LiveStateRpc.subscribe` both hand back `ping()` + `unsubscribe()`.
  */
 export type ItxLiveSubscriptionHandle = {
   ping(): boolean | Promise<boolean>;
@@ -567,7 +613,8 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
  *     → the {@link watchItxSubscription} watchdog detects it and either
  *     re-subscribes (dead) or drops the sockets so everything re-dials
  *     (timed-out);
- *   - a failed subscribe attempt → status "error", retried on a
+ *   - a failed subscribe attempt — including a failed lazy dial when
+ *     subscribing via `{ address }` — → status "error", retried on a
  *     watchdog-shaped delay.
  *
  * `subscribe` opens the subscription and returns its handle; server pushes go
@@ -592,21 +639,31 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
 export function useItxSubscription(
   subscribe: (itx: ItxHandle) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
-  opts?: { enabled?: boolean },
+  opts?: { enabled?: boolean; itx?: ItxHandle; address?: ItxAddress },
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
   const enabled = opts?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
   const [state, setState] = useState<{ status: ItxSubscriptionStatus; error?: string }>({
     status: "connecting",
   });
+  // The dial-error retry outlives its effect run (the failure IS the run never
+  // starting), so its timer is cleared on unmount rather than by an effect
+  // cleanup. A bump landing after a later successful run only re-subscribes,
+  // which is idempotent (see the watchdog note below).
+  const dialRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(dialRetry.current), []);
+
+  // Disabling makes the whole effect inert (no dial, no setup — see
+  // useItxEffect), so the status reset happens here: a subscription disabled
+  // after a live period must not keep reporting "live" over its torn-down
+  // handle (consumers would render stale data as fresh).
+  useEffect(() => {
+    if (!enabled) setState({ status: "connecting" });
+  }, [enabled]);
 
   useItxEffect(
     async (effectItx) => {
-      // Status resets BEFORE the enabled gate: a subscription disabled after a
-      // live period must not keep reporting "live" over its torn-down handle
-      // (consumers render stale data as fresh otherwise).
       setState({ status: "connecting" });
-      if (!enabled) return;
       let disposed = false;
 
       let subscription: ItxLiveSubscriptionHandle;
@@ -656,73 +713,144 @@ export function useItxSubscription(
         dispose();
       };
     },
-    [enabled, epoch, ...deps],
+    [epoch, ...deps],
+    // Subscribe through a specific connection: `{ itx }` uses a handle you already
+    // hold; `{ address }` (e.g. ⌘K reaching a project from the app shell) dials
+    // lazily inside the effect so render never suspends.
+    {
+      itx: opts?.itx,
+      address: opts?.address,
+      enabled,
+      // A failed lazy dial never reaches the setup above, so without this the
+      // hook would sit on "connecting" forever: put it on the SAME lane as a
+      // failed subscribe — status "error", then an epoch bump retries the dial
+      // (the socket pool dropped the failed promise, so the retry re-dials).
+      onDialError: (error) => {
+        setState({
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        clearTimeout(dialRetry.current);
+        dialRetry.current = setTimeout(
+          () => setEpoch((current) => current + 1),
+          SUBSCRIBE_RETRY_MS,
+        );
+      },
+    },
   );
 
-  return {
-    ...state,
-    refresh: () => {
-      setState({ status: "connecting" });
-      setEpoch((current) => current + 1);
-    },
-  };
+  // Stable identity: `refresh` lands in consumer deps and memoized children
+  // (useLiveState holds it in a ref); its captured setters are stable.
+  const refresh = useCallback(() => {
+    setState({ status: "connecting" });
+    setEpoch((current) => current + 1);
+  }, []);
+
+  return { ...state, refresh };
 }
 
 /**
- * THE page-data primitive: live reduced state from a stream processor. The
- * callsite spells the whole subscription — nothing is called on your behalf:
+ * THE live-state primitive: subscribe to any `.liveState` node, render the slice
+ * you pick. The server pushes a snapshot then minimal diffs; this hook reassembles
+ * them (see lib/live-state/store) and hands back `selector(state)`.
  *
- *   const { state } = useItxState((itx, setState) => itx.processor.onStateChange(setState), []);
- *   // state.secrets / state.repos / state.agents re-render as events land
+ *   const streams = useLiveState((itx) => itx.liveState, (s) => s.streamsIndex);
+ *   // re-renders ONLY when streamsIndex changes — a change elsewhere in the
+ *   // project's live state does not re-render this component.
  *
- * The hook only owns what a callsite can't: the state cell (`setState` is a
- * plain setter EXCEPT it commits offset-monotonically, so a straggler push
- * from a dying subscription can never roll state backwards) and
- * {@link useItxSubscription}'s recovery. No cache keys, no query client, no
- * separate initial fetch: `onStateChange` delivers the current checkpoint
- * immediately (the server's initial push IS the first paint) and every state
- * change after; mutations need no invalidation.
+ * THE SELECTOR CONTRACT — a pure function of the state, and nothing else:
+ * - Return a STABLE slice (`s => s.rows`), not a fresh object
+ *   (`s => Object.values(s.rows)`); map in a downstream `useMemo`.
+ * - Do NOT close over props/state (`s => s.rows[props.id]`): selection is
+ *   cached by STATE identity, so a closure-captured value going stale is
+ *   invisible until the next server push. Select the broader slice and index
+ *   into it in render, or route the changing input through `deps`.
  *
- * `state` is `undefined` between mount and the initial push (one round trip
- * on a warm socket); render a loading row for that window. Anything the
- * subscribe closure captures that points the hook at a DIFFERENT processor
- * (a secret path, a repo path) goes in `deps` — a deps change re-subscribes
- * AND drops the held snapshot, so offsets from unrelated processors are
- * never compared.
+ * `value` is `undefined` between mount and the first snapshot (one round trip);
+ * render a loading row for that window. `deps` re-point the hook at a different
+ * node — a change drops the held state so a stale slice never shows. All
+ * reconnect/liveness recovery is {@link useItxSubscription}'s.
+ *
+ * Every mounted hook holds its OWN server subscription (deliberate for now:
+ * ⌘K is the only always-mounted consumer). If composite-state panels multiply,
+ * share one subscription per (connection, node) behind a refcounted store map
+ * — the same shape as the socket map above — rather than mounting N hooks on
+ * one node.
+ *
+ * By default it subscribes through the ambient connection. To read a DIFFERENT
+ * project's live state from OUTSIDE its provider (the ⌘K palette mounts in the
+ * app shell but wants a project's streams index), pass `opts.address =
+ * { projectId }`: the connection resolves inside the effect, so it never
+ * suspends the surrounding tree (the documented ⌘K contract). `opts.itx` is
+ * the eager sibling for when you already hold the handle. `opts.enabled =
+ * false` makes the hook inert (no dial, no subscription) while keeping the
+ * last value.
  */
-export function useItxState<State>(
-  subscribe: (
-    itx: ItxHandle,
-    setState: (snapshot: ProcessorSnapshot<State>) => void,
-  ) => Promise<ItxLiveSubscriptionHandle>,
+export function useLiveState<State, Selected = State>(
+  live: (itx: ItxHandle) => LiveStateRpc<State>,
+  selector: (state: State) => Selected,
   deps: unknown[] = [],
+  opts?: { itx?: ItxHandle; address?: ItxAddress; enabled?: boolean },
 ): {
-  state: State | undefined;
-  offset: number | undefined;
+  value: Selected | undefined;
   status: ItxSubscriptionStatus;
   error?: string;
   refresh: () => void;
 } {
-  const [snapshot, setSnapshot] = useState<ProcessorSnapshot<State>>();
+  // useState, not useMemo: the store holds the accumulated live value, and
+  // React documents useMemo as droppable (a dropped store would cost a resync).
+  const [store] = useState(() => createLiveStateStore<State>());
+  // deps change = a different node: drop the held state (its slice is meaningless now).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
+  useEffect(() => () => store.reset(), deps);
 
-  // deps change = this hook now points at a different processor: the old
-  // snapshot must not survive (its offsets are meaningless against the new
-  // processor's). Recovery re-subscribes (same processor) keep the snapshot —
-  // they come from useItxSubscription's internal epoch, not from deps.
-  useEffect(() => {
-    return () => setSnapshot(undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
-  }, deps);
-
+  // The sink needs `refresh` to resync on a gap, but `refresh` comes from the
+  // subscription below — a ref bridges the cycle (the sink only fires later).
+  const refreshRef = useRef<() => void>(() => {});
   const subscription = useItxSubscription(
-    (itx) =>
-      subscribe(itx, (pushed) => {
-        setSnapshot((previous) =>
-          previous !== undefined && previous.offset >= pushed.offset ? previous : pushed,
-        );
-      }),
+    async (itx) => {
+      // The stale-sink guard: revision lines RESTART per subscription, so a
+      // straggler push from a dying subscription (its unsubscribe is
+      // best-effort) could collide with the fresh line and apply a wrong
+      // patch — or read as a gap and tear the healthy subscription down.
+      // Marking the sink stale on unsubscribe closes both.
+      let stale = false;
+      const handle = await live(itx).subscribe((update) => {
+        if (stale) return;
+        store.apply(update, () => refreshRef.current());
+      });
+      return {
+        ping: () => handle.ping(),
+        unsubscribe: () => {
+          stale = true;
+          return handle.unsubscribe();
+        },
+      };
+    },
     deps,
+    { itx: opts?.itx, address: opts?.address, enabled: opts?.enabled },
   );
+  // In an effect, not during render (a discarded concurrent render must not
+  // write refs); `refresh` is stable, so this runs once.
+  useEffect(() => {
+    refreshRef.current = subscription.refresh;
+  }, [subscription.refresh]);
 
-  return { state: snapshot?.state, offset: snapshot?.offset, ...subscription };
+  // Selector memo cache keyed on STATE identity: returns the same `Selected` ref
+  // while the state is unchanged, so useSyncExternalStore bails out (and can never
+  // loop). An unstable selector costs a re-render, not a loop; a closure-capturing
+  // selector goes stale — that's the documented contract above.
+  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({
+    state: undefined,
+    value: undefined,
+  });
+  const getSelected = () => {
+    const state = store.getState();
+    if (state === cache.current.state) return cache.current.value;
+    cache.current = { state, value: state === undefined ? undefined : selector(state) };
+    return cache.current.value;
+  };
+  const value = useSyncExternalStore(store.subscribe, getSelected, getSelected);
+
+  return { value, ...subscription };
 }

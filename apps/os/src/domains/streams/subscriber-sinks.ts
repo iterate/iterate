@@ -28,6 +28,7 @@
 // stream-wire.e2e.test.ts.
 
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
+import { disposeIgnoredRpcResult, isThenable, retainCallback } from "../../lib/rpc/retain.ts";
 import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
@@ -39,13 +40,6 @@ import type {
   StreamWebhookDelivery,
 } from "./rpc-types.ts";
 import type { SubscriberDial } from "./stream-subscribers.ts";
-import { disposeIgnoredRpcResult, isThenable } from "./stream-processor.ts";
-
-/** An RPC callback after retention: callable, disposable, with optional broken-transport signal. */
-type RetainedRpcCallback<T extends (...args: any[]) => unknown> = T &
-  Partial<Disposable> & {
-    onRpcBroken?(callback: (error: unknown) => void): void;
-  };
 
 /** The pump-facing delivery callback: fire-and-forget, disposable, broken-transport aware. */
 export type RetainedProcessEventBatch = ((batch: Parameters<ProcessEventBatch>[0]) => void) &
@@ -59,13 +53,6 @@ export type RetainedProcessEventBatch = ((batch: Parameters<ProcessEventBatch>[0
      */
     pendingDeliveries?(): number;
   };
-
-function retainRpcCallback<T extends (...args: any[]) => unknown>(
-  callback: T,
-): RetainedRpcCallback<T> {
-  const retainable = callback as T & Partial<Disposable> & { dup?(): RetainedRpcCallback<T> };
-  return retainable.dup?.() ?? retainable;
-}
 
 /**
  * Retains a delivery sink and wraps it in the pump's fire-and-forget calling
@@ -93,8 +80,10 @@ export function retainProcessEventBatch(
     onDisposed?: () => void;
   } = {},
 ): RetainedProcessEventBatch {
-  const retained = retainRpcCallback(processEventBatch);
-  const dispose = retained[Symbol.dispose]?.bind(retained);
+  // `retainCallback` owns the transport dance (dup, idempotent dispose, and
+  // the defensive onRpcBroken wiring — see lib/rpc/retain.ts for why that
+  // wiring is subtle); this layer adds only the pump's delivery semantics.
+  const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;
   let pendingDeliveries = 0;
   const callback: RetainedProcessEventBatch = Object.assign(
@@ -128,35 +117,16 @@ export function retainProcessEventBatch(
       pendingDeliveries: () => pendingDeliveries,
       [Symbol.dispose]() {
         try {
-          dispose?.();
+          retained[Symbol.dispose]();
         } finally {
           opts.onDisposed?.();
         }
       },
     },
   );
-  // Cap'n Web stubs intercept `onRpcBroken` locally but expose no own property
-  // descriptors, so an `Object.hasOwn` guard never wires it. `typeof` is also
-  // unreliable in the other direction: property access on a Workers RPC stub
-  // can fabricate a pipelined method that rejects at call time. Wire whatever
-  // the stub claims to have, defensively. For durable subscribers, the
-  // onDeliveryError path still observes broken stubs even if this registration
-  // was only a pipelined fake.
-  const onRpcBroken = retained.onRpcBroken;
-  if (typeof onRpcBroken === "function") {
-    callback.onRpcBroken = (brokenCallback: (error: unknown) => void) => {
-      try {
-        const result = onRpcBroken.call(retained, brokenCallback) as unknown;
-        if (isThenable(result)) {
-          void Promise.resolve(result).catch(() => {
-            // Pipelined fake: the remote has no onRpcBroken method.
-          });
-        }
-      } catch {
-        // Same: registration is best-effort.
-      }
-    };
-  }
+  // For durable subscribers, the onDeliveryError path still observes broken
+  // stubs even when this registration was only a pipelined fake.
+  if (retained.onRpcBroken) callback.onRpcBroken = retained.onRpcBroken;
   return callback;
 }
 
@@ -165,11 +135,10 @@ export function retainGetProcessorRuntimeState(
   getRuntimeState: GetProcessorRuntimeState | undefined,
 ): (GetProcessorRuntimeState & Disposable) | undefined {
   if (getRuntimeState === undefined) return undefined;
-  const retained = retainRpcCallback(getRuntimeState);
-  const dispose = retained[Symbol.dispose]?.bind(retained);
+  const retained = retainCallback<void>(getRuntimeState);
   return Object.assign(
     () => {
-      const result = retained();
+      const result = retained(undefined) as ReturnType<GetProcessorRuntimeState>;
       if (isThenable(result)) {
         return Promise.resolve(result).finally(() => disposeIgnoredRpcResult(result));
       }
@@ -178,7 +147,7 @@ export function retainGetProcessorRuntimeState(
     },
     {
       [Symbol.dispose]() {
-        dispose?.();
+        retained[Symbol.dispose]();
       },
     },
   );

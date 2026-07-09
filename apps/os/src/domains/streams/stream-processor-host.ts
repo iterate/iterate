@@ -56,6 +56,7 @@
 // incarnation left behind.
 
 import type { Stream } from "../../itx-api.generated.ts";
+import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
   StreamEventBatch,
   StreamSubscriberWakeRequest,
@@ -110,6 +111,14 @@ export type AnyHostedProcessor = {
   }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
+  /** The current reduced state, synchronously — feeds live-state assembly without an async hop. */
+  currentState: unknown;
+  /** Whether `currentState` is the fold and not the schema default (see StreamProcessor.isLoaded). */
+  readonly isLoaded: boolean;
+  /** Host confirmation that the journal is folded through head (the zero-batch catch-up case). */
+  markLoaded(): void;
+  /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
+  observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void;
 };
 
 type HostedEntry = {
@@ -118,8 +127,28 @@ type HostedEntry = {
   ingestChain: Promise<void>;
 };
 
-export type StreamProcessorHost = {
+export type StreamProcessorHost<Live extends object = Record<string, unknown>> = {
   readonly stream: Stream;
+  /** The node's live-state engine; a `.liveState` RpcTarget exposes getState()/subscribe() over it. */
+  readonly live: LiveState<Live>;
+  /**
+   * Reassemble the live state from current inputs — the ONE writer for the
+   * engine. Call it after mutating any non-processor live-state input (the
+   * streams index, the demo counter); a processor's own state change calls it
+   * automatically via `observeStateChanges`. The diff makes a full reassembly
+   * cheap (unchanged slices keep identity), so there is no need to poke
+   * individual slices. On a cold DO (a processor's checkpoint not yet loaded)
+   * it defers to an async load-then-assemble instead of publishing the schema
+   * default over real facts.
+   */
+  refreshLive(): void;
+  /**
+   * `refreshLive`'s cold-start sibling: LOAD every processor's checkpoint,
+   * THEN reassemble — so the first read/subscription reflects committed
+   * writes even on a cold DO. (Distinct names because the difference — one
+   * awaits storage, one must not — is exactly what a call site gets wrong.)
+   */
+  loadAndRefreshLive(): Promise<void>;
   /**
    * Register a processor under its contract slug. The builder receives the
    * host-provided base deps (checkpoint storage in DO KV keyed by the slug and
@@ -164,7 +193,7 @@ export type StreamProcessorHost = {
   getAlarmSlice(name: string): number | null;
 };
 
-export function createStreamProcessorHost(
+export function createStreamProcessorHost<Live extends object = Record<string, unknown>>(
   ctx: DurableObjectState,
   options: {
     stream: Stream;
@@ -182,8 +211,17 @@ export function createStreamProcessorHost(
     now?: () => number;
     /** Catch-up read page size; tests shrink it to exercise paging. */
     catchUpPageSize?: number;
+    /**
+     * Assemble this node's live state (see `LiveState`) — this is what TYPES
+     * the host's `Live` parameter. Called on every hosted processor's state
+     * change and on `loadAndRefreshLive`. Omit and the live state is the
+     * primary (first-registered) processor's reduced state (untyped: `Live`
+     * stays the default record); provide it to project a redacted view or fold
+     * in extras (e.g. a streams index).
+     */
+    getLiveState?: () => Live;
   },
-): StreamProcessorHost {
+): StreamProcessorHost<Live> {
   const entries = new Map<string, HostedEntry>();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
@@ -342,6 +380,12 @@ export function createStreamProcessorHost(
         });
         events = lookahead;
       }
+      // Folded through head as of this read. Ingest already marks itself
+      // loaded per batch; this covers the one case it can't — a clean
+      // catch-up that delivered ZERO batches (e.g. a discarded checkpoint
+      // over an empty journal), where the current state — even the schema
+      // default — is by construction the fold.
+      entry.processor.markLoaded();
     } catch (error) {
       if (opts.rethrow) throw error;
       console.error(
@@ -351,8 +395,51 @@ export function createStreamProcessorHost(
     }
   }
 
+  // The node's live-state engine. Seeded empty; assembled from processor state
+  // on the first `loadAndRefreshLive` and kept fresh by each processor's observer.
+  // The empty seed and the primary-processor fallback are the two places the
+  // host must assert `Live` (they only apply on hosts that omitted
+  // `getLiveState`, where `Live` is the default record type anyway).
+  const live = new LiveState<Live>({} as Live);
+  function assembleLive(): void {
+    // An unloaded processor reports the schema DEFAULT as currentState —
+    // assembling from that would push patches that wipe real facts to live
+    // subscribers (e.g. a cold DO whose first wake is a touchStreamActivity).
+    // Load first, then this reassembly re-runs with the real fold.
+    if ([...entries.values()].some((entry) => !entry.processor.isLoaded)) {
+      void loadThenAssemble();
+      return;
+    }
+    const primary = [...entries.values()][0]?.processor.currentState;
+    live.setState(options.getLiveState?.() ?? ((primary ?? {}) as Live));
+  }
+  async function loadThenAssemble(): Promise<void> {
+    await Promise.all(
+      [...entries.values()].map((entry) => entry.processor.snapshot().catch(() => undefined)),
+    );
+    // Still-unloaded after the snapshot read = a checkpoint DISCARDED at load
+    // (schema mismatch after a state-shape deploy): the fold must come from
+    // the journal. Catch up exactly those processors — so one stale
+    // checkpoint never blocks the peer slices assembled in getLiveState —
+    // and a clean catch-up marks even an empty journal loaded.
+    await Promise.all(
+      [...entries.entries()]
+        .filter(([, entry]) => !entry.processor.isLoaded)
+        .map(([name]) => catchUpInternal(name, { rethrow: false })),
+    );
+    // A processor that STILL isn't loaded (storage/read failures all the way
+    // down): KEEP the last assembled state rather than publishing defaults as
+    // facts — the failed loads cleared their memos, so the next refresh (or
+    // the storage-failure DO restart) retries.
+    if ([...entries.values()].some((entry) => !entry.processor.isLoaded)) return;
+    assembleLive();
+  }
+
   return {
     stream: options.stream,
+    live,
+    refreshLive: assembleLive,
+    loadAndRefreshLive: loadThenAssemble,
     add(build) {
       // The registry name is the processor's contract slug, which only exists
       // after the builder runs; the checkpoint-storage deps close over it
@@ -385,6 +472,8 @@ export function createStreamProcessorHost(
       }
       registeredSlug = processor.contract.slug;
       entries.set(registeredSlug, { processor, ingestChain: Promise.resolve() });
+      // Any processor's reduced-state change reassembles the node's live state.
+      processor.observeStateChanges(() => assembleLive());
       return processor;
     },
 

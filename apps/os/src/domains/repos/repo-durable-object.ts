@@ -6,7 +6,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -91,6 +91,11 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   get processor() {
     return new StreamProcessorRpcTarget(this.#repoProcessor);
+  }
+
+  /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
+  get liveState() {
+    return new LiveStateRpcTarget(this.#host);
   }
 
   /**

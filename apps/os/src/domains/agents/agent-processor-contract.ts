@@ -8,6 +8,16 @@ export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
 
 /**
+ * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
+ * capped at 6× base — 10s, 20s, 60s. Without it a provider blip returning
+ * instant errors (2026-07-09 prd: Workers AI 8008s in ~90ms) burns the whole
+ * retry budget inside one second and the turn dies before the blip clears.
+ * Rides the scheduled event's debounceMs, so it is derived from the fold
+ * (consecutiveLlmFailures) and deterministic under refold.
+ */
+export const AGENT_LLM_RETRY_BACKOFF_BASE_MS = 10_000;
+
+/**
  * Two horizons in one constant, deliberately equal:
  *
  * - How stale an llm-request-requested INTENT may be before the reconciler

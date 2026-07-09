@@ -1,64 +1,47 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
+import { ActivityIcon, PlusIcon, RadioIcon, TimerIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import type { ProjectProcessorState } from "../../../../domains/projects/project-processor-contract.ts";
 import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import {
   useItx,
-  useItxState,
   useItxSubscription,
+  useLiveState,
   type ItxSubscriptionStatus,
 } from "~/itx/itx-react.tsx";
 
+// The live-state PLAYGROUND — one primitive from several angles: a DO-backed
+// composite (`itx.liveState`: the project's folded `reduced` state + the streams
+// index + a demo counter), a stateless node (`itx.liveDemo.ticker`, a timer in
+// the request isolate with no DO), and the SEPARATE raw event-log lane.
+
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   ssr: false,
-  loader: ({ context }) => ({
-    breadcrumb: "Reactivity",
-    project: context.project,
-  }),
+  loader: ({ context }) => ({ breadcrumb: "Reactivity", project: context.project }),
   component: ProjectReactivityPage,
 });
 
 const REACTIVITY_TEST_STREAM_PATH = "/reactivity-test";
 const REACTIVITY_TEST_EVENT_TYPE = "events.iterate.com/reactivity-test/appended";
 
-type ReactivityActionState = {
-  error?: string;
-  kind?: "batch" | "single";
-  marker?: string;
-  status: "idle" | "running" | "done" | "error";
-};
-
-type ReactivityTestEvent = {
-  createdAt: string;
-  marker: string;
-  offset: number;
-};
+type ReactivityTestEvent = { createdAt: string; marker: string; offset: number };
 
 type ReactivityTestStreamState = {
   batchCount: number;
   error?: string;
   events: ReactivityTestEvent[];
-  lastBatchAt?: number;
   status: ItxSubscriptionStatus;
 };
 
 /**
- * Live raw-stream subscription. All recovery (reconnect, silent-death
- * watchdog, re-subscribe, retry) is useItxSubscription's; this hook only
- * accumulates delivered events. Re-subscription replays from offset 0 and
- * `mergeReactivityTestEvents` dedupes by offset, so recovery is idempotent.
+ * Live raw-EVENT subscription — the lane that stays separate from live state.
+ * Recovery is all `useItxSubscription`'s; this hook only accumulates delivered
+ * events, deduped by offset so a re-subscription's replay is idempotent.
  */
 function useReactivityTestStream(): ReactivityTestStreamState {
-  const [feed, setFeed] = useState({
-    batchCount: 0,
-    events: [] as ReactivityTestEvent[],
-    lastBatchAt: undefined as number | undefined,
-  });
-
+  const [feed, setFeed] = useState({ batchCount: 0, events: [] as ReactivityTestEvent[] });
   const subscription = useItxSubscription(
     (itx) =>
       itx.streams.get(REACTIVITY_TEST_STREAM_PATH).subscribe({
@@ -70,13 +53,11 @@ function useReactivityTestStream(): ReactivityTestStreamState {
           setFeed((current) => ({
             batchCount: current.batchCount + 1,
             events: mergeReactivityTestEvents(current.events, events),
-            lastBatchAt: Date.now(),
           }));
         },
       }),
     [],
   );
-
   return { ...feed, error: subscription.error, status: subscription.status };
 }
 
@@ -88,74 +69,94 @@ function ProjectReactivityPage() {
   );
 }
 
+type ReactivityActionState = {
+  error?: string;
+  marker?: string;
+  status: "idle" | "running" | "done" | "error";
+};
+
 function ProjectReactivityContent() {
   const { project } = Route.useLoaderData();
   const itx = useItx();
-  const live = useItxState<ProjectProcessorState>(
-    (itx, setState) => itx.processor.onStateChange(setState),
+
+  // The project's live state — the processor's fold (`reduced`) is one slice.
+  // Each selector re-renders only when ITS slice changes.
+  const live = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced,
     [],
   );
+  const streamsIndex = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.streamsIndex,
+    [],
+  );
+  const counter = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.liveDemo,
+    [],
+  );
+  const ticker = useLiveState(
+    (itx) => itx.liveDemo.ticker,
+    (state) => state.tick,
+  );
   const testStream = useReactivityTestStream();
-  // Only ever read inside the append handlers — a ref avoids a render per click.
-  const nextActionIdRef = useRef(1);
-  const [action, setAction] = useState<ReactivityActionState>({ status: "idle" });
 
-  // Count checkpoint advances observed by this component — how the page makes
-  // pushes visible without owning its own subscription.
-  const [pushLog, setPushLog] = useState({ count: 0, lastAt: undefined as number | undefined });
+  // Count live-state pushes observed here — how the page makes server pushes
+  // visible without owning a subscription. (`reduced` gets a new reference only
+  // when the fold actually changes, e.g. a child stream is born.)
+  const [pushCount, setPushCount] = useState(0);
   useEffect(() => {
-    // Mount runs this with offset still undefined — that is not a push.
-    if (live.offset === undefined) return;
-    setPushLog((current) => ({ count: current.count + 1, lastAt: Date.now() }));
-  }, [live.offset]);
+    if (live.value === undefined) return;
+    setPushCount((current) => current + 1);
+  }, [live.value]);
 
-  const projectState = live.state;
-  // The project processor state has no phase/onboarding machine; `created` is
-  // the lifecycle fact, and the create request carries the project identity.
+  const nextActionId = useRef(1);
+  const [action, setAction] = useState<ReactivityActionState>({ status: "idle" });
+  const [incrementing, setIncrementing] = useState(false);
+
+  const projectState = live.value;
   const phase = projectState === undefined ? "unknown" : projectState.created ? "ready" : "pending";
   const projectId = projectState?.createRequest?.projectId ?? project.id;
-  const actionObserved = isActionObserved(action, testStream.events);
-  const actionSyncing = action.status === "done" && !actionObserved;
-  const actionPending = action.status === "running" || actionSyncing;
-  const actionStatus = actionSyncing ? "syncing..." : action.status;
-  const liveApi = [
-    "const { state, offset, status } = useProjectProcessorState(project.id)",
-    "// server pushes every state change; a liveness watchdog",
-    "// re-subscribes after silent DO restarts and half-open sockets",
-  ].join("\n");
+  const indexedCount =
+    streamsIndex.value === undefined ? "-" : String(Object.keys(streamsIndex.value).length);
 
   async function appendTestEvent() {
-    const actionId = nextActionIdRef.current;
-    nextActionIdRef.current += 1;
-    const marker = `reactivity-event-${actionId}`;
-    setAction({ kind: "single", marker, status: "running" });
+    const marker = `reactivity-event-${nextActionId.current++}`;
+    setAction({ marker, status: "running" });
     try {
       await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).append({
         type: REACTIVITY_TEST_EVENT_TYPE,
         payload: { marker },
       });
-      setAction({ kind: "single", marker, status: "done" });
+      setAction({ marker, status: "done" });
     } catch (error: unknown) {
-      setAction({ error: stringifyError(error), kind: "single", marker, status: "error" });
+      setAction({ error: stringifyError(error), marker, status: "error" });
     }
   }
 
   async function appendTestBatch() {
-    const actionId = nextActionIdRef.current;
-    nextActionIdRef.current += 1;
-    const markers = [1, 2, 3].map((index) => `reactivity-batch-${actionId}-${index}`);
-    const marker = markers.at(-1)!;
-    setAction({ kind: "batch", marker, status: "running" });
+    const id = nextActionId.current++;
+    const markers = [1, 2, 3].map((index) => `reactivity-batch-${id}-${index}`);
+    setAction({ marker: markers.at(-1), status: "running" });
     try {
-      await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).append(
-        ...markers.map((eventMarker) => ({
-          type: REACTIVITY_TEST_EVENT_TYPE,
-          payload: { marker: eventMarker },
-        })),
-      );
-      setAction({ kind: "batch", marker, status: "done" });
+      await itx.streams
+        .get(REACTIVITY_TEST_STREAM_PATH)
+        .append(
+          ...markers.map((marker) => ({ type: REACTIVITY_TEST_EVENT_TYPE, payload: { marker } })),
+        );
+      setAction({ marker: markers.at(-1), status: "done" });
     } catch (error: unknown) {
-      setAction({ error: stringifyError(error), kind: "batch", marker, status: "error" });
+      setAction({ error: stringifyError(error), marker: markers.at(-1), status: "error" });
+    }
+  }
+
+  async function increment() {
+    setIncrementing(true);
+    try {
+      await itx.liveDemo.increment();
+    } finally {
+      setIncrementing(false);
     }
   }
 
@@ -164,16 +165,12 @@ function ProjectReactivityContent() {
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <h1 className="text-lg font-semibold">Reactive reduced state</h1>
+            <h1 className="text-lg font-semibold">Live state playground</h1>
             <p className="text-sm text-muted-foreground">
-              Project reactivity playground for {project.slug}
+              One <code>useLiveState</code> primitive for {project.slug}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* THE one loading indicator on this page. The per-panel status
-                badges deliberately carry no data-spinner: both panels connect
-                at once on first paint, and two spinner-matching elements trip
-                middlewright's strict-mode spinner-waiter. */}
             {live.status === "connecting" || testStream.status === "connecting" ? (
               <Badge variant="secondary" data-spinner="true">
                 connecting…
@@ -192,42 +189,54 @@ function ProjectReactivityContent() {
               onClick={live.refresh}
               data-testid="reactivity-refresh"
             >
-              <RefreshCwIcon aria-hidden="true" data-icon="icon" />
               Refresh
             </Button>
           </div>
         </header>
 
-        {live.status === "error" ? (
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 font-mono text-xs text-destructive">
-            {live.error}
-          </div>
-        ) : null}
-
         <div className="grid gap-3 md:grid-cols-4">
+          {/* STATELESS: a request-isolate node, no Durable Object. */}
           <MetricPanel
-            icon={<RadioIcon aria-hidden="true" data-icon="icon" />}
-            label="Stream batches"
-            value={String(testStream.batchCount)}
-            detail={formatTime(testStream.lastBatchAt)}
-            testId="reactivity-stream-batch-count"
+            icon={<TimerIcon aria-hidden="true" data-icon="icon" />}
+            label="Stateless ticker"
+            detail="itx.liveDemo.ticker · no DO"
+            value={ticker.value === undefined ? "…" : String(ticker.value)}
+            testId="livedemo-ticker"
           />
+          {/* DO-BACKED counter, shared across every watcher. */}
+          <section className="rounded-lg border bg-background p-4">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <RadioIcon aria-hidden="true" data-icon="icon" />
+              <span>DO-backed counter</span>
+            </div>
+            <div className="mt-2 flex items-end justify-between gap-3">
+              <span className="font-mono text-2xl font-semibold" data-testid="livedemo-count">
+                {counter.value === undefined ? "…" : String(counter.value.count)}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={increment}
+                disabled={incrementing}
+                data-testid="livedemo-increment"
+              >
+                <PlusIcon aria-hidden="true" data-icon="icon" />
+                Increment
+              </Button>
+            </div>
+          </section>
           <MetricPanel
             icon={<ActivityIcon aria-hidden="true" data-icon="icon" />}
-            label="Stream events"
-            value={String(testStream.events.length)}
-            testId="reactivity-stream-event-count"
+            label="Indexed streams"
+            value={indexedCount}
+            testId="reactivity-index-count"
           />
+          {/* How many times the folded `reduced` slice pushed (offset is gone; this is the live-state analogue). */}
           <MetricPanel
             label="State updates"
-            value={String(pushLog.count)}
-            detail={formatTime(pushLog.lastAt)}
+            value={String(pushCount)}
             testId="reactivity-state-push-count"
-          />
-          <MetricPanel
-            label="Processor offset"
-            value={String(live.offset ?? "-")}
-            testId="reactivity-processor-offset"
           />
         </div>
 
@@ -262,7 +271,7 @@ function ProjectReactivityContent() {
 
             <section className="rounded-lg border bg-background p-4">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold">Stream subscription</h2>
+                <h2 className="text-sm font-semibold">Event subscription (separate lane)</h2>
                 <Badge
                   data-testid="reactivity-stream-status"
                   variant={testStream.status === "live" ? "default" : "secondary"}
@@ -271,35 +280,20 @@ function ProjectReactivityContent() {
                 </Badge>
               </div>
               <div className="mt-3 grid gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={appendTestEvent}
-                  disabled={actionPending}
-                >
+                <Button type="button" variant="outline" size="sm" onClick={appendTestEvent}>
                   <PlusIcon aria-hidden="true" data-icon="icon" />
                   Append stream event
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={appendTestBatch}
-                  disabled={actionPending}
-                >
+                <Button type="button" variant="outline" size="sm" onClick={appendTestBatch}>
                   <PlusIcon aria-hidden="true" data-icon="icon" />
                   Append stream batch
                 </Button>
               </div>
               <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+                <dt className="text-muted-foreground">Events</dt>
+                <dd data-testid="reactivity-stream-event-count">{testStream.events.length}</dd>
                 <dt className="text-muted-foreground">Status</dt>
-                <dd
-                  data-testid="reactivity-action-status"
-                  data-spinner={actionPending ? "true" : undefined}
-                >
-                  {action.status === "running" ? "running..." : actionStatus}
-                </dd>
+                <dd data-testid="reactivity-action-status">{action.status}</dd>
                 <dt className="text-muted-foreground">Marker</dt>
                 <dd className="truncate font-mono" data-testid="reactivity-last-action-marker">
                   {action.marker || "-"}
@@ -325,15 +319,8 @@ function ProjectReactivityContent() {
           </div>
 
           <div className="grid min-h-0 gap-4 xl:grid-cols-2">
-            <JsonPanel title="Subscribed stream events" value={testStream.events} />
-            <JsonPanel title="Live processor state" value={projectState ?? null} />
-            <JsonPanel
-              title="Processor snapshot"
-              value={
-                live.offset === undefined ? null : { offset: live.offset, state: projectState }
-              }
-            />
-            <CodePanel title="React hook shape" code={liveApi} />
+            <JsonPanel title="itx.liveState.reduced (folded)" value={projectState ?? null} />
+            <JsonPanel title="itx.liveState.streamsIndex" value={streamsIndex.value ?? null} />
           </div>
         </div>
       </div>
@@ -394,27 +381,11 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
       <header className="border-b px-3 py-2">
         <h2 className="text-sm font-semibold">{title}</h2>
       </header>
-      <pre className="max-h-[32rem] overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
+      <pre className="max-h-[24rem] overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
         {JSON.stringify(value, null, 2)}
       </pre>
     </section>
   );
-}
-
-function CodePanel({ title, code }: { title: string; code: string }) {
-  return (
-    <section className="min-h-0 rounded-lg border bg-background">
-      <header className="border-b px-3 py-2">
-        <h2 className="text-sm font-semibold">{title}</h2>
-      </header>
-      <pre className="overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">{code}</pre>
-    </section>
-  );
-}
-
-function formatTime(timestamp: number | undefined) {
-  if (timestamp === undefined) return "No push yet";
-  return new Date(timestamp).toLocaleTimeString();
 }
 
 function stringifyError(error: unknown) {
@@ -428,11 +399,7 @@ function isReactivityTestEvent(event: StreamEvent) {
 
 function toReactivityTestEvent(event: StreamEvent): ReactivityTestEvent {
   const payload = event.payload as { marker: string };
-  return {
-    createdAt: event.createdAt,
-    marker: payload.marker,
-    offset: event.offset,
-  };
+  return { createdAt: event.createdAt, marker: payload.marker, offset: event.offset };
 }
 
 function mergeReactivityTestEvents(
@@ -442,10 +409,4 @@ function mergeReactivityTestEvents(
   const byOffset = new Map(existing.map((event) => [event.offset, event]));
   for (const event of incoming) byOffset.set(event.offset, event);
   return [...byOffset.values()].sort((a, b) => a.offset - b.offset).slice(-50);
-}
-
-function isActionObserved(action: ReactivityActionState, events: ReactivityTestEvent[]) {
-  if (action.status !== "done") return true;
-  if (!action.marker) return false;
-  return events.some((event) => event.marker === action.marker);
 }
