@@ -353,6 +353,52 @@ sessionPath` from the connection-stream sent-claims; route everything
       context; reply to an old bot message, verify the agent references the
       old thread — _appended to the manual test plan above_
 
+## Part 3: steal-with-confirm for cross-project reconnects
+
+Designed with Misha on the PR, 2026-07-09, after he hit it live: connecting
+@misherate2bot to a NEW project dead-ended on "already connected to another
+project". A Telegram bot has exactly one webhook, so one bot can only serve
+one project at a time — but the person holding the BotFather token is the
+bot's owner, and they should be able to MOVE it. Possession of the token IS
+the authorization (only the owner has it); the confirmation is a foot-gun
+gate, not authz.
+
+- `connectTelegram({ botToken, steal?: boolean })`.
+- Without `steal`, an already-claimed-by-another-project bot signals
+  DISTINGUISHABLY (not an opaque thrown string) so the UI can react — a
+  structured result arm alongside the success shape. The message must not
+  leak the holding project's identity ("another project" is all a
+  potentially-different-org user should see).
+- With `steal: true`: getMe re-validates the token as usual, then the OLD
+  project is dispossessed BEFORE the new claim — the shared
+  `recordDisconnection` run against the old project/connection (empties its
+  secret egress so its stored token is unusable, appends its
+  telegram `disconnected` fact so its dashboard shows reality, unclaims the
+  directory entry). deleteWebhook is deliberately skipped on the old side —
+  the webhook is re-registered for the same bot moments later.
+- Same-project reconnects are unchanged (silently reuse the claiming
+  connection's name; no signal, no steal needed).
+- Dashboard card: when connect answers already-claimed, show a house-style
+  confirmation ("This bot is already connected to another project. Steal it?
+  The other project will lose the connection.") and retry with
+  `steal: true` on confirm.
+
+### Part 3 touch points
+
+- [ ] `connect-flows.ts`: `connectTelegram` gains `steal?: boolean` + the
+      structured `already-claimed` result arm; steal path dispossesses the old
+      project via `recordDisconnection` (no deleteWebhook), then runs the
+      normal connect
+- [ ] `rpc-targets.ts`: verb signature + result type updated; itx-api
+      regenerated
+- [ ] Dashboard Telegram card: already-claimed → confirm dialog → retry with
+      `steal: true`
+- [ ] Tests: already-claimed signal without steal; steal flips the directory
+      claim, empties the old secret's egress, appends old-side disconnected +
+      new-side connected facts; same-project reconnect still silent
+- [ ] Manual test plan: connect the same bot from a second project → confirm
+      steal → old project's card shows disconnected, new project gets the bot
+
 ## Implementation log
 
 - 2026-07-08: worktree + branch `telegram-integration` created off main; spec
