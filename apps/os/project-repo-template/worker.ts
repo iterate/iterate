@@ -84,7 +84,8 @@ const COMPACTION_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 const COMPACTION_PROMPT =
   "You compress an agent's conversation history. Produce a dense, factual summary " +
   "preserving: the user's goals and open asks, decisions made, key script/tool results, " +
-  "and anything the agent promised to do. Write it so the agent can continue as if it " +
+  "references to attached files (keep their names and itx.files paths verbatim), and " +
+  "anything the agent promised to do. Write it so the agent can continue as if it " +
   "remembered everything.";
 
 const CompactionProcessorContract = defineProcessorContract({
@@ -194,8 +195,19 @@ class CompactionProcessor extends StreamProcessor<
           timeoutMs: 30_000,
         });
         const { state } = await this.deps.agent.processor.snapshot();
+        // Attachments flatten to hint lines so the summary can keep their
+        // names and durable itx.files paths — the compacted turns are gone,
+        // but what they attached stays findable.
         const transcript = state.history
-          .map((item) => `${item.role}:\n${item.content}`)
+          .map((item) =>
+            [
+              `${item.role}:`,
+              item.content,
+              ...(item.files ?? []).map(
+                (file) => `[attached file: ${file.filename} — itx.files path ${file.path}]`,
+              ),
+            ].join("\n"),
+          )
           .join("\n\n");
         const raw = await this.deps.ai.run(COMPACTION_MODEL, {
           messages: [
