@@ -19,7 +19,7 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
   material: z.string(),
@@ -52,8 +52,9 @@ function ProjectSecretDetailContent() {
   // Live secret processor state (the public description — material stays
   // write-only server-side): rotations and every egress-gated use push an
   // updated audit trail into this page while it's open.
-  const { state: secret } = useItxState<SecretDescription>(
-    (itx, setState) => itx.secrets.get(secretPath).processor.onStateChange(setState),
+  const { value: secret } = useLiveState(
+    (itx) => itx.secrets.get(secretPath).liveState,
+    undefined,
     [secretPath],
   );
 

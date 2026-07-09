@@ -7,7 +7,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { RepoProcessorState } from "../../domains/repos/repo-processor-contract.ts";
-import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
+import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 /**
  * The GitHub sidebar of the repo IDE: shows the repo's GitHub link (owner/
@@ -18,11 +18,10 @@ import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
  * live, so link and push facts fold into this panel as they happen.
  */
 export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; repoPath: string }) {
-  const repoProcessor = useItxState<RepoProcessorState>(
-    (itx, setState) => itx.repos.get(repoPath).processor.onStateChange(setState),
-    [repoPath],
-  );
-  const state = repoProcessor.state;
+  const repoProcessor = useLiveState((itx) => itx.repos.get(repoPath).liveState, undefined, [
+    repoPath,
+  ]);
+  const state = repoProcessor.value;
   if (state === undefined) {
     return (
       <div className="p-3 text-xs text-muted-foreground" data-spinner="true">

@@ -8,7 +8,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
@@ -53,6 +53,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    // Secret material is write-only: the live state that leaves this DO is the
+    // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
+    // processor facade applies via publicState.
+    getLiveState: () =>
+      describeSecretState(this.#secretProcessor.currentState) as unknown as Record<string, unknown>,
   });
   readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
@@ -83,6 +88,11 @@ export class SecretDurableObject extends DurableObject<Env> {
       // the ciphertext, only the hasMaterial fact.
       publicState: describeSecretState,
     });
+  }
+
+  /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
+  get liveState() {
+    return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
   }
 
   async update(input: SecretUpdateInput) {

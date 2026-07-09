@@ -1,13 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import type { RepoProcessorState } from "../../../../../domains/repos/repo-processor-contract.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItxState } from "~/itx/itx-react.tsx";
+import { useLiveState } from "~/itx/itx-react.tsx";
 
 /** The stream-view params plus the IDE's own view state (open file, diff,
  * markdown/html preview, source-control / GitHub sidebar, history sidebar +
@@ -46,15 +45,14 @@ function ProjectRepoDetailContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const repoPath = repoPathFromSplat(params._splat);
-  const repoProcessor = useItxState<RepoProcessorState>(
-    (itx, setState) => itx.repos.get(repoPath).processor.onStateChange(setState),
-    [repoPath],
-  );
+  const repoProcessor = useLiveState((itx) => itx.repos.get(repoPath).liveState, undefined, [
+    repoPath,
+  ]);
 
   // The IDE only mounts on an initialized repo (its file reads would throw
   // before the artifact exists); until then the panel shows the bootstrap
   // progress the processor state pushes in live.
-  const state = repoProcessor.state;
+  const state = repoProcessor.value;
   const panel =
     state === undefined ? (
       <div

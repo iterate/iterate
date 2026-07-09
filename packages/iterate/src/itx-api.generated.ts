@@ -831,6 +831,8 @@ export interface Repo {
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<RepoProcessorState>;
+  /** The repo's live state — its reduced processor state. See {@link WritableLiveStateRpc}. */
+  liveState: WritableLiveStateRpc<RepoProcessorState>;
 }
 
 /**
@@ -1110,6 +1112,8 @@ export interface Secret {
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: WakeableStreamProcessorRpc<SecretDescription>;
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link WritableLiveStateRpc}. */
+  liveState: WritableLiveStateRpc<SecretDescription>;
 }
 
 /**

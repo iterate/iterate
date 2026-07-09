@@ -980,6 +980,16 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
     });
   }
+
+  /** The repo's live state — its reduced processor state. See {@link WritableLiveStateRpc}. */
+  get liveState(): WritableLiveStateRpc<RepoProcessorState> {
+    return new LiveStateRelayRpcTarget<RepoProcessorState>(
+      () =>
+        this.#durableObjectStub as unknown as {
+          liveState: PromiseLike<WritableLiveStateRpc<RepoProcessorState>>;
+        },
+    );
+  }
 }
 
 /** Repo catalog for either a project or the deployment-wide global scope. */
@@ -1645,6 +1655,16 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
       auth: this.props.auth,
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
     });
+  }
+
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link WritableLiveStateRpc}. */
+  get liveState(): WritableLiveStateRpc<SecretDescription> {
+    return new LiveStateRelayRpcTarget<SecretDescription>(
+      () =>
+        this.durableObjectStub as unknown as {
+          liveState: PromiseLike<WritableLiveStateRpc<SecretDescription>>;
+        },
+    );
   }
 }
 
