@@ -11,7 +11,7 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { authClient } from "../../utils/auth-client.ts";
+import { authClient, useSession } from "../../utils/auth-client.ts";
 import { inventoryQueryOptions } from "./-projects-shared.tsx";
 
 export const Route = createFileRoute("/_auth/invitations/$invitationId")({
@@ -22,6 +22,8 @@ function InvitationPage() {
   const { invitationId } = Route.useParams();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
+  const session = useSession();
+  const signedInEmail = session.user.email ?? "";
 
   const invitationQuery = useQuery({
     queryKey: ["better-auth", "invitation", invitationId] as const,
@@ -55,6 +57,15 @@ function InvitationPage() {
     onError: (error) => toast.error(error.message),
   });
 
+  const switchAccount = useMutation({
+    mutationFn: () => authClient.signOut(),
+    onSuccess: () => {
+      const returnURL = window.location.pathname + window.location.search;
+      navigate({ to: "/login", search: { redirect: returnURL } });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   if (invitationQuery.isPending) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -76,6 +87,14 @@ function InvitationPage() {
             <CardTitle>Invitation unavailable</CardTitle>
             <CardDescription>{invitationQuery.error.message}</CardDescription>
           </CardHeader>
+          <Separator />
+          <CardContent>
+            <SignedInAccountRow
+              email={signedInEmail}
+              isSwitching={switchAccount.isPending}
+              onSwitch={() => switchAccount.mutate()}
+            />
+          </CardContent>
           <CardFooter>
             <Button variant="outline" onClick={() => navigateToProjects()}>
               Back to organizations
@@ -88,6 +107,14 @@ function InvitationPage() {
 
   const invitation = invitationQuery.data;
   const isPendingInvitation = invitation.status === "pending";
+  const signedInAsInvitedEmail =
+    Boolean(signedInEmail) && invitation.email.toLowerCase() === signedInEmail.toLowerCase();
+  const canRespond =
+    isPendingInvitation &&
+    signedInAsInvitedEmail &&
+    !acceptInvitation.isPending &&
+    !rejectInvitation.isPending &&
+    !switchAccount.isPending;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -100,6 +127,11 @@ function InvitationPage() {
         </CardHeader>
         <Separator />
         <CardContent className="space-y-3">
+          <SignedInAccountRow
+            email={signedInEmail}
+            isSwitching={switchAccount.isPending}
+            onSwitch={() => switchAccount.mutate()}
+          />
           <div className="flex items-center justify-between gap-4 text-sm">
             <span className="text-muted-foreground">Status</span>
             <span className="font-medium">{invitation.status}</span>
@@ -108,27 +140,39 @@ function InvitationPage() {
             <span className="text-muted-foreground">Organization</span>
             <span className="truncate font-medium">{invitation.organizationSlug}</span>
           </div>
+          {!signedInAsInvitedEmail ? (
+            <p className="text-sm text-destructive">
+              Sign in as {invitation.email} to accept or decline this invitation.
+            </p>
+          ) : null}
         </CardContent>
         <CardFooter className="justify-end gap-2">
           <Button
             variant="outline"
-            disabled={
-              !isPendingInvitation || rejectInvitation.isPending || acceptInvitation.isPending
-            }
+            disabled={!canRespond}
             onClick={() => rejectInvitation.mutate()}
           >
             {rejectInvitation.isPending ? "Declining..." : "Decline"}
           </Button>
-          <Button
-            disabled={
-              !isPendingInvitation || acceptInvitation.isPending || rejectInvitation.isPending
-            }
-            onClick={() => acceptInvitation.mutate()}
-          >
+          <Button disabled={!canRespond} onClick={() => acceptInvitation.mutate()}>
             {acceptInvitation.isPending ? "Accepting..." : "Accept"}
           </Button>
         </CardFooter>
       </Card>
     </main>
+  );
+}
+
+function SignedInAccountRow(props: { email: string; isSwitching: boolean; onSwitch: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2">
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">Signed in as</p>
+        <p className="truncate text-sm font-medium">{props.email || "Unknown email"}</p>
+      </div>
+      <Button variant="ghost" size="sm" disabled={props.isSwitching} onClick={props.onSwitch}>
+        {props.isSwitching ? "Switching..." : "Switch"}
+      </Button>
+    </div>
   );
 }

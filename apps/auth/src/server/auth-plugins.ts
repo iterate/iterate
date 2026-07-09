@@ -18,7 +18,7 @@ import {
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
-import { betterAuth } from "better-auth";
+import { APIError, betterAuth } from "better-auth";
 import {
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
@@ -41,6 +41,7 @@ import { isPlatformAdminUser } from "./platform-admin.ts";
 import {
   type CloudflareEmailBinding,
   TEST_OTP_CODE,
+  getOrganizationInvitationEmailConfigError,
   sendEmailOtp,
   sendOrganizationInvitationEmail,
   shouldUseTestOtp,
@@ -100,22 +101,37 @@ export function getAuthPlugins(options: AuthPluginOptions) {
     bearer(),
     admin(),
     organization({
-      sendInvitationEmail: async (data, request) => {
-        const invitationUrl = new URL(
-          `/invitations/${data.id}`,
-          request?.url ?? options.authAppOrigin,
-        );
+      // Better Auth's `sendInvitationEmail` callback is routed through
+      // runInBackgroundOrAwait, which logs delivery failures instead of failing
+      // inviteMember. Hooks keep delivery on the endpoint path while still
+      // using the native organization invitation lifecycle.
+      organizationHooks: {
+        beforeCreateInvitation: async () => {
+          const configError = getOrganizationInvitationEmailConfigError({
+            senderDomain: options.emailSenderDomain,
+            emailBinding: options.emailBinding,
+          });
+          if (configError) {
+            throw new APIError("INTERNAL_SERVER_ERROR", { message: configError });
+          }
+        },
+        afterCreateInvitation: async (data) => {
+          const invitationUrl = new URL(
+            `/invitations/${data.invitation.id}`,
+            options.authAppOrigin,
+          );
 
-        await sendOrganizationInvitationEmail({
-          email: data.email,
-          role: data.role,
-          organizationName: data.organization.name,
-          inviterName: data.inviter.user.name,
-          inviterEmail: data.inviter.user.email,
-          invitationUrl: invitationUrl.toString(),
-          senderDomain: options.emailSenderDomain,
-          emailBinding: options.emailBinding,
-        });
+          await sendOrganizationInvitationEmail({
+            email: data.invitation.email,
+            role: data.invitation.role,
+            organizationName: data.organization.name,
+            inviterName: data.inviter.name,
+            inviterEmail: data.inviter.email,
+            invitationUrl: invitationUrl.toString(),
+            senderDomain: options.emailSenderDomain,
+            emailBinding: options.emailBinding,
+          });
+        },
       },
     }),
     multiSession({ maximumSessions: 10 }),

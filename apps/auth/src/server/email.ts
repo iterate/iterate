@@ -49,9 +49,26 @@ export function shouldUseTestOtp(input: { email: string; fixedTestOtpEnabled: bo
 }
 
 export function getEmailOtpSenderAddress(senderDomain: string) {
+  return getAuthEmailSenderAddress(senderDomain, "Email OTP");
+}
+
+export function getOrganizationInvitationEmailConfigError(options: {
+  senderDomain: string;
+  emailBinding: CloudflareEmailBinding | undefined;
+}) {
+  if (!options.emailBinding) {
+    return "Organization invitation email sending requires the Cloudflare EMAIL send_email binding";
+  }
+  if (!options.senderDomain.trim()) {
+    return "Organization invitation email sending requires APP_CONFIG_EMAIL_SENDER_DOMAIN";
+  }
+  return null;
+}
+
+function getAuthEmailSenderAddress(senderDomain: string, purpose: string) {
   const domain = senderDomain.trim();
   if (!domain) {
-    throw new Error("Email OTP sending requires APP_CONFIG_EMAIL_SENDER_DOMAIN");
+    throw new Error(`${purpose} sending requires APP_CONFIG_EMAIL_SENDER_DOMAIN`);
   }
   return `noreply+auth@${domain}`;
 }
@@ -72,19 +89,24 @@ export async function sendEmailOtp(options: SendEmailOtpOptions) {
 export async function sendOrganizationInvitationEmail(
   options: SendOrganizationInvitationEmailOptions,
 ) {
-  if (!options.emailBinding) {
-    console.warn("Organization invitation email not sent: missing Cloudflare EMAIL binding");
-    return;
+  const configError = getOrganizationInvitationEmailConfigError(options);
+  if (configError) {
+    throw new Error(configError);
   }
-  if (!options.senderDomain.trim()) {
-    console.warn("Organization invitation email not sent: missing APP_CONFIG_EMAIL_SENDER_DOMAIN");
-    return;
+  const emailBinding = options.emailBinding;
+  if (!emailBinding) {
+    throw new Error(
+      "Organization invitation email sending requires the Cloudflare EMAIL send_email binding",
+    );
   }
 
-  const fromEmail = getEmailOtpSenderAddress(options.senderDomain);
+  const fromEmail = getAuthEmailSenderAddress(
+    options.senderDomain,
+    "Organization invitation email",
+  );
   const inviterName = options.inviterName || options.inviterEmail;
   const roleLabel = options.role || "member";
-  await options.emailBinding.send({
+  await emailBinding.send({
     from: { email: fromEmail, name: "Iterate" },
     to: options.email,
     subject: `${inviterName} invited you to ${options.organizationName} on Iterate`,

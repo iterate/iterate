@@ -111,4 +111,38 @@ describe("organization invitation email", () => {
       ].join(""),
     });
   });
+
+  it("fails clearly when the EMAIL binding is missing", async () => {
+    await assert.rejects(
+      sendOrganizationInvitationEmail({
+        email: "alice@nustom.com",
+        role: "member",
+        organizationName: "Nustom",
+        inviterName: "Sam Inviter",
+        inviterEmail: "sam@nustom.com",
+        invitationUrl: "https://auth.iterate.com/invitations/inv_123",
+        senderDomain: "nustom.com",
+        emailBinding: undefined,
+      }),
+      /Organization invitation email sending requires the Cloudflare EMAIL send_email binding/,
+    );
+  });
+
+  it("fails clearly when the sender domain is missing", async () => {
+    await assert.rejects(
+      sendOrganizationInvitationEmail({
+        email: "alice@nustom.com",
+        role: "member",
+        organizationName: "Nustom",
+        inviterName: "Sam Inviter",
+        inviterEmail: "sam@nustom.com",
+        invitationUrl: "https://auth.iterate.com/invitations/inv_123",
+        senderDomain: " ",
+        emailBinding: {
+          send: async () => undefined,
+        },
+      }),
+      /Organization invitation email sending requires APP_CONFIG_EMAIL_SENDER_DOMAIN/,
+    );
+  });
 });

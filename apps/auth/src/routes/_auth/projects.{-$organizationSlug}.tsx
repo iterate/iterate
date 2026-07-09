@@ -5,7 +5,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { orpcClient } from "../../utils/query.tsx";
-import { useSession } from "../../utils/auth-client.ts";
+import { authClient, useSession } from "../../utils/auth-client.ts";
 import {
   DeleteOrganizationDialog,
   DeleteProjectDialog,
@@ -156,9 +156,7 @@ function ProjectsPage() {
             />
             <OrganizationDetail
               organization={selectedOrganization}
-              canManage={
-                selectedOrganization.role === "owner" || selectedOrganization.role === "admin"
-              }
+              canManage={canManageOrganizationMembers(selectedOrganization.role)}
               currentUserId={session.user.id}
               onCreateProject={() =>
                 setProjectDialog({ organizationSlug: selectedOrganization.slug })
@@ -235,4 +233,14 @@ function ProjectsPage() {
       />
     </main>
   );
+}
+
+function canManageOrganizationMembers(role: InventoryOrganization["role"]) {
+  return authClient.organization.checkRolePermission({
+    role,
+    permissions: {
+      member: ["create", "update", "delete"],
+      invitation: ["create", "cancel"],
+    },
+  });
 }

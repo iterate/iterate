@@ -209,6 +209,7 @@ export function OrganizationDetail(props: {
         organizationId={props.organization.id}
         organizationSlug={props.organization.slug}
         canManage={props.canManage}
+        currentUserRole={toOrganizationRole(props.organization.role)}
         currentUserId={props.currentUserId}
       />
     </section>
@@ -252,6 +253,7 @@ function OrganizationMembersPanel(props: {
   organizationId: string;
   organizationSlug: string;
   canManage: boolean;
+  currentUserRole: OrganizationRole;
   currentUserId: string;
 }) {
   const queryClient = useQueryClient();
@@ -295,7 +297,6 @@ function OrganizationMembersPanel(props: {
         organizationId: props.organizationId,
         email: input.email,
         role: input.role,
-        resend: true,
       }),
     onSuccess: async () => {
       toast.success("Invitation created");
@@ -344,6 +345,8 @@ function OrganizationMembersPanel(props: {
 
   const members = membersQuery.data ?? [];
   const invitations = invitationsQuery.data ?? [];
+  const manageableRoles: readonly OrganizationRole[] =
+    props.currentUserRole === "owner" ? organizationRoles : ["member", "admin"];
 
   return (
     <section>
@@ -355,6 +358,7 @@ function OrganizationMembersPanel(props: {
         <div className="border-b px-5 py-4">
           <InviteMemberForm
             isPending={inviteMember.isPending}
+            roleOptions={manageableRoles}
             onSubmit={(input) => inviteMember.mutateAsync(input).then(() => undefined)}
           />
         </div>
@@ -381,6 +385,8 @@ function OrganizationMembersPanel(props: {
               key={member.id}
               member={member}
               canManage={props.canManage}
+              currentUserRole={props.currentUserRole}
+              roleOptions={manageableRoles}
               isCurrentUser={member.userId === props.currentUserId}
               isUpdatingRole={
                 updateMemberRole.isPending && updateMemberRole.variables?.memberId === member.id
@@ -447,6 +453,7 @@ const InviteMemberInput = z.object({
 
 function InviteMemberForm(props: {
   isPending: boolean;
+  roleOptions: readonly OrganizationRole[];
   onSubmit: (input: z.infer<typeof InviteMemberInput>) => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
@@ -488,7 +495,7 @@ function InviteMemberForm(props: {
           onChange={(event) => setRole(toOrganizationRole(event.target.value))}
           disabled={props.isPending}
         >
-          {organizationRoles.map((roleOption) => (
+          {props.roleOptions.map((roleOption) => (
             <NativeSelectOption key={roleOption} value={roleOption}>
               {formatOrganizationRole(roleOption)}
             </NativeSelectOption>
@@ -505,13 +512,23 @@ function InviteMemberForm(props: {
 function MemberRow(props: {
   member: BetterAuthOrganizationMember;
   canManage: boolean;
+  currentUserRole: OrganizationRole;
+  roleOptions: readonly OrganizationRole[];
   isCurrentUser: boolean;
   isUpdatingRole: boolean;
   onRoleChange: (role: OrganizationRole) => void;
   onRemove: () => void;
 }) {
   const role = toOrganizationRole(props.member.role);
-  const canEditMember = props.canManage && !props.isCurrentUser;
+  const canEditMember = canManageMember({
+    canManage: props.canManage,
+    currentUserRole: props.currentUserRole,
+    targetRole: role,
+    isCurrentUser: props.isCurrentUser,
+  });
+  const roleOptions = props.roleOptions.includes(role)
+    ? props.roleOptions
+    : [role, ...props.roleOptions];
   return (
     <article className="grid gap-3 px-5 py-4 md:grid-cols-[minmax(0,1fr)_160px_auto] md:items-center">
       <div className="flex min-w-0 items-center gap-3">
@@ -530,19 +547,26 @@ function MemberRow(props: {
       </div>
       <NativeSelect
         value={role}
+        aria-label={`Role for ${props.member.user.email}`}
         disabled={!canEditMember || props.isUpdatingRole}
         onChange={(event) => {
           const nextRole = toOrganizationRole(event.target.value);
           if (nextRole !== role) props.onRoleChange(nextRole);
         }}
       >
-        {organizationRoles.map((roleOption) => (
+        {roleOptions.map((roleOption) => (
           <NativeSelectOption key={roleOption} value={roleOption}>
             {formatOrganizationRole(roleOption)}
           </NativeSelectOption>
         ))}
       </NativeSelect>
-      <Button size="sm" variant="destructive" disabled={!canEditMember} onClick={props.onRemove}>
+      <Button
+        size="sm"
+        variant="destructive"
+        aria-label={`Remove ${props.member.user.email}`}
+        disabled={!canEditMember}
+        onClick={props.onRemove}
+      >
         Remove
       </Button>
     </article>
@@ -571,6 +595,7 @@ function PendingInvitationRow(props: {
         <Button
           size="sm"
           variant="outline"
+          aria-label={`Copy invitation link for ${props.invitation.email}`}
           onClick={() => copyInvitationLink(props.invitation.id, props.organizationSlug)}
         >
           Copy link
@@ -578,6 +603,7 @@ function PendingInvitationRow(props: {
         <Button
           size="sm"
           variant="destructive"
+          aria-label={`Cancel invitation for ${props.invitation.email}`}
           disabled={!props.canManage || props.isCanceling}
           onClick={props.onCancel}
         >
@@ -644,6 +670,17 @@ function memberInitials(member: BetterAuthOrganizationMember) {
 
 function toOrganizationRole(role: string): OrganizationRole {
   return role === "owner" || role === "admin" ? role : "member";
+}
+
+function canManageMember(input: {
+  canManage: boolean;
+  currentUserRole: OrganizationRole;
+  targetRole: OrganizationRole;
+  isCurrentUser: boolean;
+}) {
+  if (!input.canManage || input.isCurrentUser) return false;
+  if (input.targetRole === "owner" && input.currentUserRole !== "owner") return false;
+  return true;
 }
 
 function formatOrganizationRole(role: OrganizationRole) {
