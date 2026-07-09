@@ -43,11 +43,13 @@ test("template gets the platform types from iterate/sdk, not a committed snapsho
   expect(seededSdk).not.toContain("codegen:start");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
   };
-  // A runtime dependency (not dev): worker.ts imports StreamProcessor and
-  // friends from iterate/sdk, so the worker build pipeline installs it.
-  expect(templatePackageJson.dependencies).toMatchObject({
+  // Types-only devDependency: worker.ts imports the StreamProcessor RUNTIME
+  // from "iterate/sdk" too, but that resolves via the platform-injected
+  // virtual module at build time (worker-loader.ts), never via npm — the
+  // worker-bundler's installer only fetches registry semver deps.
+  expect(templatePackageJson.devDependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 

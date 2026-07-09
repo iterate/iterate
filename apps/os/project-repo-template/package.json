@@ -3,13 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` is a runtime dependency: worker.ts imports the stream-processor machinery from iterate/sdk (the capability types ride along).",
+  "description": "Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. The `iterate` devDependency is TYPES ONLY (editor/typecheck support after `npm install`): the platform injects the iterate/sdk RUNTIME into every worker build as a virtual module, so imports from \"iterate/sdk\" resolve without installing anything.",
   "dependencies": {
-    "@slack/web-api": "^7.14.1",
-    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main"
+    "@slack/web-api": "^7.14.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
     "typescript": "^5.9.3"
   }
 }
