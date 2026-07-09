@@ -36,7 +36,7 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
   await expect(page.locator(".cm-content")).toContainText("<circle");
 
   // Preview renders the svg in the sandboxed iframe (same srcdoc lane as html).
-  await page.getByRole("tab", { name: "Preview" }).click();
+  await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   const preview = page.locator('iframe[title="HTML preview"]');
   await expect(preview).toBeVisible();
   await expect(preview).toHaveAttribute("srcdoc", /<circle/);
@@ -71,7 +71,7 @@ test("preview a staged snapshot from the readonly Index view", async ({
 
   // The Code | Preview toggle rides into the Index view: previewing renders the
   // STAGED snapshot and the header reads "(Index Preview)".
-  await page.getByRole("tab", { name: "Preview" }).click();
+  await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   await expect(page.getByText("page.html (Index Preview)")).toBeVisible();
   await expect(page.locator('iframe[title="HTML preview"]')).toHaveAttribute(
     "srcdoc",
