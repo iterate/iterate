@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
+import { disposeIgnoredRpcResult, isThenable } from "../../lib/rpc/retain.ts";
 import {
   assertObjectProcessorState,
   cachedEventSchema,
@@ -848,29 +849,4 @@ function retainStateChangeCallback<State>(
     };
   }
   return wrapped;
-}
-
-/** Shared thenable probe for RPC results (stubs are thenable-shaped). */
-export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as PromiseLike<unknown>).then === "function"
-  );
-}
-
-/**
- * Dispose an ignored RPC call result. Reading a Cap'n Web / Workers RPC method
- * yields a disposable stub even when the caller ignores the value; dropping it
- * without disposal leaks the remote reference. Exported so the stream
- * connection code shares one implementation.
- */
-export function disposeIgnoredRpcResult(result: unknown): void {
-  if (
-    result !== null &&
-    (typeof result === "object" || typeof result === "function") &&
-    Symbol.dispose in result
-  ) {
-    (result as Disposable)[Symbol.dispose]();
-  }
 }
