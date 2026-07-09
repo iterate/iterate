@@ -34,10 +34,12 @@ test(
       { description: "project repo to be seeded", intervalMs: 1_000, timeoutMs: 60_000 },
     );
 
-    // Well past the 30k-char inline limit, with a unique marker in the tail
-    // half — the part the pre-spill behavior threw away.
+    // Well past the 30k-char context limit AND past the workspace's 1.5MB
+    // inline threshold, so this also proves the R2 spillover lane end to end
+    // (on pre-R2 deployments a write this size was rejected outright). The
+    // marker sits in the tail — the part the pre-spill behavior threw away.
     const marker = crypto.randomUUID();
-    const result = { blob: "x".repeat(60_000), marker };
+    const result = { blob: "x".repeat(2_500_000), marker };
     await agent.stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:1", result },

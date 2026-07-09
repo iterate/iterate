@@ -508,7 +508,7 @@ async function scriptResultAgentInput(
   const text = stringifyScriptResult(payload.result);
   if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
     try {
-      const spill = await spillScriptResult({
+      const spilledPath = await spillScriptResult({
         executionId: payload.executionId,
         text,
         writeWorkspaceFile,
@@ -518,7 +518,7 @@ async function scriptResultAgentInput(
         "```json",
         text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT),
         "```",
-        spillNotice({ spill, totalChars: text.length }),
+        spillNotice({ path: spilledPath, totalChars: text.length }),
       ].join("\n");
     } catch (error) {
       // Spilling is best effort: a workspace that cannot clone or write must
@@ -551,108 +551,37 @@ function truncateScriptResult(text: string): string {
  * Where oversized script results land inside the agent's workspace checkout:
  * scratch files for the model to page through with itx.workspace, never meant
  * to be committed. One file per execution, so replays overwrite idempotently.
+ * Size is no concern — workspace files past the inline threshold are stored
+ * in R2 transparently.
  */
 const SCRIPT_RESULT_SPILL_DIR = "/script-results";
 
-/**
- * A spilled file must stay under the workspace per-file cap (1.5MB of UTF-8 —
- * see MAX_FILE_BYTES in workspace-durable-object.ts) with headroom. A single
- * file is used when the whole text encodes under this; otherwise the text
- * splits into parts of SCRIPT_RESULT_SPILL_PART_CHARS chars, sized so even
- * all-3-byte chars cannot overflow a file.
- */
-const SCRIPT_RESULT_SPILL_FILE_BYTES = 1_400_000;
-const SCRIPT_RESULT_SPILL_PART_CHARS = 450_000;
-
-/** Beyond this many parts (~9M chars) the tail is dropped, and the notice says so. */
-const SCRIPT_RESULT_SPILL_MAX_PARTS = 20;
-
-/** What a spill wrote: the workspace paths and how much of the text they hold. */
-type ScriptResultSpill = { paths: string[]; savedChars: number };
-
+/** Writes the full result text into the agent's workspace; returns its path. */
 async function spillScriptResult(input: {
   executionId: string;
   text: string;
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
-}): Promise<ScriptResultSpill> {
-  const base = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+}): Promise<string> {
   // The agent's documented publish flow is `git.add({ filepath: "." })` —
   // without this nested ignore every spill would ride along into workspace
   // commits (isomorphic-git's add respects .gitignore).
   await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
-  // UTF-8 bytes ≥ UTF-16 code units, so a text already over the byte cap in
-  // chars skips the (allocating) encode check entirely.
-  if (
-    input.text.length <= SCRIPT_RESULT_SPILL_FILE_BYTES &&
-    new TextEncoder().encode(input.text).byteLength <= SCRIPT_RESULT_SPILL_FILE_BYTES
-  ) {
-    const path = `${base}.json`;
-    await input.writeWorkspaceFile({ content: input.text, path });
-    return { paths: [path], savedChars: input.text.length };
-  }
-  const paths: string[] = [];
-  let savedChars = 0;
-  while (savedChars < input.text.length && paths.length < SCRIPT_RESULT_SPILL_MAX_PARTS) {
-    let end = Math.min(savedChars + SCRIPT_RESULT_SPILL_PART_CHARS, input.text.length);
-    // Never split a surrogate pair across two files.
-    const lastCode = input.text.charCodeAt(end - 1);
-    if (end < input.text.length && lastCode >= 0xd800 && lastCode <= 0xdbff) end += 1;
-    const path = `${base}.part${paths.length + 1}.json`;
-    await input.writeWorkspaceFile({ content: input.text.slice(savedChars, end), path });
-    paths.push(path);
-    savedChars = end;
-  }
-  return { paths, savedChars };
+  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
+  await input.writeWorkspaceFile({ content: input.text, path });
+  return path;
 }
 
 /**
  * The model-facing text after a truncated preview: where the full result
  * lives and a concrete next-script recipe for paging it, so the model reads
  * the file with plain JavaScript instead of re-running the expensive fetch.
- * Three variants, each with ONE coherent recipe: single file (JSON.parse it),
- * complete parts (concatenate then JSON.parse), dropped tail (the saved text
- * is not complete JSON, so the recipe searches it as text — never parse).
  */
-function spillNotice(input: { spill: ScriptResultSpill; totalChars: number }): string {
-  const { paths, savedChars } = input.spill;
-  const shown = SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US");
-  const total = input.totalChars.toLocaleString("en-US");
-  if (paths.length === 1) {
-    return [
-      `…truncated: showing the first ${shown} of ${total} chars. The full result is saved in your workspace at ${JSON.stringify(paths[0])} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
-      "```js",
-      "async (itx) => {",
-      `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(paths[0])}));`,
-      "  return Object.keys(data); // then slice/filter/regex to return only what you need",
-      "}",
-      "```",
-    ].join("\n");
-  }
-  if (savedChars < input.totalChars) {
-    return [
-      `…truncated: showing the first ${shown} of ${total} chars. Only the first ${savedChars.toLocaleString("en-US")} chars are saved in your workspace, split across ${paths.length} files (workspace files cap at 1.5MB; the tail past the spill cap was dropped, so the saved text is NOT complete JSON):`,
-      ...paths.map((path) => `- ${JSON.stringify(path)}`),
-      "Don't re-fetch; search the files as text (regex/indexOf — not JSON.parse) in your next script, e.g.:",
-      "```js",
-      "async (itx) => {",
-      `  const paths = ${JSON.stringify(paths)};`,
-      '  const text = (await Promise.all(paths.map((p) => itx.workspace.readFile(p)))).join("");',
-      '  const at = text.indexOf("needle");',
-      "  return text.slice(Math.max(0, at - 200), at + 800);",
-      "}",
-      "```",
-      "Return less next time: slice arrays, pick fields.",
-    ].join("\n");
-  }
+function spillNotice(input: { path: string; totalChars: number }): string {
   return [
-    `…truncated: showing the first ${shown} of ${total} chars. The full result is saved in your workspace, split across ${paths.length} files (workspace files cap at 1.5MB):`,
-    ...paths.map((path) => `- ${JSON.stringify(path)}`),
-    "Don't re-fetch; read and concatenate them with plain JavaScript in your next script, e.g.:",
+    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
     "```js",
     "async (itx) => {",
-    `  const paths = ${JSON.stringify(paths)};`,
-    "  const parts = await Promise.all(paths.map((p) => itx.workspace.readFile(p)));",
-    '  const data = JSON.parse(parts.join(""));',
+    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
     "  return Object.keys(data); // then slice/filter/regex to return only what you need",
     "}",
     "```",

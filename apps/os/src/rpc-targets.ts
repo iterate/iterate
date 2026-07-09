@@ -1284,9 +1284,9 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
  * nothing is shared until pushed. `git` publishes commits to the workspace's
  * own branch in the project repo (`workspaces/<path>`), never to main.
  *
- * Constraints: individual files are capped at ~1.5MB (store large blobs with
- * `itx.files`), and the `.git` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the `git` methods). Workspace
+ * Constraints: the `.git` directory is platform-managed — read it if you
+ * like, but writes there are rejected (use the `git` methods). Large files
+ * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
  */
