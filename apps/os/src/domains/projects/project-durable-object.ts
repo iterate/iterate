@@ -34,6 +34,7 @@ import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
+import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
@@ -59,7 +60,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // `itx.liveState` = the project's composite live state (see ProjectLiveState):
     // the processor's fold is ONE peer slice, alongside the streams index the DO
     // keeps in SQLite and the demo counter.
-    getLiveState: () => {
+    getLiveState: (): ProjectLiveState => {
       const reduced = this.#projectProcessor.currentState;
       // Reconcile any catalog stream missing an index row (cheap when none are),
       // so newly-created quiet streams show up in ⌘K without waiting for events.

@@ -4781,30 +4781,27 @@ class ProcessorRelayRpcTarget<State>
  * the node's own verbs). `get`/`subscribe` first seed the engine from committed
  * state so the first paint is never stale after a DO restart.
  */
-export class LiveStateRpcTarget<State = unknown>
+export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
-  readonly #host: Pick<StreamProcessorHost, "live" | "refreshLiveState">;
+  readonly #host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">;
 
-  constructor(host: Pick<StreamProcessorHost, "live" | "refreshLiveState">) {
+  constructor(host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">) {
     super();
     this.#host = host;
   }
 
   async get(): Promise<State> {
-    await this.#host.refreshLiveState();
-    return this.#host.live.getState() as State;
+    await this.#host.loadAndRefreshLive();
+    return this.#host.live.getState();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    await this.#host.refreshLiveState();
-    // The engine holds an untyped state bag; the node asserts its own shape.
-    const handle = this.#host.live.subscribe(
-      onUpdate as (update: LiveUpdate<Record<string, unknown>>) => unknown,
-    );
+    await this.#host.loadAndRefreshLive();
+    const handle = this.#host.live.subscribe(onUpdate);
     return new LiveStateSubscriptionRpcTarget(handle);
   }
 }

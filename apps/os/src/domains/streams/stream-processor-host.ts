@@ -125,14 +125,14 @@ type HostedEntry = {
   ingestChain: Promise<void>;
 };
 
-export type StreamProcessorHost = {
+export type StreamProcessorHost<Live extends object = Record<string, unknown>> = {
   readonly stream: Stream;
-  /** The node's live-state engine; a `.live` RpcTarget exposes getState()/subscribe() over it. */
-  readonly live: LiveState<Record<string, unknown>>;
+  /** The node's live-state engine; a `.liveState` RpcTarget exposes getState()/subscribe() over it. */
+  readonly live: LiveState<Live>;
   /**
-   * Reassemble the live state from current inputs — the ONE writer for `.live`.
-   * Call it after mutating any non-processor live-state input (the streams
-   * index, the demo counter); a processor's own state change calls it
+   * Reassemble the live state from current inputs — the ONE writer for the
+   * engine. Call it after mutating any non-processor live-state input (the
+   * streams index, the demo counter); a processor's own state change calls it
    * automatically via `observeStateChanges`. The diff makes a full reassembly
    * cheap (unchanged slices keep identity), so there is no need to poke
    * individual slices. On a cold DO (a processor's checkpoint not yet loaded)
@@ -141,10 +141,12 @@ export type StreamProcessorHost = {
    */
   refreshLive(): void;
   /**
-   * Like `refreshLive`, but first LOADS every processor's checkpoint — so the
-   * first `.live` read/subscription reflects committed writes even on a cold DO.
+   * `refreshLive`'s cold-start sibling: LOAD every processor's checkpoint,
+   * THEN reassemble — so the first read/subscription reflects committed
+   * writes even on a cold DO. (Distinct names because the difference — one
+   * awaits storage, one must not — is exactly what a call site gets wrong.)
    */
-  refreshLiveState(): Promise<void>;
+  loadAndRefreshLive(): Promise<void>;
   /**
    * Register a processor under its contract slug. The builder receives the
    * host-provided base deps (checkpoint storage in DO KV keyed by the slug and
@@ -189,7 +191,7 @@ export type StreamProcessorHost = {
   getAlarmSlice(name: string): number | null;
 };
 
-export function createStreamProcessorHost(
+export function createStreamProcessorHost<Live extends object = Record<string, unknown>>(
   ctx: DurableObjectState,
   options: {
     stream: Stream;
@@ -208,14 +210,16 @@ export function createStreamProcessorHost(
     /** Catch-up read page size; tests shrink it to exercise paging. */
     catchUpPageSize?: number;
     /**
-     * Assemble this node's live state (see `LiveState`). Called on every hosted
-     * processor's state change and on `refreshLiveState`. Omit and the live
-     * state is the primary (first-registered) processor's reduced state; provide
-     * it to project a redacted view or fold in extras (e.g. a streams index).
+     * Assemble this node's live state (see `LiveState`) — this is what TYPES
+     * the host's `Live` parameter. Called on every hosted processor's state
+     * change and on `loadAndRefreshLive`. Omit and the live state is the
+     * primary (first-registered) processor's reduced state (untyped: `Live`
+     * stays the default record); provide it to project a redacted view or fold
+     * in extras (e.g. a streams index).
      */
-    getLiveState?: () => Record<string, unknown>;
+    getLiveState?: () => Live;
   },
-): StreamProcessorHost {
+): StreamProcessorHost<Live> {
   const entries = new Map<string, HostedEntry>();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
@@ -384,8 +388,11 @@ export function createStreamProcessorHost(
   }
 
   // The node's live-state engine. Seeded empty; assembled from processor state
-  // on the first `refreshLiveState` and kept fresh by each processor's observer.
-  const live = new LiveState<Record<string, unknown>>({});
+  // on the first `loadAndRefreshLive` and kept fresh by each processor's observer.
+  // The empty seed and the primary-processor fallback are the two places the
+  // host must assert `Live` (they only apply on hosts that omitted
+  // `getLiveState`, where `Live` is the default record type anyway).
+  const live = new LiveState<Live>({} as Live);
   function assembleLive(): void {
     // An unloaded processor reports the schema DEFAULT as currentState —
     // assembling from that would push patches that wipe real facts to live
@@ -396,7 +403,7 @@ export function createStreamProcessorHost(
       return;
     }
     const primary = [...entries.values()][0]?.processor.currentState;
-    live.setState(options.getLiveState?.() ?? (primary as Record<string, unknown>) ?? {});
+    live.setState(options.getLiveState?.() ?? ((primary ?? {}) as Live));
   }
   async function loadThenAssemble(): Promise<void> {
     await Promise.all(
@@ -414,7 +421,7 @@ export function createStreamProcessorHost(
     stream: options.stream,
     live,
     refreshLive: assembleLive,
-    refreshLiveState: loadThenAssemble,
+    loadAndRefreshLive: loadThenAssemble,
     add(build) {
       // The registry name is the processor's contract slug, which only exists
       // after the builder runs; the checkpoint-storage deps close over it

@@ -55,9 +55,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     version: workerVersion(this.env),
     // Secret material is write-only: the live state that leaves this DO is the
     // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
-    // processor facade applies via publicState.
-    getLiveState: () =>
-      describeSecretState(this.#secretProcessor.currentState) as unknown as Record<string, unknown>,
+    // processor facade applies via publicState. The explicit return type does
+    // double duty: it makes the host a LiveState<SecretDescription>, and it
+    // breaks the field-initializer inference cycle (this closure reads
+    // #secretProcessor, which is built from this host).
+    getLiveState: (): SecretDescription => describeSecretState(this.#secretProcessor.currentState),
   });
   readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
