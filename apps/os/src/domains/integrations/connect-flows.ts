@@ -797,23 +797,22 @@ export async function connectTelegram(input: {
       botToken,
       method: "setWebhook",
     });
-    // Advertise /new in the chat's `/` command menu (the session-rotation verb
-    // the telegram router understands). Same strictness as setWebhook — a
-    // token that can set a webhook can set commands; already-connected bots
-    // pick the menu up on reconnect.
-    await callTelegramWithToken({
-      apiBaseUrl,
-      body: { commands: [{ command: "new", description: "Start a fresh thread" }] },
-      botToken,
-      method: "setMyCommands",
-    });
   } catch (error) {
     // Roll the just-recorded connection back (best-effort) so the dashboard
     // never shows a half-connected bot whose webhook was never registered; a
     // retry re-runs cleanly (the reconnect path reuses the connection name).
+    // The deleteWebhook is defense in depth for partial/ambiguous failures
+    // (a webhook that DID register while the response failed would otherwise
+    // keep delivering to a deployment that ACK-drops the unclaimed bot).
     // Steal note: the OLD project is not restored — its token was already
     // bricked above and re-claiming it would resurrect a connection whose
     // secret is dead; the truthful state is "nobody holds the bot, retry".
+    await callTelegramWithToken({
+      apiBaseUrl,
+      body: {},
+      botToken,
+      method: "deleteWebhook",
+    }).catch(() => null);
     await recordDisconnection({
       connection,
       disconnectedEvent: {
@@ -833,6 +832,23 @@ export async function connectTelegram(input: {
     }).catch(() => null);
     throw error;
   }
+
+  // Advertise /new in the chat's `/` command menu (the session-rotation verb
+  // the telegram router understands) — BEST-EFFORT: the menu is cosmetic
+  // (routing understands /new regardless), so its failure must never fail —
+  // let alone roll back — a connect whose webhook is already live.
+  // Already-connected bots pick the menu up on reconnect.
+  await callTelegramWithToken({
+    apiBaseUrl,
+    body: {
+      commands: [
+        { command: "new", description: "Start a fresh thread" },
+        { command: "debug", description: "Show agent debug info" },
+      ],
+    },
+    botToken,
+    method: "setMyCommands",
+  }).catch(() => null);
 
   return { botId: bot.id, botUsername: bot.username ?? null, connection, ok: true };
 }

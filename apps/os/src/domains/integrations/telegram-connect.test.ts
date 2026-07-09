@@ -171,9 +171,12 @@ describe("connectTelegram", () => {
       }),
       url: `https://os.example.test/api/integrations/telegram/webhook/${BOT_ID}`,
     });
-    // The /new session-rotation command is advertised in the chat's `/` menu.
+    // The command menu advertises both verbs the processors understand.
     expect(api.requests[2]!.body).toEqual({
-      commands: [{ command: "new", description: "Start a fresh thread" }],
+      commands: [
+        { command: "new", description: "Start a fresh thread" },
+        { command: "debug", description: "Show agent debug info" },
+      ],
     });
 
     // The token lands in the connection secret, egress pinned to the Bot API
@@ -395,12 +398,47 @@ describe("connectTelegram", () => {
     expect(result).toMatchObject({ connection: "my-old-name", ok: true });
   });
 
+  test("a setMyCommands failure never fails the connect (the / menu is cosmetic)", async () => {
+    await using api = await startFakeTelegramApi({ failSetMyCommands: true });
+
+    const result = await connectTelegram({
+      botToken: BOT_TOKEN,
+      config: config(api.baseUrl),
+      projectId: PROJECT_ID,
+    });
+    expect(result).toMatchObject({ connection: "mishashelperbot", ok: true });
+    // The webhook is live, the claim stands, and status shows connected — a
+    // missing command-menu entry must never roll any of that back.
+    expect(api.requests.map((request) => request.path)).toEqual([
+      `/bot${BOT_TOKEN}/getMe`,
+      `/bot${BOT_TOKEN}/setWebhook`,
+      `/bot${BOT_TOKEN}/setMyCommands`,
+    ]);
+    expect(directoryEvents().map((event) => event.type)).toEqual([CONNECTION_CLAIMED_EVENT_TYPE]);
+    expect(
+      await getConnectionStatus({
+        connection: "mishashelperbot",
+        projectId: PROJECT_ID,
+        provider: "telegram",
+      }),
+    ).toMatchObject({ connected: true });
+  });
+
   test("a setWebhook failure rolls the fresh connect back: no claim, disconnected status, bricked secret", async () => {
     await using api = await startFakeTelegramApi({ failSetWebhook: true });
 
     await expect(
       connectTelegram({ botToken: BOT_TOKEN, config: config(api.baseUrl), projectId: PROJECT_ID }),
     ).rejects.toThrow(/setWebhook failed: webhook set refused/);
+
+    // Defense in depth: the rollback also tries deleteWebhook (a webhook that
+    // DID register while the response failed would otherwise keep delivering
+    // to a deployment that ACK-drops the unclaimed bot).
+    expect(api.requests.map((request) => request.path)).toEqual([
+      `/bot${BOT_TOKEN}/getMe`,
+      `/bot${BOT_TOKEN}/setWebhook`,
+      `/bot${BOT_TOKEN}/deleteWebhook`,
+    ]);
 
     // Claim-first means the claim exists before setWebhook; the rollback
     // unclaims it, so the fold nets to nobody holding the bot and a retry
@@ -576,7 +614,11 @@ async function seedDirectoryClaim(input: { connection: string; projectId: string
  * claim-first ordering proof); `failSetWebhook` simulates Telegram refusing
  * the webhook. `await using` closes it when the test scope exits. */
 async function startFakeTelegramApi(
-  options: { failSetWebhook?: boolean; onSetWebhook?: () => void } = {},
+  options: {
+    failSetMyCommands?: boolean;
+    failSetWebhook?: boolean;
+    onSetWebhook?: () => void;
+  } = {},
 ) {
   const requests: Array<{ body: Record<string, unknown>; path: string }> = [];
   const server = createServer((request, response) => {
@@ -604,6 +646,12 @@ async function startFakeTelegramApi(
         });
       }
       if (path.endsWith("/setMyCommands")) {
+        if (options.failSetMyCommands === true) {
+          return respond(500, { ok: false, description: "commands refused" });
+        }
+        return respond(200, { ok: true, result: true });
+      }
+      if (path.endsWith("/deleteWebhook")) {
         return respond(200, { ok: true, result: true });
       }
       if (path.endsWith("/setWebhook")) {
