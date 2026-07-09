@@ -97,24 +97,49 @@ describe("itx workspaces", () => {
     await expect(workspace.writeFile("/.git/config", "[remote]")).rejects.toThrow(/not writable/);
     await expect(workspace.rm("/", { recursive: true })).rejects.toThrow(/not writable/);
 
-    // -- publish: one snapshot commit on the workspace's own branch -----------
+    // -- commit: the workspace's changes land on the config repo's MAIN ------
+
+    // Captured pre-commit so main's worker.ts can be restored afterwards
+    // (the commit below deletes it, and later assertions want a sane repo).
+    const workerTsContent = await root.readFile("/worker.ts");
+    expect(workerTsContent).not.toBeNull();
 
     const status = await workspace.git.status();
     expect(status).toContainEqual({ change: "added", path: "/notes/e2e.md" });
     expect(status).toContainEqual({ change: "modified", path: "/docs/freshness.md" });
     expect(status).toContainEqual({ change: "deleted", path: "/worker.ts" });
 
-    const published = await workspace.git.commit({ message: "e2e workspace publish" });
-    expect(published.branch).toBe(workspacePath.slice(1));
-    expect(published.commitOid).toMatch(/^[0-9a-f]{40}$/);
-    expect(published.changedPaths).toContain("/notes/e2e.md");
-    expect(published.changedPaths).toContain("/worker.ts");
+    const committed = await workspace.git.commit({ message: "e2e workspace commit" });
+    expect(committed.commitOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(committed.changedPaths).toContain("/notes/e2e.md");
+    expect(committed.changedPaths).toContain("/worker.ts");
     const [head] = await workspace.git.log({ limit: 1 });
-    expect(head?.oid).toBe(published.commitOid);
+    expect(head?.oid).toBe(committed.commitOid);
+    expect(head?.message).toContain("e2e workspace commit");
 
-    // The publish went to the workspace branch, not main.
-    expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();
-    expect(await project.repo.readFile({ path: "worker.ts" })).not.toBeNull();
+    // The commit went to MAIN: adds, shadows, and deletions are all live on
+    // the repo — this is what makes "agent updates the website" one call.
+    expect((await project.repo.readFile({ path: "notes/e2e.md" }))?.content).toBe(
+      "workspace hello world",
+    );
+    expect((await project.repo.readFile({ path: "docs/freshness.md" }))?.content).toBe(
+      "fresh off main + overlay addendum",
+    );
+    expect(await project.repo.readFile({ path: "worker.ts" })).toBeNull();
+
+    // After the commit the overlay is pristine again: no private shadows, and
+    // reads fall through to the new main (which contains the changes).
+    expect(await workspace.git.status()).toEqual([]);
+    expect(await workspace.readFile("/notes/e2e.md")).toBe("workspace hello world");
+    expect(await workspace.exists("/worker.ts")).toBe(false);
+
+    // Restore worker.ts on main so the project stays buildable for the rest
+    // of the test.
+    await project.repo.commitFiles({
+      message: "e2e: restore worker.ts after workspace-delete commit",
+      changes: [{ path: "worker.ts", content: workerTsContent! }],
+    });
+    expect(await workspace.exists("/worker.ts")).toBe(true);
 
     // Secondary repos are NOT the config repo: their reads must serve their
     // own files, never the root workspace cache (which mirrors only "/").
@@ -128,10 +153,13 @@ describe("itx workspaces", () => {
     expect((await sideRepo.listFiles()).paths).toContain("side.md");
     expect(await project.repo.readFile({ path: "side.md" })).toBeNull();
 
-    // An empty overlay has nothing to publish.
+    // An empty overlay has nothing to commit — and, because the earlier
+    // commit landed on MAIN, a brand-new overlay already sees its files
+    // through the fall-through (workspace commits are shared state, not
+    // per-workspace branches).
     using other = project.workspaces.get(`/workspaces/agents/e2e-${crypto.randomUUID()}`);
-    expect(await other.readFile("/notes/e2e.md")).toBeNull();
-    await expect(other.git.commit({ message: "premature" })).rejects.toThrow(/Nothing to publish/);
+    expect(await other.readFile("/notes/e2e.md")).toBe("workspace hello world");
+    await expect(other.git.commit({ message: "premature" })).rejects.toThrow(/Nothing to commit/);
 
     // -- itx.files <-> workspace: the two file domains compose through bytes.
 

@@ -79,11 +79,7 @@ import {
 } from "./domains/sandboxes/utils.ts";
 import { SandboxProcessorContract } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import {
-  isRootWorkspacePath,
-  normalizeWorkspacePath,
-  workspaceBranchName,
-} from "./domains/workspaces/utils.ts";
+import { isRootWorkspacePath, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
@@ -1357,14 +1353,13 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
  * read-only, always-fresh materialization of the config repo's main branch.
  * Every other workspace is an OVERLAY over the root: reads see latest main
  * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. `git` publishes
- * the overlay as snapshot commits on the workspace's own branch in the
- * config repo (`workspaces/<path>`), never to main.
+ * there is no clone — a new workspace is usable instantly. `git.commit`
+ * commits the overlay's changes straight to the config repo's MAIN branch
+ * (the same lane as `itx.repo.commitFiles`, so the project worker/website
+ * redeploys automatically), then the overlay resets to mirror the new main.
  *
  * Constraints: the `.git` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
- * branches are for durability and handoff, not worker builds: point worker
- * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
+ * are fine (past ~1.5MB they are stored in R2 transparently).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
@@ -1372,15 +1367,15 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return describeNode({
       instructions: isRoot
         ? "The project's ROOT workspace (\"/\"): a read-only, always-fresh checkout of the config repo's main branch — reads always see the latest commit on main. Writes are rejected (write in your own workspace, or commit to main via itx.repo). Every other workspace overlays this one."
-        : `A durable workspace at "${this.props.path}": an instant copy-on-write overlay over the config repo's latest main (no clone — reads fall through to main until a local write shadows a path; writes and deletes stay private). Paths are absolute with "/" as the repo root. ` +
-          `workspace.git.commit({ message }) publishes the overlay as a snapshot commit on the config repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
+        : `A durable workspace at "${this.props.path}": an instant copy-on-write overlay over the config repo's latest main (no clone — reads fall through to main until a local write shadows a path; writes and deletes stay private until committed). Paths are absolute with "/" as the repo root. ` +
+          "workspace.git.commit({ message }) commits your changes to the config repo's MAIN branch — the project worker/website redeploys automatically; no branches, no push, no extra steps.",
       children: {
         appendFile: "Append to a file (copies a fallen-through file up first).",
         cp: "Copy a file or directory ({ recursive } for trees).",
         deleteFile: "Delete one file (false when it did not exist).",
-        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Private until published via git.",
+        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Private until committed via git.",
         exists: "Whether a path exists.",
-        git: "Publish surface: status (changes vs main), commit (snapshot to this workspace's own branch), log.",
+        git: "Commit surface: status (changes vs main), commit (changes → the config repo's main), log (main's history).",
         glob: "Files matching a glob pattern.",
         kill: "Abort this Workspace Durable Object incarnation; the next request boots it again.",
         listAllFiles: "Every file path in the merged view (sorted).",
@@ -1440,8 +1435,8 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /**
    * Wipe the workspace back to pristine: the local layer and every deletion
    * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Unpublished work is LOST (published snapshots survive
-   * on the workspace branch).
+   * re-materializes). Uncommitted work is LOST (committed changes live on
+   * main).
    */
   reset(): Promise<void> {
     return this.durableObjectStub.reset();
@@ -1527,23 +1522,22 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 }
 
 /**
- * The publish surface of an overlay workspace. There is no staging area and
- * no separate push: `commit({ message })` snapshots the whole merged view
- * (latest main + the local layer, minus deletions and `.gitignore`d paths)
- * as ONE commit force-pushed to the workspace's own branch in the project
- * repo. Push credentials are injected inside the workspace Durable Object
- * (from the config repo's `gitAccess()`), so no token ever rides this
- * surface.
+ * The commit surface of an overlay workspace. There is no staging area, no
+ * branch, and no separate push: `commit({ message })` turns the workspace's
+ * changes (local files minus `.gitignore`d paths, plus deletions) into ONE
+ * ordinary commit on the config repo's MAIN branch — the same lane as
+ * `itx.repo.commitFiles`, so the project worker/website redeploys
+ * automatically. Credentials are internal; no token rides this surface.
  */
 class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        `Publish surface of the workspace at "${this.props.path}". commit({ message }) snapshots the merged view (main + this workspace's changes) to the config repo branch "${workspaceBranchName(this.props.path)}" — this workspace's own branch, never main; credentials are automatic. ` +
-        "No add/push needed: every local file not .gitignored is included, deletions apply, and each commit is a fresh snapshot on the current main.",
+        `Commit surface of the workspace at "${this.props.path}". commit({ message }) commits this workspace's changes to the config repo's MAIN branch — changes go live immediately (the project worker/website rebuilds from main automatically). ` +
+        "No add, no push, no branches: every local file not .gitignored is included, deletions apply, and afterwards the workspace mirrors the new main.",
       children: {
-        commit: "Publish the workspace as one snapshot commit ({ message, author? }).",
-        log: "Published snapshots, newest first ({ limit? }; [] before the first commit).",
+        commit: "Commit the workspace's changes to the config repo's main ({ message, author? }).",
+        log: "The config repo's main-branch history, newest first ({ limit? }).",
         status: "Changes vs latest main: added / modified (shadowed) / deleted paths.",
       },
       parent: "a workspace (workspace.git)",
@@ -1570,7 +1564,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     return this.durableObjectStub.gitStatus();
   }
 
-  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
+  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
@@ -1578,7 +1572,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     return this.durableObjectStub.gitCommit(input);
   }
 
-  /** Published snapshots of this workspace, newest first. */
+  /** The config repo's main-branch history, newest first. */
   log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
     return this.durableObjectStub.gitLog(input);
   }
