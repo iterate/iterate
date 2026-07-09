@@ -1,4 +1,11 @@
-import { FilterIcon, HistoryIcon, MoreHorizontalIcon, PauseIcon, PlayIcon } from "lucide-react";
+import {
+  CircleStopIcon,
+  FilterIcon,
+  HistoryIcon,
+  MoreHorizontalIcon,
+  PauseIcon,
+  PlayIcon,
+} from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -40,6 +47,7 @@ export function StreamViewHeader({
   eventsToggle,
   metrics,
   presence,
+  streamKill,
   streamPath,
 }: {
   agentBusy: boolean;
@@ -48,6 +56,10 @@ export function StreamViewHeader({
     pending: boolean;
     reason: string | null;
     setPaused: (paused: boolean) => Promise<void>;
+  };
+  streamKill: {
+    kill: () => Promise<void>;
+    pending: boolean;
   };
   /**
    * Full-panel layouts relegate the feed to a sheet; this renders the header
@@ -189,22 +201,27 @@ export function StreamViewHeader({
             </Button>
           </>
         )}
-        {agentPause == null ? null : <AgentActionMenu pause={agentPause} />}
+        <StreamActionMenu kill={streamKill} pause={agentPause} />
       </div>
     </header>
   );
 }
 
-function AgentActionMenu({
+function StreamActionMenu({
+  kill,
   pause,
 }: {
-  pause: {
+  kill: {
+    kill: () => Promise<void>;
+    pending: boolean;
+  };
+  pause?: {
     paused: boolean;
     pending: boolean;
     setPaused: (paused: boolean) => Promise<void>;
   };
 }) {
-  const Icon = pause.paused ? PlayIcon : PauseIcon;
+  const PauseActionIcon = pause?.paused ? PlayIcon : PauseIcon;
 
   return (
     <DropdownMenu>
@@ -213,7 +230,7 @@ function AgentActionMenu({
           <Button
             variant="ghost"
             size="icon"
-            title="Agent actions"
+            title={pause == null ? "Stream actions" : "Agent actions"}
             className="rounded-full text-muted-foreground"
           />
         }
@@ -222,14 +239,27 @@ function AgentActionMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
+          <DropdownMenuLabel>
+            {pause == null ? "Stream actions" : "Agent actions"}
+          </DropdownMenuLabel>
+          {pause == null ? null : (
+            <DropdownMenuItem
+              closeOnClick
+              disabled={pause.pending}
+              onClick={() => void pause.setPaused(!pause.paused)}
+            >
+              {pause.pending ? <Spinner /> : <PauseActionIcon />}
+              {pause.paused ? "Resume agent" : "Pause agent"}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             closeOnClick
-            disabled={pause.pending}
-            onClick={() => void pause.setPaused(!pause.paused)}
+            disabled={kill.pending}
+            variant="destructive"
+            onClick={() => void kill.kill()}
           >
-            {pause.pending ? <Spinner /> : <Icon />}
-            {pause.paused ? "Resume agent" : "Pause agent"}
+            {kill.pending ? <Spinner /> : <CircleStopIcon />}
+            Kill stream
           </DropdownMenuItem>
         </DropdownMenuGroup>
       </DropdownMenuContent>
