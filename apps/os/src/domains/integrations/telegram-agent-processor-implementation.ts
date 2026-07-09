@@ -294,31 +294,38 @@ function coerceTelegramId(id: string): number | string {
   return Number.isSafeInteger(numeric) ? numeric : id;
 }
 
+/** The exact thread-reading call the hint and the system prompt both teach:
+ * webhook-received + send-requested ARE the two-sided transcript (user text
+ * in `payload.body.message.text`, bot text in `payload.text`) — an unfiltered
+ * getEvents returns the OLDEST raw events, which on a real stream is
+ * subscriber/llm plumbing with likely zero conversation in the first page. */
+export function telegramThreadReadSnippet(streamPath: string): string {
+  return `await itx.streams.get(${JSON.stringify(streamPath)}).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] })`;
+}
+
 function telegramWebhookAgentInput(
   payload: unknown,
   options: { newCommand: { trailingText: string | null } | null },
 ) {
-  const lines = [
-    "`events.iterate.com/telegram/webhook-received` event received",
-    "",
-    "```yaml",
-    stringifyYaml(payload).trimEnd(),
-    "```",
-  ];
+  const lines = ["`events.iterate.com/telegram/webhook-received` event received"];
+  // The reply hint leads, ABOVE the YAML dump — trailing a wall of YAML it
+  // gets skimmed past (observed live: the agent explored the repo instead of
+  // reading the hinted thread, then claimed the history was unavailable).
+  const replyHint = readRecord(readRecord(payload)?.replyHint);
+  const replyHintPath = readString(replyHint?.sessionPath);
+  if (replyHintPath !== undefined) {
+    lines.push(
+      "",
+      `IMPORTANT: this message REPLIES to a message from a different thread: ${replyHintPath} (resolved by ${readString(replyHint?.resolvedBy) ?? "unknown"}). Before answering — and before any other exploration — read that thread's transcript: ${telegramThreadReadSnippet(replyHintPath)} (user text is in payload.body.message.text, your earlier replies in payload.text; if exactly 500 events come back, repeat with afterOffset: events.at(-1).offset to reach the recent end). Then answer in THAT thread by appending your send request to that stream instead of this one, or answer here — your judgement, but only after reading it.`,
+    );
+  }
+  lines.push("", "```yaml", stringifyYaml(payload).trimEnd(), "```");
   if (options.newCommand !== null) {
     lines.push(
       "",
       options.newCommand.trailingText === null
         ? "The user started a fresh thread with /new. This session's transcript starts here; earlier conversation lives in the previous session streams."
         : `The user started a fresh thread with /new — treat the text after /new as their first message in this new conversation: ${JSON.stringify(options.newCommand.trailingText)}`,
-    );
-  }
-  const replyHint = readRecord(readRecord(payload)?.replyHint);
-  const replyHintPath = readString(replyHint?.sessionPath);
-  if (replyHintPath !== undefined) {
-    lines.push(
-      "",
-      `This message REPLIES to a message from a different thread: ${replyHintPath} (resolved by ${readString(replyHint?.resolvedBy) ?? "unknown"}). You can read that thread for context (await itx.streams.get(${JSON.stringify(replyHintPath)}).getEvents({ limit: 50 })), answer in THAT thread by appending your send request to that stream instead of this one, or simply answer here — your judgement.`,
     );
   }
   const placeholders = telegramMediaPlaceholders(payload);

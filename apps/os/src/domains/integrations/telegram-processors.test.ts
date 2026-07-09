@@ -744,7 +744,53 @@ describe("TelegramAgentProcessor", () => {
     expect(inputs).toHaveLength(1);
     const content = (inputs[0]!.payload as { content: string }).content;
     expect(content).toContain(`REPLIES to a message from a different thread: ${oldSession}`);
-    expect(content).toContain(`itx.streams.get("${oldSession}")`);
+    // The taught read is FILTERED to the conversation event types — an
+    // unfiltered getEvents returns the oldest raw events (subscriber/llm
+    // plumbing), which is how a live agent failed to recover the history.
+    expect(content).toContain(
+      `await itx.streams.get("${oldSession}").getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] })`,
+    );
+    // Imperative and LEADING: the hint sits above the YAML dump (trailing it,
+    // the live agent skimmed past and explored the repo instead).
+    expect(content.indexOf("IMPORTANT: this message REPLIES")).toBeLessThan(
+      content.indexOf("```yaml"),
+    );
+    expect(content).toContain("Before answering");
+  });
+
+  it("the taught filtered read returns exactly the two-sided transcript of a real-shaped thread", async () => {
+    // Seed an old session stream the way a live one accumulates: plumbing
+    // noise interleaved with the conversation. The exact call the hint and
+    // system prompt teach must surface ONLY the user/bot exchange.
+    const network = new MemoryStreamNetwork();
+    const oldSession = network.get(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`);
+    await oldSession.append(
+      { type: "events.iterate.com/stream/subscriber-connected", payload: {} },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({ text: "what's the wifi password?" }),
+      },
+      { type: "events.iterate.com/agent/input-added", payload: { content: "transcribed..." } },
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { requestId: "r1" } },
+      {
+        type: "events.iterate.com/telegram/send-requested",
+        payload: { text: "It's hunter2." },
+      },
+      { type: "events.iterate.com/telegram/message-sent", payload: { messageId: 9001 } },
+    );
+
+    const transcript = await oldSession.getEvents({
+      eventTypes: [
+        "events.iterate.com/telegram/webhook-received",
+        "events.iterate.com/telegram/send-requested",
+      ],
+    });
+    expect(
+      transcript.map((event) => {
+        const payload = event.payload as { body?: { message?: { text?: string } }; text?: string };
+        return payload.body?.message?.text ?? payload.text;
+      }),
+    ).toEqual(["what's the wifi password?", "It's hunter2."]);
   });
 });
 
@@ -762,8 +808,13 @@ describe("telegramAgentSystemPrompt", () => {
     expect(prompt).toContain(`this chat's id is ${CHAT_ID}`);
     expect(prompt).toContain("Never use itx.chat.sendMessage");
     // Threading guidance: /new sessions + reply hints (read / cross-post /
-    // answer in place).
+    // answer in place) — imperative, with the FILTERED transcript read (an
+    // unfiltered getEvents pages through plumbing noise, not conversation).
     expect(prompt).toContain("/new");
+    expect(prompt).toContain("READ the referenced thread FIRST");
+    expect(prompt).toContain(
+      'getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] })',
+    );
     expect(prompt).toContain("your judgement");
     // Arbitrary Bot API methods remain available as immediate calls.
     expect(prompt).toContain(`itx.integrations.telegram["${CONNECTION}"]`);
