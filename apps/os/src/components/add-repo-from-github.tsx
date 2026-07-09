@@ -95,12 +95,19 @@ async function listInstallationRepos(
  * head so the new repo starts as a copy of the GitHub one. Renders nothing
  * when the project has no GitHub connection. Suspends on the connections
  * read — mount under a `<Suspense>` boundary.
+ *
+ * `existingRepoPaths` (the page's live repo list) gates the path field:
+ * `repos.create` is create-if-absent, so without the gate an existing path —
+ * `/repos/config` included — would be silently linked and force-synced,
+ * discarding its local history.
  */
 export function AddRepoFromGithub({
   projectId,
+  existingRepoPaths,
   onAdded,
 }: {
   projectId: string;
+  existingRepoPaths: string[];
   onAdded: (path: string) => void;
 }) {
   const connections = useItxQuery({
@@ -137,6 +144,7 @@ export function AddRepoFromGithub({
           </DialogHeader>
           <AddRepoFromGithubWizard
             connections={connections}
+            existingRepoPaths={existingRepoPaths}
             onAdded={(path) => {
               setOpen(false);
               onAdded(path);
@@ -150,9 +158,11 @@ export function AddRepoFromGithub({
 
 function AddRepoFromGithubWizard({
   connections,
+  existingRepoPaths,
   onAdded,
 }: {
   connections: string[];
+  existingRepoPaths: string[];
   onAdded: (path: string) => void;
 }) {
   const itx = useItx();
@@ -164,10 +174,20 @@ function AddRepoFromGithubWizard({
   // stops overwriting it.
   const [pathEdited, setPathEdited] = useState(false);
   const normalizedPath = path.trim();
-  const pathValid = REPO_PATH_PATTERN.test(normalizedPath);
+  const pathTaken = existingRepoPaths.includes(normalizedPath);
+  const pathValid = REPO_PATH_PATTERN.test(normalizedPath) && !pathTaken;
 
   const addRepo = useMutation({
     mutationFn: async (input: { path: string; repo: InstallationRepo }) => {
+      // The wizard only ADDS repos. `repos.create` is create-if-absent, so an
+      // existing path would sail through and the force-sync below would
+      // discard its history — re-check against the live list right before
+      // mutating (the submit gate can race a repo created since last render).
+      if (existingRepoPaths.includes(input.path)) {
+        throw new Error(
+          `${input.path} already exists. To back an existing repo with GitHub, use the GitHub panel on that repo's page.`,
+        );
+      }
       // create is "create if it does not exist yet", so a retry after a
       // mid-flow failure is safe and finishes the job.
       await itx.repos.create({ path: input.path });
@@ -190,7 +210,7 @@ function AddRepoFromGithubWizard({
       }
       return { link, path: input.path, sync, syncError };
     },
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       const github = `${result.link.owner}/${result.link.repo}`;
       if (result.syncError !== null) {
         toast.warning(
@@ -201,8 +221,14 @@ function AddRepoFromGithubWizard({
           `Added ${result.path} from ${github} at ${result.sync.commitOid.slice(0, 7)}.`,
         );
       } else if (result.link.initialPush.ok) {
+        // changed: false right after a successful seed push means GitHub had
+        // no main HEAD to pull — either an empty repository, or one whose
+        // content lives on a different default branch (which iterate does not
+        // mirror). Only claim what we know.
         toast.success(
-          `Added ${result.path} linked to ${github} — the GitHub repository was empty, so it was seeded with the starter files.`,
+          variables.repo.defaultBranch === "main"
+            ? `Added ${result.path} linked to ${github} — the GitHub repository had no main branch to pull, so it was seeded with the starter files.`
+            : `Added ${result.path} linked to ${github} — its content lives on "${variables.repo.defaultBranch}", which iterate does not mirror, so main was seeded with the starter files.`,
         );
       } else {
         toast.success(`Added ${result.path} linked to ${github}.`);
@@ -287,7 +313,12 @@ function AddRepoFromGithubWizard({
           aria-invalid={!pathValid && path !== "/repos/"}
         />
         <FieldDescription>Project-local repo path.</FieldDescription>
-        {!pathValid && path !== "/repos/" ? (
+        {pathTaken ? (
+          <FieldError>
+            {normalizedPath} already exists. To back an existing repo with GitHub, use the GitHub
+            panel on that repo's page.
+          </FieldError>
+        ) : !pathValid && path !== "/repos/" ? (
           <FieldError>Use a repo path like "/repos/project".</FieldError>
         ) : null}
       </Field>
