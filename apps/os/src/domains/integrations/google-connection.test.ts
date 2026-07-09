@@ -20,10 +20,15 @@ const streamNetwork = vi.hoisted(() => {
   return { streams };
 });
 
-// connect-flows imports slack-api (disconnect's auth.revoke), which drags the
-// worker-only egress entrypoint into the module graph; sever that edge — these
-// tests never touch slack.
+// connect-flows imports slack-api (disconnect's auth.revoke) and telegram-api
+// (disconnect's deleteWebhook), which drag the worker-only egress entrypoint
+// into the module graph; sever those edges — these tests never touch either.
 vi.mock("./slack-api.ts", () => ({ callProjectSlackWebApi: vi.fn() }));
+vi.mock("./telegram-api.ts", () => ({
+  callProjectTelegramBotApi: vi.fn(),
+  telegramApiBaseUrl: (config: { integrations: { telegram: { apiBaseUrl: string } } }) =>
+    config.integrations.telegram.apiBaseUrl.replace(/\/$/, ""),
+}));
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {

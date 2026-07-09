@@ -66,7 +66,11 @@ function ProjectRepoDetailContent() {
     ) : state.initialized ? (
       <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
     ) : (
-      <div className="overflow-y-auto p-4">
+      // data-spinner: this panel is live bootstrap progress (the processor
+      // pushes each step in), and right after repos.create it can also show a
+      // momentarily-stale checkpoint on a repo that IS already initialized —
+      // waits must keep extending until the live push replaces it.
+      <div className="overflow-y-auto p-4" data-spinner="true">
         <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
           <InfoRow label="Created" value={state.created ? "yes" : "not yet"} />
           <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
@@ -94,9 +98,5 @@ function ProjectRepoDetailContent() {
 
 function repoPathFromSplat(splat: string | undefined) {
   const suffix = splat?.replace(/^\/+/, "") ?? "";
-  // TEMPORARY HACK: the legacy project repo lives at path "/", whose suffix is
-  // empty — its URL ".../repos//" normalizes to the repos index, making it
-  // unviewable. "ROOT" stands in for it until the / repo becomes /repos/config.
-  if (suffix === "ROOT") return "/";
   return `/repos/${suffix}`;
 }

@@ -95,6 +95,29 @@ describe("StreamEventLog.getRange", () => {
     expect(read(log, { afterOffset: 0, eventTypes: [], limit: 3 })).toEqual([]);
   });
 
+  it("insert reports serialized byte lengths and getRangeSized reads the same sizes back", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const committedEvents = [
+      event(1, "events.iterate.com/test/sized"),
+      event(2, "events.iterate.com/test/sized"),
+    ];
+
+    const insertedByteLengths = log.insert(committedEvents);
+    expect(insertedByteLengths).toEqual(
+      committedEvents.map((entry) => new TextEncoder().encode(JSON.stringify(entry)).byteLength),
+    );
+
+    // The sized read sums the chunk rows already in hand — no re-stringify —
+    // and must agree exactly with what insert serialized.
+    const sized = log.getRangeSized({
+      afterOffset: 0,
+      beforeOffset: Number.MAX_SAFE_INTEGER,
+      limit: 10,
+    });
+    expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
+    expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+  });
+
   it("adds the stream path when reading legacy stored events", () => {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
     const log = new StreamEventLog(sql, "/legacy/stream");
@@ -156,6 +179,45 @@ describe("reconcileSubscriptionCursorRows", () => {
       nextAttemptAt: null,
       lastError: null,
     });
+  });
+});
+
+describe("SqliteSubscriptionCursorStore schema migration", () => {
+  it("adds the epoch column to a pre-epoch subscriptions table without losing rows", () => {
+    // A live DO that created the table under #1784 (no epoch column) and then
+    // received #1792 code: construction must upgrade the table in place
+    // instead of leaving every subsequent select throwing "no such column".
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      create table subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        updated_at text not null
+      )
+    `);
+    db.prepare(
+      "insert into subscriptions (subscription_key, acked_offset, updated_at) values (?, ?, ?)",
+    ).run("pre-existing", 7, new Date(0).toISOString());
+
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+
+    // The old row reads back with the fence value fresh #1784 rows had.
+    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
+    expect(store.list()).toHaveLength(1);
+    // Post-migration writes behave like any other row.
+    store.ensure("fresh", 0);
+    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
+  });
+
+  it("is idempotent on an already-current table", () => {
+    const db = new DatabaseSync(":memory:");
+    const first = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    first.ensure("k", 3);
+    const again = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    expect(again.get("k")).toMatchObject({ ackedOffset: 3 });
   });
 });
 

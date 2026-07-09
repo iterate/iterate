@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
@@ -159,6 +160,7 @@ export function ProjectStreamView({
   const agentPauseState = useStreamPauseState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
   const [pauseMutationPending, setPauseMutationPending] = useState(false);
+  const [killMutationPending, setKillMutationPending] = useState(false);
 
   const { search, setSearch } = useStreamViewSearch();
   const panels = useStreamViewPanels();
@@ -246,6 +248,29 @@ export function ProjectStreamView({
         },
       }
     : undefined;
+  const streamKillControl = {
+    pending: killMutationPending,
+    kill: async () => {
+      if (killMutationPending) return;
+      setKillMutationPending(true);
+      try {
+        const stream = await resolvedStreamSource(streamPath);
+        await stream.kill();
+        toast.success("Stream killed");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.toLowerCase().includes("kill requested")) {
+          toast.success("Stream killed");
+        } else {
+          toast.error(`Failed to kill stream: ${message}`);
+          return;
+        }
+      } finally {
+        setKillMutationPending(false);
+      }
+      nudgeDeliveries();
+    },
+  };
 
   const filterRow =
     search.filter !== true ? null : activeTab === "feed" ? (
@@ -362,6 +387,7 @@ export function ProjectStreamView({
           eventsToggle={{ eventCount }}
           metrics={metrics}
           presence={presence}
+          streamKill={streamKillControl}
           streamPath={streamPath}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
@@ -432,6 +458,7 @@ export function ProjectStreamView({
           agentPause={agentPauseControl}
           metrics={metrics}
           presence={presence}
+          streamKill={streamKillControl}
           streamPath={streamPath}
         />
       ) : null}

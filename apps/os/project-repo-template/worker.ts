@@ -33,7 +33,7 @@ const APPS = {
     type: "stateless",
     path: "/",
     source: {
-      files: { type: "repo", repoPath: "/", include: ["apps/hello/**"] },
+      files: { type: "repo", repoPath: "/repos/config", include: ["apps/hello/**"] },
       options: { entryPoint: "apps/hello/worker.ts" },
     },
   },
@@ -43,7 +43,7 @@ const APPS = {
     className: "CounterApp",
     durableWorkerKey: "app-counter",
     source: {
-      files: { type: "repo", repoPath: "/", include: ["apps/counter/**"] },
+      files: { type: "repo", repoPath: "/repos/config", include: ["apps/counter/**"] },
       options: { entryPoint: "apps/counter/worker.ts" },
     },
   },
@@ -53,7 +53,7 @@ const APPS = {
     className: "WebsocketEchoApp",
     durableWorkerKey: "app-websocket",
     source: {
-      files: { type: "repo", repoPath: "/", include: ["apps/websocket/**"] },
+      files: { type: "repo", repoPath: "/repos/config", include: ["apps/websocket/**"] },
       options: { entryPoint: "apps/websocket/worker.ts" },
     },
   },

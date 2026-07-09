@@ -1,6 +1,7 @@
 // itx-side connect/disconnect flows for the built-in integrations (Slack +
-// Google OAuth, GitHub App installation). Each provider contributes only its
-// exchange half; the storage half is the shared recordConnection.
+// Google OAuth, GitHub App installation, Telegram bot-token paste). Each
+// provider contributes only its exchange half; the storage half is the shared
+// recordConnection.
 //
 // Every connection is NAMED: a project can hold several Slack workspaces /
 // Google accounts / GitHub installations, each at a sanitized connection name.
@@ -30,6 +31,7 @@ import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
+  OAuthProviderSlug,
 } from "./types.ts";
 import {
   createOAuthState,
@@ -40,12 +42,15 @@ import {
 } from "./oauth-state.ts";
 import {
   appendConnectionDirectoryEvent,
+  appendConnectionDirectoryEvents,
   integrationStreamStub,
   lookupConnectionClaim,
   streamEventsNewestFirst,
 } from "./integration-streams.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
+import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
+import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 import {
   GITHUB_CONNECTED_EVENT_TYPE,
   GITHUB_CONNECTION_EGRESS_URLS,
@@ -56,6 +61,8 @@ import {
   GOOGLE_OAUTH_TOKEN_URL,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
+  TELEGRAM_CONNECTED_EVENT_TYPE,
+  TELEGRAM_DISCONNECTED_EVENT_TYPE,
   githubConnectionSecretPath,
   googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
@@ -64,6 +71,8 @@ import {
   integrationConnectionStreamPath,
   sanitizeConnectionName,
   slackBotTokenSecretPath,
+  telegramBotTokenSecretPath,
+  telegramWebhookSecretToken,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -85,13 +94,13 @@ function requireGoogleConfig(config: AppConfig) {
   return google;
 }
 
-function oauthRedirectUri(input: { baseUrl: string; provider: BuiltinIntegrationSlug }) {
+function oauthRedirectUri(input: { baseUrl: string; provider: OAuthProviderSlug }) {
   return `${input.baseUrl.replace(/\/$/, "")}/api/integrations/${input.provider}/callback`;
 }
 
 function requestBaseUrl(input: { config: AppConfig }) {
-  if (input.config.baseUrl) return input.config.baseUrl;
-  throw new Error("config.baseUrl is required for OAuth flows.");
+  if (input.config.baseUrl) return input.config.baseUrl.replace(/\/$/, "");
+  throw new Error("config.baseUrl is required to connect this integration.");
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +111,7 @@ export async function startOAuthFlow(input: {
   callbackUrl?: string;
   config: AppConfig;
   projectId: string;
-  provider: BuiltinIntegrationSlug;
+  provider: OAuthProviderSlug;
   /** The user to bind the OAuth state to. Browser-supplied, not authority; the
    * callback's user check against the signed state is the backstop. */
   userId: string;
@@ -200,7 +209,7 @@ export async function completeConnect(input: {
   /** GitHub App installation id — github's callback carries this, not a code. */
   installationId?: string;
   projectId: string;
-  provider: BuiltinIntegrationSlug;
+  provider: OAuthProviderSlug;
   state: string;
   userId: string | null;
 }): Promise<CompleteConnectResult> {
@@ -232,7 +241,7 @@ export async function completeConnect(input: {
 async function gateConnectState(input: {
   errorPrefix: string;
   projectId: string;
-  provider: BuiltinIntegrationSlug;
+  provider: OAuthProviderSlug;
   state: string;
   userId: string | null;
 }): Promise<
@@ -292,8 +301,14 @@ async function recordConnection(input: {
   };
   /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
-   * route inbound events (D4). */
-  directoryClaim?: { externalId: string };
+   * route inbound events (D4). `unclaimFirst` names a claim being MOVED from
+   * (telegram's steal): its unclaim commits in the SAME directory append as
+   * the new claim, so live inbound traffic never observes an unclaimed window
+   * (the door would ACK-and-drop, and Telegram never retries an ACK). */
+  directoryClaim?: {
+    externalId: string;
+    unclaimFirst?: { connection: string; projectId: string };
+  };
 }): Promise<void> {
   const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
   for (const secret of input.secrets) {
@@ -322,13 +337,26 @@ async function recordConnection(input: {
     input.connectedEvent,
   );
   if (input.directoryClaim) {
-    await appendConnectionDirectoryEvent({
-      claimed: true,
-      connection: input.connection,
-      externalId: input.directoryClaim.externalId,
-      projectId: input.projectId,
-      slug: input.slug,
-    });
+    await appendConnectionDirectoryEvents([
+      ...(input.directoryClaim.unclaimFirst
+        ? [
+            {
+              claimed: false,
+              connection: input.directoryClaim.unclaimFirst.connection,
+              externalId: input.directoryClaim.externalId,
+              projectId: input.directoryClaim.unclaimFirst.projectId,
+              slug: input.slug,
+            },
+          ]
+        : []),
+      {
+        claimed: true,
+        connection: input.connection,
+        externalId: input.directoryClaim.externalId,
+        projectId: input.projectId,
+        slug: input.slug,
+      },
+    ]);
   }
 }
 
@@ -611,6 +639,274 @@ async function completeGoogleConnect(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Telegram connect (no OAuth — bot-token paste + setWebhook)
+// ---------------------------------------------------------------------------
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured `ok: false` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. `steal: true` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
+ */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with `steal: true` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+export async function connectTelegram(input: {
+  botToken: string;
+  config: AppConfig;
+  projectId: string;
+  steal?: boolean;
+}): Promise<ConnectTelegramResult> {
+  const botToken = input.botToken.trim();
+  if (!botToken) throw new Error("A Telegram bot token is required (get one from @BotFather).");
+  const apiBaseUrl = telegramApiBaseUrl(input.config);
+  const baseUrl = requestBaseUrl(input);
+
+  const bot = await telegramGetMe({ apiBaseUrl, botToken });
+
+  const existingClaim = await lookupConnectionClaim("telegram", bot.id);
+  const foreignClaim =
+    existingClaim !== null && existingClaim.projectId !== input.projectId ? existingClaim : null;
+  if (foreignClaim !== null && input.steal !== true) {
+    return { botUsername: bot.username ?? null, error: "telegram_bot_already_claimed", ok: false };
+  }
+  // Same-project reconnects reuse the claiming connection's name; fresh
+  // connects (steals included — the old name belonged to the old project)
+  // derive it from the bot username (or the bot id when the username
+  // sanitizes away).
+  const connection =
+    (foreignClaim === null ? existingClaim?.connection : undefined) ??
+    (sanitizeConnectionName(bot.username ?? "") || `bot-${sanitizeConnectionName(bot.id)}`);
+
+  // Record BEFORE setWebhook — claim-first, so no update can arrive at the
+  // door before its claim exists. A fresh bot has no traffic until setWebhook
+  // registers, and a stolen bot's traffic keeps routing (old claim, then the
+  // atomic swap) the whole way through; an update landing between the claim
+  // and setWebhook simply routes to the just-recorded connection. The old
+  // order (setWebhook first) had a real loss window on steal: claim-less
+  // updates are ACK-200-dropped and Telegram never retries an ACK.
+  //
+  // Steal ordering inside this call is deliberate too: recordConnection
+  // prepares the NEW connection completely (secret, connected fact, router
+  // arm) and the atomic [unclaim old, claim new] directory swap comes LAST —
+  // so the instant routing flips, the new connection is fully ready, and
+  // until it flips the old project keeps a WORKING token (its dispossession
+  // happens after, below). No window routes to a bricked handler.
+  await recordConnection({
+    connection,
+    projectId: input.projectId,
+    slug: "telegram",
+    secrets: [
+      {
+        // The Bot API host is the only place this token is ever useful.
+        egressUrls: [new URL(apiBaseUrl).origin],
+        material: botToken,
+        path: telegramBotTokenSecretPath(connection),
+      },
+    ],
+    // No idempotency keys on the connected/claim facts — same reasoning as
+    // Slack: a disconnect->reconnect cycle must append fresh facts.
+    connectedEvent: {
+      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      payload: {
+        botFirstName: bot.firstName,
+        botId: bot.id,
+        botUsername: bot.username,
+        connection,
+        externalId: bot.id,
+        projectId: input.projectId,
+      },
+    },
+    processorSubscription: {
+      idempotencyKey: `telegram-router-subscription:${input.projectId}:${connection}`,
+      processor: ["integrations", "telegram", connection, "processor"],
+      processorSlug: TelegramProcessorContract.slug,
+    },
+    directoryClaim: {
+      externalId: bot.id,
+      ...(foreignClaim === null
+        ? {}
+        : {
+            unclaimFirst: {
+              connection: foreignClaim.connection,
+              projectId: foreignClaim.projectId,
+            },
+          }),
+    },
+  });
+
+  if (foreignClaim !== null) {
+    // Dispossess the old project AFTER the swap: brick its stored token
+    // (egress emptied) and append its disconnected fact. Its directory claim
+    // is already gone (the atomic swap above), so no unclaim here. The old
+    // project keeps a live token for the sub-second between swap and brick —
+    // accepted, and actually good: in-flight replies to pre-swap messages
+    // drain gracefully, and it receives nothing new. Its dashboard is
+    // momentarily stale (still "connected") until this fact lands — harmless.
+    await recordDisconnection({
+      connection: foreignClaim.connection,
+      disconnectedEvent: {
+        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        payload: {
+          botId: bot.id,
+          botUsername: bot.username,
+          connection: foreignClaim.connection,
+          externalId: bot.id,
+          projectId: foreignClaim.projectId,
+          // Breadcrumb for the old project's journal; deliberately does NOT
+          // name the project that took the bot.
+          reason: "stolen-by-another-project",
+        },
+      },
+      projectId: foreignClaim.projectId,
+      secretPath: telegramBotTokenSecretPath(foreignClaim.connection),
+      slug: "telegram",
+    });
+  }
+
+  try {
+    const secretToken = await telegramWebhookSecretToken({
+      botId: bot.id,
+      keyMaterial: itxEnv.SECRET_ENCRYPTION_KEY,
+    });
+    await callTelegramWithToken({
+      apiBaseUrl,
+      body: {
+        secret_token: secretToken,
+        url: `${baseUrl}/api/integrations/telegram/webhook/${bot.id}`,
+      },
+      botToken,
+      method: "setWebhook",
+    });
+  } catch (error) {
+    // Roll the just-recorded connection back (best-effort) so the dashboard
+    // never shows a half-connected bot whose webhook was never registered; a
+    // retry re-runs cleanly (the reconnect path reuses the connection name).
+    // The deleteWebhook is defense in depth for partial/ambiguous failures
+    // (a webhook that DID register while the response failed would otherwise
+    // keep delivering to a deployment that ACK-drops the unclaimed bot).
+    // Steal note: the OLD project is not restored — its token was already
+    // bricked above and re-claiming it would resurrect a connection whose
+    // secret is dead; the truthful state is "nobody holds the bot, retry".
+    await callTelegramWithToken({
+      apiBaseUrl,
+      body: {},
+      botToken,
+      method: "deleteWebhook",
+    }).catch(() => null);
+    await recordDisconnection({
+      connection,
+      disconnectedEvent: {
+        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        payload: {
+          botId: bot.id,
+          connection,
+          externalId: bot.id,
+          projectId: input.projectId,
+          reason: "webhook-registration-failed",
+        },
+      },
+      projectId: input.projectId,
+      secretPath: telegramBotTokenSecretPath(connection),
+      slug: "telegram",
+      unclaimExternalId: bot.id,
+    }).catch(() => null);
+    throw error;
+  }
+
+  // Advertise /new in the chat's `/` command menu (the session-rotation verb
+  // the telegram router understands) — BEST-EFFORT: the menu is cosmetic
+  // (routing understands /new regardless), so its failure must never fail —
+  // let alone roll back — a connect whose webhook is already live.
+  // Already-connected bots pick the menu up on reconnect.
+  await callTelegramWithToken({
+    apiBaseUrl,
+    body: {
+      commands: [
+        { command: "new", description: "Start a fresh thread" },
+        { command: "debug", description: "Show agent debug info" },
+      ],
+    },
+    botToken,
+    method: "setMyCommands",
+  }).catch(() => null);
+
+  return { botId: bot.id, botUsername: bot.username ?? null, connection, ok: true };
+}
+
+/** What `getMe` said about the pasted token's bot. The numeric id is the
+ * stable identity (usernames can change) — it is the directory external id,
+ * the webhook path segment, and the secret-token derivation input. */
+type TelegramBotIdentity = { firstName?: string; id: string; username?: string };
+
+/** Validate the pasted token against the live Bot API and read the bot's
+ * identity. Runs with the raw token (the connect flow holds it by definition,
+ * exactly as the OAuth flows hold their freshly exchanged access tokens). */
+async function telegramGetMe(input: {
+  apiBaseUrl: string;
+  botToken: string;
+}): Promise<TelegramBotIdentity> {
+  const me = await callTelegramWithToken({ ...input, body: {}, method: "getMe" });
+  const result = readRecord(me.result);
+  const id = result?.id;
+  if (typeof id !== "number" && typeof id !== "string") {
+    throw new Error("Telegram getMe returned no bot id.");
+  }
+  const username = readString(result?.username);
+  const firstName = readString(result?.first_name);
+  return {
+    ...(firstName === undefined ? {} : { firstName }),
+    id: String(id),
+    ...(username === undefined ? {} : { username }),
+  };
+}
+
+async function callTelegramWithToken(input: {
+  apiBaseUrl: string;
+  body: Record<string, unknown>;
+  botToken: string;
+  method: string;
+}): Promise<{ description?: string; ok?: boolean; result?: unknown }> {
+  const response = await fetch(`${input.apiBaseUrl}/bot${input.botToken}/${input.method}`, {
+    body: JSON.stringify(input.body),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  const data = (await response.json().catch(() => null)) as {
+    description?: string;
+    ok?: boolean;
+    result?: unknown;
+  } | null;
+  if (data === null || !response.ok || data.ok !== true) {
+    // 401 here means the pasted token is wrong — the one failure users hit.
+    const reason =
+      data?.description ??
+      (response.status === 401 ? "invalid bot token" : `HTTP ${response.status}`);
+    throw new Error(`Telegram ${input.method} failed: ${reason}`);
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
 // Connection status + disconnect (the itx.integrations surface)
 // ---------------------------------------------------------------------------
 
@@ -686,6 +982,27 @@ export async function getConnectionStatus(input: {
         metadata: { installationId: readString(fact.payload.installationId) },
       };
     }
+    case "telegram": {
+      const fact = await latestLifecycleFact({
+        connectedType: TELEGRAM_CONNECTED_EVENT_TYPE,
+        connection: input.connection,
+        disconnectedType: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        projectId: input.projectId,
+        slug: "telegram",
+      });
+      if (!fact) return notConnectedStatus();
+      const botUsername = readString(fact.payload.botUsername);
+      return {
+        connected: fact.connected,
+        displayName: botUsername === undefined ? null : `@${botUsername}`,
+        externalId: readString(fact.payload.externalId) ?? null,
+        metadata: {
+          botFirstName: readString(fact.payload.botFirstName),
+          botId: readString(fact.payload.botId),
+          botUsername,
+        },
+      };
+    }
     case "google": {
       const fact = await latestLifecycleFact({
         connectedType: GOOGLE_CONNECTED_EVENT_TYPE,
@@ -726,6 +1043,8 @@ export async function disconnectProvider(input: {
       return await disconnectGithub(input);
     case "google":
       return await disconnectGoogle(input);
+    case "telegram":
+      return await disconnectTelegram(input);
   }
 }
 
@@ -820,6 +1139,41 @@ async function disconnectGithub(input: {
     secretPath: githubConnectionSecretPath(input.connection),
     slug: "github",
     unclaimExternalId: status.externalId ?? undefined,
+  });
+  return { success: true };
+}
+
+async function disconnectTelegram(input: {
+  connection: string;
+  projectId: string;
+}): Promise<{ success: true }> {
+  const status = await getConnectionStatus({ ...input, provider: "telegram" });
+  // Best-effort deleteWebhook so Telegram stops delivering (the secret-
+  // substituted egress path — no material read), like Slack's auth.revoke.
+  // Must run BEFORE recordDisconnection empties the egress allowlist.
+  await callProjectTelegramBotApi({
+    body: {},
+    connection: input.connection,
+    method: "deleteWebhook",
+    projectId: input.projectId,
+  }).catch(() => null);
+  const botId = status.metadata.botId as string | undefined;
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
+      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      payload: {
+        botId,
+        botUsername: (status.metadata.botUsername as string | undefined) ?? undefined,
+        connection: input.connection,
+        externalId: status.externalId ?? undefined,
+        projectId: input.projectId,
+      },
+    },
+    projectId: input.projectId,
+    secretPath: telegramBotTokenSecretPath(input.connection),
+    slug: "telegram",
+    unclaimExternalId: botId,
   });
   return { success: true };
 }

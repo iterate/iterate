@@ -81,7 +81,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
-      readEvents: (args) => this.getEvents(args),
+      // Straight to the sized log read: the spine wants byte lengths for its
+      // batch cap (getEvents would re-stringify to size a batch), and its
+      // limits are already bounded well under the public read clamp.
+      readEvents: (args) =>
+        this.#log.getRangeSized({
+          afterOffset: args.afterOffset,
+          beforeOffset: Number.MAX_SAFE_INTEGER,
+          limit: args.limit,
+        }),
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
       dial: createSubscriberDial({
@@ -157,6 +165,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
+    this.#flushCoreProcessorState();
   }
 
   /**
@@ -268,10 +277,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     // Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
-    // Keep this section await-free: event rows + core state are the append boundary.
-    this.#log.insert(newEvents);
-    this.#writeCoreProcessorState(workingState);
+    // Keep this section await-free: event rows + core state are the append
+    // boundary. The KV state checkpoint is DEBOUNCED (see
+    // #checkpointCoreProcessorState) — event rows are the durable truth, and
+    // boot catch-up folds past a lagging checkpoint by design.
+    const byteLengths = this.#log.insert(newEvents);
     this.#coreProcessorState = workingState;
+    this.#checkpointCoreProcessorState(newEvents.length);
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -279,9 +291,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     // lagging push subscriptions drain. The spine triggers on WATERMARK LAG,
     // never on event types — a subscriber-disconnected fact whose teardown
     // pre-advanced the watermark reconciles to a no-op instead of needing the
-    // event-type carve-out the old reconciler carried.
+    // event-type carve-out the old reconciler carried. The wake hands over the
+    // just-committed events (sized by the log write) so caught-up consumers
+    // skip the per-lane SQLite re-read.
     for (const reduced of reducedEvents) this.#processEvent(reduced);
-    this.#subscribers.wake();
+    this.#subscribers.wake(
+      newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
+    );
 
     // Re-arm (or clear) the idle timer against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
@@ -696,7 +712,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           "events.iterate.com/stream/subscription-resumed",
           args.event,
         );
-        this.#subscribers.onResumed(event.payload.subscriptionKey, event.payload.afterOffset);
+        this.#subscribers.onResumed(event.payload.subscriptionKey);
         return;
       }
       case "events.iterate.com/stream/subscription-cursor-set": {
@@ -868,9 +884,48 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #stateVersionWritten = false;
+  /** True while `#coreProcessorState` is ahead of the KV checkpoint. */
+  #checkpointDirty = false;
+  #eventsSinceCheckpoint = 0;
+  #checkpointWrittenAtMs = 0;
+  /** Debounce bounds: checkpoint at least every N events / T ms of appends. */
+  static readonly #CHECKPOINT_EVERY_EVENTS = 64;
+  static readonly #CHECKPOINT_MAX_LAG_MS = 1_000;
+
+  /**
+   * The debounced per-append checkpoint. Serializing the full core state into
+   * KV on EVERY append is O(state) write amplification per event — on a busy
+   * agent stream the state (config payloads, roster) easily outweighs the
+   * event. Event rows are the commit boundary and the durable truth; the KV
+   * checkpoint is a rebuild accelerator, and boot ALWAYS folds log rows past
+   * it (`#catchUpCoreProcessorState`, paged) — so a checkpoint that lags by a
+   * bounded window (64 events / 1s) costs a small constructor fold, never
+   * correctness. Alarm and idle teardown flush so a stream going quiet
+   * checkpoints before it hibernates.
+   */
+  #checkpointCoreProcessorState(newEventCount: number): void {
+    this.#eventsSinceCheckpoint += newEventCount;
+    const now = Date.now();
+    if (
+      this.#eventsSinceCheckpoint < StreamDurableObject.#CHECKPOINT_EVERY_EVENTS &&
+      now - this.#checkpointWrittenAtMs < StreamDurableObject.#CHECKPOINT_MAX_LAG_MS
+    ) {
+      this.#checkpointDirty = true;
+      return;
+    }
+    this.#writeCoreProcessorState(this.#coreProcessorState);
+  }
+
+  /** Write the checkpoint now if the in-memory state is ahead of it. */
+  #flushCoreProcessorState(): void {
+    if (this.#checkpointDirty) this.#writeCoreProcessorState(this.#coreProcessorState);
+  }
 
   #writeCoreProcessorState(state: CoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
+    this.#checkpointDirty = false;
+    this.#eventsSinceCheckpoint = 0;
+    this.#checkpointWrittenAtMs = Date.now();
     // The version is a constant per deploy; re-putting it on every append is
     // pure write amplification. Once per incarnation is exactly as durable.
     if (!this.#stateVersionWritten) {
@@ -1097,6 +1152,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
   runIdleTeardownNow(): void {
     this.#subscribers.runIdleTeardownNow();
+    // A stream going quiet checkpoints before it hibernates, so the next wake
+    // rebuilds from a fresh checkpoint instead of folding the debounce window.
+    this.#flushCoreProcessorState();
   }
 
   /**

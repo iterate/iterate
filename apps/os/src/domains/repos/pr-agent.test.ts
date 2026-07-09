@@ -44,6 +44,8 @@ class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
+  async kill(): Promise<void> {}
+
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
@@ -192,7 +194,7 @@ function pullRequestBody(input: {
   };
 }
 
-function newRepoProcessor(stream: MemoryStream, path = "/") {
+function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
   return new RepoProcessor({
     stream,
     createRepoArtifact: async () => {
@@ -205,16 +207,17 @@ function newRepoProcessor(stream: MemoryStream, path = "/") {
 
 describe("pr-agent path scheme", () => {
   it("derives slugs and paths", () => {
-    expect(repoSlugForAgentPath("/")).toBe("root");
+    expect(repoSlugForAgentPath("/repos/config")).toBe("config");
     expect(repoSlugForAgentPath("/repos/foo")).toBe("foo");
     expect(repoSlugForAgentPath("/tools/bar")).toBe("tools-bar");
-    expect(prAgentPath("/", 7)).toBe("/agents/repos/root/pull-requests/7");
+    expect(() => repoSlugForAgentPath("/")).toThrow(/non-root repo path/);
+    expect(prAgentPath("/repos/config", 7)).toBe("/agents/repos/config/pull-requests/7");
     expect(prAgentPath("/repos/foo", 12)).toBe("/agents/repos/foo/pull-requests/12");
-    expect(() => prAgentPath("/", 0)).toThrow(/positive integer/);
+    expect(() => prAgentPath("/repos/config", 0)).toThrow(/positive integer/);
   });
 
   it("recognizes PR agent paths and only those", () => {
-    expect(isPrAgentPath("/agents/repos/root/pull-requests/7")).toBe(true);
+    expect(isPrAgentPath("/agents/repos/config/pull-requests/7")).toBe(true);
     expect(isPrAgentPath("/agents/repos/foo/pull-requests/12")).toBe(true);
     expect(isPrAgentPath("/agents/repos/foo/pull-requests/nope")).toBe(false);
     expect(isPrAgentPath("/agents/repos/pull-requests/7")).toBe(false);
@@ -245,7 +248,7 @@ describe("pr-agent path scheme", () => {
 describe("RepoProcessor PR webhook forward (router)", () => {
   it("forwards PR webhooks to the per-PR agent stream, route fact first", async () => {
     const network = new MemoryStreamNetwork();
-    const stream = network.get("/");
+    const stream = network.get("/repos/config");
     const processor = newRepoProcessor(stream);
     const cursors = new Map<object, number>();
 
@@ -258,7 +261,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     );
     await deliverNewEvents({ cursors, processor, stream });
 
-    const routed = network.eventsAt("/agents/repos/root/pull-requests/7");
+    const routed = network.eventsAt("/agents/repos/config/pull-requests/7");
     expect(routed.map((event) => event.type)).toEqual([
       "events.iterate.com/github-pr/route-configured",
       "events.iterate.com/github/webhook-received",
@@ -266,15 +269,15 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     expect(routed[0]!.payload).toEqual({
       ...GITHUB_LINK,
       number: 7,
-      repoPath: "/",
-      streamPath: "/agents/repos/root/pull-requests/7",
+      repoPath: "/repos/config",
+      streamPath: "/agents/repos/config/pull-requests/7",
     });
     expect(routed[1]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
     const network = new MemoryStreamNetwork();
-    const stream = network.get("/");
+    const stream = network.get("/repos/config");
     const processor = newRepoProcessor(stream);
     const cursors = new Map<object, number>();
 
@@ -295,13 +298,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     );
     await deliverNewEvents({ cursors, processor, stream });
 
-    const pr7 = network.eventsAt("/agents/repos/root/pull-requests/7");
+    const pr7 = network.eventsAt("/agents/repos/config/pull-requests/7");
     expect(pr7.map((event) => event.type)).toEqual([
       "events.iterate.com/github-pr/route-configured",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
-    const pr8 = network.eventsAt("/agents/repos/root/pull-requests/8");
+    const pr8 = network.eventsAt("/agents/repos/config/pull-requests/8");
     expect(pr8.map((event) => event.type)).toEqual([
       "events.iterate.com/github-pr/route-configured",
       "events.iterate.com/github/webhook-received",
@@ -310,7 +313,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
   it("relinking to a different GitHub repo emits a fresh route fact that repoints the agent", async () => {
     const network = new MemoryStreamNetwork();
-    const stream = network.get("/");
+    const stream = network.get("/repos/config");
     const processor = newRepoProcessor(stream);
     const cursors = new Map<object, number>();
 
@@ -335,7 +338,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     // A coordinate-free key would dedupe the second route fact into the stale
     // acme/widgets coordinates; the coordinate-carrying key repoints instead.
     const routeFacts = network
-      .eventsAt("/agents/repos/root/pull-requests/7")
+      .eventsAt("/agents/repos/config/pull-requests/7")
       .filter((event) => event.type === "events.iterate.com/github-pr/route-configured");
     expect(routeFacts).toHaveLength(2);
     expect(routeFacts[0]!.payload).toMatchObject({ repo: "widgets" });
@@ -344,7 +347,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
   it("ignores non-PR webhooks and webhooks on unlinked repos", async () => {
     const network = new MemoryStreamNetwork();
-    const stream = network.get("/");
+    const stream = network.get("/repos/config");
     const processor = newRepoProcessor(stream);
     const cursors = new Map<object, number>();
 
@@ -367,11 +370,117 @@ describe("RepoProcessor PR webhook forward (router)", () => {
   });
 });
 
+describe("RepoProcessor create lane (creation as an at-head obligation)", () => {
+  const CREATED_ARTIFACT = {
+    artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
+    defaultBranch: "main",
+    remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
+  };
+
+  function newCreatingRepoProcessor(stream: MemoryStream, createCalls: unknown[]) {
+    return new RepoProcessor({
+      stream,
+      createRepoArtifact: async (input) => {
+        createCalls.push(input);
+        return CREATED_ARTIFACT;
+      },
+      path: "/repos/config",
+      projectId: "prj_1",
+    });
+  }
+
+  const CREATE_REQUESTED = {
+    type: "events.iterate.com/repo/create-requested" as const,
+    payload: { projectId: "prj_1", path: "/repos/config" },
+  };
+
+  it("creates the artifact once at head and journals repo/created", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const createCalls: unknown[] = [];
+    const processor = newCreatingRepoProcessor(stream, createCalls);
+    const cursors = new Map<object, number>();
+
+    await stream.append(CREATE_REQUESTED);
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(createCalls).toEqual([{ path: "/repos/config", projectId: "prj_1" }]);
+    const created = stream.events.filter(
+      (event) => event.type === "events.iterate.com/repo/created",
+    );
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      idempotencyKey: "repo-created:prj_1:/repos/config",
+      payload: { ...CREATED_ARTIFACT, path: "/repos/config", projectId: "prj_1" },
+    });
+
+    // The self-appended created fact folds on the next delivery (offset order
+    // guarantees it precedes anything later), closing the obligation: the
+    // reconciler runs again at head and provably does not re-create.
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(processor.state).toMatchObject({ createRequested: true, created: true });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("defers creation while the fold is behind the head, then creates once caught up", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const createCalls: unknown[] = [];
+    const processor = newCreatingRepoProcessor(stream, createCalls);
+
+    const [requested, linked] = await stream.append(CREATE_REQUESTED, {
+      type: "events.iterate.com/repo/github-link-configured",
+      payload: GITHUB_LINK,
+    });
+
+    // A mid-catch-up batch (streamMaxOffset past its own tail, the catch-up
+    // pager's lookahead shape) must not act: the not-yet-folded remainder may
+    // contain the repo/created fact.
+    await processor.ingest({ events: [requested!], streamMaxOffset: 2 });
+    expect(createCalls).toHaveLength(0);
+
+    await processor.ingest({ events: [linked!], streamMaxOffset: 2 });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("refold: a journal that already contains repo/created never re-creates", async () => {
+    // THE refold test (docs/writing-stream-processors.md, "Refold safety"):
+    // re-running createRepoArtifact would force-push the seed commit over
+    // whatever the user has committed since, so the fake here THROWS — the
+    // reconciler must never reach it when the at-head fold shows `created`.
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const createCalls: unknown[] = [];
+    const processor = newCreatingRepoProcessor(stream, createCalls);
+    const cursors = new Map<object, number>();
+
+    await stream.append(CREATE_REQUESTED);
+    await deliverNewEvents({ cursors, processor, stream });
+    // Fold the self-appended created fact so the live state is settled.
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(createCalls).toHaveLength(1);
+    const journalBeforeRefold = stream.events.length;
+
+    const refolded = new RepoProcessor({
+      stream,
+      createRepoArtifact: async () => {
+        throw new Error("refold must not re-create an existing repo");
+      },
+      path: "/repos/config",
+      projectId: "prj_1",
+    });
+    await deliverNewEvents({ cursors, processor: refolded, stream });
+
+    expect(stream.events).toHaveLength(journalBeforeRefold);
+    expect(refolded.state).toEqual(processor.state);
+  });
+});
+
 describe("PrAgentProcessor (transcriber)", () => {
-  const AGENT_PATH = "/agents/repos/root/pull-requests/7";
+  const AGENT_PATH = "/agents/repos/config/pull-requests/7";
   const ROUTE_EVENT = {
     type: "events.iterate.com/github-pr/route-configured" as const,
-    payload: { ...GITHUB_LINK, number: 7, repoPath: "/", streamPath: AGENT_PATH },
+    payload: { ...GITHUB_LINK, number: 7, repoPath: "/repos/config", streamPath: AGENT_PATH },
   };
 
   function agentInputs(stream: MemoryStream) {

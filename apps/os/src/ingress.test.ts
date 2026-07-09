@@ -90,6 +90,10 @@ it("sends integration webhook ingress paths to the api lane", async () => {
     "/api/integrations/slack/webhook",
     "/api/integrations/slack/interactivity-webhook",
     "/api/integrations/github/webhook",
+    // Telegram's webhook path carries the bot id as a segment, so the lane
+    // predicate matches it by prefix (this exact path 404'd on preview-2
+    // until 2026-07-08 — same missing-lane failure mode as GitHub's).
+    "/api/integrations/telegram/webhook/7000001",
   ]) {
     const route = await decideIngressRoute({
       config: DEV_CONFIG,
@@ -98,6 +102,23 @@ it("sends integration webhook ingress paths to the api lane", async () => {
       url: `http://localhost:56455${path}`,
     });
     expect(route).toMatchObject({ lane: "api" });
+  }
+});
+
+it("keeps non-webhook integration paths on the os lane (the telegram prefix must not overreach)", async () => {
+  for (const path of [
+    "/api/integrations/slack/callback",
+    "/api/integrations/telegram/callback",
+    // No bot id segment → not the webhook shape; the app router owns it.
+    "/api/integrations/telegram/webhook",
+  ]) {
+    const route = await decideIngressRoute({
+      config: DEV_CONFIG,
+      method: "POST",
+      resolvers: resolversThatShouldNotBeUsed(),
+      url: `http://localhost:56455${path}`,
+    });
+    expect(route).toMatchObject({ lane: "os" });
   }
 });
 

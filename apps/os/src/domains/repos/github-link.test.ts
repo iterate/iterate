@@ -169,10 +169,16 @@ const network = vi.hoisted(() => {
   };
 });
 
-// connect-flows imports slack-api (disconnect's auth.revoke), which drags the
-// worker-only egress entrypoint into the module graph; sever that edge — these
-// tests never touch slack. Same seam as github-connect.test.ts.
+// connect-flows imports slack-api (disconnect's auth.revoke) and telegram-api
+// (disconnect's deleteWebhook), which drag the worker-only egress entrypoint
+// into the module graph; sever those edges — these tests never touch either.
+// Same seam as github-connect.test.ts.
 vi.mock("../integrations/slack-api.ts", () => ({ callProjectSlackWebApi: vi.fn() }));
+vi.mock("../integrations/telegram-api.ts", () => ({
+  callProjectTelegramBotApi: vi.fn(),
+  telegramApiBaseUrl: (config: { integrations: { telegram: { apiBaseUrl: string } } }) =>
+    config.integrations.telegram.apiBaseUrl.replace(/\/$/, ""),
+}));
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {

@@ -158,8 +158,12 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
 /** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
-/** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
-export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
+  Disposable & {
+    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
+    kill(): Promise<void>;
+  };
 
 /**
  * Per-stub dispatch options for `DynamicWorkerCollection.get`.
