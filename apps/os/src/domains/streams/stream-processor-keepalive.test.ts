@@ -92,13 +92,17 @@ describe("arming", () => {
     expect(h.state.record?.armedAtMs).toBe(T0 + KEEPALIVE_ALARM_LEAD_MS);
   });
 
-  test("more work while armed does not move the alarm later", () => {
+  test("more work while armed re-asserts the same desire, never a later one", () => {
     const h = makeHarness();
     const keepalive = h.build();
     keepalive.track(deferred().promise);
     h.clock.now = T0 + 4_000;
     keepalive.track(deferred().promise);
-    expect(h.state.armCalls).toEqual([T0 + KEEPALIVE_ALARM_LEAD_MS]);
+    // The second track re-asserts the EXISTING desire (so a silently-failed
+    // platform write self-heals in a warm incarnation) but must never push
+    // the alarm later than the first work's protection.
+    expect(new Set(h.state.armCalls)).toEqual(new Set([T0 + KEEPALIVE_ALARM_LEAD_MS]));
+    expect(keepalive.armedAtMs).toBe(T0 + KEEPALIVE_ALARM_LEAD_MS);
   });
 
   test("a fire before the armed time (another subsystem's slice) is ignored", async () => {

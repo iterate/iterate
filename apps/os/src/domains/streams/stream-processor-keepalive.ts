@@ -288,7 +288,18 @@ export class ProcessorKeepalive {
     if (this.#reviving) return;
     const atMs = this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS;
     const armedAt = this.armedAtMs;
-    if (armedAt !== null && armedAt <= atMs) return;
+    if (armedAt !== null && armedAt <= atMs) {
+      // The record says a sufficient alarm exists — but the record proves the
+      // DESIRE, not the platform write (a setAlarm can fail after the KV
+      // committed, and the host swallows it into "platform state unknown").
+      // Re-assert the desire: the host's reconcile is a pure in-memory
+      // comparison when the platform alarm matches, and re-issues the write
+      // when a previous one failed. Without this, a lost alarm in a WARM
+      // incarnation stays lost until the next boot — the boot-time reconcile
+      // only covers fresh incarnations.
+      this.#hooks.armAlarm(armedAt);
+      return;
+    }
     this.#arm(atMs);
   }
 
