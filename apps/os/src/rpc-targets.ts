@@ -192,6 +192,7 @@ import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
+  StreamEventBatch,
   StreamEventReadInput,
   StreamProcessorRpc,
   StreamSubscriberWakeRequest,
@@ -3556,6 +3557,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
+  processEventBatch:
+    "The project's event-batch dispatch point: streams' birth-certificate feeds deliver here; delegates to worker.processEventBatch.",
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
@@ -3910,6 +3913,27 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });
+  }
+
+  /**
+   * "The project processes this event batch" — the first-party dispatch point
+   * every project-scoped stream's birth-certificate feed names
+   * (`expression: ["processEventBatch"]`). Today it delegates verbatim to the
+   * repo-backed project worker; it exists so the persisted expression names
+   * the INTENT rather than the implementation. That indirection is the
+   * platform's adaptation point: envelope evolution happens here in
+   * deployment code instead of by patching user repos, and future first-party
+   * per-event work (policy, metrics, indexing feeds) can join the same
+   * ordered, checkpointed delivery — with one rule when it does: platform
+   * steps must be idempotent and must never throw; only the worker delegation
+   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
+   * such steps until a real second consumer earns its place.
+   *
+   * Same trust model as `worker.processEventBatch` itself: any project
+   * principal may call it.
+   */
+  processEventBatch(batch: StreamEventBatch): Promise<void> {
+    return this.worker.processEventBatch(batch);
   }
 
   /**

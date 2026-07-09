@@ -268,7 +268,8 @@ test("project streams are born with the project-worker push feed and replace it 
   // Stateless workers are no longer a wake-target kind: a worker consumes via
   // a PUSH subscription whose expression addresses it. Every project-scoped
   // stream self-configures the default feed at birth — subscriptionKey
-  // "project-worker", expression ["worker", "processEventBatch"], deliver
+  // "project-worker", expression ["processEventBatch"] (the project root's
+  // dispatch point, delegating to the worker), deliver
   // "all", onPoison "skip" — in the same synchronous turn as `created`, so
   // there is no wiring window. It stays ordinary config: one registry, one
   // spine, overridable by re-appending the same key.
@@ -312,6 +313,8 @@ test("project streams are born with the project-worker push feed and replace it 
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: "project-worker",
+      // Deliberately the DIRECT worker spelling: both names stay valid, and
+      // this pins that a subscription may bypass the root dispatch point.
       delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
       selector: { eventTypes: narrowedTypes },
       onPoison: "skip",
