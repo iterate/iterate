@@ -11,7 +11,7 @@ publishes the merged view as one snapshot commit on the workspace's own branch
 (`workspaces/<path>`) — never main. See `workspace-durable-object.ts` for the
 full semantics.
 
-## Agreed next steps (in flight on PR #1804 and its follow-ups)
+## Agreed next steps (ALL landing on PR #1804, per Jonas)
 
 1. **WorkspaceCore library split**: the overlay/cache semantics move into a
    host-agnostic class constructed with `{ storage, getParent, repos, branch }`
@@ -24,7 +24,7 @@ full semantics.
 3. **Multi-repo overlays**: every agent workspace sees ALL project repos at
    their repo paths — copy-on-write, fall-through per subtree to that repo's
    cache. Repos live at arbitrary paths, so the router longest-prefix-matches
-   an injected repo list; default route is the project repo at "/". Publish
+   an injected repo list (= project processor state's `repos`, served via `projectProcessorState(projectId)` — see rpc-targets.ts ~992); default route is the project repo at "/". Publish
    routes per mount: changes under a mounted repo commit to THAT repo's
    `workspaces/<path>` branch. Per-file git laziness is impossible
    (isomorphic-git has no partial clone) — laziness lives at the cache layer.
