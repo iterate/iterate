@@ -459,14 +459,30 @@ export const AgentProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         model: z.string().min(1),
       }),
+      examples: [
+        {
+          description: "The agent picks up a prepared request and dials the AI binding.",
+          payload: { llmRequestId: 57, model: "@cf/moonshotai/kimi-k2.7-code" },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-response-chunk": {
-      description: "One streamed provider chunk received from the AI binding.",
+      description: "One streamed chunk received from the AI binding.",
       payloadSchema: z.object({
         chunk: z.unknown(),
         llmRequestId: z.number().int().positive(),
         sequence: z.number().int().nonnegative(),
       }),
+      examples: [
+        {
+          description: "The first streamed text delta of a response.",
+          payload: {
+            chunk: { choices: [{ delta: { content: "Hello" } }] },
+            llmRequestId: 57,
+            sequence: 0,
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-completed": {
       description: "The agent processor finished an LLM request.",

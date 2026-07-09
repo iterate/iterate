@@ -361,11 +361,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   /** The one construction of llm-request-requested (debounce and recovery
    * paths), so the expiry stamp and idempotency key can never drift apart. */
-  #buildLlmRequestRequested(input: {
-    model: string;
-    requestId: string;
-    scheduledOffset: number;
-  }) {
+  #buildLlmRequestRequested(input: { model: string; requestId: string; scheduledOffset: number }) {
     return {
       type: "events.iterate.com/agent/llm-request-requested" as const,
       idempotencyKey: `agent/llm-request-requested@${input.scheduledOffset}`,
@@ -532,7 +528,7 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
 }
 
 /** One agent-history message as the model receives it. */
-export type AgentChatMessage = {
+type AgentChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
   files?: AgentFileAttachment[];
@@ -550,7 +546,7 @@ function buildLlmChatRequest(state: AgentState): { messages: AgentChatMessage[] 
  * or convert them, and let it act (fetch via itx.files, convert via
  * itx.ai.toMarkdown) on its next script.
  */
-export function renderFileHintLine(file: AgentFileAttachment): string {
+function renderFileHintLine(file: AgentFileAttachment): string {
   return (
     `[Attached file: ${file.filename} (${file.contentType}, ${file.size} bytes) — ` +
     `bytes: await itx.files.get(${JSON.stringify(file.path)}).bytes(); ` +

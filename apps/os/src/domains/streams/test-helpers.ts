@@ -138,25 +138,6 @@ export class MemoryStream implements Stream {
   }
 }
 
-export type ProcessorLike = {
-  ingest(input: { events: StreamEvent[]; streamMaxOffset: number }): Promise<void>;
-};
-
-/** Cursor-based delivery mirroring production subscription semantics, for
- * tests that drive a single processor without a host. */
-export async function deliverNewEvents(input: {
-  processor: ProcessorLike;
-  stream: MemoryStream;
-  cursors: Map<object, number>;
-}) {
-  const cursor = input.cursors.get(input.processor) ?? 0;
-  const events = input.stream.events.slice(cursor);
-  input.cursors.set(input.processor, input.stream.events.length);
-  if (events.length === 0) return;
-  const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
-  await input.processor.ingest({ events, streamMaxOffset });
-}
-
 /** The durable substrate an eviction does NOT destroy. */
 export type FakeDurableStore = {
   kv: Map<string, unknown>;

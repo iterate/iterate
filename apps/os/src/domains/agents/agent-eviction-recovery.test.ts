@@ -44,7 +44,8 @@ function agentHarness() {
                   return { response: "unreachable" };
                 }
                 return {
-                  response: "```js\nasync (itx) => {\n  await itx.chat.sendMessage('recovered!');\n}\n```",
+                  response:
+                    "```js\nasync (itx) => {\n  await itx.chat.sendMessage('recovered!');\n}\n```",
                 };
               },
             },
