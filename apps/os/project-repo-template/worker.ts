@@ -110,7 +110,11 @@ const CompactionProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/history-reset": {
       payloadSchema: z.object({
         systemPrompt: z.string(),
-        history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })),
+        // Loose items: turns carried forward past the summary keep their
+        // extra fields (e.g. file attachments) intact.
+        history: z.array(
+          z.looseObject({ role: z.enum(["user", "assistant"]), content: z.string() }),
+        ),
         reason: z.string().optional(),
       }),
     },
@@ -153,6 +157,10 @@ class CompactionProcessor extends StreamProcessor<
 > {
   readonly contract = CompactionProcessorContract;
 
+  /** One compaction per delivery instance: a batch carrying several
+   * over-threshold reports triggers on the first, not once per report. */
+  #compacting = false;
+
   protected override processEvent({
     append,
     event,
@@ -166,6 +174,8 @@ class CompactionProcessor extends StreamProcessor<
     const thresholdTokens = Math.floor(usage.maxContextTokens * COMPACTION_TRIGGER_FRACTION);
     if (contextTokens < thresholdTokens) return;
     if (streamMaxOffset - event.offset > COMPACTION_MAX_TRIGGER_LAG_EVENTS) return;
+    if (this.#compacting) return;
+    this.#compacting = true;
     const triggeringEventOffset = event.offset;
 
     runInBackground(async () => {
@@ -197,17 +207,31 @@ class CompactionProcessor extends StreamProcessor<
           typeof raw === "object" && raw !== null && "response" in raw
             ? String((raw as { response: unknown }).response)
             : JSON.stringify(raw);
+        // The summary took a while; re-snapshot before resetting. Turns that
+        // landed during summarization ride along verbatim after the summary
+        // instead of being clobbered. If the summarized history is no longer
+        // a prefix of the live one (another reset landed first), this
+        // compaction is stale — abort rather than overwrite a fresher outcome.
+        const { state: latest } = await this.deps.agent.processor.snapshot();
+        const summarized = latest.history.slice(0, state.history.length);
+        if (JSON.stringify(summarized) !== JSON.stringify(state.history)) {
+          throw new Error(
+            "history changed shape during compaction (another reset landed first); aborting",
+          );
+        }
+        const carriedForward = latest.history.slice(state.history.length);
         await append(
           {
             type: "events.iterate.com/agent/history-reset",
             idempotencyKey: `compaction/history-reset@${triggeringEventOffset}`,
             payload: {
-              systemPrompt: state.systemPrompt,
+              systemPrompt: latest.systemPrompt,
               history: [
                 {
                   role: "user",
                   content: `[Earlier conversation history was compacted. Summary:]\n\n${summary}`,
                 },
+                ...carriedForward,
               ],
               reason: `compaction@${triggeringEventOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
             },
