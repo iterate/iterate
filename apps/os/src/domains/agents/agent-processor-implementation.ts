@@ -54,6 +54,9 @@ type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
+  /** Failure-retry backoff override (tests use instant retries); defaults to
+   * {@link llmRequestDebounceMs}. */
+  llmRequestDebounceMs?: (consecutiveLlmFailures: number) => number;
 };
 
 /** Page size for full-journal reads (prompt building, currency checks). */
@@ -409,7 +412,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           `llm-request-scheduled@generation:${state.requestGeneration}`,
         ),
         payload: {
-          debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+          debounceMs: (this.deps.llmRequestDebounceMs ?? llmRequestDebounceMs)(
+            state.consecutiveLlmFailures,
+          ),
           model: state.llmConfig.model,
           requestId: `llm-request:gen-${state.requestGeneration}`,
         },
@@ -865,6 +870,19 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
     state = reduceAgentEvent({ event: parsed.data as AgentConsumedEvent, state });
   }
   return state;
+}
+
+/**
+ * The debounce for the next scheduled request. Fresh triggers coalesce on the
+ * short default; a retry after a FAILED request backs off exponentially
+ * (20s, then 40s, capped at 60s). Workers AI rate-limits inference per
+ * MINUTE (error 3021), so instant retries all land inside the same limited
+ * window and burn the whole consecutive-failure budget without ever escaping
+ * it — the backoff walks the retries into the next window instead.
+ */
+function llmRequestDebounceMs(consecutiveLlmFailures: number): number {
+  if (consecutiveLlmFailures === 0) return DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS;
+  return Math.min(60_000, 20_000 * 2 ** (consecutiveLlmFailures - 1));
 }
 
 function agentInputTriggerSource(

@@ -767,7 +767,14 @@ describe("minimal web-chat agent processors", () => {
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
     );
     expect(scheduled).toHaveLength(2);
-    expect(scheduled[1]!.payload).toMatchObject({ requestId: "llm-request:gen-1" });
+    // A fresh trigger coalesces on the short default; a failure retry backs
+    // off (Workers AI rate-limits per minute — instant retries burn the whole
+    // consecutive-failure budget inside one limited window).
+    expect(scheduled[0]!.payload).toMatchObject({ debounceMs: 250 });
+    expect(scheduled[1]!.payload).toMatchObject({
+      debounceMs: 20_000,
+      requestId: "llm-request:gen-1",
+    });
     // The retry is the loop talking to itself: it counts as an autonomous turn
     // instead of resetting the circuit breaker the way a real user message does.
     expect(reduceAgentEvents(stream.events)).toMatchObject({ autonomousTurnCount: 1 });
@@ -780,6 +787,9 @@ describe("minimal web-chat agent processors", () => {
       stream,
       path: stream.path,
       projectId: null,
+      // Retries back off for real deployments (per-minute rate limits); the
+      // test drives three failures back to back.
+      llmRequestDebounceMs: () => 0,
       ai: {
         async run() {
           boom += 1;
