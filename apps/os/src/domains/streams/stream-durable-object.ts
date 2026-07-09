@@ -723,7 +723,18 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
         return;
       }
-      case "events.iterate.com/stream/created":
+      case "events.iterate.com/stream/woken":
+        // Every incarnation re-announces this stream to its ancestors, not
+        // just the birth one. The appends are idempotent (stable key per
+        // ancestor/path pair, deduped in the ancestor's log), so re-announcing
+        // is a cheap no-op once landed — and an announcement lost in flight
+        // (isolate recycled by a deploy mid birth turn, transient ancestor
+        // failure) heals on the next wake instead of orphaning the stream:
+        // ancestors would otherwise never fold `child-stream-created`, leaving
+        // listings blind and birth reactions unarmed forever. Fire-and-forget
+        // by design — a newborn must never block its own boot on ancestor
+        // health (the parent's processor may be mid-append INTO this stream,
+        // so waiting on the parent's ack here is a reentrant deadlock).
         this.#announceToAncestors(args);
         return;
       default:

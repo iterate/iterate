@@ -74,7 +74,11 @@ import {
 } from "./domains/sandboxes/utils.ts";
 import { SandboxProcessorContract } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
+import {
+  isRootWorkspacePath,
+  normalizeWorkspacePath,
+  workspaceBranchName,
+} from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
@@ -216,9 +220,10 @@ import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-proc
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
+  WorkspaceChange,
   WorkspaceFileInfo,
   WorkspaceGitLogEntry,
-  WorkspaceGitStatusEntry,
+  WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
@@ -243,7 +248,6 @@ import { EmailProcessorContract } from "./domains/email/email-processor-contract
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
   agentDefaultsForPath,
-  deploymentDefaultLlmProvider,
   type AgentDefaultPolicy,
   type AgentDefaultsOverrides,
 } from "./domains/agents/agent-defaults.ts";
@@ -1075,7 +1079,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, provider, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, provider selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, provider?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -1095,7 +1099,6 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
-      deploymentLlmProvider: deploymentDefaultLlmProvider(env),
       projectId: this.props.projectId,
       ...(overrides === undefined ? {} : { overrides }),
     });
@@ -1274,19 +1277,24 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 /**
  * Catalog of durable workspaces within one project.
  *
- * A workspace is addressed by its FULL path, which always lives under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the config repo.
+ * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
+ * materialization of the config repo's main branch. Every other workspace is
+ * addressed by its FULL path under `/workspaces/` — the same domain-prefix
+ * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
+ * the agent path under the prefix (`/workspaces/agents/...`, exposed as
+ * `itx.workspace` in that agent's scope), and standalone workspaces live
+ * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
+ * root: writes stay local, missing reads fall through to latest main — no
+ * clone, usable instantly.
  */
 class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the config repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
-      children: { get: "The workspace at a path (clones the config repo on first use)." },
+        "Durable workspace filesystems (Durable-Object-hosted, no container, always warm). get(\"/\") is the project's read-only ROOT workspace — always the latest main of the config repo. Other paths live under /workspaces/ and are instant copy-on-write overlays over the root: an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+      children: {
+        get: 'The workspace at a path — "/" for the read-only root (latest main), /workspaces/<name> for a private overlay.',
+      },
       parent: "a project itx (itx.workspaces)",
     });
   }
@@ -1296,7 +1304,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The workspace at a path (clones the config repo on first use). */
+  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
   get(path: string): WorkspaceRpcTarget {
     return new WorkspaceRpcTarget({
       auth: this.props.auth,
@@ -1308,40 +1316,45 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
 
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm), seeded on first use with a checkout of
- * the config repo at `/repos/config` — every call waits for that clone, so a
- * read that returns proves the checkout exists. Read, write, and edit files
- * freely; nothing is shared until pushed. `git` publishes commits to the
- * workspace's own branch in the config repo (`workspaces/<path>`), never to
- * main.
+ * Object (no container, always warm). The root workspace (`"/"`) is the
+ * read-only, always-fresh materialization of the config repo's main branch.
+ * Every other workspace is an OVERLAY over the root: reads see latest main
+ * until a local write shadows a path, writes and deletes stay private, and
+ * there is no clone — a new workspace is usable instantly. `git` publishes
+ * the overlay as snapshot commits on the workspace's own branch in the
+ * config repo (`workspaces/<path>`), never to main.
  *
- * Constraints: the `.git` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the `git` methods). Large files
+ * Constraints: the `.git` name is reserved (platform-managed). Large files
  * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
+    const isRoot = isRootWorkspacePath(this.props.path);
     return describeNode({
-      instructions:
-        `A durable workspace at "${this.props.path}": a private checkout of the project repo in a Durable Object filesystem (cloned on first use; every call waits for that clone, so a successful read proves the checkout is ready). Paths are absolute with "/" as the repo root. Read/write/edit freely — nothing is shared until pushed; ` +
-        `workspace.git publishes commits to the project repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
+      instructions: isRoot
+        ? "The project's ROOT workspace (\"/\"): a read-only, always-fresh checkout of the config repo's main branch — reads always see the latest commit on main. Writes are rejected (write in your own workspace, or commit to main via itx.repo). Every other workspace overlays this one."
+        : `A durable workspace at "${this.props.path}": an instant copy-on-write overlay over the config repo's latest main (no clone — reads fall through to main until a local write shadows a path; writes and deletes stay private). Paths are absolute with "/" as the repo root. ` +
+          `workspace.git.commit({ message }) publishes the overlay as a snapshot commit on the config repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
       children: {
-        appendFile: "Append to a file.",
+        appendFile: "Append to a file (copies a fallen-through file up first).",
         cp: "Copy a file or directory ({ recursive } for trees).",
         deleteFile: "Delete one file (false when it did not exist).",
-        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Working-tree only — commit via git.",
+        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Private until published via git.",
         exists: "Whether a path exists.",
-        git: "Git over this checkout: status/add/rm/commit/log/diff/push — push goes to this workspace's own branch.",
+        git: "Publish surface: status (changes vs main), commit (snapshot to this workspace's own branch), log.",
         glob: "Files matching a glob pattern.",
         kill: "Abort this Workspace Durable Object incarnation; the next request boots it again.",
+        listAllFiles: "Every file path in the merged view (sorted).",
         mkdir: "Create a directory ({ recursive } for parents).",
         mv: "Move/rename a file or directory.",
         readDir: "List a directory (defaults to the root).",
         readFile: "One file's contents ({ path }); null when missing.",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
-        reset: "Wipe the checkout; the next call re-clones. Unpushed work is LOST.",
+        reset:
+          "Wipe the local layer and deletions — back to a pristine view of main. Unpublished work is LOST.",
+        revert: "Un-pin ONE path: drop the local copy/deletion so it follows latest main again.",
         rm: "Remove a path ({ recursive, force }).",
         stat: "Metadata for one path; null when missing.",
         whoami: "Workspace identity string (debug).",
@@ -1388,12 +1401,28 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   /**
-   * Wipe the checkout and re-clone the project repo on the next call — the
-   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
-   * commits survive on the workspace branch).
+   * Wipe the workspace back to pristine: the local layer and every deletion
+   * vanish, leaving a clean view of latest main (on the root, the next read
+   * re-materializes). Unpublished work is LOST (published snapshots survive
+   * on the workspace branch).
    */
   reset(): Promise<void> {
     return this.durableObjectStub.reset();
+  }
+
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void> {
+    return this.durableObjectStub.revert(path);
+  }
+
+  /** Every file path in the merged view (local layer over latest main), sorted. */
+  listAllFiles(): Promise<string[]> {
+    return this.durableObjectStub.listAllFiles();
   }
 
   writeFile(path: string, content: string): Promise<void> {
@@ -1461,27 +1490,24 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 }
 
 /**
- * Git operations over a workspace's checkout, mirroring `@cloudflare/shell`'s
- * git command names so upstream docs apply. The workflow is ordinary git:
- * `add({ filepath: "." })` stages everything, `commit({ message })` commits,
- * `push()` publishes to the workspace's own branch in the project repo.
- * Push credentials are injected inside the workspace Durable Object (from the
- * project repo's `gitAccess()`), so no token ever rides this surface.
+ * The publish surface of an overlay workspace. There is no staging area and
+ * no separate push: `commit({ message })` snapshots the whole merged view
+ * (latest main + the local layer, minus deletions and `.gitignore`d paths)
+ * as ONE commit force-pushed to the workspace's own branch in the project
+ * repo. Push credentials are injected inside the workspace Durable Object
+ * (from the config repo's `gitAccess()`), so no token ever rides this
+ * surface.
  */
 class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        `Git over the workspace checkout at "${this.props.path}". Ordinary flow: add({ filepath: "." }) → commit({ message }) → push(). ` +
-        `push() publishes to the project repo branch "${workspaceBranchName(this.props.path)}" (this workspace's own branch — never main); credentials are automatic.`,
+        `Publish surface of the workspace at "${this.props.path}". commit({ message }) snapshots the merged view (main + this workspace's changes) to the config repo branch "${workspaceBranchName(this.props.path)}" — this workspace's own branch, never main; credentials are automatic. ` +
+        "No add/push needed: every local file not .gitignored is included, deletions apply, and each commit is a fresh snapshot on the current main.",
       children: {
-        add: 'Stage a file ("." for everything).',
-        commit: "Commit staged changes ({ message, author? }).",
-        diff: "Changed files relative to HEAD.",
-        log: "Commit history ({ depth? }).",
-        push: "Push the workspace branch to the project repo ({ force? }).",
-        rm: "Stage a file deletion.",
-        status: "Staging state of every changed file.",
+        commit: "Publish the workspace as one snapshot commit ({ message, author? }).",
+        log: "Published snapshots, newest first ({ limit? }; [] before the first commit).",
+        status: "Changes vs latest main: added / modified (shadowed) / deleted paths.",
       },
       parent: "a workspace (workspace.git)",
     });
@@ -1502,40 +1528,22 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     );
   }
 
-  /** Staging state of every changed file. */
-  status(): Promise<WorkspaceGitStatusEntry[]> {
+  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
+  status(): Promise<WorkspaceChange[]> {
     return this.durableObjectStub.gitStatus();
   }
 
-  /** Stage a file (`filepath: "."` stages everything). */
-  add(input: { filepath: string }): Promise<{ added: string }> {
-    return this.durableObjectStub.gitAdd(input);
-  }
-
-  /** Stage a file deletion. */
-  rm(input: { filepath: string }): Promise<{ removed: string }> {
-    return this.durableObjectStub.gitRm(input);
-  }
-
+  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
-  }): Promise<{ message: string; oid: string }> {
+  }): Promise<WorkspacePublishResult> {
     return this.durableObjectStub.gitCommit(input);
   }
 
-  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]> {
+  /** Published snapshots of this workspace, newest first. */
+  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
     return this.durableObjectStub.gitLog(input);
-  }
-
-  /** Changed files in the working tree relative to HEAD. */
-  diff(): Promise<{ filepath: string; status: string }[]> {
-    return this.durableObjectStub.gitDiff();
-  }
-
-  /** Push the workspace branch to the project repo. */
-  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }> {
-    return this.durableObjectStub.gitPush(input);
   }
 }
 
@@ -3706,7 +3714,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the config repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
+    'Durable workspace filesystems by path: get("/") is the read-only root (always latest main of the project repo); get("/workspaces/<name>") is an instant private overlay over it (read/write/edit + git publish). An agent\'s own workspace is itx.workspace.',
 };
 
 // The shortcut methods are children (callable members) but not capability

@@ -41,30 +41,27 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           sequence: 0,
-          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+          chunk: { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           sequence: 1,
-          chunk: { type: "response.output_text.delta", delta: "const n = await " },
+          chunk: { choices: [{ delta: { content: "const n = await " } }] },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           sequence: 2,
-          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
+          chunk: { choices: [{ delta: { content: "stream.count();" } }] },
         },
       },
     ]);
@@ -104,8 +101,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
-          llmRequestId: 5,
-          provider: "openai-ws",
+          llmRequestOffset: 5,
           durationMs: 2100,
           result: { status: "success", usage: { input_tokens: 9400, output_tokens: 300 } },
         },
@@ -169,7 +165,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/output-added",
         payload: {
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           content:
             "```js\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
         },
@@ -183,7 +179,7 @@ describe("agent-ui reducer", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { llmRequestId: 10, result: { status: "success" } },
+        payload: { llmRequestOffset: 10, result: { status: "success" } },
       },
       {
         type: "events.iterate.com/agents/web-message-sent",
@@ -219,7 +215,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
+  it("streams legacy openai-ws llm-response-chunk frames into the live llm step", () => {
     // itx journals every raw Responses-WS frame as llm-response-chunk
     // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
     // showed only a bare spinner because the reducer ignored these frames.
@@ -267,7 +263,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("accumulates cloudflare-ai chunk deltas", () => {
+  it("accumulates agent llm-response-chunk deltas", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -275,17 +271,17 @@ describe("agent-ui reducer", () => {
         payload: { model: "test-model" },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        payload: { llmRequestId: 3, sequence: 0, chunk: { response: "Hel" } },
+        type: "events.iterate.com/agent/llm-response-chunk",
+        payload: { llmRequestOffset: 3, sequence: 0, chunk: { response: "Hel" } },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        payload: { llmRequestId: 3, sequence: 1, chunk: { response: "lo" } },
+        type: "events.iterate.com/agent/llm-response-chunk",
+        payload: { llmRequestOffset: 3, sequence: 1, chunk: { response: "lo" } },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          llmRequestId: 3,
+          llmRequestOffset: 3,
           sequence: 2,
           chunk: { choices: [{ delta: { reasoning_content: "hmm" } }] },
         },
@@ -429,8 +425,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
-          llmRequestId: 7,
-          provider: "openai-ws",
+          llmRequestOffset: 7,
           durationMs: 250,
           result: { status: "success" },
         },
@@ -442,7 +437,7 @@ describe("agent-ui reducer", () => {
     const activity = state.items[0];
     expect(activity).toMatchObject({ kind: "activity", status: "done" });
     expect(activity?.kind === "activity" ? activity.steps : []).toMatchObject([
-      { kind: "llm", llmRequestId: 7, status: "done", outcome: "completed" },
+      { kind: "llm", llmRequestOffset: 7, status: "done", outcome: "completed" },
     ]);
   });
 
@@ -502,8 +497,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
-          llmRequestId: 7,
-          provider: "openai-ws",
+          llmRequestOffset: 7,
           durationMs: 100,
           result: { status: "success" },
         },
@@ -522,7 +516,7 @@ describe("agent-ui reducer", () => {
     });
     expect(state.queuedUserMessages).toHaveLength(0);
     expect(state.live?.steps).toHaveLength(1);
-    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestId: 12 });
+    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestOffset: 12 });
   });
 
   it("does not append late chunks from an interrupted request into the next turn", () => {
@@ -549,7 +543,7 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/llm-request-cancelled",
         payload: {
           phase: "requested",
-          llmRequestId: 7,
+          llmRequestOffset: 7,
           reason: "interrupted-by-user-input",
         },
       },
@@ -574,7 +568,7 @@ describe("agent-ui reducer", () => {
     if (activity?.kind !== "activity") throw new Error("expected activity item");
     expect(activity.steps[0]).toMatchObject({
       kind: "llm",
-      llmRequestId: 7,
+      llmRequestOffset: 7,
       outcome: "cancelled",
       responseText: "old partial",
     });
@@ -585,7 +579,7 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps).toHaveLength(1);
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
-      llmRequestId: 12,
+      llmRequestOffset: 12,
       responseText: "",
     });
   });
@@ -848,7 +842,7 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/llm-request-cancelled",
         payload: {
           phase: "requested",
-          llmRequestId: 7,
+          llmRequestOffset: 7,
           reason: "interrupted-by-user-input",
         },
       },

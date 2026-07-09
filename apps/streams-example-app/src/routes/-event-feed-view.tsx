@@ -54,7 +54,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         slug: BrowserEventFeedContract.slug,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         tables: [BROWSER_EVENT_FEED_TABLE],
-        createProcessor({ stream, sql, subscriptionKey }) {
+        createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
           const storage = browserProcessorStateStorage<BrowserEventFeedState>({
             sql,
             processorSlug: BrowserEventFeedContract.slug,
@@ -62,6 +62,8 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
           });
           return new BrowserEventFeedProcessor({
             stream,
+            path,
+            projectId,
             sql,
             readState: storage.readState,
             writeState: storage.writeState,

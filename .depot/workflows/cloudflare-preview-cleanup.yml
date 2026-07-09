@@ -31,7 +31,6 @@ on:
       - .depot/workflows/cloudflare-previews.yml
       - packages/shared/**
       - packages/ui/**
-      - packages/mock-http-proxy/**
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - patches/**

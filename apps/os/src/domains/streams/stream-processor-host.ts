@@ -5,7 +5,7 @@
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
 //   host = createStreamProcessorHost(this.ctx, { stream, version: workerVersion(this.env) });
-//   agent = this.host.add((deps) => new AgentProcessor({ ...deps, openai }));
+//   agent = this.host.add((deps) => new AgentProcessor({ ...deps, ai }));
 //   search = this.host.add((deps) => new SearchProcessor(deps));
 //
 //   wakeStreamSubscriber(args: StreamSubscriberWakeRequest) {
@@ -81,6 +81,10 @@ export const PROCESSOR_HOST_REVIVED_EVENT_TYPE = "events.iterate.com/stream-proc
  */
 type HostedProcessorDeps = {
   stream: Stream;
+  /** Path of the hosted stream — stamped as provenance on processor appends. */
+  path: string;
+  /** Owning project, or null on a global (deployment-root) stream. */
+  projectId: string | null;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -94,10 +98,10 @@ type HostedProcessorDeps = {
 export type AnyHostedProcessor = {
   contract: {
     slug: string;
-    version?: string;
-    description?: string;
+    version: string;
+    description: string;
     consumes: readonly string[];
-    emits?: readonly string[];
+    emits: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
   ingest(args: {
@@ -164,6 +168,10 @@ export function createStreamProcessorHost(
   ctx: DurableObjectState,
   options: {
     stream: Stream;
+    /** Path of the hosted stream — stamped as provenance on processor appends. */
+    path: string;
+    /** Owning project, or null on a global (deployment-root) stream. */
+    projectId: string | null;
     /** Worker deploy version; a change resets the keepalive's crash-loop
      * budget (the antidote deploy). Pass `workerVersion(env)`. REQUIRED: a
      * host that silently defaulted this could never take the version-reset
@@ -359,6 +367,8 @@ export function createStreamProcessorHost(
       };
       const processor = build({
         stream: options.stream,
+        path: options.path,
+        projectId: options.projectId,
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(slug())) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(slug()), snapshot),
@@ -484,18 +494,18 @@ export function createStreamProcessorHost(
  */
 export function announceContract(contract: {
   slug: string;
-  version?: string;
-  description?: string;
+  version: string;
+  description: string;
   consumes: readonly string[];
-  emits?: readonly string[];
+  emits: readonly string[];
   events: Record<string, { description?: string; payloadSchema?: unknown }>;
 }): ProcessorContractAnnouncement {
   return {
     slug: contract.slug,
-    version: contract.version ?? "0",
-    description: contract.description ?? "",
+    version: contract.version,
+    description: contract.description,
     consumes: [...contract.consumes],
-    emits: [...(contract.emits ?? [])],
+    emits: [...contract.emits],
     ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
       type,
       ...(definition.description === undefined ? {} : { description: definition.description }),
