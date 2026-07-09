@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
   ProjectEgressInterceptRpcTarget,
@@ -9,12 +9,12 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
-import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
 import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
 import {
   platformReferencesFromHeaders,
@@ -42,15 +42,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    version: workerVersion(this.env),
   });
   readonly #projectProcessor = this.#processorHost.add(
     (deps) =>
       new ProjectProcessor({
         ...deps,
-        // New agents default to openai-ws when the deployment has an OpenAI
-        // key configured; otherwise they fall back to Workers AI.
-        defaultLlmProvider:
-          readOpenAiApiKeyFromAppConfig(this.env) === null ? "cloudflare-ai" : "openai-ws",
         customDomains: createCloudflareProjectCustomDomainDeps({
           env: this.env,
           projectId: this.#name.projectId,
@@ -111,8 +108,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // door's belt-and-braces append) configured its subscription.
   readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#processorHost.handleAlarm();
   }
 
   get emailProcessor() {

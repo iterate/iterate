@@ -95,21 +95,24 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
-  "stream-cross-post-rule": {
-    // Matrix runtimes share a project; per-runtime paths keep the rule and
-    // its copies from colliding with a sibling runtime's.
+  "stream-cross-post": {
+    // Matrix runtimes share a project; per-runtime paths keep the cross-post
+    // subscription and its copies from colliding with a sibling runtime's.
     vars: ({ marker }) => ({
       source: `/examples/cross-post/source-${marker}`,
       target: `/examples/cross-post/target-${marker}`,
     }),
-    assert: (result, _ctx, expect) => {
+    assert: (result, ctx, expect) => {
       const shaped = result as {
         copied: { importance: string; text: string };
-        provenance: Array<{ ruleId: string }>;
+        provenance: Array<{ subscriptionKey: string }>;
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
       expect(shaped.provenance).toHaveLength(1);
-      expect(shaped.provenance[0]).toMatchObject({ ruleId: "copy-important" });
+      // crossPostTo without an explicit key defaults to cross-post:<target>.
+      expect(shaped.provenance[0]).toMatchObject({
+        subscriptionKey: `cross-post:/examples/cross-post/target-${ctx.marker}`,
+      });
     },
   },
   "scheduler-basics": {
@@ -237,24 +240,16 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "sandbox-exec": {
-    // One shared sandbox path for the whole matrix: the first runtime pays
-    // the container cold boot, the rest reuse the warm container (repeat
-    // ensureProjectRepo calls are idempotent). No marker on purpose.
-    // The Playwright REPL spec provisions a FRESH project (fresh container)
-    // per run; cold container boot + repo clone has a long tail. The dominant
-    // term is the IMAGE PULL on an edge location that hasn't cached the image
-    // yet: the baked-monorepo image is ~3 GB unpacked and a first-pull-after-
-    // deploy was observed at 3.2m on Depot (the platform's own health events
-    // show 1.5-3m pulls). Warm-location boots are tens of seconds. 300s covers
-    // a genuine first pull; anything past that is a container stuck
-    // provisioning, and we'd rather fail and re-run than mask it.
+    // One shared sandbox name for the whole matrix: the first runtime pays
+    // the create + container cold boot, the rest reuse the warm container
+    // (the example's get-or-create makes reuse natural). No marker on
+    // purpose. 300s: a cold-host image pull + boot has a long tail even on
+    // the stock image; anything past that is a container stuck provisioning,
+    // and we'd rather fail and re-run than mask it.
     completionTimeoutMs: 300_000,
-    vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
+    vars: () => ({ sandboxName: "example-matrix" }),
     assert: (result, _ctx, expect) => {
-      expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
-      expect((result as { repoFiles: string[] }).repoFiles).toEqual(
-        expect.arrayContaining(["README.md", "worker.ts"]),
-      );
+      expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
     },
   },
   "workspace-edit-and-push": {

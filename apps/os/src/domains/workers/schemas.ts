@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -212,12 +212,22 @@ export interface ProjectWorkerSlack {
  * workers should be typed by callers through `workers.get<T>(ref)`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * `invokeCapability` in userspace and every dotted call — including any
- * nested `slack.*` Web API family — is one RPC.
+ * nested surface a userland getter hands back (the seeded `slack` and
+ * `waitrose` getters, an SDK client you add) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  processEvent(input: { event: StreamEvent }): Promise<void>;
+  /**
+   * Checkpointed event delivery: every project-scoped stream pumps its
+   * committed events here (see ProjectWorkerDelivery). Batches arrive in
+   * per-stream order, at-least-once — each event carries the `path` of the
+   * stream it lives on, so `${event.path}@${event.offset}` identifies a
+   * delivery globally and is the idempotency-key idiom for reactions. The
+   * stream only advances its checkpoint when this resolves; throwing means
+   * the whole batch is redelivered later.
+   */
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
@@ -337,8 +347,8 @@ export const DynamicWorkerRef = z.discriminatedUnion("type", [
  * the host — worker code never picks its own project.
  *
  * @public — not reachable from the /api entrypoint walk; published for
- * project-worker code, which imports it from the project repo's sdk.ts copy
- * of this contract.
+ * project-worker code, which imports it from its `iterate` devDependency's
+ * `iterate/sdk` export (re-exported by the seeded sdk.ts).
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;

@@ -17,7 +17,8 @@ export const StreamEventInput = z.object({
         .array(
           z
             .object({
-              ruleId: z.string().trim().min(1),
+              /** The push subscription (on the SOURCE stream) that carried this hop. */
+              subscriptionKey: z.string().trim().min(1),
               createdAt: z.string(),
               offset: z.number().int().nonnegative(),
               path: z.string().trim().min(1),
@@ -40,6 +41,7 @@ export const StreamEventInput = z.object({
 export const StreamEvent = StreamEventInput.extend({
   offset: z.number().int().nonnegative(),
   createdAt: z.string(),
+  path: z.string().trim().min(1),
 });
 
 /**

@@ -1,9 +1,12 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
+  AGENT_LLM_REQUEST_BACKSTOP_MS,
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+  DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
@@ -11,9 +14,26 @@ import {
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
-export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
+/**
+ * Host-provided deps beyond the stream plumbing. `writeWorkspaceFile` writes
+ * one file into THIS agent's own workspace (the same checkout `itx.workspace`
+ * resolves to) so oversized script results can spill to a file the model pages
+ * through with plain JavaScript. Optional: without it (bare test hosts),
+ * oversized results fall back to inline truncation.
+ */
+type AgentProcessorDeps = {
+  writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
+  /** Injected clock (expiry stamps + backstop deadline); defaults to Date.now. */
+  now?: () => number;
+};
+
+export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
+
+  #now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
 
   protected override reduce({
     event,
@@ -83,19 +103,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
+        // The debounce timer is a droppable ATTEMPT: the scheduled event is
+        // the durable evidence, and #settleLlmRequestScheduling re-derives a
+        // lost timer from the fold. Losing this closure costs latency, never
+        // the request.
         this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
         runInBackground(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
           try {
-            await append({
-              type: "events.iterate.com/agent/llm-request-requested",
-              idempotencyKey: `agent/llm-request-requested@${event.offset}`,
-              payload: {
+            await append(
+              this.#buildLlmRequestRequested({
                 model: event.payload.model,
                 provider: event.payload.provider,
                 requestId: event.payload.requestId,
-              },
-            });
+                scheduledOffset: event.offset,
+              }),
+            );
           } finally {
             this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
           }
@@ -111,23 +134,28 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
             payload: {
               code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
+              expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
             },
           });
         });
         return;
       case "events.iterate.com/capability-host/script-execution-completed": {
-        const content = scriptResultAgentInput(event);
-        if (content === null) return;
-        blockProcessorWhile(() =>
-          append({
+        // Rendering may spill an oversized result into the agent's workspace
+        // first (a durable write that can wait on the checkout's first-use
+        // clone), so the whole render-then-append runs inside the blocking
+        // section — the input must not land before the file it references.
+        blockProcessorWhile(async () => {
+          const content = await scriptResultAgentInput(event, this.deps.writeWorkspaceFile);
+          if (content === null) return;
+          await append({
             type: "events.iterate.com/agent/input-added",
             idempotencyKey: `agent/render-script-result@${event.offset}`,
             payload: {
               content,
               llmRequestPolicy: { behaviour: "after-current-request" },
             },
-          }),
-        );
+          });
+        });
         return;
       }
       // A failed request must never brick the stream: the error becomes a
@@ -166,49 +194,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
         );
         return;
       }
-      // The agent's own sandbox came (back) up. Record a model-visible FYI —
-      // never a trigger — so that next time the agent acts it knows the state
-      // of its `itx.sandbox`, and is reminded how it works. `dont-trigger-request`
-      // means this sits in context for later, it does not start an LLM turn.
-      case "events.iterate.com/sandbox/workspace-restored":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/sandbox-restored@${event.offset}`,
-            payload: {
-              content:
-                "FYI (no reply needed): your sandbox (`itx.sandbox`) resumed and `/workspace` was RESTORED from a snapshot — files you kept there are back. But gitignored paths were NOT snapshotted (e.g. `node_modules`, build outputs): reinstall/rebuild them before use if a task needs them. The container filesystem otherwise resets between sleeps, so treat anything outside `/workspace` as gone. (The repo at `/workspace/repos/project` is always checked out; if the snapshot lacked it, a separate FYI notes it was freshly cloned.)",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-          }),
-        );
-        return;
-      case "events.iterate.com/sandbox/workspace-cloned":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/sandbox-cloned@${event.offset}`,
-            payload: {
-              content:
-                "FYI (no reply needed): the project repo was freshly cloned in your sandbox (`itx.sandbox`) at `/workspace/repos/project` (your cwd) — no usable snapshot of the checkout existed, so uncommitted repo work from a previous container, if any, is gone. Baked tools (e.g. `codex`) are preinstalled; anything else a task needs must be installed. Work you want to keep across sleeps lives under `/workspace`; commit durable changes to the repo.",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-          }),
-        );
-        return;
-      case "events.iterate.com/sandbox/warmed-up":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/sandbox-warmed-up@${event.offset}`,
-            payload: {
-              content:
-                "FYI (no reply needed): your sandbox finished warming up — baked coding tools with a configured provider key (e.g. `codex` via the project's OpenAI secret) are logged in, no per-command login needed. If `codex` still reports an auth error, the project likely has no OpenAI key seeded — ask the user to add one rather than retrying.",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-          }),
-        );
-        return;
       default:
         return;
     }
@@ -233,6 +218,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
   async #settleLlmRequestScheduling(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
+    // At-head gate (see OpenAiWsProcessor.processEventBatch): scheduling
+    // decisions and the backstop must never fire from a mid-catch-up fold —
+    // a long-settled request transiently looks `requested` mid-refold, and
+    // backstopping it would journal a false failure.
+    if (args.checkpointOffset < args.streamMaxOffset) return;
     const { state } = args;
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
@@ -263,20 +253,64 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract> {
       });
       return;
     }
-    if (state.currentRequest.phase !== "scheduled") return;
+    if (state.currentRequest.phase === "requested") {
+      // The BACKSTOP: providers settle their own undriven requests, so a
+      // `requested` this old means the provider layer never answered at all.
+      // Settling it un-wedges the queue — the failure input (rendered by
+      // processEvent above on the next batch) tells the model what happened.
+      const requestedAt = state.currentRequest.requestedAt;
+      if (requestedAt === undefined) return;
+      if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
+      const llmRequestId = state.currentRequest.llmRequestId;
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `agent/backstop-completed@${llmRequestId}`,
+        payload: {
+          durationMs: this.#now() - requestedAt,
+          llmRequestId,
+          provider: state.currentRequest.provider ?? state.llmProvider,
+          result: {
+            status: "failure",
+            error: {
+              message: `No LLM provider settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
+            },
+          },
+        },
+      });
+      return;
+    }
     if (this.#scheduledRequestsWithActiveTimers.has(state.currentRequest.requestId)) return;
     // No active timer for this scheduled request: the DO restarted and lost the
     // debounce. Fire llm-request-requested immediately. The idempotency key
     // makes this safe if the timer also fires concurrently.
-    await args.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      idempotencyKey: `agent/llm-request-requested@${state.currentRequest.scheduledOffset}`,
-      payload: {
+    await args.append(
+      this.#buildLlmRequestRequested({
         model: state.llmConfig.model,
         provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
+        scheduledOffset: state.currentRequest.scheduledOffset,
+      }),
+    );
+  }
+
+  /** The one construction of llm-request-requested (debounce and recovery
+   * paths), so the expiry stamp and idempotency key can never drift apart. */
+  #buildLlmRequestRequested(input: {
+    model: string;
+    provider: AgentState["llmProvider"];
+    requestId: string;
+    scheduledOffset: number;
+  }) {
+    return {
+      type: "events.iterate.com/agent/llm-request-requested" as const,
+      idempotencyKey: `agent/llm-request-requested@${input.scheduledOffset}`,
+      payload: {
+        model: input.model,
+        provider: input.provider,
+        requestId: input.requestId,
+        expiresAt: this.#now() + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
       },
-    });
+    };
   }
 }
 
@@ -401,7 +435,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return state;
       return {
         ...state,
-        currentRequest: { phase: "requested", llmRequestId: event.offset },
+        currentRequest: {
+          phase: "requested",
+          llmRequestId: event.offset,
+          requestedAt: Date.parse(event.createdAt),
+          provider: event.payload.provider,
+        },
         pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
@@ -520,19 +559,44 @@ const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 //   e.g. Slack bang commands — journal on the same stream);
 // - a script that returned undefined and did not throw produces nothing.
 //   Returning no value is how an agent ends its turn.
-function scriptResultAgentInput(
+async function scriptResultAgentInput(
   event: Extract<
     AgentConsumedEvent,
     { type: "events.iterate.com/capability-host/script-execution-completed" }
   >,
-): string | null {
+  writeWorkspaceFile: AgentProcessorDeps["writeWorkspaceFile"],
+): Promise<string | null> {
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
   if (payload.error !== undefined) {
     return `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\``;
   }
   if (payload.result === undefined) return null;
-  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(stringifyScriptResult(payload.result))}\n\`\`\``;
+  const text = stringifyScriptResult(payload.result);
+  if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
+    try {
+      const spilledPath = await spillScriptResult({
+        executionId: payload.executionId,
+        text,
+        writeWorkspaceFile,
+      });
+      return [
+        "Your script returned:",
+        "```json",
+        text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT),
+        "```",
+        spillNotice({ path: spilledPath, totalChars: text.length }),
+      ].join("\n");
+    } catch (error) {
+      // Spilling is best effort: a workspace that cannot clone or write must
+      // not lose the result entirely — fall through to inline truncation.
+      console.error("[agent] failed to spill oversized script result to workspace", {
+        error,
+        executionId: payload.executionId,
+      });
+    }
+  }
+  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(text)}\n\`\`\``;
 }
 
 function stringifyScriptResult(result: unknown): string {
@@ -550,8 +614,57 @@ function truncateScriptResult(text: string): string {
   return `${text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
 }
 
+/**
+ * Where oversized script results land inside the agent's workspace checkout:
+ * scratch files for the model to page through with itx.workspace, never meant
+ * to be committed. One file per execution, so replays overwrite idempotently.
+ * Size is no concern — workspace files past the inline threshold are stored
+ * in R2 transparently.
+ */
+const SCRIPT_RESULT_SPILL_DIR = "/script-results";
+
+/** Writes the full result text into the agent's workspace; returns its path. */
+async function spillScriptResult(input: {
+  executionId: string;
+  text: string;
+  writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
+}): Promise<string> {
+  // The agent's documented publish flow is `git.add({ filepath: "." })` —
+  // without this nested ignore every spill would ride along into workspace
+  // commits (isomorphic-git's add respects .gitignore).
+  await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
+  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
+  await input.writeWorkspaceFile({ content: input.text, path });
+  return path;
+}
+
+/**
+ * The model-facing text after a truncated preview: where the full result
+ * lives and a concrete next-script recipe for paging it, so the model reads
+ * the file with plain JavaScript instead of re-running the expensive fetch.
+ */
+function spillNotice(input: { path: string; totalChars: number }): string {
+  return [
+    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
+    "```js",
+    "async (itx) => {",
+    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
+    "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+    "}",
+    "```",
+  ].join("\n");
+}
+
 function extractAsyncJsSnippet(content: string): string | null {
-  const fenced = content.match(/```(?:js|javascript|ts|typescript)?\s*([\s\S]*?)```/i);
+  // Fences count only at line starts: scripts legitimately carry ``` inside
+  // string literals (chat messages formatted as markdown), and in valid JS
+  // those always sit mid-line — a raw newline cannot appear in a string
+  // literal, and an unescaped ``` would terminate a template literal. A fence
+  // match anywhere used to cut the script at the first embedded ``` and
+  // execute an unparseable prefix (unclosed string literal).
+  const fenced = content.match(
+    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
+  );
   const code = (fenced?.[1] ?? content).trim();
   return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
 }

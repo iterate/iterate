@@ -379,28 +379,35 @@ return { current: await counter.current() }; // 2, and it persists under the key
   },
   {
     id: "sandbox-exec",
-    title: "Run shell commands in a sandbox (project repo included)",
+    title: "Create a sandbox and run shell commands in it",
     description:
-      'A sandbox is a real Linux container addressed by a path under /sandboxes/. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your agent path under the prefix — /sandboxes/cloudflare/agents/...) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, tunnels, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. The project repo is ALWAYS checked out at /workspace/repos/project (with working git credentials), which is also the default working directory — a bare exec("ls") lists the project; no ensureProjectRepo() call needed first.',
+      "A sandbox is a real Linux container, kept like a project pet: it exists only after itx.sandboxes.create({ name, instanceType? }) (names are one path segment — the path is /sandboxes/<name>; instance types are Cloudflare's — lite, basic (default), standard-1..4 — fixed for life), and itx.sandboxes.get(path) then returns the bare Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, … — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). The first command boots the container (can take a minute cold); after idle it is snapshotted and shut down — files under /workspace come back on the next start, everything else resets. The image is the stock Cloudflare one (Ubuntu, Node, Bun, git): install what you need, and clone repos with gitCheckout (GH_TOKEN is planted automatically when the project has a GitHub connection). Prefer reusing an existing sandbox (itx.sandboxes.list()) over creating more.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// The path IS the identity: same path, same sandbox (and its filesystem)
-// until you destroy() it. Different paths are different containers.
-const sandbox = await itx.sandboxes.get(vars.sandboxPath ?? "/sandboxes/cloudflare/example");
+// Reuse the sandbox if it exists, create it otherwise. The name IS the
+// identity, verbatim — no normalization anywhere: same name, same sandbox
+// (and its /workspace) until destroy(). create is strict, so a concurrent
+// creator can win the race — swallow the create error and let the second
+// get() be the arbiter.
+const name = vars.sandboxName ?? "example";
+const path = "/sandboxes/" + name;
+const sandbox = await itx.sandboxes.get(path).catch(async () => {
+  await itx.sandboxes.create({ name, instanceType: vars.instanceType }).catch(() => {});
+  return itx.sandboxes.get(path);
+});
 
 // exec runs a shell command; the first one boots the container.
 const uname = await sandbox.exec("uname -s");
 
-// The project repo is ALWAYS checked out at /workspace/repos/project, which is
-// also the default working directory — so a bare "ls" lists the project. Every
-// command awaits provisioning internally; no ensureProjectRepo() call needed.
-const repo = await sandbox.exec("ls");
+// Only /workspace survives stop/idle (snapshot-restored) — keep durable
+// work there.
+const marker = await sandbox.exec("echo hello > /workspace/marker && cat /workspace/marker");
 
 return {
   os: uname.stdout.trim(), // "Linux"
-  repoFiles: repo.stdout.trim().split("\\n"),
-  exitCode: repo.exitCode,
+  marker: marker.stdout.trim(), // "hello"
+  exitCode: marker.exitCode,
 };
 `.trim(),
   },
@@ -943,25 +950,20 @@ return { link, github: state.state.github, lastGithubPush: state.state.lastGithu
 `.trim(),
   },
   {
-    id: "stream-cross-post-rule",
-    title: "Cross-post matching events between streams with a rule",
+    id: "stream-cross-post",
+    title: "Cross-post matching events between streams",
     description:
-      'Streams have a built-in rule primitive: append events.iterate.com/stream/rule-configured with { ruleId, type: "cross-post", path, eventTypes, condition? } and every later matching event is copied to the target stream. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), rules never copy into a stream already on the chain (cycles are safe), and rule-removed deletes a rule.',
+      "stream.crossPostTo({ path, eventTypes, condition? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's ingest sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const source = itx.streams.get(vars.source ?? "/examples/cross-post/source");
 const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
 
-await source.append({
-  type: "events.iterate.com/stream/rule-configured",
-  payload: {
-    ruleId: "copy-important",
-    type: "cross-post",
-    path: vars.target ?? "/examples/cross-post/target",
-    eventTypes: ["events.iterate.example/note"],
-    condition: 'payload.importance = "high"', // JSONata over the event; optional
-  },
+await source.crossPostTo({
+  path: vars.target ?? "/examples/cross-post/target",
+  eventTypes: ["events.iterate.example/note"],
+  condition: 'payload.importance = "high"', // JSONata over the event; optional
 });
 
 await source.append(
@@ -1122,7 +1124,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     return new Response("not found", { status: 404 });
   }
 
-  processEvent() {}
+  processEventBatch() {}
 }
 \`,
     },

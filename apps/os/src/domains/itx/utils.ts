@@ -53,7 +53,13 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
 
 export type ItxEntrypointScope = {
   path: string;
-  projectId: string;
+  /**
+   * `null` is the deployment-global scope: the trusted root a GLOBAL
+   * (`projectId: null`) stream's delivery dial evaluates expressions against.
+   * Dynamic workers are always project-scoped — their minting paths type
+   * `projectId: string` upstream, so `null` never reaches a worker binding.
+   */
+  projectId: string | null;
 };
 
 export type ItxEntrypointProps = ItxEntrypointScope;
@@ -85,22 +91,14 @@ export function scopeFromItxEntrypointProps(
   if (props === undefined) {
     throw new Error("env.ITX.get() requires ITX binding props with projectId and path");
   }
-  if (props.projectId.trim() === "") {
-    throw new Error("env.ITX.get() requires a non-empty projectId");
+  if (props.projectId !== null && props.projectId.trim() === "") {
+    throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
   }
   return {
     path: normalizePath(props.path),
     projectId: props.projectId,
   };
 }
-
-/**
- * Builds the Worker Loader cache key component for an ITX scope.
- *
- * The same module bytes can be loaded under different project/agent scopes, and
- * those scopes must not share Worker Loader instances because `env.ITX` would
- * point at the wrong capability tree.
- */
 
 /**
  * Narrow structural view of the `ItxEntrypoint` loopback export on
@@ -115,6 +113,20 @@ type ItxEntrypointLoopbackExports = Record<
 
 export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps): Fetcher {
   return (exports as ItxEntrypointLoopbackExports).ItxEntrypoint({ props });
+}
+
+/**
+ * The loopback ItxEntrypoint stub viewed by callers that use its RPC `get()`
+ * (the scoped itx root) rather than binding it as a dynamic worker's env
+ * fetcher. Same stub, honest type: `Fetcher` is what worker bindings need,
+ * `get()` is what in-process callers (the stream delivery dial, scheduler
+ * scripts) actually call. Both the stub and the root it returns are
+ * per-acquisition and must be disposed by the caller.
+ */
+type ItxLoopbackStub = { get(): Promise<unknown> } & Partial<Disposable>;
+
+export function itxLoopbackStub(exports: unknown, props: ItxEntrypointProps): ItxLoopbackStub {
+  return itxEntrypointBinding(exports, itxEntrypointProps(props)) as unknown as ItxLoopbackStub;
 }
 
 /**
@@ -162,7 +174,6 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
   });
 }
 
-/**
 /**
  * Guards `provideCapability` against shadowing the itx surface: a capability
  * path's root segment may not be a reserved RPC segment nor an existing member

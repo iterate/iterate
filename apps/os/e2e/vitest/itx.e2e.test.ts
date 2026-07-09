@@ -25,7 +25,8 @@ const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   slug: "minimal-itx-v4.project-worker-forwarding-probe",
   version: "0.1.0",
-  description: "Records project worker processEvent deliveries observed through an ITX stream.",
+  description:
+    "Records project worker processEventBatch deliveries observed through an ITX stream.",
   stateSchema: z.object({
     childPaths: z.array(z.string()).default([]),
     markers: z.array(z.string()).default([]),
@@ -332,11 +333,17 @@ describe("itx", () => {
     });
     expect(committedEvent).toMatchObject({
       type: "hello-world",
-      offset: 3, // first two events are created and woken
+      // The birth certificate: created(1), the project-worker feed's
+      // subscription-configured(2), woken(3) — the first user append is 4.
+      offset: 4,
     });
     expect(await project.streams.get("/some/path").getEvents()).toMatchObject([
       {
         type: "events.iterate.com/stream/created",
+      },
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { subscriptionKey: "project-worker" },
       },
       {
         type: "events.iterate.com/stream/woken",
@@ -1171,8 +1178,8 @@ describe("itx", () => {
                 };
               }
 
-              processEvent(input) {
-                console.log("updated project worker processed", input.event.type);
+              processEventBatch(batch) {
+                console.log("updated project worker processed", batch.events.length, "events");
               }
             }
 
@@ -1647,8 +1654,8 @@ describe("itx", () => {
                 return new Response(\`matrix project worker \${new URL(req.url).pathname}\`);
               }
 
-              processEvent(input) {
-                console.log("matrix project worker processed", input.event.type);
+              processEventBatch(batch) {
+                console.log("matrix project worker processed", batch.events.length, "events");
               }
             }
 
@@ -1944,27 +1951,33 @@ describe("itx", () => {
     const outputOffset = events.find(
       (event) => event.type === AGENT_OUTPUT_ADDED_TYPE && event.payload?.content === content,
     )?.offset;
+    // Processor subscriptions are wake-mode deliveries addressed by itx
+    // expression over the ordinary domain surface: { delivery: { mode:
+    // "wake", expression: ["agents", ["get", path], "processor",
+    // "wakeStreamSubscriber"] } }. The expression ROOT names the host domain.
+    const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
+      event.payload as {
+        subscriptionKey?: string;
+        delivery?: { mode?: string; expression?: unknown[] };
+      };
+    const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
+      wakeSubscriptionPayload(event).delivery?.expression?.[0];
     const agentSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
-          ?.type === "agent" &&
-        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith("#agent"),
+        wakeExpressionRoot(event) === "agents" &&
+        String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
     )?.offset;
     const cloudflareAiSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
-          ?.type === "agent" &&
-        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith(
-          "#cloudflare-ai",
-        ),
+        wakeExpressionRoot(event) === "agents" &&
+        String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#cloudflare-ai"),
     )?.offset;
     const itxSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriber?: { type?: string } }).subscriber?.type ===
-          "capability-host",
+        wakeExpressionRoot(event) === "capabilityHosts",
     )?.offset;
     const scriptRequestedOffset = events.find(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -2198,7 +2211,53 @@ describe("itx", () => {
     });
   });
 
-  test("Dynamic project worker processEvent can cross-post project events", async () => {
+  test("Project worker births agents: policy from itx.agents.defaults, appended by the seeded template", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+
+    using project = itx.projects.create({ slug: "worker-births-agents" });
+    const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
+    using agentStream = project.streams.get(agentPath);
+
+    // Wait for the policy BEFORE materializing the stream, so the birth
+    // reaction (worker sees child-stream-created on "/") races nothing.
+    const config = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/config-updated"],
+      timeoutMs: 60_000,
+    });
+    const providerSelected = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
+      timeoutMs: 60_000,
+    });
+    const workspaceMount = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/capability-host/capability-provided"],
+      timeoutMs: 60_000,
+    });
+
+    // Any append materializes the agent stream; the platform announces it on
+    // the root stream, the project worker reacts with the defaults batch.
+    await agentStream.append({
+      type: "events.iterate.test/agent-policy-probe",
+      payload: {},
+    });
+
+    const configEvent = await config;
+    expect(configEvent.payload?.systemPrompt).toContain("async (itx)");
+    expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
+    expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+
+    // The subscriptions (mechanics) still come from the platform, not the worker.
+    const events = await agentStream.getEvents({ afterOffset: 0 });
+    const subscriptions = events.filter(
+      (event) => event.type === "events.iterate.com/stream/subscription-configured",
+    );
+    expect(subscriptions.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -2207,6 +2266,10 @@ describe("itx", () => {
 
     using project = itx.projects.create({ slug: "project-worker-process-event" });
     const marker = `cross-post-${crypto.randomUUID()}`;
+    // NOT the root stream: every project stream self-configures the
+    // project-worker push feed at birth, so a freshly minted child stream must
+    // reach the worker with no wiring at all.
+    const sourcePath = `/sources/ping-${crypto.randomUUID()}`;
 
     await project.repo.commitFiles({
       changes: [
@@ -2220,17 +2283,22 @@ describe("itx", () => {
                 return new Response("ok");
               }
 
-              async processEvent({ event }) {
+              async processEventBatch(batch) {
+                for (const event of batch.events) await this.processEvent(event);
+              }
+
+              async processEvent(event) {
                 if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
 
                 const project = await this.env.ITX.get();
                 await project.streams.get("/cross-posted").append({
                   type: "events.iterate.com/test/cross-posted",
-                  idempotencyKey: \`project-worker-cross-post:\${event.offset}\`,
+                  idempotencyKey: \`project-worker-cross-post:\${event.path}@\${event.offset}\`,
                   metadata: {
                     crossPostedBy: "project-worker",
                     marker: event.metadata.crossPostMarker,
                     sourceOffset: event.offset,
+                    sourcePath: event.path,
                   },
                   payload: {
                     originalPayload: event.payload ?? null,
@@ -2242,7 +2310,7 @@ describe("itx", () => {
           `,
         },
       ],
-      message: "Cross-post selected project events from processEvent",
+      message: "Cross-post selected project events from processEventBatch",
     });
 
     const crossPosted = project.streams.get("/cross-posted");
@@ -2251,10 +2319,10 @@ describe("itx", () => {
       timeoutMs: 30_000,
     });
 
-    const [sourceEvent] = await project.streams.get("/").append({
+    const [sourceEvent] = await project.streams.get(sourcePath).append({
       type: "events.iterate.com/test/source",
       metadata: { crossPostMarker: marker },
-      payload: { text: "hello from root" },
+      payload: { text: "hello from a child stream" },
     });
 
     const copiedEvent = await copied;
@@ -2262,14 +2330,30 @@ describe("itx", () => {
       crossPostedBy: "project-worker",
       marker,
       sourceOffset: sourceEvent.offset,
+      sourcePath,
     });
     expect(copiedEvent.payload).toEqual({
-      originalPayload: { text: "hello from root" },
+      originalPayload: { text: "hello from a child stream" },
       originalType: "events.iterate.com/test/source",
     });
+
+    // The source stream's worker-feed cursor reflects the delivery. The push
+    // ack lands after the worker's processEventBatch resolves — which can be a
+    // beat after the cross-posted copy became observable — so poll briefly.
+    await waitForCondition(
+      async () => {
+        const runtimeState = await project.streams.get(sourcePath).runtimeState();
+        const feed = runtimeState.runtime.subscriptions["project-worker"];
+        return (feed?.ackedOffset ?? 0) >= sourceEvent.offset;
+      },
+      {
+        description: "project-worker feed ackedOffset to reach the source event",
+        timeoutMs: 10_000,
+      },
+    );
   });
 
-  test("Project stream subscribe can observe project worker processEvent forwarding", async () => {
+  test("Project stream subscribe can observe project worker processEventBatch forwarding", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -2299,8 +2383,12 @@ describe("itx", () => {
                 return new Response(\`forwarding test worker fetched \${new URL(req.url).pathname}\`);
               }
 
-              async processEvent(input) {
-                const event = input.event;
+              async processEventBatch(batch) {
+                for (const event of batch.events) await this.processEvent(event);
+              }
+
+              async processEvent(event) {
+                if (event.path !== "/") return;
                 if (event.type !== "events.iterate.com/stream/child-stream-created") return;
                 if (event.payload.childPath !== TRIGGER_PATH) return;
 
@@ -2503,7 +2591,7 @@ describe("itx", () => {
     await secondSubscription.unsubscribe();
   });
 
-  test("Cap'n Web nested subscriber processor callbacks survive the stateless Worker proxy", async () => {
+  test("Cap'n Web subscriber runtime-state callbacks survive the stateless Worker proxy", async () => {
     const marker = crypto.randomUUID();
     const streamPath = `/capnweb-subscribe-nested-${marker}`;
     const subscriptionKey = `capnweb-nested-${marker}`;
@@ -2517,6 +2605,14 @@ describe("itx", () => {
     using stream = project.streams.get(streamPath);
     using subscription = await stream.subscribe({
       processEventBatch: () => {},
+      // The live callback rides as a SIBLING of the descriptor: `subscriber`
+      // is validated, serialized data (the presence fact) and cannot carry
+      // functions. The probe still crosses session → stateless Worker proxy →
+      // stream DO as a function-valued member of a plain-object argument.
+      getRuntimeState: () => ({
+        runtime: { marker },
+        snapshot: { offset: 123, state: { marker } },
+      }),
       subscriber: {
         description: "minimal-itx-v4 e2e nested subscriber callback forwarding probe",
         processor: {
@@ -2528,10 +2624,6 @@ describe("itx", () => {
             slug: "minimal-itx-v4.e2e.nested-callback-probe",
             version: "0.1.0",
           },
-          getRuntimeState: () => ({
-            runtime: { marker },
-            snapshot: { offset: 123, state: { marker } },
-          }),
         },
       },
       subscriptionKey,
@@ -2542,7 +2634,7 @@ describe("itx", () => {
         const state = await stream.getProcessorRuntimeState({ subscriptionKey });
         return state?.runtime?.marker === marker && state.snapshot.offset === 123;
       },
-      { description: "nested getRuntimeState callback after subscribe returned" },
+      { description: "getRuntimeState callback after subscribe returned" },
     );
 
     await subscription.unsubscribe();

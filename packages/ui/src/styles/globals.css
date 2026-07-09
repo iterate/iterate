@@ -3,6 +3,10 @@
 
 @source "../**/*.{ts,tsx}";
 @source "../../../services/*/src/ui/**/*.{ts,tsx}";
+/* Streamdown's built-in markdown components (headings, lists, tables…) carry
+   Tailwind classes of their own; scan its dist so they exist in the output.
+   https://streamdown.ai — "update your globals.css to include the following" */
+@source "../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 

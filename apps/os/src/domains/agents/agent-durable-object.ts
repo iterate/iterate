@@ -1,18 +1,22 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
+import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
 import { mintProjectFileUrl } from "../files/project-files.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
@@ -31,8 +35,25 @@ export class AgentDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    version: workerVersion(this.env),
   });
-  readonly #agentProcessor = this.#processorHost.add((deps) => new AgentProcessor(deps));
+  readonly #agentProcessor = this.#processorHost.add(
+    (deps) =>
+      new AgentProcessor({
+        ...deps,
+        // Oversized script results spill into the agent's OWN workspace (the
+        // same checkout itx.workspace resolves to), so the model can page
+        // through the file instead of blowing its context window. The first
+        // write on a fresh workspace waits for the repo clone.
+        writeWorkspaceFile: ({ content, path }) =>
+          this.env.WORKSPACE.getByName(
+            DurableObjectNameCodec.stringify({
+              path: agentWorkspacePath(this.#name.path),
+              projectId: this.#name.projectId,
+            }),
+          ).writeFile(path, content),
+      }),
+  );
   readonly cloudflareAiProcessor = this.#processorHost.add(
     (deps) =>
       new CloudflareAiProcessor({
@@ -139,6 +160,12 @@ export class AgentDurableObject extends DurableObject<Env> {
       }),
   );
 
+  // Registered on every agent host; it wakes on routed PR agent streams
+  // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
+  // linked connection's itx.integrations.github Octokit, called by the agent
+  // itself, so there are no side-effect deps here.
+  readonly prAgentProcessor = this.#processorHost.add((deps) => new PrAgentProcessor(deps));
+
   async #readAgentPromptEvents(): Promise<StreamEvent[]> {
     const events: StreamEvent[] = [];
     using pager = this.#stream.readEvents({
@@ -153,8 +180,13 @@ export class AgentDurableObject extends DurableObject<Env> {
     }
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#processorHost.handleAlarm();
   }
 
   get processor() {

@@ -643,9 +643,11 @@ function createStreamRuntime(
             description: "browser",
             processor: {
               announcement: announceContract(processor.contract),
-              getRuntimeState: () => processor.getRuntimeState(),
             },
           },
+          // The live capability rides as a SIBLING of the serializable
+          // descriptor — the same position the wake handshake gives it.
+          getRuntimeState: () => processor.getRuntimeState(),
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -664,6 +666,7 @@ function createStreamRuntime(
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
             subscriber: ready.subscriber,
+            getRuntimeState: ready.getRuntimeState,
           }),
         );
       })

@@ -102,7 +102,7 @@ export interface Project {
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   /** The project stream processor (snapshot/state; \`state.created\` flips when bootstrap lands). */
-  processor: StreamProcessorRpc<ProjectProcessorState>;
+  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -152,7 +152,8 @@ export interface Project {
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
-  /** Path-addressed sandboxes (\`itx.sandboxes.get("/sandboxes/cloudflare/whatever")\`). */
+  /** The project's sandboxes — explicitly created, sized Linux containers
+   * (\`itx.sandboxes.create\` / \`get\` / \`list\`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   /** The default project Scheduler — shorthand for \`schedulers.get("/scheduler/primary")\`. */
   scheduler: Scheduler;
@@ -166,6 +167,24 @@ export interface Project {
   workers: DynamicWorkerCollection;
   /** Path-addressed durable workspaces (\`itx.workspaces.get(path)\`). */
   workspaces: WorkspaceCollection;
+  /**
+   * "The project processes this event batch" — the first-party dispatch point
+   * every project-scoped stream's birth-certificate feed names
+   * (\`expression: ["processEventBatch"]\`). Today it delegates verbatim to the
+   * repo-backed project worker; it exists so the persisted expression names
+   * the INTENT rather than the implementation. That indirection is the
+   * platform's adaptation point: envelope evolution happens here in
+   * deployment code instead of by patching user repos, and future first-party
+   * per-event work (policy, metrics, indexing feeds) can join the same
+   * ordered, checkpointed delivery — with one rule when it does: platform
+   * steps must be idempotent and must never throw; only the worker delegation
+   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
+   * such steps until a real second consumer earns its place.
+   *
+   * Same trust model as \`worker.processEventBatch\` itself: any project
+   * principal may call it.
+   */
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is \`workers.get(ref)\`. Flattened: the seeded worker implements
@@ -226,22 +245,6 @@ export interface ProjectCollection {
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
-export interface StreamProcessorRpc<State = unknown> {
-  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint \`{ offset, state }\` — offset-carrying so clients can
-   * commit pushes and \`snapshot()\` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
-  snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
-}
-
 /** Workers AI binding exposed through ITX as a project/agent capability. */
 export interface Ai {
   __describe(): Promise<Description>;
@@ -278,7 +281,7 @@ export interface Agent {
   /** Shortcut for \`capabilityHost.revokeCapability\`. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
-  processor: StreamProcessorRpc<AgentProcessorState>;
+  processor: WakeableStreamProcessorRpc<AgentProcessorState>;
   /** The agent's own event stream. */
   stream: Stream;
   /** The agent's web-chat door (what the user sees). */
@@ -353,6 +356,9 @@ export interface AgentChat {
 export interface CapabilityHost {
   /** The scope path this host fronts: \`"/"\` is the project root, \`/agents/bla\` an agent. */
   path: string;
+  /** This scope's capability-host stream processor (snapshot/state). A real
+   * member, so it also claims the name: mounts cannot shadow \`processor\`. */
+  processor: WakeableStreamProcessorRpc;
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
@@ -415,6 +421,8 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
+  /** The platform's default agent policy, as data. */
+  defaults: AgentDefaults;
 }
 
 /**
@@ -443,6 +451,11 @@ export interface ProjectEgress {
  */
 export interface EmailCapability {
   __describe(): Promise<Description>;
+  /** The email router's stream processor: the project-class host Durable
+   * Object at /integrations/email, whose EmailProcessor routes inbound mail.
+   * Wake subscriptions for it persist \`["email", "processor",
+   * "wakeStreamSubscriber"]\`. */
+  processor: WakeableStreamProcessorRpc;
   /**
    * Send one email from the project's own address (\`<slug>@<hostname base>\`).
    * From ANY agent scope, send binds the conversation to the calling agent:
@@ -619,21 +632,44 @@ export interface ProjectRepoCollection extends RepoCollection {
 }
 
 /**
- * The \`itx.sandboxes\` built-in. \`get(path)\` returns the sandbox Durable
- * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
- * sees exactly what the \`@cloudflare/sandbox\` SDK exposes and new SDK methods
- * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated path, after the same
- * project-access assert every collection performs. Every sandbox lives under
- * \`/sandboxes/\` (the same domain-prefix convention as \`/secrets/...\` and
- * \`/repos/...\`): an agent's sandbox is its agent path under the prefix
- * (\`itx.sandbox\` on \`/agents/bla\` is \`sandboxes.get("/sandboxes/cloudflare/agents/bla")\`);
- * standalone sandboxes conventionally live under \`/sandboxes/cloudflare/...\`.
+ * The \`itx.sandboxes\` built-in. Sandboxes are PETS:
+ * \`create({ name, instanceType })\` is the only way one comes to exist
+ * (nothing mints a sandbox implicitly — \`get\` refuses paths that were never
+ * created), names are one path segment (\`/sandboxes/<name>\` — no intermediate
+ * folders in the stream tree), and the sandbox itself carries the imperative
+ * lifecycle (\`start\`/\`sleep\`/\`destroy\`).
+ *
+ * \`get(path)\` returns the sandbox Durable Object's own RPC stub —
+ * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
+ * \`@cloudflare/sandbox\` SDK exposes and new SDK methods need no forwarding
+ * code here. Confinement is by name: the stub is minted from this project's
+ * id plus the validated path, after the same project-access assert every
+ * collection performs.
+ *
+ * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
+ * instance type per container class (instance-types.ts), so each type is its
+ * own Durable Object namespace and routing needs the type. The \`/sandboxes\`
+ * catalogue stream is the directory: \`create\` journals \`create-requested\`
+ * there (idempotency-keyed by path, so the stream's native dedup makes the
+ * FIRST claim on a name authoritative — races settle atomically in one
+ * append) BEFORE touching any container namespace, and \`get\` routes by the
+ * claim's instance type. The catalogue and not the sandbox's own stream
+ * because reads materialize streams (any wake appends \`created\`/\`woken\`):
+ * routing a \`get\` through the sandbox's own stream would mint a junk stream
+ * for every typo'd path, and addressing must never create.
  */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
-  /** The sandbox at a path. Cheap — the container boots on the first command, not here. */
+  /** Create a sandbox. Strict: an existing or destroyed path is an error.
+   * Returns the path to \`get\`. */
+  create(
+    input: SandboxCreateInput,
+  ): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }>;
+  /** The sandbox at a path. Throws unless the path was created (and not destroyed). */
   get(path: string): Promise<CloudflareSandbox>;
+  /** Every sandbox stream path in the project (\`/sandboxes/...\`), including
+   * destroyed sandboxes' streams — the stream is the history. */
+  list(): Promise<StreamListItem[]>;
 }
 
 /**
@@ -650,6 +686,8 @@ export interface SandboxCollection {
  */
 export interface Scheduler {
   __describe(): Promise<Description>;
+  /** The scheduler stream processor (snapshot/state). */
+  processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as \`skipped\`. */
@@ -691,8 +729,25 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-  /** Committed file contents at HEAD; null when the path does not exist. */
-  readFile(input: { path: string }): Promise<{
+  /**
+   * Commit history of a branch, newest first — oid, message, author,
+   * timestamp (epoch ms), parent oids. Deliberately without per-commit file
+   * stats (those cost tree checkouts per commit); fetch them lazily per
+   * commit through \`commitDetails\`.
+   */
+  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (the whole tree for the root commit), with \`git diff --numstat\`-shaped
+   * +/- line counts; binary files are flagged instead of counted.
+   */
+  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;
+  /**
+   * Committed file contents at HEAD — or, with \`commitOid\`, pinned to that
+   * commit — null when the path does not exist there. \`encoding: "base64"\`
+   * reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -720,10 +775,15 @@ export interface Repo {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless \`force: true\` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * Public repositories transfer server-side (any history size); private
+   * ones transfer in-process, where big histories need \`depth\`. \`depth\`
+   * prunes to the newest N commits — GitHub retains the full history, and a
+   * later deeper sync can always widen the window.
    */
-  syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult>;
+  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
-  processor: StreamProcessorRpc<RepoProcessorState>;
+  processor: WakeableStreamProcessorRpc<RepoProcessorState>;
 }
 
 /**
@@ -764,12 +824,22 @@ export interface WorkspaceCollection {
  * workers should be typed by callers through \`workers.get<T>(ref)\`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * \`invokeCapability\` in userspace and every dotted call — including any
- * nested \`slack.*\` Web API family — is one RPC.
+ * nested surface a userland getter hands back (the seeded \`slack\` and
+ * \`waitrose\` getters, an SDK client you add) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  processEvent(input: { event: StreamEvent }): Promise<void>;
+  /**
+   * Checkpointed event delivery: every project-scoped stream pumps its
+   * committed events here (see ProjectWorkerDelivery). Batches arrive in
+   * per-stream order, at-least-once — each event carries the \`path\` of the
+   * stream it lives on, so \`\${event.path}@\${event.offset}\` identifies a
+   * delivery globally and is the idempotency-key idiom for reactions. The
+   * stream only advances its checkpoint when this resolves; throwing means
+   * the whole batch is redelivered later.
+   */
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
@@ -812,29 +882,115 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
+      subscriptions: Record<
+        string,
+        {
+          mode: "wake" | "push" | "webhook";
+          ackedOffset: number;
+          lag: number;
+          attempt: number;
+          nextAttemptAt: number | null;
+          lastError: string | null;
+          parkedAtOffset: number | null;
+          connected: boolean;
+        }
+      >;
     };
   }>;
   /**
-   * Live event delivery: \`processEventBatch\` is called for every committed
-   * batch (optionally replayed from \`replayAfterOffset\`); returns an
-   * unsubscribe handle. Set \`configured: true\` only from trusted-internal
-   * auth — it opens the durable configured subscription registered under
-   * \`subscriptionKey\` (the wake-handshake response) instead of an ephemeral one.
+   * Live EPHEMERAL event delivery: \`processEventBatch\` is called for every
+   * committed batch (optionally replayed from \`replayAfterOffset\`); returns an
+   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
+   * delivery is configured as data instead, by appending a
+   * \`subscription-configured\` event (wake or push mode) to the stream.
    */
   subscribe(args: {
     subscriptionKey?: string;
-    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Sugar for \`selector.eventTypes\` — one filter shape across every lane. */
     eventTypes?: readonly string[];
+    selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
+    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */
+    getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle>;
+  /**
+   * Cross-post receiving end: an ordinary push SINK (\`(batch) => void\`) that
+   * appends the batch's events into THIS stream with provenance stamping,
+   * structural loop protection, and source-derived idempotency keys. A source
+   * stream cross-posts here by configuring
+   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }\`.
+   */
+  ingest(batch: StreamPushEventBatch): Promise<void>;
+  /**
+   * "When events matching this land HERE, post them onto stream \`path\`" — the
+   * cross-post verb. Pure sugar over appending a \`subscription-configured\`
+   * push subscription targeting the destination's \`ingest\` sink; the appended
+   * event (returned) is the real interface and shows in the log like any
+   * other config. Same-\`key\` calls replace the previous cross-post; remove
+   * with \`removeCrossPost\`. Copies carry the full provenance chain
+   * (\`source.crossPostedFrom\`), multi-hop legal, loop-protected. \`transform\`
+   * is an optional JSONata expression CONSTRUCTING the copied event's body
+   * from the original (e.g. \`{ "type": "myapp/pr", "payload": { "repo":
+   * payload.body.repository.full_name } }\`); omitted fields copy verbatim.
+   */
+  crossPostTo(args: {
+    /** Destination stream path (this project). */
+    path: string;
+    /** Subscription identity; defaults to \`cross-post:<destination path>\`. */
+    key?: string;
+    eventTypes?: string[];
+    /** JSONata filter; the event is copied only when it evaluates to exactly \`true\`. */
+    condition?: string;
+    /** JSONata constructor for the copied event's \`{type?, payload?, metadata?}\`. */
+    transform?: string;
+    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
+    deliver?: "all" | "new" | { afterOffset: number };
+  }): Promise<StreamEvent>;
+  /** Remove a cross-post configured by \`crossPostTo\` (by destination path or explicit key). */
+  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
+}
+
+export interface StreamProcessorRpc<State = unknown> {
+  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
+  /**
+   * Server-push of the processor's reduced state. The callback receives the
+   * durable checkpoint \`{ offset, state }\` — offset-carrying so clients can
+   * commit pushes and \`snapshot()\` reads monotonically against each other —
+   * once immediately on subscribe (current state IS the first paint) and then
+   * after every checkpointed batch that changed state.
+   */
+  onStateChange(
+    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
+  ): Promise<ProcessorStateSubscriptionHandle>;
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+}
+
+/**
+ * The \`itx.agents.defaults\` built-in: default agent POLICY as data. The
+ * project worker owns applying it — the seeded template reacts to
+ * \`stream/child-stream-created\` for \`/agents/**\` by appending
+ * \`forPath(path).events\` to the new agent stream (and edits the result to
+ * customize agents). The platform appends only mechanics (processor
+ * subscriptions); an agent nobody configures runs on stock defaults.
+ */
+export interface AgentDefaults {
+  __describe(): Promise<Description>;
+  /**
+   * The default policy for one agent path: the named pieces plus the exact
+   * event batch that applies them. Events are idempotency-keyed on
+   * (projectId, path), so appending them twice — or racing a redelivery — is
+   * a no-op.
+   */
+  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -885,7 +1041,7 @@ export interface Secret {
   /** Set the secret material and/or its egress allowlist. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
-  processor: StreamProcessorRpc<SecretDescription>;
+  processor: WakeableStreamProcessorRpc<SecretDescription>;
 }
 
 /**
@@ -896,9 +1052,9 @@ export interface Secret {
  * nothing is shared until pushed. \`git\` publishes commits to the workspace's
  * own branch in the project repo (\`workspaces/<path>\`), never to main.
  *
- * Constraints: individual files are capped at ~1.5MB (store large blobs with
- * \`itx.files\`), and the \`.git\` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the \`git\` methods). Workspace
+ * Constraints: the \`.git\` directory is platform-managed — read it if you
+ * like, but writes there are rejected (use the \`git\` methods). Large files
+ * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
  */
@@ -1037,8 +1193,8 @@ export interface WorkspaceGit {
  * the host — worker code never picks its own project.
  *
  * @public — not reachable from the /api entrypoint walk; published for
- * project-worker code, which imports it from the project repo's sdk.ts copy
- * of this contract.
+ * project-worker code, which imports it from its \`iterate\` devDependency's
+ * \`iterate/sdk\` export (re-exported by the seeded sdk.ts).
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
@@ -1099,6 +1255,25 @@ export type ProjectDescription = Description & {
   capabilities: CapabilityDescription[];
   name: string;
   projectId: string;
+};
+
+/**
+ * A processor node that is also its HOST's wake-mode delivery door. This is
+ * what the domain surfaces expose (\`itx.agents.get(path).processor\`,
+ * \`itx.repos.get(path).processor\`, \`itx.processor\`, …) and what wake-mode
+ * stream subscriptions persist as their delivery expression:
+ * \`["agents", ["get", path], "processor", "wakeStreamSubscriber"]\`.
+ *
+ * \`wakeStreamSubscriber\` is dialed by stream delivery spines only
+ * (trusted-internal): the handshake's sink drives the host's durable
+ * checkpoint, so an ordinary session poking it could feed fabricated batches
+ * and fast-forward the checkpoint past real events. Multi-processor hosts (an
+ * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * processor wakes from the request's \`processorSlug\` — the inspection half of
+ * this node reads the host's main processor.
+ */
+export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
 };
 
 /**
@@ -1171,6 +1346,41 @@ export type RevokeCapabilityInput = {
  */
 export type OpenApiRpc = object;
 
+/**
+ * The batch a PUSH subscription's receiver is invoked with: the delivery
+ * coordinates and events, plus the fields an at-least-once stateless receiver
+ * needs to dedupe and self-configure. Deliberately NOT the live lanes'
+ * {@link StreamEventBatch}: push receivers include userspace project workers
+ * and sibling streams, and the folded core state — other subscriptions'
+ * delivery expressions, park errors, the presence roster — is internal to the
+ * deployment (the webhook envelope strips it for the same reason). Live sinks
+ * (ephemeral subscribers, wake-mode processors) still get state-carrying
+ * batches: they are the lanes that paint from state.
+ */
+export type StreamPushEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  subscriptionKey: SubscriptionKey;
+  /**
+   * Stable across retries of the same batch (\`\${subscriptionKey}:\${firstOffset}-\${lastOffset}\`),
+   * so receivers can dedupe redeliveries even without per-event bookkeeping.
+   * (\`\${event.path}@\${event.offset}\` remains the per-event idempotency idiom.)
+   */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this batch. */
+  attempt: number;
+  /**
+   * The committed \`subscription-configured\` event this delivery serves — so a
+   * receiver can configure itself from committed stream state without a
+   * side-channel registry (which stream, which selector, whose params).
+   * Narrowed to the fields the fold stores; an honest shape instead of a
+   * \`StreamEvent\` cast that pretends metadata/source survived.
+   */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+};
+
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
 
@@ -1199,31 +1409,41 @@ export type CapabilityDescription = {
   types?: string;
 };
 
-/** Serializable snapshot plus optional live runtime debug state for a processor. */
-export type ProcessorRuntimeState<State = unknown> = {
-  snapshot: { offset: number; state: State };
-  runtime?: Record<string, unknown>;
-};
-
-export type ProcessorSnapshot<State> = {
-  offset: number;
-  state: State;
+/**
+ * What the stream sends when poking a durable wake-mode subscriber
+ * (\`wakeStreamSubscriber\`): serializable coordinates only.
+ */
+export type StreamSubscriberWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: SubscriptionKey;
+  /** Which hosted processor the poke is for (multi-processor hosts resolve on it). */
+  processorSlug?: string;
 };
 
 /**
- * Live handle for one \`onStateChange\` subscription.
- *
- * \`ping()\` is the liveness probe: \`true\` while the subscription is still
- * registered on the live processor, \`false\` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, \`false\` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
+ * What the poked subscriber hands back — the entire handshake in one return
+ * value. The stream retains \`sink\` (ownership of a returned stub transfers to
+ * the caller) and streams one-way batches into it from \`checkpointOffset + 1\`;
+ * there is no subscribe-back call and therefore no handshake race to fence.
  */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
+export type StreamSubscriberWakeResponse = {
+  /** The processor's durable checkpoint offset — replay resumes after it. */
+  checkpointOffset: number;
+  /** The live delivery callback the stream retains and invokes per batch. */
+  sink: ProcessEventBatch;
+  /**
+   * Serializable subscriber identity (validated against
+   * \`StreamSubscriberDescriptor\` by the stream) appended as the
+   * subscriber-connected presence fact; carries the processor's contract
+   * announcement for the stream's \`processorsBySlug\` registry.
+   */
+  subscriber?: unknown;
+  /** Live runtime-state capability, retained for the connection lifetime. */
+  getRuntimeState?: GetProcessorRuntimeState;
 };
 
 export type CfMarkdownConversionArgs =
@@ -1278,7 +1498,12 @@ export type AgentProcessorState = {
   llmProviderConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number }
+    | {
+        phase: "requested";
+        llmRequestId: number;
+        requestedAt?: number | undefined;
+        provider?: "cloudflare-ai" | "openai-ws" | undefined;
+      }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -1303,7 +1528,7 @@ export type StreamEvent = {
         processor?: { slug: string; version: string } | undefined;
         crossPostedFrom?:
           | {
-              ruleId: string;
+              subscriptionKey: string;
               createdAt: string;
               offset: number;
               path: string;
@@ -1316,6 +1541,7 @@ export type StreamEvent = {
   idempotencyKey?: string | undefined;
   offset: number;
   createdAt: string;
+  path: string;
 };
 
 /**
@@ -1339,6 +1565,7 @@ export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
 };
 
+/** A persisted capability name: the steps from an itx root to a value. */
 export type ItxExpression = ItxExpressionStep[];
 
 export type StreamListItem = { createdAt: string; path: string };
@@ -1436,19 +1663,100 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/** What \`itx.sandboxes.create\` takes — Cloudflare's own vocabulary
+ * (instance types, \`SandboxOptions.sleepAfter\`/\`keepAlive\`) plus a name. */
+export type SandboxCreateInput = {
+  /** The sandbox's name — a single path segment (no \`/\`); its path becomes
+   * \`/sandboxes/<name>\`. Names are unique per project (across instance
+   * types), and destroyed names are retired, not recycled — pick a new one. */
+  name: string;
+  /** Cloudflare instance type; defaults to \`basic\`. Cannot be changed later. */
+  instanceType?: SandboxInstanceType;
+  /** Idle time before the container is snapshotted and torn down: a positive
+   * number of SECONDS, or \`"<n>s"\`/\`"<n>m"\`/\`"<n>h"\` (e.g. \`"30s"\`, \`"5m"\`,
+   * \`"1h"\` — no other units). Defaults to the SDK's 10 minutes. The workspace
+   * survives — see {@link CloudflareSandbox}. */
+  sleepAfter?: string | number;
+  /** Keep the container alive indefinitely (the SDK's \`keepAlive\`); you must
+   * \`sleep()\` or \`destroy()\` explicitly. */
+  keepAlive?: boolean;
+  /** Initial env-var map, merged as if by \`setEnvVars\` — values are
+   * \`getSecret({ path })\` placeholders or non-secret literals, NEVER raw
+   * secret material. */
+  env?: Record<string, string>;
+};
+
+export type SandboxInstanceType =
+  | "basic"
+  | "lite"
+  | "standard-1"
+  | "standard-2"
+  | "standard-3"
+  | "standard-4";
+
 /**
- * One Cloudflare Sandbox: the bare \`@cloudflare/sandbox\` Durable Object stub,
- * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * One sandbox: the bare \`@cloudflare/sandbox\` Durable Object stub, nothing
+ * wrapped on top. Whatever the installed SDK exposes is callable —
  * \`exec(command)\`, \`readFile\`/\`writeFile\`/\`listFiles\`, \`startProcess\`,
- * \`gitCheckout\`, \`exposePort\`, \`destroy()\`, … — so this contract deliberately
- * does not re-declare that surface (same stance as \`McpClientRpc\`); see
- * https://developers.cloudflare.com/sandbox/ for the API. One addition: the
- * project's repo is ALWAYS checked out at \`/workspace/repos/project\` (with
- * working git credentials), which is also the default working directory — a
- * bare \`exec("ls")\` lists the project; no \`ensureProjectRepo()\` call needed
- * first.
+ * sessions, \`gitCheckout\`, the code interpreter, \`tunnels\`, … — so this
+ * contract deliberately does not re-declare that surface (same stance as
+ * \`McpClientRpc\`); https://developers.cloudflare.com/sandbox/api/ is
+ * the authoritative reference. The image is the stock Cloudflare sandbox
+ * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
+ * you need at runtime.
+ *
+ * Platform deltas over stock Cloudflare (everything else passes through):
+ * - Sandboxes are created explicitly (\`itx.sandboxes.create\`), never minted
+ *   by addressing.
+ * - \`/workspace\` SURVIVES sleep: snapshotted to storage on \`sleep()\` or the
+ *   idle timer, restored on the next start — where stock Cloudflare loses all
+ *   state. Everything outside \`/workspace\` is ephemeral, and a crash loses
+ *   anything since the last snapshot.
+ * - \`start()\` boots the container now instead of lazily; \`sleep()\` snapshots
+ *   and tears down now instead of waiting for \`sleepAfter\` (the SDK's
+ *   \`stop()\` forwards to it); \`destroy()\` is permanent — the name is retired.
+ * - \`__describe()\` (the capability-tree convention) carries the durable
+ *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
+ * - \`setEnvVars(vars)\` is DURABLE here (persisted, re-applied every start,
+ *   journaled as a \`configured\` event); values are conventionally
+ *   \`getSecret({ path })\` placeholders substituted only at egress — real
+ *   secret material never enters the container. All sandbox egress flows
+ *   through project egress policy; there is no direct internet path.
+ * - \`mountBucket\` and \`exposePort\` are unavailable (they throw): /workspace
+ *   snapshots cover persistence, and \`tunnels\` covers public URLs.
  */
 export type CloudflareSandbox = object;
+
+/** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
+export type SchedulerProcessorState = {
+  pendingTriggers: Record<
+    string,
+    {
+      [x: string]: unknown;
+      key: string;
+      requestedAt: string;
+      runCount: number;
+      scheduledFor: string;
+    }
+  >;
+  schedules: Record<
+    string,
+    {
+      [x: string]: unknown;
+      action: { [x: string]: unknown; kind: "itx-script"; script: string };
+      definedAtOffset: number;
+      metadata?: Record<string, unknown> | undefined;
+      path?: string | undefined;
+      nextTriggerAt: number | null;
+      recurrence:
+        | { [x: string]: unknown; at: string }
+        | { [x: string]: unknown; every: number }
+        | { [x: string]: unknown; cron: string; timezone?: string | undefined };
+      runCount: number;
+      setAt: string;
+    }
+  >;
+};
 
 /**
  * Input to \`scheduler.set(...)\`: a keyed upsert. \`recurrence\` additionally
@@ -1520,6 +1828,20 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   path: string;
 };
 
+/** What \`repo.log\` returns: newest-first commits on one branch. */
+export type RepoLogResult = {
+  branch: string;
+  commits: RepoLogCommit[];
+};
+
+/** What \`repo.commitDetails\` returns: one commit's metadata plus the files it
+ * changed versus its first parent (versus an empty tree for the root commit). */
+export type RepoCommitDetails = RepoLogCommit & {
+  /** First parent oid — the diff baseline; null for the root commit. */
+  parentOid: string | null;
+  files: RepoCommitFileChange[];
+};
+
 /** What \`repo.linkGithub\` returns: the recorded link, whether the GitHub
  * repository was created by this call, and the initial mirror push's outcome
  * (a failed initial push does not fail the link — it is journaled on the repo
@@ -1545,6 +1867,7 @@ export type GithubSyncResult = {
  */
 export type RepoProcessorState = {
   artifactName: string | null;
+  createRequested: boolean;
   created: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;
@@ -1581,6 +1904,9 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
+
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1590,7 +1916,7 @@ export type StreamEventInput = {
         processor?: { slug: string; version: string } | undefined;
         crossPostedFrom?:
           | {
-              ruleId: string;
+              subscriptionKey: string;
               createdAt: string;
               offset: number;
               path: string;
@@ -1615,6 +1941,12 @@ export type StreamEventReadInput = {
   limit?: number;
 };
 
+/** Serializable snapshot plus optional live runtime debug state for a processor. */
+export type ProcessorRuntimeState<State = unknown> = {
+  snapshot: { offset: number; state: State };
+  runtime?: Record<string, unknown>;
+};
+
 /**
  * Callback invoked by the stream pump for each delivered batch.
  *
@@ -1622,6 +1954,14 @@ export type StreamEventReadInput = {
  * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/**
+ * Optional runtime-state callback exposed by a hosted processor.
+ *
+ * It accepts sync or async implementations because local processors can return
+ * immediately, while RPC-backed processors may need an async round trip.
+ */
+export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 /**
  * Live subscription handle returned by \`Stream.subscribe\`.
@@ -1652,6 +1992,27 @@ export type StreamSubscriptionHandle = Disposable & {
  */
 export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
 
+export type ProcessorSnapshot<State> = {
+  offset: number;
+  state: State;
+};
+
+/**
+ * Live handle for one \`onStateChange\` subscription.
+ *
+ * \`ping()\` is the liveness probe: \`true\` while the subscription is still
+ * registered on the live processor, \`false\` once it was dropped (delivery
+ * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
+ * Object incarnation is gone. For a subscriber, \`false\` and a rejection mean
+ * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
+ * transport half-opens, so a periodic ping is how a client turns "silently
+ * stale" into "detectably dead".
+ */
+export type ProcessorStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
@@ -1680,8 +2041,24 @@ export type FlattenedCapabilityInvocation = {
   path: string[];
 };
 
-/** Durable expression over the project ITX surface. */
+/** One step of an {@link ItxExpression}: a property read, or a \`[method, ...args]\` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
+
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  provider?: AgentLlmProvider;
+  model?: string;
+};
+
+/** The default policy for one agent path: the named pieces plus the exact
+ * event batch that applies them (idempotency-keyed, safe to re-append). */
+export type AgentDefaultPolicy = {
+  systemPrompt: string;
+  provider: AgentLlmProvider;
+  model: string;
+  events: AgentPolicyEventInput[];
+};
 
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
@@ -1758,8 +2135,38 @@ export type RepoFileChange =
     }
   | {
       path: string;
+      /** Standard base64 of the file's raw bytes — the binary write lane
+       * (images, PDFs, …), matching the \`files.put\` string convention. */
+      contentBase64: string;
+    }
+  | {
+      path: string;
       delete: true;
     };
+
+/** One commit in a repo's history, as returned by \`repo.log\`. */
+export type RepoLogCommit = {
+  oid: string;
+  /** Full commit message, trailing newline trimmed. */
+  message: string;
+  author: { email: string; name: string };
+  /** Author timestamp in epoch milliseconds. */
+  timestamp: number;
+  /** Parent commit oids — empty for the root commit, 2+ for merges. */
+  parents: string[];
+};
+
+/** One changed file in a commit — \`git diff --numstat\`-shaped counts. */
+export type RepoCommitFileChange = {
+  path: string;
+  status: "added" | "deleted" | "modified";
+  /** Lines added; 0 for binary files. */
+  additions: number;
+  /** Lines removed; 0 for binary files. */
+  deletions: number;
+  /** True when either side of the diff sniffs binary (NUL byte). */
+  binary: boolean;
+};
 
 /**
  * The GitHub repository a repo is linked to: the named GitHub connection (an
@@ -1857,8 +2264,16 @@ export type StreamEventBatch = {
   state: unknown;
 };
 
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
+export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
+
+/** The policy events an agent is born with, as append inputs. Typed
+ * structurally (not against the full event catalog) so the SDK projection
+ * stays self-contained. */
+export type AgentPolicyEventInput = {
+  type: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+};
 
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;

@@ -9,7 +9,13 @@ import {
 } from "./grouping.ts";
 
 function event(offset: number, type: string): StreamEvent {
-  return { offset, type, createdAt: new Date(0).toISOString(), payload: { offset } };
+  return {
+    offset,
+    type,
+    createdAt: new Date(0).toISOString(),
+    payload: { offset },
+    path: "/tests/feed",
+  };
 }
 
 const CREATED = "events.iterate.com/stream/created";

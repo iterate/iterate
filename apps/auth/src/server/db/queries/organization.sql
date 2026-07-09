@@ -66,6 +66,7 @@ SELECT id
 FROM invitation
 WHERE organizationId = :organizationId
   AND email = :email
+  AND status = 'pending'
 LIMIT 1;
 
 /** @name insertInvite */
@@ -104,6 +105,7 @@ FROM invitation i
 JOIN organization o ON o.id = i.organizationId
 JOIN user u ON u.id = i.inviterId
 WHERE i.organizationId = :organizationId
+  AND i.status = 'pending'
 ORDER BY i.createdAt DESC,
   i.email ASC;
 

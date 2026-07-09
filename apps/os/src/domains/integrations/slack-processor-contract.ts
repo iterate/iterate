@@ -41,6 +41,30 @@ export const SlackProcessorContract = defineProcessorContract({
       description:
         "Raw Slack Events API callback body, appended by the webhook route to `/integrations/slack/{connection}` and forwarded unchanged to routed thread streams.",
       payloadSchema: z.object({ body: z.record(z.string(), z.unknown()) }).loose(),
+      examples: [
+        {
+          description:
+            "A threaded Slack message, as Slack's Events API delivers it (trimmed to the typical fields).",
+          payload: {
+            body: {
+              type: "event_callback",
+              team_id: "T0XYZ1234",
+              api_app_id: "A0AB12CD3",
+              event: {
+                type: "message",
+                channel: "C0AB12CD3",
+                user: "U0DE45FG6",
+                text: "Hey @iterate, can you take a look at this?",
+                ts: "1751980451.204569",
+                thread_ts: "1751980423.123456",
+                channel_type: "channel",
+              },
+              event_id: "Ev0HI78JK9",
+              event_time: 1751980451,
+            },
+          },
+        },
+      ],
     },
     "events.iterate.com/slack/thread-route-configured": {
       description:
@@ -50,6 +74,17 @@ export const SlackProcessorContract = defineProcessorContract({
         threadTs: z.string(),
         streamPath: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "A fresh Slack thread gets its own routed agent stream (`/agents/slack/{connection}/{channel}/ts-{threadTs}`, channel and ts sanitized to lowercase kebab).",
+          payload: {
+            channel: "C0AB12CD3",
+            threadTs: "1751980423.123456",
+            streamPath: "/agents/slack/acme/c0ab12cd3/ts-1751980423-123456",
+          },
+        },
+      ],
     },
   },
   consumes: [

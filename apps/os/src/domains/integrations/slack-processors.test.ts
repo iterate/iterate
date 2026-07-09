@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { slackAgentSystemPrompt } from "../projects/project-processor-implementation.ts";
+import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -16,6 +16,10 @@ import {
  */
 class MemoryStreamNetwork {
   readonly streams = new Map<string, MemoryStream>();
+
+  /** Injectable clock for createdAt stamps, so freshness-gated lanes (the 👀
+   * ack, the status repaint) can be tested on both sides of the horizon. */
+  constructor(readonly now: () => number = Date.now) {}
 
   get(path: string): MemoryStream {
     let stream = this.streams.get(path);
@@ -52,8 +56,9 @@ class MemoryStream implements Stream {
       if (existing !== undefined) return existing;
       const event: StreamEvent = {
         ...input,
-        createdAt: new Date(this.events.length + 1).toISOString(),
+        createdAt: new Date(this.network.now()).toISOString(),
         offset: this.events.length + 1,
+        path: this.path,
       };
       this.events.push(event);
       return event;
@@ -104,11 +109,23 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
+    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
   }
 
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
+  }
+
+  async ingest(): Promise<never> {
+    throw new Error("MemoryStream does not implement ingest().");
+  }
+
+  async crossPostTo(): Promise<never> {
+    throw new Error("MemoryStream does not implement crossPostTo().");
+  }
+
+  async removeCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement removeCrossPost().");
   }
 }
 
@@ -372,6 +389,54 @@ describe("SlackProcessor (webhook router)", () => {
     expect(network.eventsAt("/agents/slack/custom-route")).toHaveLength(1);
   });
 
+  it("refold: replaying the journal neither re-acknowledges nor duplicates forwards", async () => {
+    // THE refold test (docs/writing-stream-processors.md, "Refold safety").
+    const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
+    const network = new MemoryStreamNetwork(() => clock.now);
+    const stream = network.get("/integrations/slack/nustom");
+    const acked: unknown[] = [];
+    const processor = new SlackProcessor({
+      stream,
+      connection: CONNECTION,
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        acked.push(payload);
+      },
+      now: () => clock.now,
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(acked).toHaveLength(1);
+    const routedPath = "/agents/slack/nustom/c123/ts-111-222";
+    expect(network.eventsAt(routedPath)).toHaveLength(2);
+
+    clock.now += 60 * 60_000;
+    const refoldAcked: unknown[] = [];
+    const refolded = new SlackProcessor({
+      stream,
+      connection: CONNECTION,
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        refoldAcked.push(payload);
+      },
+      now: () => clock.now,
+    });
+    await deliverNewEvents({ cursors, processor: refolded, stream });
+
+    // The stale ack is skipped; the durable forwards replay and dedupe at the
+    // append layer (idempotency keys), leaving the routed stream unchanged.
+    expect(refoldAcked).toEqual([]);
+    expect(network.eventsAt(routedPath)).toHaveLength(2);
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/slack/thread-route-configured",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("ignores and never acknowledges webhooks that cannot be keyed as channel:thread_ts", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
@@ -459,7 +524,8 @@ describe("SlackAgentProcessor", () => {
   function setup(deps?: {
     storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
   }) {
-    const network = new MemoryStreamNetwork();
+    const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
+    const network = new MemoryStreamNetwork(() => clock.now);
     const stream = network.get("/agents/slack/nustom/c123/ts-111-222");
     const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
     const processor = new SlackAgentProcessor({
@@ -467,10 +533,11 @@ describe("SlackAgentProcessor", () => {
       callSlackApi: async (method, body) => {
         slackCalls.push({ body, method });
       },
+      now: () => clock.now,
       ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
     });
     const cursors = new Map<object, number>();
-    return { cursors, network, processor, slackCalls, stream };
+    return { clock, cursors, network, processor, slackCalls, stream };
   }
 
   it("turns a routed human message into triggering agent input and adds the eyes reaction", async () => {
@@ -695,6 +762,161 @@ describe("SlackAgentProcessor", () => {
         body: { channel: "C123", name: "eyes", timestamp: "111.222" },
       },
     ]);
+  });
+
+  it("repaints the status once per batch — the latest lifecycle fact wins", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // Requested and completed land in ONE batch: the status is a repaint of
+    // current truth, so only the final (cleared) status reaches Slack — no
+    // transient "is thinking..." call for a request that already finished.
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 10,
+          llmRequestId: 1,
+          provider: "openai-ws",
+          result: { status: "success" },
+        },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+      },
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("carries a behind-batch lifecycle fact to the at-head repaint", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The completion lands in a batch stamped BEHIND the head (a render/input
+    // event already followed it — the wake-lane shape), and the trailing
+    // catch-up batch that reaches head contains no lifecycle facts at all.
+    // The repaint must not lose the completion: without the carry, Slack
+    // keeps "is thinking..." and the eyes reaction forever.
+    const [completed, render] = await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 10,
+          llmRequestId: 1,
+          provider: "openai-ws",
+          result: { status: "success" },
+        },
+      },
+      {
+        // Not consumed by slack-agent: stands in for the renders/inputs that
+        // typically trail a completion.
+        type: "events.iterate.com/agent/input-added",
+        payload: { content: "render" },
+      },
+    );
+    await processor.ingest({ events: [completed!], streamMaxOffset: render!.offset });
+    expect(slackCalls).toEqual([]); // behind the head: deferred, not painted
+
+    await processor.ingest({ events: [render!], streamMaxOffset: render!.offset });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+      },
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("skips the stale 👀 ack on a late wake but still lands the agent input", async () => {
+    const { clock, cursors, processor, slackCalls, stream } = setup();
+
+    // The webhook arrived while the processor's host was down; delivery
+    // happens 16 minutes later. The durable lane (agent input) must land —
+    // the ack lane must not pretend the message was "just picked up".
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    clock.now += 16 * 60_000;
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(1);
+    expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
+  });
+
+  it("refold: replaying the full journal re-executes no Slack calls and appends nothing new", async () => {
+    // THE refold test (docs/writing-stream-processors.md, "Refold safety"):
+    // a state-schema deploy discards the checkpoint and replays the journal
+    // from offset 0 into a fresh instance. Durable lanes dedupe via
+    // idempotency keys; acknowledgement/cosmetic lanes must not re-fire.
+    const { clock, cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      payload: {
+        durationMs: 10,
+        llmRequestId: 1,
+        provider: "openai-ws",
+        result: { status: "success" },
+      },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls.length).toBeGreaterThan(0);
+    const journalBeforeRefold = stream.events.length;
+
+    clock.now += 60 * 60_000;
+    const refoldCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
+    const refolded = new SlackAgentProcessor({
+      stream,
+      callSlackApi: async (method, body) => {
+        refoldCalls.push({ body, method });
+      },
+      now: () => clock.now,
+    });
+    await deliverNewEvents({ cursors, processor: refolded, stream });
+
+    expect(refoldCalls).toEqual([]);
+    expect(stream.events).toHaveLength(journalBeforeRefold);
+    // The refolded state converged to the live processor's.
+    expect(refolded.state).toEqual(processor.state);
   });
 
   it("captures route context (including streamPath) in state without announcing anything", async () => {

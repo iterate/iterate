@@ -34,7 +34,7 @@ type DurableObjectAddressInput = {
   props?: Record<string, string>;
 };
 
-export type DurableObjectAddress = {
+type DurableObjectAddress = {
   projectId: string | null;
   path: string;
   props: Record<string, string>;

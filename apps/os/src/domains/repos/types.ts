@@ -18,6 +18,12 @@ export type RepoFileChange =
     }
   | {
       path: string;
+      /** Standard base64 of the file's raw bytes — the binary write lane
+       * (images, PDFs, …), matching the `files.put` string convention. */
+      contentBase64: string;
+    }
+  | {
+      path: string;
       delete: true;
     };
 
@@ -52,6 +58,44 @@ export type EditRepoFileInput = {
 export type EditRepoFileResult = CommitRepoFilesResult & {
   occurrenceCount: number;
   path: string;
+};
+
+/** One commit in a repo's history, as returned by `repo.log`. */
+export type RepoLogCommit = {
+  oid: string;
+  /** Full commit message, trailing newline trimmed. */
+  message: string;
+  author: { email: string; name: string };
+  /** Author timestamp in epoch milliseconds. */
+  timestamp: number;
+  /** Parent commit oids — empty for the root commit, 2+ for merges. */
+  parents: string[];
+};
+
+/** What `repo.log` returns: newest-first commits on one branch. */
+export type RepoLogResult = {
+  branch: string;
+  commits: RepoLogCommit[];
+};
+
+/** One changed file in a commit — `git diff --numstat`-shaped counts. */
+export type RepoCommitFileChange = {
+  path: string;
+  status: "added" | "deleted" | "modified";
+  /** Lines added; 0 for binary files. */
+  additions: number;
+  /** Lines removed; 0 for binary files. */
+  deletions: number;
+  /** True when either side of the diff sniffs binary (NUL byte). */
+  binary: boolean;
+};
+
+/** What `repo.commitDetails` returns: one commit's metadata plus the files it
+ * changed versus its first parent (versus an empty tree for the root commit). */
+export type RepoCommitDetails = RepoLogCommit & {
+  /** First parent oid — the diff baseline; null for the root commit. */
+  parentOid: string | null;
+  files: RepoCommitFileChange[];
 };
 
 /**

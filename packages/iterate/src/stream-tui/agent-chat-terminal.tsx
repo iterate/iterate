@@ -272,19 +272,12 @@ function ChatHeader(props: {
 
 function FeedItem(props: { item: AgentUiItem }) {
   const item = props.item;
-  switch (item.kind) {
-    case "activity":
-      return <SettledActivity activity={item} />;
-    case "user":
-    case "assistant":
-      return <Message item={item} />;
-    case "child-stream-created":
-      return <text fg={COLORS.textMuted}>✦ child stream {item.childPath}</text>;
-    case "stream-woken":
-    case "stream-paused":
-    case "stream-resumed":
-      return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
+  if (item.kind === "activity") return <SettledActivity activity={item} />;
+  if (item.kind === "user" || item.kind === "assistant") return <Message item={item} />;
+  if (item.kind === "child-stream-created") {
+    return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
   }
+  return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
 }
 
 function Message(props: { item: AgentUiMessageItem }) {

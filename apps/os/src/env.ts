@@ -62,8 +62,29 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
-  SANDBOX: DurableObjectNamespace<
-    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
+  /**
+   * Sandbox container namespaces, ONE PER INSTANCE TYPE: Cloudflare fixes the
+   * container instance type per container class, so each instance type is its own
+   * Durable Object class and binding (src/domains/sandboxes/instance-types.ts is the
+   * canonical table; the collection routes by the path's instance-type segment).
+   */
+  SANDBOX_LITE: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxLiteDurableObject
+  >;
+  SANDBOX_BASIC: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxBasicDurableObject
+  >;
+  SANDBOX_STANDARD_1: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard1DurableObject
+  >;
+  SANDBOX_STANDARD_2: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard2DurableObject
+  >;
+  SANDBOX_STANDARD_3: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard3DurableObject
+  >;
+  SANDBOX_STANDARD_4: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is
@@ -102,6 +123,14 @@ export interface Env {
    * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
    */
   FILES_BUCKET: R2Bucket;
+  /**
+   * Deploy identity (wrangler `version_metadata` binding). The stream
+   * processor hosts' crash-loop breaker keys its backoff budget on the version
+   * id so a fresh deploy — the usual antidote to a deterministic crash loop —
+   * retries immediately instead of waiting out the plateau. Optional because
+   * local dev may not provide it; read through {@link workerVersion}.
+   */
+  CF_VERSION_METADATA?: { id: string; tag?: string };
   SCHEDULER: DurableObjectNamespace<
     import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
   >;
@@ -120,3 +149,9 @@ export interface Env {
 }
 
 export const itxEnv = workerEnv as unknown as Env;
+
+/** The deploy's version id, for the processor hosts' crash-loop breaker.
+ * "unversioned" in environments without the version_metadata binding. */
+export function workerVersion(env: Env): string {
+  return env.CF_VERSION_METADATA?.id ?? "unversioned";
+}

@@ -6,7 +6,10 @@ import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,
 } from "./scheduler-processor-implementation.ts";
-import type { SchedulerProcessorState } from "./scheduler-processor-contract.ts";
+import type {
+  ScheduleSetPayload,
+  SchedulerProcessorState,
+} from "./scheduler-processor-contract.ts";
 import { SCHEDULER_HEARTBEAT_MS } from "./recurrence.ts";
 
 const T0 = Date.parse("2026-01-15T12:00:00Z");
@@ -21,7 +24,10 @@ class MemoryStream implements Stream {
   events: StreamEvent[] = [];
   failAppendsOfType: string | undefined;
 
-  constructor(readonly clock: { now: number }) {}
+  constructor(
+    readonly clock: { now: number },
+    readonly path = "/scheduler/primary",
+  ) {}
 
   async __describe() {
     return { instructions: "in-memory test stream", types: "", children: {} };
@@ -41,6 +47,7 @@ class MemoryStream implements Stream {
         ...input,
         createdAt: new Date(this.clock.now).toISOString(),
         offset: this.events.length + 1,
+        path: this.path,
       };
       this.events.push(event);
       return event;
@@ -84,11 +91,23 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
+    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
   }
 
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
+  }
+
+  async ingest(): Promise<never> {
+    throw new Error("MemoryStream does not implement ingest().");
+  }
+
+  async crossPostTo(): Promise<never> {
+    throw new Error("MemoryStream does not implement crossPostTo().");
+  }
+
+  async removeCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement removeCrossPost().");
   }
 }
 
@@ -115,7 +134,6 @@ function makeHarness(options?: {
     now: () => clock.now,
     readAlarm: async () => null,
     repointAlarm,
-    streamPath: "/scheduler/primary",
     readState: () => snapshotStore.snapshot,
     writeState: (snapshot) => {
       snapshotStore.snapshot = snapshot;
@@ -371,6 +389,41 @@ describe("triggering", () => {
     });
     expect(completed.idempotencyKey).toBe(`scheduler/trigger-completed:${triggerArg.executionId}`);
     expect(processor.state.pendingTriggers).toEqual({});
+  });
+
+  it("recovers schedule path from the defining event for legacy snapshots", async () => {
+    const snapshotStore: {
+      snapshot: StreamProcessorSnapshot<SchedulerProcessorState> | undefined;
+    } = { snapshot: undefined };
+    const harness = makeHarness({ snapshotStore });
+    const { clock, deliver, invokeCapability, processor, stream } = harness;
+    const [defined] = await stream.append(setEvent("report"));
+    const payload = defined!.payload as ScheduleSetPayload;
+    snapshotStore.snapshot = {
+      offset: defined!.offset,
+      state: {
+        pendingTriggers: {},
+        schedules: {
+          report: {
+            action: payload.action,
+            definedAtOffset: defined!.offset,
+            nextTriggerAt: T0 + 60_000,
+            recurrence: payload.recurrence,
+            runCount: 0,
+            setAt: defined!.createdAt,
+          },
+        },
+      },
+    };
+
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver();
+    await waitForCompletion(harness);
+
+    const call = vi.mocked(invokeCapability).mock.calls[0]![0];
+    const [scheduleArg] = call.args as [Record<string, unknown>];
+    expect(scheduleArg).toMatchObject({ key: "report", path: stream.path });
   });
 
   it("records a throwing script as outcome=failed and keeps the recurrence alive", async () => {

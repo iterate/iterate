@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { itxForScope } from "../../rpc-targets.ts";
+import { deploymentItxForTrustedInternal, itxForScope } from "../../rpc-targets.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import {
   takeWorkerFetchDispatch,
@@ -24,6 +24,14 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
     const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    if (projectId === null) {
+      // The deployment-global scope: what a GLOBAL (projectId: null) stream's
+      // delivery dial evaluates expressions against. It is the same root a
+      // trusted-internal session sees — deployment-wide repos/streams — so a
+      // global repo stream's wake expression walks the identical shape a
+      // project stream's does.
+      return deploymentItxForTrustedInternal({ ctx: this.ctx });
+    }
     return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
   }
 
@@ -52,6 +60,9 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       );
     }
     const { projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    if (projectId === null) {
+      return new Response("the global itx scope has no workers to dispatch to", { status: 400 });
+    }
     // A worker reached through this lane runs in the itx scope of its own
     // path, mirroring project.workers.get (DynamicWorkerRpcTarget#runner).
     const runner = new DynamicWorkerRunner({

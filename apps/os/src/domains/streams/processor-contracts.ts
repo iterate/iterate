@@ -21,10 +21,24 @@ import {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/** One owned event: its payload schema plus optional human description. */
+/**
+ * One documented example payload for an owned event, rendered on the public
+ * event docs site (events.iterate.com). The payload must parse against the
+ * event's `payloadSchema` — enforced by the event-docs unit tests rather than
+ * at module load, so a bad example fails CI instead of bricking a worker boot.
+ */
+export type EventExample = {
+  /** What this example shows, e.g. "Push delivery to another stream's ingest". */
+  description: string;
+  /** The example payload, in the payload schema's input shape. */
+  payload: unknown;
+};
+
+/** One owned event: its payload schema plus optional human description and examples. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
+  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */
@@ -293,10 +307,7 @@ type ProcessorContractParseEventInput<
  * `{ description, payloadSchema }` values keyed by the event type string, so
  * replay and live delivery share one validation path.
  */
-export function getEventSchema<
-  const Type extends string,
-  const PayloadSchema extends z.ZodType,
->(args: {
+function getEventSchema<const Type extends string, const PayloadSchema extends z.ZodType>(args: {
   type: Type;
   payloadSchema: PayloadSchema;
 }): z.ZodType<
@@ -311,6 +322,7 @@ export function getEventSchema<
     idempotencyKey: StreamEventSchema.shape.idempotencyKey,
     offset: StreamEventSchema.shape.offset,
     createdAt: StreamEventSchema.shape.createdAt,
+    path: StreamEventSchema.shape.path,
   }) as unknown as z.ZodType<
     TypedStreamEvent<Type, z.output<PayloadSchema>>,
     TypedStreamEvent<Type, z.input<PayloadSchema>>
@@ -358,6 +370,39 @@ export function getEventInputSchema<
  * builders in `utils.ts`); contracts expose it pre-bound as
  * `contract.buildEvent(...)`.
  */
+
+/**
+ * Memoized twins of {@link getEventSchema} / {@link getEventInputSchema} for
+ * hot paths. Constructing the zod wrapper per call costs ~20µs (~50x the
+ * parse itself), and the reduce/append paths run once per event. Keyed by
+ * payload-schema identity, then event type: catalog entries are module
+ * constants, so the WeakMap never grows past the contract surface.
+ */
+const eventSchemaCache = new WeakMap<z.ZodType, Map<string, z.ZodType>>();
+
+function cachedSchema(
+  cache: WeakMap<z.ZodType, Map<string, z.ZodType>>,
+  build: (args: { type: string; payloadSchema: z.ZodType }) => z.ZodType,
+  args: { type: string; payloadSchema: z.ZodType },
+): z.ZodType {
+  let byType = cache.get(args.payloadSchema);
+  if (byType === undefined) {
+    byType = new Map();
+    cache.set(args.payloadSchema, byType);
+  }
+  let schema = byType.get(args.type);
+  if (schema === undefined) {
+    schema = build(args);
+    byType.set(args.type, schema);
+  }
+  return schema;
+}
+
+/** Memoized {@link getEventSchema} (see {@link eventSchemaCache}). */
+export function cachedEventSchema(args: { type: string; payloadSchema: z.ZodType }): z.ZodType {
+  return cachedSchema(eventSchemaCache, getEventSchema, args);
+}
+
 export function buildEvent<
   const Contract extends {
     slug?: string;
@@ -476,6 +521,7 @@ function makeContractEventParser(
     parse(value: unknown): unknown;
   },
 ) {
+  const parserCache = new Map<string, { parse(value: unknown): unknown }>();
   return (typeOrEvent: string | { type: string }, maybeEvent?: { type: string }) => {
     const eventType = typeof typeOrEvent === "string" ? typeOrEvent : typeOrEvent.type;
     const event = typeof typeOrEvent === "string" ? maybeEvent : typeOrEvent;
@@ -488,9 +534,15 @@ function makeContractEventParser(
         `Processor "${getProcessorSlug(contract)}" cannot parse unresolved event "${eventType}".`,
       );
     }
-    return schemaFor({ type: eventType, payloadSchema: eventDefinition.payloadSchema }).parse(
-      event,
-    );
+    // Memoized: contract.parseEventInput runs inside the synchronous append
+    // turn (core policy validation), where per-call schema construction was
+    // measurable.
+    let schema = parserCache.get(eventType);
+    if (schema === undefined) {
+      schema = schemaFor({ type: eventType, payloadSchema: eventDefinition.payloadSchema });
+      parserCache.set(eventType, schema);
+    }
+    return schema.parse(event);
   };
 }
 

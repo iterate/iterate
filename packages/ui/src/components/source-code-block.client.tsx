@@ -4,8 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { basicSetup, EditorView } from "codemirror";
 import { json } from "@codemirror/lang-json";
+import { json5 } from "codemirror-json5";
 import { javascript } from "@codemirror/lang-javascript";
 import { yaml } from "@codemirror/lang-yaml";
+import { markdown } from "@codemirror/lang-markdown";
+import { html } from "@codemirror/lang-html";
+import { sql } from "@codemirror/lang-sql";
 import { foldService } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
@@ -38,6 +42,11 @@ function CodeMirror({
 }: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // Handoff between the rebuild effect's cleanup (which destroys the old
+  // view) and the next effect body (which restores into the new one).
+  const preservedViewStateRef = useRef<{ state: EditorView["state"]; hadFocus: boolean } | null>(
+    null,
+  );
   const onChangeRef = useRef(onChange);
   const onModEnterRef = useRef(onModEnter);
   const initialSelectAllSignalRef = useRef(selectAllSignal);
@@ -57,6 +66,14 @@ function CodeMirror({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // Extension changes (e.g. a lint schema arriving, diff mode toggling)
+    // rebuild the whole view. The previous effect's CLEANUP has already
+    // destroyed it by the time this body runs, so restoration state comes
+    // from the stash the cleanup left behind — carrying selection and focus
+    // over so a rebuild mid-edit doesn't dump the user's cursor (or send
+    // their keystrokes to <body>).
+    const preserved = preservedViewStateRef.current;
+    preservedViewStateRef.current = null;
     viewRef.current?.destroy();
 
     const view = new EditorView({
@@ -92,6 +109,10 @@ function CodeMirror({
     });
 
     viewRef.current = view;
+    if (preserved !== null && preserved.state.doc.eq(view.state.doc)) {
+      view.dispatch({ selection: preserved.state.selection, scrollIntoView: true });
+      if (preserved.hadFocus) view.focus();
+    }
     if (
       latestSelectAllSignalRef.current !== undefined &&
       latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
@@ -125,7 +146,12 @@ function CodeMirror({
 
     return () => {
       view.dom.removeEventListener("keydown", handleKeyDown);
-      viewRef.current?.destroy();
+      const current = viewRef.current;
+      if (current !== null) {
+        // Stash for the rebuild that may immediately follow (see above).
+        preservedViewStateRef.current = { state: current.state, hadFocus: current.hasFocus };
+      }
+      current?.destroy();
       viewRef.current = null;
     };
   }, [editable, extensions]);
@@ -177,10 +203,50 @@ function selectAll(view: EditorView) {
   });
 }
 
+export type SourceCodeLanguage =
+  | "typescript"
+  | "javascript"
+  | "json"
+  | "jsonc"
+  | "yaml"
+  | "markdown"
+  | "html"
+  | "sql"
+  | "text";
+
+/** The CodeMirror language extension for a {@link SourceCodeLanguage}. */
+export function sourceCodeLanguageExtension(
+  language: SourceCodeLanguage,
+): SourceCodeBlockExtension {
+  switch (language) {
+    case "typescript":
+      return javascript({ jsx: true, typescript: true });
+    case "javascript":
+      return javascript({ jsx: true });
+    case "json":
+      return json();
+    case "jsonc":
+      // JSON-with-comments (tsconfig & friends). The json5 grammar is a
+      // superset of jsonc, so comments and trailing commas parse cleanly;
+      // strict parse linting stays a caller concern, as with every language.
+      return json5();
+    case "yaml":
+      return yaml();
+    case "markdown":
+      return markdown();
+    case "html":
+      return html();
+    case "sql":
+      return sql();
+    case "text":
+      return [];
+  }
+}
+
 export interface SourceCodeBlockProps {
   code: string;
   className?: string;
-  language?: "typescript" | "json" | "yaml" | "text";
+  language?: SourceCodeLanguage;
   showCopyButton?: boolean;
   showLineNumbers?: boolean;
   plainChrome?: boolean;
@@ -209,14 +275,7 @@ export function SourceCodeBlock({
   const [copied, setCopied] = useState(false);
 
   const extensions = useMemo<CodeMirrorProps["extensions"]>(() => {
-    const languageExtension =
-      language === "json"
-        ? json()
-        : language === "yaml"
-          ? yaml()
-          : language === "typescript"
-            ? javascript({ typescript: true })
-            : [];
+    const languageExtension = sourceCodeLanguageExtension(language);
 
     return [
       basicSetup,
@@ -227,7 +286,9 @@ export function SourceCodeBlock({
       keymap.of(searchKeymap),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
-      !showLineNumbers || plainChrome
+      // Orthogonal on purpose: plainChrome strips the visual chrome (border,
+      // highlights), showLineNumbers alone decides the gutter.
+      !showLineNumbers
         ? EditorView.theme({
             ".cm-gutters": {
               display: "none",

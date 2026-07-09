@@ -116,6 +116,111 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
+  it("spills an oversized script result to a workspace file and references it", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    const result = { items: "x".repeat(50_000) };
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    // The scratch dir self-ignores so `git.add({ filepath: "." })` never
+    // commits spills to the workspace branch.
+    expect(writes.map((write) => write.path)).toEqual([
+      "/script-results/.gitignore",
+      "/script-results/agent-output-7.json",
+    ]);
+    expect(writes[0]!.content).toBe("*\n");
+    expect(writes[1]!.content).toBe(JSON.stringify(result, null, 2));
+
+    const input = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    const content = input?.payload?.content as string;
+    expect(content).toContain("Your script returned");
+    expect(content).toContain('saved in your workspace at "/script-results/agent-output-7.json"');
+    expect(content).toContain('itx.workspace.readFile("/script-results/agent-output-7.json")');
+    // The inline preview stays bounded: head slice, not the whole result.
+    expect(content.length).toBeLessThan(32_000);
+  });
+
+  it("spills a multi-megabyte result as ONE file (R2 handles the size)", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    // Well past the workspace inline threshold — the workspace spills the
+    // file to R2 itself, so no splitting happens here.
+    const result = "x".repeat(9_200_000);
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const files = writes.filter((write) => !write.path.endsWith(".gitignore"));
+    expect(files.map((write) => write.path)).toEqual(["/script-results/agent-output-7.json"]);
+    expect(files[0]!.content).toBe(JSON.stringify(result, null, 2));
+  });
+
+  it("falls back to inline truncation when the workspace spill fails", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async () => {
+        throw new Error("workspace unavailable");
+      },
+    });
+
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: { items: "x".repeat(50_000) } },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const content = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    )?.payload?.content as string;
+    expect(content).toMatch(/truncated \(\d+ chars total — return less/);
+    expect(content).not.toContain("saved in your workspace");
+  });
+
+  it("does not spill small script results", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: { ok: true } },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    expect(writes).toEqual([]);
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toBe(true);
+  });
+
   it("tracks in-progress script executions in reduced state", async () => {
     const stream = new MemoryStream();
     await stream.append({
@@ -290,6 +395,30 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
+  it("extracts the whole script when a string literal embeds a markdown fence", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+
+    // Mirrors a prd incident (agents/web/2026-07-09t14-21-45-359z): a chat
+    // message formatted as markdown puts ``` inside the script's string
+    // literal; extraction must not cut the script at that inner fence.
+    const script = [
+      "async (itx) => {",
+      '  await itx.chat.sendMessage("Tail:\\n```text\\n" + "0123456789".slice(-4) + "\\n```");',
+      "}",
+    ].join("\n");
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: `Reading the saved output now.\n\n\`\`\`js\n${script}\n\`\`\`` },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    const requested = stream.events.find(
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(requested?.payload?.code).toBe(script);
+  });
+
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream });
@@ -363,13 +492,13 @@ describe("minimal web-chat agent processors", () => {
       },
     );
 
-    // First chunk delivers only input one; its batch appends the scheduled
-    // event at offset 3. The second chunk delivers only input two — a batch
-    // that predates the scheduled event, so state still shows no current
-    // request. The generation-keyed idempotency collapses the re-derived
-    // schedule into the event already on the stream.
+    // The first chunk is BEHIND the head (input two exists past it), so the
+    // at-head gate defers scheduling entirely; the second chunk reaches the
+    // head and derives exactly one scheduled event for both inputs. The
+    // generation-keyed idempotency remains the second line of defense for
+    // batches that raced to the same derivation.
     await agent.ingest({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
-    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 3 });
+    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 2 });
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -601,7 +730,10 @@ describe("minimal web-chat agent processors", () => {
           { type: "response.output_text.delta", delta: "\n```" },
           {
             type: "response.completed",
-            response: { id: "resp_1", usage: { total_tokens: 7 } },
+            // The real API sends incomplete_details as an explicit null on
+            // completed responses; a schema that rejects null here makes the
+            // consumer skip the terminal frame and wait forever.
+            response: { id: "resp_1", incomplete_details: null, usage: { total_tokens: 7 } },
           },
         ]);
         sockets.push(socket);
@@ -640,6 +772,48 @@ describe("minimal web-chat agent processors", () => {
       result: { status: "success", usage: { total_tokens: 7 } },
     });
     expect(output.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
+  });
+
+  it("fails an openai-ws request that ends incomplete instead of keeping partial output", async () => {
+    const stream = new MemoryStream();
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () =>
+        fakeResponsesWebSocket(() => [
+          { type: "response.output_text.delta", delta: '```js\nasync (itx) => { const s = "cut' },
+          {
+            type: "response.incomplete",
+            response: {
+              id: "resp_1",
+              incomplete_details: { reason: "max_output_tokens" },
+              status: "incomplete",
+              usage: { total_tokens: 9 },
+            },
+          },
+        ]),
+      readStreamEvents: () => stream.getEvents(),
+    });
+
+    await stream.append(...openAiWsRequestEvents("hello over ws"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    const completed = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    expect(completed.payload).toMatchObject({
+      provider: "openai-ws",
+      result: {
+        status: "failure",
+        error: { message: expect.stringContaining("max_output_tokens") },
+      },
+    });
+    // A truncated response must never become an assistant turn — executing a
+    // prefix of a script is worse than failing the request and retrying.
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/output-added"),
+    ).toBe(false);
   });
 
   it("retries openai-ws once with full input when a previous response id expires", async () => {
@@ -942,11 +1116,12 @@ describe("minimal web-chat agent processors", () => {
       },
       readStreamEvents: () => stream.getEvents(),
     });
-    // Deliver only the STARTED event (the requested event is before the
-    // checkpoint of a caught-up-but-restarted instance in the real incident;
-    // any batch works — the sweep reads folded state, not the batch).
+    // Deliver the dead incarnation's events; the fold shows the obligation at
+    // `started` and the reconciler settles it WITHOUT starting an attempt
+    // (started + nobody live = orphaned, never re-driven — hence the throwing
+    // websocket factory above proving no dial happens).
     await openAiWs.ingest({
-      events: stream.events.filter((event) => event.offset > requested!.offset),
+      events: stream.events,
       streamMaxOffset: stream.events.length,
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
