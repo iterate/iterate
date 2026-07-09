@@ -142,7 +142,10 @@ export class ProjectProcessor extends StreamProcessor<
                     // The key crossPostTo would pick for destination "/", so
                     // `removeCrossPost({ path: "/" })` can manage this rule.
                     subscriptionKey: "cross-post:/",
-                    delivery: { mode: "push", expression: ["streams", ["get", "/"], "ingest"] },
+                    delivery: {
+                      mode: "push",
+                      expression: ["streams", ["get", "/"], "acceptCrossPost"],
+                    },
                     deliver: "all",
                   },
                 },
