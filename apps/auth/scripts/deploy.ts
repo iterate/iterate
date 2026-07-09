@@ -59,8 +59,6 @@ export default async function deploy(
     // projectDirectoryKvId is not auth's concern.
     resources: (env) => ({ authDbId: env.resources.authDbId }),
     requiredSecrets: REQUIRED_SECRETS,
-    // auth has no Durable Object classes.
-    hasDurableObjects: false,
     prepare: (ctx, secretValues, credentials) => {
       // ---- Derived runtime values ------------------------------------------
       // Derived: an explicit Doppler value wins; otherwise the platform default.

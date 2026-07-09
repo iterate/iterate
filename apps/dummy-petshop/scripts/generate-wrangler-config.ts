@@ -47,7 +47,9 @@ const config = {
   name: "dummy-petshop",
   main: "./src/worker.ts",
   compatibility_date: "2026-06-17",
-  migrations: [{ tag: "v1", new_sqlite_classes: ["PetshopStateDurableObject"] }],
+  // Declarative DO lifecycle — the server reconciles this against live
+  // namespaces per deploy, no tag history (see apps/os DO_EXPORTS).
+  exports: { PetshopStateDurableObject: { type: "durable-object", storage: "sqlite" } },
   // Local dev seals with a fixed key ("dummy-petshop-local-dev-seal-key"):
   // the shop holds only fake data, and a stable key beats per-run Doppler
   // plumbing. Deployed envs get a real secret via --secrets-file instead.

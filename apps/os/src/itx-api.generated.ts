@@ -411,6 +411,8 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
+  /** The platform's default agent policy, as data. */
+  defaults: AgentDefaults;
 }
 
 /**
@@ -756,8 +758,13 @@ export interface Repo {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * Public repositories transfer server-side (any history size); private
+   * ones transfer in-process, where big histories need `depth`. `depth`
+   * prunes to the newest N commits — GitHub retains the full history, and a
+   * later deeper sync can always widen the window.
    */
-  syncFromGithub(input: { force?: boolean }): Promise<GithubSyncResult>;
+  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: StreamProcessorRpc<RepoProcessorState>;
 }
@@ -805,7 +812,16 @@ export interface WorkspaceCollection {
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  processEvent(input: { event: StreamEvent }): Promise<void>;
+  /**
+   * Checkpointed event delivery: every project-scoped stream pumps its
+   * committed events here (see ProjectWorkerDelivery). Batches arrive in
+   * per-stream order, at-least-once — each event carries the `path` of the
+   * stream it lives on, so `${event.path}@${event.offset}` identifies a
+   * delivery globally and is the idempotency-key idiom for reactions. The
+   * stream only advances its checkpoint when this resolves; throwing means
+   * the whole batch is redelivered later.
+   */
+  processEventBatch(batch: StreamEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
@@ -848,11 +864,16 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
+      workerDelivery: {
+        checkpoint: number;
+        consecutiveFailures: number;
+        retryScheduled: boolean;
+      } | null;
     };
   }>;
   /**
@@ -871,6 +892,25 @@ export interface Stream {
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle>;
+}
+
+/**
+ * The `itx.agents.defaults` built-in: default agent POLICY as data. The
+ * project worker owns applying it — the seeded template reacts to
+ * `stream/child-stream-created` for `/agents/**` by appending
+ * `forPath(path).events` to the new agent stream (and edits the result to
+ * customize agents). The platform appends only mechanics (processor
+ * subscriptions); an agent nobody configures runs on stock defaults.
+ */
+export interface AgentDefaults {
+  __describe(): Promise<Description>;
+  /**
+   * The default policy for one agent path: the named pieces plus the exact
+   * event batch that applies them. Events are idempotency-keyed on
+   * (projectId, path), so appending them twice — or racing a redelivery — is
+   * a no-op.
+   */
+  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1682,6 +1722,20 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
+/**
+ * Batch delivered to stream processors and live subscribers.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
+};
+
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1783,6 +1837,22 @@ export type FlattenedCapabilityInvocation = {
 
 /** Durable expression over the project ITX surface. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
+
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  provider?: AgentLlmProvider;
+  model?: string;
+};
+
+/** The default policy for one agent path: the named pieces plus the exact
+ * event batch that applies them (idempotency-keyed, safe to re-append). */
+export type AgentDefaultPolicy = {
+  systemPrompt: string;
+  provider: AgentLlmProvider;
+  model: string;
+  events: AgentPolicyEventInput[];
+};
 
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
@@ -1974,22 +2044,19 @@ export type WorkspaceFileInfo = {
   updatedAt: number;
 };
 
-/**
- * Batch delivered to stream processors and live subscribers.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
- */
-export type StreamEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  state: unknown;
-};
-
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
+
+export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
+
+/** The policy events an agent is born with, as append inputs. Typed
+ * structurally (not against the full event catalog) so the SDK projection
+ * stays self-contained. */
+export type AgentPolicyEventInput = {
+  type: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+};
 
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;

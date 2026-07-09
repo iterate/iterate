@@ -101,7 +101,7 @@ export class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
+    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
   }
 
   async subscribe(): Promise<never> {
