@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -360,7 +361,14 @@ function AddRepoFromGithubWizard({
         ) : null}
       </Field>
 
-      <DialogFooter showCloseButton>
+      {/* Close is hand-rolled rather than DialogFooter's showCloseButton:
+          that one renders a type-less <button>, which inside this form
+          defaults to type="submit" — Close would run the whole
+          create→link→sync flow. */}
+      <DialogFooter>
+        <DialogClose render={<Button type="button" variant="outline" size="sm" />}>
+          Close
+        </DialogClose>
         <Button
           type="submit"
           size="sm"
