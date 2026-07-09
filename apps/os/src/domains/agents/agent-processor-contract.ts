@@ -145,7 +145,53 @@ const ChatMessage = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   files: z.array(AgentFileAttachment).optional(),
+  /**
+   * Offset of the stream event this entry was reduced from. Internal
+   * compaction bookkeeping — folding `compaction-completed` drops entries
+   * below its `firstKeptOffset` — and stripped before every provider call.
+   * Optional because checkpoints written before compaction existed carry
+   * untagged entries (treated as oldest, i.e. always summarizable).
+   */
+  offset: z.number().int().positive().optional(),
+  /**
+   * Marks the synthetic checkpoint message a compaction prepends. Untagged
+   * with an offset so the next compaction always rolls it into the new
+   * checkpoint instead of keeping both.
+   */
+  summary: z.literal(true).optional(),
 });
+
+/**
+ * Provider-reported token usage on a successful `llm-request-completed`.
+ * Loose by design: Workers AI reports `prompt/completion_tokens`, the OpenAI
+ * Responses API `input/output_tokens`, both report `total_tokens`, and extra
+ * vendor fields ride along. The event schema wraps this in `.catch(undefined)`
+ * so an unrecognizable usage shape degrades to "no usage" instead of making
+ * the completion event unparseable (which would wedge the agent's
+ * currentRequest forever).
+ */
+export const LlmUsage = z.looseObject({
+  completion_tokens: z.number().optional(),
+  input_tokens: z.number().optional(),
+  output_tokens: z.number().optional(),
+  prompt_tokens: z.number().optional(),
+  total_tokens: z.number().optional(),
+});
+export type LlmUsage = z.infer<typeof LlmUsage>;
+
+/** Total tokens the provider says the request consumed, or null when the
+ * usage shape carries no usable total. */
+export function totalTokensFromUsage(usage: LlmUsage | undefined): number | null {
+  if (usage === undefined) return null;
+  if (typeof usage.total_tokens === "number") return usage.total_tokens;
+  if (typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number") {
+    return usage.input_tokens + usage.output_tokens;
+  }
+  if (typeof usage.prompt_tokens === "number" && typeof usage.completion_tokens === "number") {
+    return usage.prompt_tokens + usage.completion_tokens;
+  }
+  return null;
+}
 
 const LlmRequestPolicy = z
   .discriminatedUnion("behaviour", [
@@ -157,7 +203,7 @@ const LlmRequestPolicy = z
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.3.1",
+  version: "0.4.0",
   description:
     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
   stateSchema: z.object({
@@ -166,6 +212,9 @@ export const AgentProcessorContract = defineProcessorContract({
     llmConfig: z
       .object({
         model: z.string().min(1),
+        /** Overrides the model-derived context window (see
+         * agent-compaction.ts `contextWindowForModel`) for this agent. */
+        contextWindowTokens: z.number().int().positive().optional(),
       })
       .default({ model: DEFAULT_AGENT_MODEL }),
     llmProvider: AgentLlmProvider.default("cloudflare-ai"),
@@ -176,12 +225,52 @@ export const AgentProcessorContract = defineProcessorContract({
           phase: z.literal("scheduled"),
           requestId: z.string(),
           scheduledOffset: z.number().int().positive(),
+          /** Present when this is a compaction summarization request, whose
+           * output becomes `compaction-completed` instead of chat history. */
+          purpose: z.literal("compaction").optional(),
         }),
         z.object({
           phase: z.literal("requested"),
           llmRequestId: z.number().int().positive(),
+          purpose: z.literal("compaction").optional(),
         }),
       ])
+      .nullable()
+      .default(null),
+    /**
+     * Token usage the provider reported for the newest completed CHAT request
+     * (compaction requests are excluded — their usage measures the summary
+     * prompt, not the conversation). The compaction trigger extrapolates from
+     * this: usage total + chars/4 of history added since. Cleared when a
+     * compaction folds, so another compaction can only trigger after a fresh
+     * post-compaction measurement — the thrash guard.
+     */
+    lastUsage: z
+      .object({
+        llmRequestId: z.number().int().positive(),
+        totalTokens: z.number().int().nonnegative(),
+      })
+      .nullable()
+      .default(null),
+    /** The compaction currently awaiting its summarization result. */
+    pendingCompaction: z
+      .object({
+        requestedOffset: z.number().int().positive(),
+        firstKeptOffset: z.number().int().positive(),
+        tokensBefore: z.number().int().nonnegative(),
+      })
+      .nullable()
+      .default(null),
+    /**
+     * The usage measurement the last compaction attempt was based on. One
+     * attempt per measurement: a failed (or cancelled) compaction does not
+     * retry until the next chat completion reports fresh usage, so a broken
+     * summarizer degrades to "no compaction" instead of a retry loop.
+     */
+    lastCompactionAttempt: z
+      .object({
+        usageLlmRequestId: z.number().int().nonnegative(),
+      })
       .nullable()
       .default(null),
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
@@ -264,6 +353,9 @@ export const AgentProcessorContract = defineProcessorContract({
         ifUnset: z.boolean().optional(),
         model: z.string().min(1),
         provider: AgentLlmProvider,
+        /** Optional context-window override for agents whose model is not in
+         * the built-in map (see agent-compaction.ts). */
+        contextWindowTokens: z.number().int().positive().optional(),
       }),
     },
     "events.iterate.com/agent/llm-request-scheduled": {
@@ -273,6 +365,7 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
         provider: AgentLlmProvider,
         requestId: z.string(),
+        purpose: z.literal("compaction").optional(),
       }),
     },
     "events.iterate.com/agent/llm-request-requested": {
@@ -282,6 +375,10 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
         provider: AgentLlmProvider,
         requestId: z.string(),
+        /** Compaction requests get the summarization prompt instead of the
+         * chat history (see buildAgentLlmRequestBody), and their output folds
+         * into `compaction-completed` instead of chat history. */
+        purpose: z.literal("compaction").optional(),
       }),
     },
     "events.iterate.com/agent/llm-request-completed": {
@@ -294,7 +391,7 @@ export const AgentProcessorContract = defineProcessorContract({
           z.object({
             rawResponse: z.unknown().optional(),
             status: z.literal("success"),
-            usage: z.unknown().optional(),
+            usage: LlmUsage.optional().catch(undefined),
           }),
           z.object({
             error: z.object({ message: z.string() }),
@@ -302,6 +399,36 @@ export const AgentProcessorContract = defineProcessorContract({
             status: z.literal("failure"),
           }),
         ]),
+      }),
+    },
+    "events.iterate.com/agent/compaction-requested": {
+      description:
+        "The agent decided to compact its context: summarize history entries older than firstKeptOffset into a checkpoint.",
+      payloadSchema: z.object({
+        reason: z.enum(["manual", "threshold", "overflow"]),
+        instructions: z.string().optional(),
+        /** History entries reduced from events at/after this offset stay
+         * verbatim; everything older is summarized. */
+        firstKeptOffset: z.number().int().positive(),
+        /** Estimated context size (tokens) that triggered the compaction. */
+        tokensBefore: z.number().int().nonnegative(),
+      }),
+    },
+    "events.iterate.com/agent/compaction-completed": {
+      description:
+        "A compaction summarization finished. The reducer drops history entries below firstKeptOffset and prepends the checkpoint summary.",
+      payloadSchema: z.object({
+        summary: z.string().min(1),
+        firstKeptOffset: z.number().int().positive(),
+        tokensBefore: z.number().int().nonnegative(),
+      }),
+    },
+    "events.iterate.com/agent/compaction-failed": {
+      description:
+        "A compaction summarization failed; history is left untouched and no retry happens until fresh usage is reported.",
+      payloadSchema: z.object({
+        error: z.object({ message: z.string() }),
+        requestedOffset: z.number().int().positive(),
       }),
     },
     "events.iterate.com/agent/llm-request-cancelled": {
@@ -343,6 +470,9 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
+    "events.iterate.com/agent/compaction-requested",
+    "events.iterate.com/agent/compaction-completed",
+    "events.iterate.com/agent/compaction-failed",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
   ],
@@ -353,6 +483,9 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
+    "events.iterate.com/agent/compaction-requested",
+    "events.iterate.com/agent/compaction-completed",
+    "events.iterate.com/agent/compaction-failed",
     "events.iterate.com/capability-host/script-execution-requested",
   ],
 });

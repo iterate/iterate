@@ -1491,14 +1491,28 @@ export type AgentProcessorState = {
     files?:
       | { contentType: string; filename: string; path: string; size: number; url: string }[]
       | undefined;
+    offset?: number | undefined;
+    summary?: true | undefined;
   }[];
-  llmConfig: { model: string };
+  llmConfig: { model: string; contextWindowTokens?: number | undefined };
   llmProvider: "cloudflare-ai" | "openai-ws";
   llmProviderConfigured: boolean;
   currentRequest:
-    | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number }
+    | {
+        phase: "scheduled";
+        requestId: string;
+        scheduledOffset: number;
+        purpose?: "compaction" | undefined;
+      }
+    | { phase: "requested"; llmRequestId: number; purpose?: "compaction" | undefined }
     | null;
+  lastUsage: { llmRequestId: number; totalTokens: number } | null;
+  pendingCompaction: {
+    requestedOffset: number;
+    firstKeptOffset: number;
+    tokensBefore: number;
+  } | null;
+  lastCompactionAttempt: { usageLlmRequestId: number } | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;

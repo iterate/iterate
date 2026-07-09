@@ -79,6 +79,15 @@ export class OpenAiWsProcessor extends StreamProcessor<
    */
   #connection: OpenAiWsConnection | null = null;
   #previousResponseId: string | null = null;
+  /**
+   * How many compaction boundaries the request body that produced
+   * `#previousResponseId` had folded in. Server-side continuation holds the
+   * FULL pre-compaction context, so once the agent compacts (compactionCount
+   * changes) the stored id is useless — reusing it would keep the uncompacted
+   * history (and its token bill) alive on the server and re-trigger
+   * compaction forever. Mismatch ⇒ full resend.
+   */
+  #previousResponseIdCompactionCount = 0;
 
   /**
    * Serializes LLM executions on this instance. Only executions queue behind
@@ -209,7 +218,15 @@ export class OpenAiWsProcessor extends StreamProcessor<
         events: await this.deps.readStreamEvents(),
         llmRequestId,
       });
-      const attemptedPreviousResponseId = this.#previousResponseId;
+      // Continuation only carries a CHAT conversation forward: a compaction
+      // request is a separate one-shot conversation, and a stored id from
+      // before a compaction boundary must not resurrect the uncompacted
+      // server-side context (see #previousResponseIdCompactionCount).
+      const attemptedPreviousResponseId =
+        body.purpose === "compaction" ||
+        this.#previousResponseIdCompactionCount !== body.compactionCount
+          ? null
+          : this.#previousResponseId;
       let completion;
       try {
         completion = await this.#withRequestDeadline(
@@ -248,7 +265,12 @@ export class OpenAiWsProcessor extends StreamProcessor<
           idempotencyKey: `openai-ws/agent-output-added@${llmRequestId}`,
           payload: { content: completion.text, llmRequestId },
         });
-        if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
+        // A compaction response's id is never stored: it continues the
+        // summarization conversation, not the chat.
+        if (completion.responseId !== undefined && body.purpose !== "compaction") {
+          this.#previousResponseId = completion.responseId;
+          this.#previousResponseIdCompactionCount = body.compactionCount;
+        }
       }
 
       await this.#appendCompletion({ durationMs, llmRequestId, result: providerResult });

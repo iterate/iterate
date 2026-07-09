@@ -7,7 +7,7 @@ size: large
 
 ## Status summary
 
-POC in progress. Research phase done (survey of pi, opencode, codex, Claude Code compaction implementations — see "Prior art" below). This PR is a proof-of-concept of the core mechanism: compaction expressed as stream events folded by the agent reducer, triggered by provider-reported token usage. Tier-1 pruning, the deterministic script ledger, and snippets-catalogue promotion are specced but deliberately out of scope for the POC.
+POC implemented (2026-07-09): all checklist items done, typecheck/lint/tests green. Compaction is three new agent events (`compaction-requested/completed/failed`) folded by the agent reducer; the summarization call rides the existing llm-request pipeline as a `purpose: "compaction"` request, so both providers work unchanged (openai-ws additionally resets `previous_response_id` across the boundary). Trigger = typed provider usage + chars/4 extrapolation vs per-model window − 24k reserve, checked only in settle. Main missing pieces are the specced follow-ups (tier-1 pruning, manual `/compact`, overflow recovery); see "Implementation log" for mechanics and tradeoffs.
 
 ## Why
 
@@ -70,13 +70,13 @@ Consensus we adopt: usage-based trigger with headroom, keep-recent-verbatim + su
 
 ## POC checklist
 
-- [ ] Typed `usage` on `llm-request-completed` + per-model context window map + `estimateTokens` (chars/4) helper
-- [ ] `compaction-requested` / `compaction-completed` events in `agent-processor-contract.ts`
-- [ ] Reducer: source-offset tagging on history entries; fold `compaction-completed` (drop older, prepend summary message)
-- [ ] Threshold trigger in settle logic (append `compaction-requested` when over budget; thrash guard)
-- [ ] Summarization step: on `compaction-requested`, serialize the span, run summary LLM call, append `compaction-completed`
-- [ ] OpenAI WS provider: full resend (reset `previous_response_id`) after a compaction boundary
-- [ ] Tests in the existing `agent-processors.test.ts` style: reducer fold, trigger, end-to-end compact-then-continue
+- [x] Typed `usage` on `llm-request-completed` + per-model context window map + `estimateTokens` (chars/4) helper — _`LlmUsage` (+`totalTokensFromUsage`) in agent-processor-contract.ts, wrapped in `.catch(undefined)` so a weird usage shape degrades instead of wedging the completion event; window map + estimator in agent-compaction.ts; per-agent override via `llm-provider-selected.contextWindowTokens` → `llmConfig.contextWindowTokens`_
+- [x] `compaction-requested` / `compaction-completed` events in `agent-processor-contract.ts` — _plus `compaction-failed` (the "journal a failure event" guardrail); `firstKeptOffset`/`tokensBefore` are computed at request time and carried on the events so fold and serialization can't disagree_
+- [x] Reducer: source-offset tagging on history entries; fold `compaction-completed` (drop older, prepend summary message) — _`ChatMessage.offset` + `summary` internal fields, stripped in `buildLlmChatRequest`; the prepended checkpoint carries no offset so the next compaction always rolls it forward_
+- [x] Threshold trigger in settle logic (append `compaction-requested` when over budget; thrash guard) — _`planCompaction` in agent-compaction.ts, called from `#settleLlmRequestScheduling` before scheduling; guards: pendingCompaction, one-attempt-per-usage-measurement (`lastCompactionAttempt`), `lastUsage` cleared on fold, min 1k-token span_
+- [x] Summarization step: on `compaction-requested`, serialize the span, run summary LLM call, append `compaction-completed` — _a `purpose: "compaction"` llm-request through the normal pipeline; `buildAgentLlmRequestBody` swaps in the compaction prompt, the agent turns its `output-added` into `compaction-completed` (never script execution)_
+- [x] OpenAI WS provider: full resend (reset `previous_response_id`) after a compaction boundary — _body carries `compactionCount`; the provider stores the count with the response id and nulls continuation on mismatch (and never stores a compaction response's id)_
+- [x] Tests in the existing `agent-processors.test.ts` style: reducer fold, trigger, end-to-end compact-then-continue — _agent-compaction.test.ts: 9 specs incl. cloudflare-ai compact-then-continue and openai-ws full-resend e2e_
 
 ## Follow-ups (out of POC scope)
 
@@ -91,3 +91,26 @@ Consensus we adopt: usage-based trigger with headroom, keep-recent-verbatim + su
 ## Implementation log
 
 (started 2026-07-09)
+
+### 2026-07-09 — POC implemented
+
+Files: `agent-processor-contract.ts` (events/state/usage vocabulary, version 0.3.1 → 0.4.0), new `agent-compaction.ts` (planning + prompt/serialization, pure functions only), `agent-processor-implementation.ts` (folds, settle trigger, output→compaction-completed routing), `openai-ws-processor-implementation.ts` (continuation reset), `agent-compaction.test.ts`.
+
+**Summarization mechanism chosen: a `purpose: "compaction"` flag on the existing llm-request events**, not a separate request pipeline. Rationale: providers already rebuild request bodies by reference (`buildAgentLlmRequestBody(events, llmRequestId)`), so teaching that one function to emit the compaction prompt when the request-at-offset has compaction purpose gives both providers (and any future one) summarization for free — zero provider-specific compaction code except the openai-ws continuation reset, which is needed regardless. The alternative (agent runs its own side-channel LLM call) would bypass the orphan-recovery sweep, request cancellation, chunk streaming, and the requested/completed idempotency machinery, all of which compaction gets for free by riding the pipeline.
+
+Mechanics worth knowing when reading the diff:
+
+- The request slot (`currentRequest`) is shared: a pending compaction wins it before any chat request; the chat trigger (`pendingTriggerOffset`) deliberately survives compaction-purpose scheduled/requested folds so the user's turn fires right after the compaction settles. Compaction requests don't charge the autonomous-turn circuit breaker.
+- `firstKeptOffset`/`tokensBefore` are computed once, at settle time, and travel on `compaction-requested` → state → `compaction-completed`, so the provider-side serializer and the reducer fold can never cut at different places.
+- Settle re-derivations between "compaction LLM request completed" and "compaction-completed folded" dedup into the original scheduled event (`agent/llm-request-scheduled@compaction:<requestedOffset>` idempotency key) — no double summarizer calls.
+- Failure/cancellation paths: summarizer failure → `compaction-failed` (history untouched, no model-visible error input); user interrupt during compaction → cancel fold also clears `pendingCompaction`. Both leave `lastCompactionAttempt` pointing at the usage measurement, so the trigger stays quiet until fresh usage arrives — degrade to "no compaction", never a loop.
+- Usage from compaction requests is ignored for the trigger (it measures the summary prompt, not the conversation).
+- Malformed `usage` degrades via `.catch(undefined)` rather than failing the event parse — an unparseable `llm-request-completed` would otherwise wedge `currentRequest` forever (the reducer skips unparseable events).
+- Legacy checkpoint entries without `offset` tags count as oldest (always summarizable); if the keep-boundary itself lands on an untagged entry, compaction is skipped until tagged entries exist.
+- Regenerated files: `itx-api.generated.ts`, `types-source.generated.ts` (scripts), and the `sdk.ts` codegen copy + `project-repo-template.generated.ts` (the oxlint codegen preset doesn't fire — spliced manually, guarded by existing freshness tests).
+
+Tradeoffs / conscious POC shortcuts:
+
+- Compaction failures increment `consecutiveLlmFailures` like any failure; a compaction success also resets it. Harmless coupling, not worth a parallel counter yet.
+- `reason: "manual"`/`"overflow"` and `instructions` are in the event schema but nothing generates them yet (follow-ups).
+- Context-window numbers: kimi-k2 family 262,144; gpt-5 family 272,000 (input window); unknown models 131,072. Overridable per agent via `llm-provider-selected.contextWindowTokens`.

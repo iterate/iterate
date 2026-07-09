@@ -5,8 +5,14 @@ import {
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+  totalTokensFromUsage,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
+import {
+  buildCompactionRequestMessages,
+  planCompaction,
+  renderCompactionSummaryMessage,
+} from "./agent-compaction.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
@@ -105,6 +111,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
                 model: event.payload.model,
                 provider: event.payload.provider,
                 requestId: event.payload.requestId,
+                ...(event.payload.purpose === undefined ? {} : { purpose: event.payload.purpose }),
               },
             });
           } finally {
@@ -112,7 +119,43 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           }
         });
         return;
-      case "events.iterate.com/agent/output-added":
+      case "events.iterate.com/agent/output-added": {
+        // A compaction request's output is the checkpoint document: it
+        // becomes compaction-completed (folded by the reducer into a
+        // compacted history) and is never scanned for scripts — a summarizer
+        // hallucinating a code block must not cause side effects.
+        const request = previousState.currentRequest;
+        if (
+          request?.phase === "requested" &&
+          request.purpose === "compaction" &&
+          request.llmRequestId === event.payload.llmRequestId
+        ) {
+          const pending = previousState.pendingCompaction;
+          if (pending === null) return;
+          blockProcessorWhile(async () => {
+            if (event.payload.content.trim() === "") {
+              await append({
+                type: "events.iterate.com/agent/compaction-failed",
+                idempotencyKey: `agent/compaction-failed@${event.offset}`,
+                payload: {
+                  error: { message: "Summarizer returned empty output." },
+                  requestedOffset: pending.requestedOffset,
+                },
+              });
+              return;
+            }
+            await append({
+              type: "events.iterate.com/agent/compaction-completed",
+              idempotencyKey: `agent/compaction-completed@${event.offset}`,
+              payload: {
+                summary: event.payload.content,
+                firstKeptOffset: pending.firstKeptOffset,
+                tokensBefore: pending.tokensBefore,
+              },
+            });
+          });
+          return;
+        }
         blockProcessorWhile(async () => {
           const code = extractAsyncJsSnippet(event.payload.content);
           if (code === null) return;
@@ -126,6 +169,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           });
         });
         return;
+      }
       case "events.iterate.com/capability-host/script-execution-completed": {
         // Rendering may spill an oversized result into the agent's workspace
         // first (a durable write that can wait on the checkout's first-use
@@ -160,6 +204,25 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ) {
           // Stale completion (e.g. the request was already cancelled) — the
           // reducer ignored it, so don't render an error input for it either.
+          return;
+        }
+        if (previousState.currentRequest.purpose === "compaction") {
+          // A failed summarization never touches history and never renders a
+          // model-visible error: journal the failure and move on. The trigger
+          // won't retry until fresh usage arrives (lastCompactionAttempt), so
+          // a broken summarizer degrades to "no compaction".
+          const pending = previousState.pendingCompaction;
+          blockProcessorWhile(() =>
+            append({
+              type: "events.iterate.com/agent/compaction-failed",
+              idempotencyKey: `agent/compaction-failed@${event.offset}`,
+              payload: {
+                error: { message: result.error.message },
+                requestedOffset:
+                  pending === null ? event.payload.llmRequestId : pending.requestedOffset,
+              },
+            }),
+          );
           return;
         }
         const retry = state.consecutiveLlmFailures < MAX_CONSECUTIVE_LLM_FAILURES;
@@ -207,6 +270,26 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {
+      // A pending compaction owns the request slot: its summarization call
+      // runs before any chat request, and the chat trigger stays pending
+      // until the compaction settles (completed, failed, or cancelled). Keyed
+      // on the compaction's own offset, not the request generation, so
+      // re-derivations while the completion is still landing collapse into
+      // the one scheduled event.
+      if (state.pendingCompaction !== null) {
+        await args.append({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          idempotencyKey: `agent/llm-request-scheduled@compaction:${state.pendingCompaction.requestedOffset}`,
+          payload: {
+            debounceMs: 0,
+            model: state.llmConfig.model,
+            provider: state.llmProvider,
+            purpose: "compaction",
+            requestId: `llm-request:compaction-${state.pendingCompaction.requestedOffset}`,
+          },
+        });
+        return;
+      }
       if (state.pendingTriggerOffset === null) return;
       if (
         state.pendingTriggerSource === "agent-loop" &&
@@ -219,6 +302,24 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
             reason: `Agent circuit breaker stopped after ${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS} consecutive autonomous turns.`,
             triggerOffset: state.pendingTriggerOffset,
+          },
+        });
+        return;
+      }
+      // Over the context budget? Compact before answering: the summarization
+      // request runs first and the pending trigger schedules right after the
+      // compaction folds. One attempt per usage measurement (the idempotency
+      // key and lastCompactionAttempt), so a failed compaction falls through
+      // to a normal request on the next settle instead of looping.
+      const compactionPlan = planCompaction(state);
+      if (compactionPlan !== null) {
+        await args.append({
+          type: "events.iterate.com/agent/compaction-requested",
+          idempotencyKey: `agent/compaction-requested@usage:${compactionPlan.usageLlmRequestId}`,
+          payload: {
+            reason: "threshold",
+            firstKeptOffset: compactionPlan.firstKeptOffset,
+            tokensBefore: compactionPlan.tokensBefore,
           },
         });
         return;
@@ -247,6 +348,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         model: state.llmConfig.model,
         provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
+        ...(state.currentRequest.purpose === undefined
+          ? {}
+          : { purpose: state.currentRequest.purpose }),
       },
     });
   }
@@ -276,7 +380,16 @@ export type AgentChatMessage = {
 
 function buildLlmChatRequest(state: AgentState): { messages: AgentChatMessage[] } {
   return {
-    messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
+    messages: [
+      { role: "system" as const, content: state.systemPrompt },
+      // Internal bookkeeping fields (offset/summary compaction tags) never
+      // reach the provider: the LLM-facing message shape is role/content/files.
+      ...state.history.map(({ role, content, files }) => ({
+        role,
+        content,
+        ...(files === undefined || files.length === 0 ? {} : { files }),
+      })),
+    ],
   };
 }
 
@@ -305,13 +418,45 @@ export function flattenMessageToText(message: AgentChatMessage): string {
   return [message.content, ...files.map(renderFileHintLine)].join("\n");
 }
 
+export type AgentLlmRequestBody = {
+  messages: AgentChatMessage[];
+  /** "compaction" when this request is a summarization call (its output folds
+   * into compaction-completed, never chat history). */
+  purpose: "chat" | "compaction";
+  /**
+   * Compaction boundaries folded into this body. Providers with server-side
+   * continuation (openai-ws `previous_response_id`) must full-resend when this
+   * changes: the server-retained context still holds the UNcompacted history,
+   * so reusing it would defeat the compaction and keep reported usage high.
+   */
+  compactionCount: number;
+};
+
 export function buildAgentLlmRequestBody(input: {
   events: readonly StreamEvent[];
   llmRequestId: number;
-}) {
-  return buildLlmChatRequest(
-    reduceAgentEvents(input.events.filter((event) => event.offset <= input.llmRequestId)),
-  );
+}): AgentLlmRequestBody {
+  const events = input.events.filter((event) => event.offset <= input.llmRequestId);
+  const state = reduceAgentEvents(events);
+  const compactionCount = events.filter(
+    (event) => event.type === "events.iterate.com/agent/compaction-completed",
+  ).length;
+  if (
+    state.currentRequest?.phase === "requested" &&
+    state.currentRequest.llmRequestId === input.llmRequestId &&
+    state.currentRequest.purpose === "compaction" &&
+    state.pendingCompaction !== null
+  ) {
+    return {
+      messages: buildCompactionRequestMessages({
+        history: state.history,
+        firstKeptOffset: state.pendingCompaction.firstKeptOffset,
+      }),
+      purpose: "compaction",
+      compactionCount,
+    };
+  }
+  return { ...buildLlmChatRequest(state), purpose: "chat", compactionCount };
 }
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
@@ -331,6 +476,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           {
             role: "user",
             content: event.payload.content,
+            offset: event.offset,
             ...(files === undefined || files.length === 0 ? {} : { files }),
           },
         ],
@@ -340,19 +486,52 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       };
     }
     case "events.iterate.com/agent/output-added":
+      // A compaction request's output is the checkpoint document, not an
+      // assistant turn: it folds into history via compaction-completed
+      // (appended by processEvent), never directly.
+      if (
+        state.currentRequest?.phase === "requested" &&
+        state.currentRequest.purpose === "compaction" &&
+        state.currentRequest.llmRequestId === event.payload.llmRequestId
+      ) {
+        return state;
+      }
       return {
         ...state,
-        history: [...state.history, { role: "assistant", content: event.payload.content }],
+        history: [
+          ...state.history,
+          { role: "assistant", content: event.payload.content, offset: event.offset },
+        ],
       };
-    case "events.iterate.com/agent/llm-provider-selected":
+    case "events.iterate.com/agent/llm-provider-selected": {
       if (event.payload.ifUnset && state.llmProviderConfigured) return state;
+      const contextWindowTokens = event.payload.contextWindowTokens;
       return {
         ...state,
-        llmConfig: { model: event.payload.model },
+        llmConfig: {
+          model: event.payload.model,
+          ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+        },
         llmProvider: event.payload.provider,
         llmProviderConfigured: true,
       };
+    }
     case "events.iterate.com/agent/llm-request-scheduled":
+      if (event.payload.purpose === "compaction") {
+        // A compaction request occupies the request slot but is not a chat
+        // turn: the pending trigger that provoked it stays pending (the chat
+        // request fires after the compaction settles) and the autonomous-turn
+        // circuit breaker is not charged.
+        return {
+          ...state,
+          currentRequest: {
+            phase: "scheduled",
+            requestId: event.payload.requestId,
+            scheduledOffset: event.offset,
+            purpose: "compaction",
+          },
+        };
+      }
       return {
         ...state,
         currentRequest: {
@@ -365,47 +544,106 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         autonomousTurnCount:
           state.pendingTriggerSource === "agent-loop" ? state.autonomousTurnCount + 1 : 0,
       };
-    case "events.iterate.com/agent/llm-request-requested":
+    case "events.iterate.com/agent/llm-request-requested": {
       if (
         state.currentRequest?.phase !== "scheduled" ||
         state.currentRequest.requestId !== event.payload.requestId
       )
         return state;
+      const purpose = state.currentRequest.purpose;
       return {
         ...state,
-        currentRequest: { phase: "requested", llmRequestId: event.offset },
-        pendingTriggerOffset: null,
+        currentRequest: {
+          phase: "requested",
+          llmRequestId: event.offset,
+          ...(purpose === undefined ? {} : { purpose }),
+        },
+        ...(purpose === "compaction" ? {} : { pendingTriggerOffset: null }),
       };
-    case "events.iterate.com/agent/llm-request-completed":
+    }
+    case "events.iterate.com/agent/llm-request-completed": {
       if (
         state.currentRequest?.phase !== "requested" ||
         state.currentRequest.llmRequestId !== event.payload.llmRequestId
       ) {
         return state;
       }
+      const result = event.payload.result;
+      // Compaction-request usage measures the summarization prompt, not the
+      // conversation, so it must not feed the compaction trigger.
+      const totalTokens =
+        result.status === "success" && state.currentRequest.purpose !== "compaction"
+          ? totalTokensFromUsage(result.usage)
+          : null;
       return {
         ...state,
-        consecutiveLlmFailures:
-          event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        consecutiveLlmFailures: result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
         currentRequest: null,
         requestGeneration: state.requestGeneration + 1,
+        ...(totalTokens === null
+          ? {}
+          : { lastUsage: { llmRequestId: event.payload.llmRequestId, totalTokens } }),
       };
-    case "events.iterate.com/agent/llm-request-cancelled":
-      if (
-        event.payload.phase === "scheduled" &&
-        state.currentRequest?.phase === "scheduled" &&
-        state.currentRequest.requestId === event.payload.requestId
-      ) {
-        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
-      }
-      if (
-        event.payload.phase === "requested" &&
-        state.currentRequest?.phase === "requested" &&
-        state.currentRequest.llmRequestId === event.payload.llmRequestId
-      ) {
-        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
-      }
-      return state;
+    }
+    case "events.iterate.com/agent/llm-request-cancelled": {
+      const matchesCurrent =
+        (event.payload.phase === "scheduled" &&
+          state.currentRequest?.phase === "scheduled" &&
+          state.currentRequest.requestId === event.payload.requestId) ||
+        (event.payload.phase === "requested" &&
+          state.currentRequest?.phase === "requested" &&
+          state.currentRequest.llmRequestId === event.payload.llmRequestId);
+      if (!matchesCurrent) return state;
+      return {
+        ...state,
+        currentRequest: null,
+        requestGeneration: state.requestGeneration + 1,
+        // A cancelled compaction is abandoned, not retried: pendingCompaction
+        // clears, and lastCompactionAttempt keeps the trigger quiet until the
+        // next chat completion reports fresh usage.
+        ...(state.currentRequest?.purpose === "compaction" ? { pendingCompaction: null } : {}),
+      };
+    }
+    case "events.iterate.com/agent/compaction-requested":
+      if (state.pendingCompaction !== null) return state;
+      return {
+        ...state,
+        pendingCompaction: {
+          requestedOffset: event.offset,
+          firstKeptOffset: event.payload.firstKeptOffset,
+          tokensBefore: event.payload.tokensBefore,
+        },
+        lastCompactionAttempt: {
+          usageLlmRequestId: state.lastUsage === null ? 0 : state.lastUsage.llmRequestId,
+        },
+      };
+    case "events.iterate.com/agent/compaction-completed": {
+      if (state.pendingCompaction === null) return state;
+      const firstKeptOffset = event.payload.firstKeptOffset;
+      return {
+        ...state,
+        history: [
+          // The checkpoint replaces everything below the cut. It carries no
+          // offset, so the next compaction's fold drops it (offset 0 is
+          // always below any firstKeptOffset) after rolling it into the new
+          // checkpoint. Untagged legacy entries are dropped the same way —
+          // they are the oldest history by construction.
+          {
+            role: "user" as const,
+            content: renderCompactionSummaryMessage(event.payload.summary),
+            summary: true as const,
+          },
+          ...state.history.filter((message) => (message.offset || 0) >= firstKeptOffset),
+        ],
+        pendingCompaction: null,
+        // The last measurement described the pre-compaction context; the
+        // trigger stays quiet until a post-compaction completion reports
+        // fresh usage (the thrash guard).
+        lastUsage: null,
+      };
+    }
+    case "events.iterate.com/agent/compaction-failed":
+      return { ...state, pendingCompaction: null };
     case "events.iterate.com/agent/loop-stopped":
       return {
         ...state,
