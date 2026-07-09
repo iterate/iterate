@@ -133,8 +133,8 @@ describe("minimal web-chat agent processors", () => {
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
-    // The scratch dir self-ignores so `git.add({ filepath: "." })` never
-    // commits spills to the workspace branch.
+    // The scratch dir self-ignores so workspace snapshot publishes never
+    // commit spills to the workspace branch.
     expect(writes.map((write) => write.path)).toEqual([
       "/script-results/.gitignore",
       "/script-results/agent-output-7.json",
