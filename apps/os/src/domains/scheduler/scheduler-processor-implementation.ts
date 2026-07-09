@@ -190,7 +190,7 @@ export class SchedulerProcessor extends StreamProcessor<
     const now = this.deps.now();
     const due = dueSchedules(this.state.schedules, now);
     if (due.length > 0) {
-      await this.stream.append(
+      await this.append(
         ...due.map(([key, entry]) =>
           this.contract.buildEvent({
             type: "events.iterate.com/scheduler/trigger-requested",
@@ -198,7 +198,9 @@ export class SchedulerProcessor extends StreamProcessor<
             // crashed after appending and re-runs cannot double-trigger, and a
             // later re-set of the same key/occurrence (definedAtOffset differs)
             // can never dedupe against a spent request from a past life.
-            idempotencyKey: `scheduler/trigger-requested:${key}:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
+            idempotencyKey: this.idempotencyKey(
+              `trigger-requested:${key}:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
+            ),
             payload: {
               executionId: crypto.randomUUID(),
               key,
@@ -312,7 +314,7 @@ export class SchedulerProcessor extends StreamProcessor<
     await this.waitUntilEvent({ offset: barrierOffset, timeoutMs: 30_000 });
     const pending = this.state.pendingTriggers[executionId];
     if (pending === undefined) return; // already completed (e.g. by a raced sweep)
-    const completionIdempotencyKey = `scheduler/trigger-completed:${executionId}`;
+    const completionIdempotencyKey = this.idempotencyKey(`trigger-completed:${executionId}`);
     // A checkpoint-loss replay redelivers historical requests whose completions
     // sit in LATER catch-up pages — still pending as far as the fold knows.
     // The stream itself always has the truth: one indexed read prevents
@@ -377,7 +379,7 @@ export class SchedulerProcessor extends StreamProcessor<
     // transport problem, not a script outcome — let it propagate so the
     // trigger stays pending and the next wake's sweep retries, instead of
     // durably recording a succeeded script as failed.
-    await this.stream.append(
+    await this.append(
       this.contract.buildEvent({
         type: "events.iterate.com/scheduler/trigger-completed",
         idempotencyKey: completionIdempotencyKey,

@@ -3,6 +3,7 @@ import { defineProcessorContract, type ProcessorState } from "../streams/process
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { StreamListItem } from "../streams/schemas.ts";
 
 const ProjectCustomDomainStatus = z.enum([
@@ -148,11 +149,19 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
   ],
-  processorDeps: [CoreProcessorContract, RepoProcessorContract, AgentProcessorContract],
+  processorDeps: [
+    CoreProcessorContract,
+    RepoProcessorContract,
+    AgentProcessorContract,
+    EmailProcessorContract,
+  ],
   emits: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-provider-selected",
+    // Seeded onto /integrations/email at project birth (the creator's email
+    // becomes the sender allowlist's first entry).
+    "events.iterate.com/email/sender-allowed",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",

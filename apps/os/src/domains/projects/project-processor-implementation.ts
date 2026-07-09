@@ -75,6 +75,7 @@ export class ProjectProcessor extends StreamProcessor<
     event,
     state,
     append,
+    appendTo,
   }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
     // Project worker delivery is NOT here: every project stream (this one
     // included) pumps its own events into the worker's `processEventBatch`
@@ -128,7 +129,8 @@ export class ProjectProcessor extends StreamProcessor<
             // so the owner can email their project from day one without any
             // config.
             timedStep("create-timing", timing, "email-router-append", () =>
-              this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
+              appendTo(
+                EMAIL_INTEGRATION_STREAM_PATH,
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
@@ -174,7 +176,8 @@ export class ProjectProcessor extends StreamProcessor<
             // A scheduler stream's birth certificate is just its processor
             // subscription: the Scheduler Durable Object reduces schedules and
             // owns the alarm from the first delivered batch onward.
-            await this.deps.itx.streams.get(childPath).append(
+            await appendTo(
+              childPath,
               buildDurableObjectProcessorSubscriptionConfiguredEvent({
                 durableObjectName,
                 idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
@@ -194,7 +197,8 @@ export class ProjectProcessor extends StreamProcessor<
             // Slack-agent wiring requires the full thread shape — the
             // connection segment is what replies authenticate with.
             const isSlack = slackConnectionFromAgentPath(childPath) !== null;
-            await this.deps.itx.streams.get(childPath).append(
+            await appendTo(
+              childPath,
               // Identical idempotency keys to the create-time onboarding
               // subscriptions, so whichever lane runs second dedupes cleanly.
               ...agentSubscriptionEvents({
@@ -208,7 +212,8 @@ export class ProjectProcessor extends StreamProcessor<
             return;
           }
 
-          await this.deps.itx.streams.get(childPath).append(
+          await appendTo(
+            childPath,
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName,
               processor: ["secrets", ["get", childPath], "processor"],
@@ -235,7 +240,7 @@ export class ProjectProcessor extends StreamProcessor<
           await timedStep("create-timing", timing, "project-created-append", () =>
             append({
               type: "events.iterate.com/project/created",
-              idempotencyKey: `project-created:${this.deps.itx.projectId}`,
+              idempotencyKey: this.idempotencyKey("created"),
               payload: state.createRequest!,
             }),
           );
@@ -244,9 +249,7 @@ export class ProjectProcessor extends StreamProcessor<
           // worker, so the policy (prompt, provider, kickoff) lands
           // immediately — no window where the agent runs on stock defaults.
           await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
-            this.deps.itx.streams
-              .get(ONBOARDING_AGENT_PATH)
-              .append(...onboardingAgentStartEvents(this.deps)),
+            appendTo(ONBOARDING_AGENT_PATH, ...onboardingAgentStartEvents(this.deps)),
           );
         });
         return;
@@ -259,6 +262,7 @@ export class ProjectProcessor extends StreamProcessor<
             blockProcessorWhile,
             customDomains: this.deps.customDomains,
             event,
+            idempotencyKey: (key) => this.idempotencyKey(key, event),
             projectId: this.deps.itx.projectId,
             state,
           })

@@ -48,7 +48,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/system-prompt-updated",
-            idempotencyKey: `agent/system-prompt-updated@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("system-prompt-updated", event),
             payload: { systemPrompt },
           }),
         );
@@ -58,7 +58,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-web-message@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-web-message", event),
             payload: {
               content: event.payload.content,
               llmRequestPolicy: { behaviour: "after-current-request" },
@@ -73,7 +73,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-web-response@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-web-response", event),
             payload: {
               content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
               ...(files === undefined || files.length === 0 ? {} : { files }),
@@ -100,7 +100,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           try {
             await append({
               type: "events.iterate.com/agent/llm-request-requested",
-              idempotencyKey: `agent/llm-request-requested@${event.offset}`,
+              idempotencyKey: this.idempotencyKey("llm-request-requested", event),
               payload: {
                 model: event.payload.model,
                 provider: event.payload.provider,
@@ -118,7 +118,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           if (code === null) return;
           await append({
             type: "events.iterate.com/capability-host/script-execution-requested",
-            idempotencyKey: `itx/script-execution-requested@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("script-execution-requested", event),
             payload: {
               code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
@@ -136,7 +136,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           if (content === null) return;
           await append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-script-result@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-script-result", event),
             payload: {
               content,
               llmRequestPolicy: { behaviour: "after-current-request" },
@@ -166,7 +166,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-llm-failure@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-llm-failure", event),
             payload: {
               content:
                 `Your LLM request failed (${event.payload.provider}):\n\`\`\`\n${result.error.message}\n\`\`\`` +
@@ -214,7 +214,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       ) {
         await args.append({
           type: "events.iterate.com/agent/loop-stopped",
-          idempotencyKey: `agent/autonomous-turn-limit:${state.pendingTriggerOffset}`,
+          idempotencyKey: this.idempotencyKey(
+            `autonomous-turn-limit:${state.pendingTriggerOffset}`,
+          ),
           payload: {
             maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
             reason: `Agent circuit breaker stopped after ${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS} consecutive autonomous turns.`,
@@ -225,7 +227,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       await args.append({
         type: "events.iterate.com/agent/llm-request-scheduled",
-        idempotencyKey: `agent/llm-request-scheduled@generation:${state.requestGeneration}`,
+        idempotencyKey: this.idempotencyKey(
+          `llm-request-scheduled@generation:${state.requestGeneration}`,
+        ),
         payload: {
           debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
           model: state.llmConfig.model,
@@ -242,7 +246,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // makes this safe if the timer also fires concurrently.
     await args.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      idempotencyKey: `agent/llm-request-requested@${state.currentRequest.scheduledOffset}`,
+      idempotencyKey: this.idempotencyKey(
+        `llm-request-requested@${state.currentRequest.scheduledOffset}`,
+      ),
       payload: {
         model: state.llmConfig.model,
         provider: state.llmProvider,

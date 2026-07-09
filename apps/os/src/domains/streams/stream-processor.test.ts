@@ -483,13 +483,16 @@ describe("StreamProcessor provenance stamping", () => {
     const processor = new (class extends StreamProcessor<typeof EchoContract> {
       readonly contract = EchoContract;
       emitForeign() {
-        return this.append({ type: "events.iterate.com/test/triggered" as never, payload: {} });
+        return this.append({
+          type: "events.iterate.com/test/triggered",
+          payload: { id: "x" },
+        } as never);
       }
       forwardForeign() {
         return this.appendTo("/tests/echo-sibling", {
-          type: "events.iterate.com/test/triggered" as never,
-          payload: {},
-        });
+          type: "events.iterate.com/test/triggered",
+          payload: { id: "x" },
+        } as never);
       }
     })({ stream, ...HOME });
 

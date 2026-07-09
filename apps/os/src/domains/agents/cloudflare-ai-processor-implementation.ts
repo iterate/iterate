@@ -66,9 +66,9 @@ export class CloudflareAiProcessor extends StreamProcessor<
   }): Promise<void> {
     const llmRequestId = input.event.offset;
     const startedAt = Date.now();
-    await this.stream.append({
+    await this.append({
       type: "events.iterate.com/cloudflare-ai/llm-request-started",
-      idempotencyKey: `cloudflare-ai/llm-request-started@${llmRequestId}`,
+      idempotencyKey: this.idempotencyKey(`llm-request-started@${llmRequestId}`),
       payload: {
         llmRequestId,
         model: input.event.payload.model,
@@ -104,17 +104,17 @@ export class CloudflareAiProcessor extends StreamProcessor<
       };
 
       if (await this.#isRequestStillCurrent({ llmRequestId })) {
-        await this.stream.append({
+        await this.append({
           type: "events.iterate.com/agent/output-added",
-          idempotencyKey: `cloudflare-ai/agent-output-added@${llmRequestId}`,
+          idempotencyKey: this.idempotencyKey(`agent-output-added@${llmRequestId}`),
           payload: { content: completion.text, llmRequestId },
         });
       }
 
-      await this.stream.append(
+      await this.append(
         {
           type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/provider-completed@${llmRequestId}`,
+          idempotencyKey: this.idempotencyKey(`provider-completed@${llmRequestId}`),
           payload: {
             durationMs,
             llmRequestId,
@@ -123,7 +123,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
         },
         {
           type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/agent-completed@${llmRequestId}`,
+          idempotencyKey: this.idempotencyKey(`agent-completed@${llmRequestId}`),
           payload: {
             durationMs,
             llmRequestId,
@@ -138,10 +138,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
         status: "failure" as const,
         error: { message: stringifyError(error) },
       };
-      await this.stream.append(
+      await this.append(
         {
           type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/provider-completed@${llmRequestId}`,
+          idempotencyKey: this.idempotencyKey(`provider-completed@${llmRequestId}`),
           payload: {
             durationMs,
             llmRequestId,
@@ -150,7 +150,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
         },
         {
           type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `cloudflare-ai/agent-completed@${llmRequestId}`,
+          idempotencyKey: this.idempotencyKey(`agent-completed@${llmRequestId}`),
           payload: {
             durationMs,
             llmRequestId,
@@ -176,9 +176,11 @@ export class CloudflareAiProcessor extends StreamProcessor<
     const handleChunk = async (chunk: unknown) => {
       text += extractChunkText(chunk);
       usage = extractUsage(chunk) ?? usage;
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        idempotencyKey: `cloudflare-ai/llm-response-chunk@${input.sourceEvent.offset}:${sequence}`,
+        idempotencyKey: this.idempotencyKey(
+          `llm-response-chunk@${input.sourceEvent.offset}:${sequence}`,
+        ),
         payload: {
           chunk: jsonCompatible(chunk),
           llmRequestId: input.sourceEvent.offset,

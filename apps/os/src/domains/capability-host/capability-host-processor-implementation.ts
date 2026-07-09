@@ -239,7 +239,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
     let committedOffset: number;
     try {
-      const [committed] = await this.stream.append({
+      const [committed] = await this.append({
         type: "events.iterate.com/capability-host/capability-provided",
         payload: record,
       });
@@ -270,7 +270,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
-    const [committed] = await this.stream.append({
+    const [committed] = await this.append({
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
@@ -376,7 +376,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async runScript(code: string): Promise<RunScriptResult> {
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
-    await this.stream.append({
+    await this.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code, executionId },
     });
@@ -404,7 +404,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async #executeScript(input: { code: string; executionId: string }) {
     const complete = (payload: { error?: string; result?: unknown }) => {
-      const completionPayload: JsonValue =
+      const completionPayload =
         payload.error !== undefined
           ? { error: payload.error, executionId: input.executionId }
           : {
@@ -415,7 +415,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
               // ends the loop.
               ...(payload.result === undefined ? {} : { result: json(payload.result) }),
             };
-      return this.stream.append({
+      return this.append({
         type: "events.iterate.com/capability-host/script-execution-completed",
         payload: completionPayload,
       });

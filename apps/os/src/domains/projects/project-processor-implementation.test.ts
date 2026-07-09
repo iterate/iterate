@@ -94,6 +94,7 @@ function processEventHarness(state = projectState()) {
         },
         customDomains,
         event: domainEvent,
+        idempotencyKey: (key) => `project/${key}@/projects/test:${domainEvent.offset}`,
         projectId: project.id,
         state,
       });
