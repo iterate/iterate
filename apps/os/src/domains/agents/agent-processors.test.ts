@@ -730,7 +730,10 @@ describe("minimal web-chat agent processors", () => {
           { type: "response.output_text.delta", delta: "\n```" },
           {
             type: "response.completed",
-            response: { id: "resp_1", usage: { total_tokens: 7 } },
+            // The real API sends incomplete_details as an explicit null on
+            // completed responses; a schema that rejects null here makes the
+            // consumer skip the terminal frame and wait forever.
+            response: { id: "resp_1", incomplete_details: null, usage: { total_tokens: 7 } },
           },
         ]);
         sockets.push(socket);

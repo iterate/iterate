@@ -46,7 +46,9 @@ const OpenAiResponsesStreamMessage = z.looseObject({
   response: z
     .looseObject({
       id: z.string().optional(),
-      incomplete_details: z.looseObject({ reason: z.string().optional() }).optional(),
+      // Explicitly null (not absent) on completed responses — .nullish(), or
+      // the terminal frame fails parsing and the consumer waits forever.
+      incomplete_details: z.looseObject({ reason: z.string().nullish() }).nullish(),
       usage: z.unknown().optional(),
     })
     .optional(),
