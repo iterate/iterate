@@ -2414,6 +2414,8 @@ describe("itx", () => {
     const processor = new ProjectWorkerForwardingProbeProcessor({
       readState: () => storedSnapshot,
       stream: outputStream as never,
+      path: outputPath,
+      projectId: null,
       writeState: (snapshot) => {
         storedSnapshot = snapshot;
       },

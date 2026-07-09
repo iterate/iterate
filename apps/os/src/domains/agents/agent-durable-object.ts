@@ -35,6 +35,8 @@ export class AgentDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
   });
   readonly #agentProcessor = this.#processorHost.add(
     (deps) =>

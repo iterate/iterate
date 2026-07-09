@@ -42,6 +42,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
   });
   readonly #projectProcessor = this.#processorHost.add(
     (deps) =>

@@ -148,6 +148,8 @@ function makeHarness() {
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
     stream: network.get("/"),
+    path: "/",
+    projectId: "prj_test",
     itx,
   });
   return { network, processor };

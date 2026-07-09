@@ -48,6 +48,10 @@ import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts
  */
 type HostedProcessorDeps = {
   stream: Stream;
+  /** Path of the hosted stream — stamped as provenance on processor appends. */
+  path: string;
+  /** Owning project, or null on a global (deployment-root) stream. */
+  projectId: string | null;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -109,7 +113,7 @@ type StreamProcessorHost = {
 
 export function createStreamProcessorHost(
   ctx: DurableObjectState,
-  options: { stream: Stream },
+  options: { stream: Stream; path: string; projectId: string | null },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
@@ -152,6 +156,8 @@ export function createStreamProcessorHost(
       };
       const processor = build({
         stream: options.stream,
+        path: options.path,
+        projectId: options.projectId,
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(slug())) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(slug()), snapshot),

@@ -68,6 +68,8 @@ function createRawEventsProcessor(sql: SqlClient) {
   });
   return new BrowserRawEventsProcessor({
     stream: stream(),
+    path: "/tests/raw",
+    projectId: null,
     sql,
     readState: storage.readState,
     writeState: storage.writeState,

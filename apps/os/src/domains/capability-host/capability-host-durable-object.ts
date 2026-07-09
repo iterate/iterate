@@ -44,6 +44,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
   });
   readonly #capabilityHostProcessor = this.#processorHost.add(
     (deps) =>

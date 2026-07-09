@@ -64,7 +64,7 @@ function unrelatedEvent(offset?: number): StreamEvent {
 
 function counter() {
   nextOffset = 0;
-  return new CounterProcessor({ stream: neverStream });
+  return new CounterProcessor({ stream: neverStream, path: "/tests/counter", projectId: null });
 }
 
 describe("StreamProcessor.onStateChange", () => {
@@ -235,7 +235,10 @@ describe("StreamProcessor parse-failure skipping", () => {
   function recordingCounter() {
     nextOffset = 0;
     const { appends, stream } = recordingStream();
-    return { appends, processor: new CounterProcessor({ stream }) };
+    return {
+      appends,
+      processor: new CounterProcessor({ stream, path: "/tests/counter", projectId: null }),
+    };
   }
 
   it("skips an unparseable consumed-type event and folds the rest of the batch", async () => {
@@ -276,7 +279,14 @@ describe("StreamProcessor parse-failure skipping", () => {
       await vi.waitFor(() => expect(appends).toHaveLength(1));
       expect(appends[0]).toMatchObject({
         type: "events.iterate.com/stream/error-occurred",
-        idempotencyKey: "processor-event-parse-failed:test-counter:2",
+        idempotencyKey: "test-counter/event-parse-failed@/tests/counter:2",
+        source: {
+          processor: {
+            slug: "test-counter",
+            stream: { path: "/tests/counter", projectId: null },
+            whileProcessing: { offset: 2, type: "events.iterate.com/test/incremented" },
+          },
+        },
       });
       expect(consoleError).toHaveBeenCalledTimes(1);
     } finally {
@@ -307,6 +317,8 @@ describe("StreamProcessor parse-failure skipping", () => {
     try {
       nextOffset = 0;
       const processor = new CounterProcessor({
+        path: "/tests/counter",
+        projectId: null,
         stream: {
           append: () => Promise.reject(new Error("append transport down")),
         } as unknown as Stream,
@@ -320,5 +332,168 @@ describe("StreamProcessor parse-failure skipping", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+// Every append a processor makes through the emitted lanes carries
+// `source.processor`: who appended (slug/version + home stream) and — on the
+// per-event lanes — while processing which event. These tests pin the stamp's
+// shape, the overwrite rule, and the batch-level omission of `whileProcessing`.
+describe("StreamProcessor provenance stamping", () => {
+  const EchoContract = defineProcessorContract({
+    slug: "test-echo",
+    version: "0.0.1",
+    description: "Echoes triggers; exists to test append-lane provenance stamping.",
+    stateSchema: z.object({ seen: z.number().default(0) }),
+    events: {
+      "events.iterate.com/test/triggered": {
+        description: "A trigger the echo processor consumes.",
+        payloadSchema: z.object({ id: z.string() }),
+      },
+      "events.iterate.com/test/echoed": {
+        description: "The echo emitted in response to a trigger.",
+        payloadSchema: z.object({ id: z.string() }),
+      },
+    },
+    consumes: ["events.iterate.com/test/triggered"],
+    emits: ["events.iterate.com/test/echoed"],
+  });
+
+  const HOME = { path: "/tests/echo", projectId: "prj_echo" };
+  const STAMP = { slug: "test-echo", version: "0.0.1", stream: HOME };
+
+  function triggeredEvent(offset: number): StreamEvent {
+    return {
+      type: "events.iterate.com/test/triggered",
+      payload: { id: `t${offset}` },
+      createdAt: new Date(offset).toISOString(),
+      offset,
+      path: HOME.path,
+    };
+  }
+
+  // A stream whose own appends AND `at(path)` children record into one log,
+  // tagged with the destination path.
+  function recordingNetwork() {
+    const appends: { path: string; event: StreamEventInput }[] = [];
+    const streamAt = (path: string): Stream =>
+      ({
+        append: (...events: StreamEventInput[]) => {
+          appends.push(...events.map((event) => ({ path, event })));
+          return Promise.resolve(
+            events.map((event, index) => ({
+              ...event,
+              offset: 1_000 + appends.length + index,
+              createdAt: new Date(0).toISOString(),
+              path,
+            })),
+          );
+        },
+        at: (child: string) => streamAt(child),
+      }) as unknown as Stream;
+    return { appends, stream: streamAt(HOME.path) };
+  }
+
+  class EchoProcessor extends StreamProcessor<typeof EchoContract> {
+    readonly contract = EchoContract;
+
+    protected override processEvent({
+      event,
+      append,
+      appendTo,
+      blockProcessorWhile,
+    }: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0]): undefined {
+      const echo = {
+        type: "events.iterate.com/test/echoed" as const,
+        idempotencyKey: this.idempotencyKey("echo", event),
+        payload: { id: event.payload.id },
+      };
+      blockProcessorWhile(async () => {
+        await append(echo);
+        await appendTo("/tests/echo-sibling", {
+          ...echo,
+          // The caller's stamp claim must lose to the framework's.
+          source: { processor: { slug: "forged", version: "9", stream: HOME } },
+        });
+      });
+    }
+  }
+
+  class BatchEchoProcessor extends StreamProcessor<typeof EchoContract> {
+    readonly contract = EchoContract;
+
+    protected override async processEventBatch(
+      args: Parameters<StreamProcessor<typeof EchoContract>["processEventBatch"]>[0],
+    ): Promise<void> {
+      await super.processEventBatch(args);
+      await args.append({
+        type: "events.iterate.com/test/echoed",
+        idempotencyKey: this.idempotencyKey(`batch-summary:${args.checkpointOffset}`),
+        payload: { id: "batch" },
+      });
+    }
+  }
+
+  it("stamps per-event appends with the processor and the event being processed", async () => {
+    const { appends, stream } = recordingNetwork();
+    const processor = new EchoProcessor({ stream, ...HOME });
+
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+
+    const home = appends.filter(({ path }) => path === HOME.path);
+    expect(home).toHaveLength(1);
+    expect(home[0]!.event).toMatchObject({
+      idempotencyKey: "test-echo/echo@/tests/echo:7",
+      source: {
+        processor: {
+          ...STAMP,
+          whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },
+        },
+      },
+    });
+  });
+
+  it("appendTo lands on the sibling stream with the same stamp, overwriting claims", async () => {
+    const { appends, stream } = recordingNetwork();
+    const processor = new EchoProcessor({ stream, ...HOME });
+
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+
+    const sibling = appends.filter(({ path }) => path === "/tests/echo-sibling");
+    expect(sibling).toHaveLength(1);
+    expect(sibling[0]!.event.source?.processor).toEqual({
+      ...STAMP,
+      whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },
+    });
+  });
+
+  it("stamps batch-level appends without whileProcessing", async () => {
+    const { appends, stream } = recordingNetwork();
+    const processor = new BatchEchoProcessor({ stream, ...HOME });
+
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+
+    const summary = appends.find(({ event }) => event.idempotencyKey?.includes("batch-summary"));
+    expect(summary?.event.idempotencyKey).toBe("test-echo/batch-summary:7");
+    expect(summary?.event.source?.processor).toEqual(STAMP);
+  });
+
+  it("refuses to append an event type missing from emits, on both lanes", () => {
+    const { stream } = recordingNetwork();
+    const processor = new (class extends StreamProcessor<typeof EchoContract> {
+      readonly contract = EchoContract;
+      emitForeign() {
+        return this.append({ type: "events.iterate.com/test/triggered" as never, payload: {} });
+      }
+      forwardForeign() {
+        return this.appendTo("/tests/echo-sibling", {
+          type: "events.iterate.com/test/triggered" as never,
+          payload: {},
+        });
+      }
+    })({ stream, ...HOME });
+
+    expect(() => processor.emitForeign()).toThrow(/cannot build emitted event/);
+    expect(() => processor.forwardForeign()).toThrow(/cannot build emitted event/);
   });
 });

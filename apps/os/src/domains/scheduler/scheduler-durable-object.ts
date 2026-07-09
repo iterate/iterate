@@ -49,6 +49,8 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
   });
   readonly #schedulerProcessor = this.#processorHost.add(
     (deps) =>

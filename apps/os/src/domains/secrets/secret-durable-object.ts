@@ -50,6 +50,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
   });
   readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
