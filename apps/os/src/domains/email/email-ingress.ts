@@ -167,8 +167,8 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
         path: EMAIL_INTEGRATION_STREAM_PATH,
       }),
       idempotencyKey: `email-router-subscription:${project.id}`,
+      processor: ["email", "processor"],
       processorSlug: EmailProcessorContract.slug,
-      subscriberType: "project",
     }),
     receivedEvent,
   );

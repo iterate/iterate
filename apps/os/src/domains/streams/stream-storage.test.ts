@@ -1,7 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "./schemas.ts";
-import { StreamEventLog } from "./stream-storage.ts";
+import {
+  reconcileSubscriptionCursorRows,
+  SqliteSubscriptionCursorStore,
+  StreamEventLog,
+} from "./stream-storage.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -124,3 +128,83 @@ function fromNodeSqlValue([key, value]: [string, unknown]) {
   }
   return [key, value];
 }
+
+describe("reconcileSubscriptionCursorRows", () => {
+  it("drops orphaned rows, keeps progress, clears failure state (version-mismatch rebuild)", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("survivor-clean", 5);
+    store.ensure("survivor-backing-off", 3);
+    store.nack("survivor-backing-off", {
+      attempt: 7,
+      nextAttemptAt: 99_999,
+      error: "old-code bug",
+    });
+    store.ensure("orphan", 2);
+    store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
+
+    reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
+
+    // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
+    expect(store.get("orphan")).toBeUndefined();
+    expect(store.minNextAttemptAt()).toBeNull();
+    // Progress survives (ackedOffset is monotonic truth about the same log)...
+    expect(store.get("survivor-clean")?.ackedOffset).toBe(5);
+    expect(store.get("survivor-backing-off")?.ackedOffset).toBe(3);
+    // ...but backoff state is cleared: the new fold gets an immediate fresh try.
+    expect(store.get("survivor-backing-off")).toMatchObject({
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+});
+
+describe("SqliteSubscriptionCursorStore epoch fencing", () => {
+  function makeStore() {
+    return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+  }
+
+  it("acks fenced on a stale epoch no-op; unfenced acks still land", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const before = store.get("k")!;
+
+    store.setCursor("k", 2); // the seek bumps the epoch
+    const after = store.get("k")!;
+    expect(after.epoch).toBeGreaterThan(before.epoch);
+
+    // The in-flight delivery captured the PRE-seek epoch: its ack must not
+    // clobber the seek.
+    store.ack("k", 100, before.epoch);
+    expect(store.get("k")!.ackedOffset).toBe(2);
+
+    // A delivery that read the post-seek row acks normally.
+    store.ack("k", 5, after.epoch);
+    expect(store.get("k")!.ackedOffset).toBe(5);
+  });
+
+  it("remove+recreate mints a fresh epoch, so a dead subscription's ack cannot land", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const oldEpoch = store.get("k")!.epoch;
+    store.delete("k");
+    store.ensure("k", 0); // recreate with deliver:"all" semantics
+    expect(store.get("k")!.epoch).toBeGreaterThan(oldEpoch);
+
+    store.ack("k", 100, oldEpoch); // the removed receiver's in-flight ack
+    expect(store.get("k")!.ackedOffset).toBe(0); // full history still owed
+  });
+
+  it("advanceWatermark keeps the failure streak but clears the retry schedule", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    store.nack("k", { attempt: 3, nextAttemptAt: 12345, error: "ingest failing" });
+
+    store.advanceWatermark("k", 7);
+    const row = store.get("k")!;
+    expect(row.ackedOffset).toBe(7);
+    expect(row.attempt).toBe(3); // a reachable host is not a healthy one
+    expect(row.lastError).toBe("ingest failing");
+    expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
+  });
+});

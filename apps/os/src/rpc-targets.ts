@@ -34,6 +34,7 @@ import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
+  trustedInternalAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -112,6 +113,7 @@ import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
+import { compileJsonataExpression } from "./domains/streams/event-selector.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import type {
   DynamicWorkerCapability,
@@ -120,6 +122,7 @@ import type {
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
+import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -148,6 +151,8 @@ import type {
   EditRepoFileResult,
   GithubSyncResult,
   LinkGithubResult,
+  RepoCommitDetails,
+  RepoLogResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -185,16 +190,22 @@ import type {
 } from "./domains/capability-host/types.ts";
 import type { SecretDescription, SecretUpdateInput } from "./domains/secrets/types.ts";
 import type {
+  GetProcessorRuntimeState,
   ProcessEventBatch,
+  StreamPushEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
   StreamEventReadInput,
   StreamProcessorRpc,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
   StreamSubscriptionHandle,
+  WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
+import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -310,14 +321,16 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains).`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
+        crossPostTo: "Copy matching events onto another stream (optionally JSONata-transformed).",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
         readEvents: "Create a pager for bounded event pages.",
-        subscribe: "Live event delivery; returns an unsubscribe handle.",
+        removeCrossPost: "Remove a cross-post configured by crossPostTo.",
+        subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
       parent: "streams.get(path)",
@@ -402,44 +415,144 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
-      workerDelivery: {
-        checkpoint: number;
-        consecutiveFailures: number;
-        retryScheduled: boolean;
-      } | null;
+      subscriptions: Record<
+        string,
+        {
+          mode: "wake" | "push" | "webhook";
+          ackedOffset: number;
+          lag: number;
+          attempt: number;
+          nextAttemptAt: number | null;
+          lastError: string | null;
+          parkedAtOffset: number | null;
+          connected: boolean;
+        }
+      >;
     };
   }> {
     return this.durableObjectStub.runtimeState();
   }
 
   /**
-   * Live event delivery: `processEventBatch` is called for every committed
-   * batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Set `configured: true` only from trusted-internal
-   * auth — it opens the durable configured subscription registered under
-   * `subscriptionKey` (the wake-handshake response) instead of an ephemeral one.
+   * Live EPHEMERAL event delivery: `processEventBatch` is called for every
+   * committed batch (optionally replayed from `replayAfterOffset`); returns an
+   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
+   * delivery is configured as data instead, by appending a
+   * `subscription-configured` event (wake or push mode) to the stream.
    */
   subscribe(args: {
     subscriptionKey?: string;
-    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
+    selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
+    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */
+    getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle> {
-    // `configured: true` opens the durable configured subscription for the
-    // given key (the wake-handshake response) — only the platform's own
-    // Durable Objects may do that; everyone else gets ephemeral subscriptions.
-    if (args.configured === true && this.props.auth.principal !== "trusted-internal") {
-      throw new Error("configured subscriptions require trusted internal auth");
+    // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
+    // and invokes the delivery callback over Workers RPC, and Workers RPC
+    // always ships a call result — so if the DO's calls were forwarded
+    // straight through to the subscriber's Cap'n Web stub, this worker would
+    // have to PULL the subscriber's resolution to produce that result,
+    // putting one subscriber-originated resolve frame per batch on the socket
+    // (live-proven against a preview deployment; see stream-wire.e2e.test.ts).
+    // Terminating the call HERE keeps the subscriber leg one-way: the
+    // forwarder invokes the subscriber's stub and disposes the result
+    // unpulled, and the DO's Workers RPC result is the forwarder's own
+    // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
+    // disposes a session's exports when the session ends, which is exactly an
+    // ephemeral subscription's lifetime.
+    const forward = retainProcessEventBatch(args.processEventBatch);
+    return this.durableObjectStub.subscribe({
+      ...args,
+      processEventBatch: (batch) => void forward(batch),
+    });
+  }
+
+  /**
+   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
+   * appends the batch's events into THIS stream with provenance stamping,
+   * structural loop protection, and source-derived idempotency keys. A source
+   * stream cross-posts here by configuring
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
+   */
+  ingest(batch: StreamPushEventBatch): Promise<void> {
+    // Only the platform's own delivery spine dials ingest: it arrives through
+    // a push expression evaluated against the project's trusted itx root. A
+    // session principal appending copies would bypass provenance stamping.
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("ingest is dialed by stream push subscriptions, not sessions");
     }
-    return this.durableObjectStub.subscribe(args);
+    return Promise.resolve(this.durableObjectStub.ingest(batch));
+  }
+
+  /**
+   * "When events matching this land HERE, post them onto stream `path`" — the
+   * cross-post verb. Pure sugar over appending a `subscription-configured`
+   * push subscription targeting the destination's `ingest` sink; the appended
+   * event (returned) is the real interface and shows in the log like any
+   * other config. Same-`key` calls replace the previous cross-post; remove
+   * with `removeCrossPost`. Copies carry the full provenance chain
+   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
+   * is an optional JSONata expression CONSTRUCTING the copied event's body
+   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":
+   * payload.body.repository.full_name } }`); omitted fields copy verbatim.
+   */
+  async crossPostTo(args: {
+    /** Destination stream path (this project). */
+    path: string;
+    /** Subscription identity; defaults to `cross-post:<destination path>`. */
+    key?: string;
+    eventTypes?: string[];
+    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
+    condition?: string;
+    /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
+    transform?: string;
+    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
+    deliver?: "all" | "new" | { afterOffset: number };
+  }): Promise<StreamEvent> {
+    const destination = normalizePath(args.path);
+    if (args.transform !== undefined) {
+      // Same configure-time posture as selector conditions (#validateAppend
+      // compiles them): an unparseable transform must fail THIS call, not
+      // park the subscription at delivery time hours later.
+      compileJsonataExpression(args.transform);
+    }
+    const selector = {
+      ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
+      ...(args.condition === undefined ? {} : { condition: args.condition }),
+    };
+    const [event] = await this.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        subscriptionKey: args.key ?? `cross-post:${destination}`,
+        delivery: { mode: "push", expression: ["streams", ["get", destination], "ingest"] },
+        ...(Object.keys(selector).length === 0 ? {} : { selector }),
+        ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
+        ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
+      },
+    });
+    return event!;
+  }
+
+  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
+  async removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent> {
+    const key =
+      args.key ?? (args.path === undefined ? undefined : `cross-post:${normalizePath(args.path)}`);
+    if (key === undefined) throw new Error("removeCrossPost needs a path or key");
+    const [event] = await this.append({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { subscriptionKey: key },
+    });
+    return event!;
   }
 }
 
@@ -506,6 +619,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       children: {
         cancel: "Remove a Schedule by key (idempotent).",
         list: "Every Schedule, reduced from the stream.",
+        processor: "The scheduler stream processor (snapshot/state).",
         set: "Upsert a Schedule: { key, recurrence, script, metadata? }.",
         trigger: "Run a Schedule now (advances a recurring clock, consumes a one-shot).",
       },
@@ -525,6 +639,14 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
         path: this.props.path,
       }),
     );
+  }
+
+  /** The scheduler stream processor (snapshot/state). */
+  get processor(): WakeableStreamProcessorRpc<SchedulerProcessorState> {
+    return new ProcessorRelayRpcTarget<SchedulerProcessorState>({
+      auth: this.props.auth,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+    });
   }
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -606,8 +728,8 @@ async function requestRepoCreate(input: {
     stream.append(
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+        processor: ["repos", ["get", path], "processor"],
         processorSlug: RepoProcessorContract.slug,
-        subscriberType: "repo",
       }),
       {
         type: "events.iterate.com/repo/create-requested",
@@ -638,6 +760,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return describeNode({
       instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
+        commitDetails:
+          "One commit's metadata plus its changed files with +/- line counts, diffed against its first parent ({ commitOid }).",
         commitFiles:
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
@@ -645,10 +769,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
+        log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile:
-          'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
+          'Read one file ({ path, encoding?, commitOid? }); encoding "base64" for binary files (images, PDFs), commitOid for a pinned read at a historic commit.',
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
@@ -712,10 +837,30 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /**
-   * Committed file contents at HEAD; null when the path does not exist.
-   * `encoding: "base64"` reads raw bytes (images, PDFs) base64-encoded.
+   * Commit history of a branch, newest first — oid, message, author,
+   * timestamp (epoch ms), parent oids. Deliberately without per-commit file
+   * stats (those cost tree checkouts per commit); fetch them lazily per
+   * commit through `commitDetails`.
    */
-  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
+  log(input: { branch?: string; limit?: number } = {}): Promise<RepoLogResult> {
+    return this.#durableObjectStub.log(input);
+  }
+
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (the whole tree for the root commit), with `git diff --numstat`-shaped
+   * +/- line counts; binary files are flagged instead of counted.
+   */
+  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails> {
+    return this.#durableObjectStub.commitDetails(input);
+  }
+
+  /**
+   * Committed file contents at HEAD — or, with `commitOid`, pinned to that
+   * commit — null when the path does not exist there. `encoding: "base64"`
+   * reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -788,8 +933,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /** The repo stream processor (snapshot/state). */
-  get processor(): StreamProcessorRpc<RepoProcessorState> {
-    return new ProcessorRelayRpcTarget<RepoProcessorState>(() => this.#durableObjectStub.processor);
+  get processor(): WakeableStreamProcessorRpc<RepoProcessorState> {
+    return new ProcessorRelayRpcTarget<RepoProcessorState>({
+      auth: this.props.auth,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+    });
   }
 }
 
@@ -1433,8 +1581,11 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   }
 
   /** The secret stream processor; its public state IS the SecretDescription. */
-  get processor(): StreamProcessorRpc<SecretDescription> {
-    return new ProcessorRelayRpcTarget<SecretDescription>(() => this.durableObjectStub.processor);
+  get processor(): WakeableStreamProcessorRpc<SecretDescription> {
+    return new ProcessorRelayRpcTarget<SecretDescription>({
+      auth: this.props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
   }
 }
 
@@ -1813,6 +1964,25 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           slug: "slack",
         });
       }
+      // The connection's router processor: the project-class host Durable
+      // Object at this connection's stream path. `processor` is a claimed
+      // child, not a Web API replay — it is what the connect flow's wake
+      // subscription persists (["integrations", "slack", <connection>,
+      // "processor", "wakeStreamSubscriber"]).
+      if (method[0] === "processor") {
+        const relay = new ProcessorRelayRpcTarget({
+          auth: this.props.auth,
+          host: () =>
+            env.PROJECT.getByName(
+              DurableObjectNameCodec.stringify({
+                path: `/integrations/slack/${connection}`,
+                projectId: this.props.projectId,
+              }),
+            ) as unknown as ProcessorHostStub,
+        });
+        if (method.length === 1) return relay;
+        return await replayPathCall(relay, { args, path: method.slice(1) });
+      }
       // The connection's wrapped Slack WebClient: replay the caller's dotted Web
       // API path onto it (chat.postMessage, conversations.list, …) — the real
       // SDK, its transport riding the connection secret's substituting egress
@@ -2089,11 +2259,30 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       instructions:
         "First-party email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. From ANY agent scope, send binds the conversation to the calling agent: replies to that mail arrive as this agent's inputs, and reply({ text }) answers the latest counterpart with correct threading headers. Both take attachments: [{ path }] (project files via itx.files, any file type) or [{ filename, data }] (inline base64); limits 32 files / 5 MiB total. Both return { messageId }.",
       children: {
+        processor:
+          "The email router's stream processor (the project-class host at /integrations/email).",
         send: "Send one email from the project's address; agent scopes get replies routed back to them. Returns { from, messageId }.",
         reply:
           "Reply within this agent's email conversation (email thread agents, or any agent that has sent/received project email); returns { from, to, messageId }.",
       },
       parent: "the project itx root",
+    });
+  }
+
+  /** The email router's stream processor: the project-class host Durable
+   * Object at /integrations/email, whose EmailProcessor routes inbound mail.
+   * Wake subscriptions for it persist `["email", "processor",
+   * "wakeStreamSubscriber"]`. */
+  get processor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.props.auth,
+      host: () =>
+        env.PROJECT.getByName(
+          DurableObjectNameCodec.stringify({
+            path: EMAIL_INTEGRATION_STREAM_PATH,
+            projectId: this.props.projectId,
+          }),
+        ) as unknown as ProcessorHostStub,
     });
   }
 
@@ -2267,8 +2456,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName,
           idempotencyKey: `stream/subscription-configured:${durableObjectName}#${EmailAgentProcessorContract.slug}`,
+          processor: ["agents", ["get", scopePath], "processor"],
           processorSlug: EmailAgentProcessorContract.slug,
-          subscriberType: "agent",
         }),
       ),
     ]);
@@ -2579,8 +2768,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /** The agent stream processor (snapshot/state). */
-  get processor(): StreamProcessorRpc<AgentProcessorState> {
-    return new ProcessorRelayRpcTarget<AgentProcessorState>(() => this.durableObjectStub.processor);
+  get processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
+    return new ProcessorRelayRpcTarget<AgentProcessorState>({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
   }
 
   /** The agent's own event stream. */
@@ -2952,16 +3144,16 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
             projectId: registered.projectId,
             path: "/",
           }),
+          processor: ["processor"],
           processorSlug: ProjectProcessorContract.slug,
-          subscriberType: "project",
         }),
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName: streamDurableObjectName({
             projectId: registered.projectId,
             path: PROJECT_REPO_PATH,
           }),
+          processor: ["repos", ["get", PROJECT_REPO_PATH], "processor"],
           processorSlug: RepoProcessorContract.slug,
-          subscriberType: "repo",
         }),
         {
           type: "events.iterate.com/project/create-requested",
@@ -2997,8 +3189,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
                   path: EMAIL_INTEGRATION_STREAM_PATH,
                 }),
                 idempotencyKey: `email-router-subscription:${registered.projectId}`,
+                processor: ["email", "processor"],
                 processorSlug: EmailProcessorContract.slug,
-                subscriberType: "project",
               }),
               {
                 type: "events.iterate.com/email/sender-allowed",
@@ -3246,6 +3438,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     );
   }
 
+  /** This scope's capability-host stream processor (snapshot/state). A real
+   * member, so it also claims the name: mounts cannot shadow `processor`. */
+  get processor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.#props.auth,
+      host: () => this.#durableObject as unknown as ProcessorHostStub,
+    });
+  }
+
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvisionRpcTarget> {
     rejectBuiltinCollision(ITX_SURFACE_MEMBER_NAMES, input.path);
@@ -3356,6 +3557,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
+  processEventBatch:
+    "The project's event-batch dispatch point: streams' birth-certificate feeds deliver here; delegates to worker.processEventBatch.",
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
@@ -3496,10 +3699,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
-  get processor(): StreamProcessorRpc<ProjectProcessorState> {
-    return new ProcessorRelayRpcTarget<ProjectProcessorState>(
-      () => this.durableObjectStub.processor,
-    );
+  get processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
+    return new ProcessorRelayRpcTarget<ProjectProcessorState>({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
   }
 
   /** Workers AI: run(model, body), models(). */
@@ -3712,6 +3916,27 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
+   * "The project processes this event batch" — the first-party dispatch point
+   * every project-scoped stream's birth-certificate feed names
+   * (`expression: ["processEventBatch"]`). Today it delegates verbatim to the
+   * repo-backed project worker; it exists so the persisted expression names
+   * the INTENT rather than the implementation. That indirection is the
+   * platform's adaptation point: envelope evolution happens here in
+   * deployment code instead of by patching user repos, and future first-party
+   * per-event work (policy, metrics, indexing feeds) can join the same
+   * ordered, checkpointed delivery — with one rule when it does: platform
+   * steps must be idempotent and must never throw; only the worker delegation
+   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
+   * such steps until a real second consumer earns its place.
+   *
+   * Same trust model as `worker.processEventBatch` itself: any project
+   * principal may call it.
+   */
+  processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    return this.worker.processEventBatch(batch);
+  }
+
+  /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
    * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
@@ -3756,6 +3981,18 @@ export function itxForScope(props: {
     ctx: props.ctx,
     projectId: props.projectId,
   });
+}
+
+/**
+ * The deployment-global trusted root: what a GLOBAL (`projectId: null`)
+ * stream's delivery dial evaluates expressions against (`ItxEntrypoint.get()`
+ * with `projectId: null` props). Session-shaped on purpose — deployment-wide
+ * repos/streams live on the session — so a global repo stream's wake
+ * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
+ * walks the same shape a project stream's does.
+ */
+export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext }) {
+  return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
 }
 
 async function projectProcessorState(projectId: string) {
@@ -4267,6 +4504,17 @@ function exampleSummary(example: ItxExample): ItxExampleSummary {
 }
 
 /**
+ * Narrow structural view of a processor-hosting Durable Object stub: every
+ * host class (agent, capability-host, project, repo, scheduler, secret)
+ * exposes the same `processor` facade property and the same host-level wake
+ * handshake, so the relay works over one shape instead of six stub types.
+ */
+type ProcessorHostStub = {
+  processor: PromiseLike<unknown>;
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+};
+
+/**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
  *
  * A DO stub's `.processor` is a Workers RPC PROPERTY read, and method calls
@@ -4280,20 +4528,28 @@ function exampleSummary(example: ItxExample): ItxExampleSummary {
  * across capnweb. This relay is a real RpcTarget at the property position:
  * each method awaits the resolved processor stub, then makes a plain method
  * call on it.
+ *
+ * It is also the host's WAKE DOOR (see {@link WakeableStreamProcessorRpc}):
+ * `wakeStreamSubscriber` forwards to the host Durable Object's top-level
+ * handshake, gated to trusted-internal because the handshake's sink drives
+ * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
+ * exists to close for `ingest`).
  */
 class ProcessorRelayRpcTarget<State>
   extends IterateRpcRelay<"StreamProcessorRpc">
-  implements StreamProcessorRpc<State>
+  implements WakeableStreamProcessorRpc<State>
 {
-  readonly #resolveProcessor: () => PromiseLike<unknown>;
+  readonly #auth: ItxAuth;
+  readonly #host: () => ProcessorHostStub;
 
-  constructor(resolveProcessor: () => PromiseLike<unknown>) {
+  constructor(args: { auth: ItxAuth; host: () => ProcessorHostStub }) {
     super();
-    this.#resolveProcessor = resolveProcessor;
+    this.#auth = args.auth;
+    this.#host = args.host;
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
-    return (await this.#resolveProcessor()) as StreamProcessorRpc<State>;
+    return (await this.#host().processor) as StreamProcessorRpc<State>;
   }
 
   async snapshot() {
@@ -4310,6 +4566,16 @@ class ProcessorRelayRpcTarget<State>
 
   async waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
     return await (await this.#processor()).waitUntilEvent(input);
+  }
+
+  /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */
+  wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    if (this.#auth.principal !== "trusted-internal") {
+      throw new Error("wakeStreamSubscriber is dialed by stream delivery spines, not sessions");
+    }
+    return this.#host().wakeStreamSubscriber(request);
   }
 }
 

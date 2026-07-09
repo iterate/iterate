@@ -950,25 +950,20 @@ return { link, github: state.state.github, lastGithubPush: state.state.lastGithu
 `.trim(),
   },
   {
-    id: "stream-cross-post-rule",
-    title: "Cross-post matching events between streams with a rule",
+    id: "stream-cross-post",
+    title: "Cross-post matching events between streams",
     description:
-      'Streams have a built-in rule primitive: append events.iterate.com/stream/rule-configured with { ruleId, type: "cross-post", path, eventTypes, condition? } and every later matching event is copied to the target stream. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), rules never copy into a stream already on the chain (cycles are safe), and rule-removed deletes a rule.',
+      "stream.crossPostTo({ path, eventTypes, condition? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's ingest sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const source = itx.streams.get(vars.source ?? "/examples/cross-post/source");
 const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
 
-await source.append({
-  type: "events.iterate.com/stream/rule-configured",
-  payload: {
-    ruleId: "copy-important",
-    type: "cross-post",
-    path: vars.target ?? "/examples/cross-post/target",
-    eventTypes: ["events.iterate.example/note"],
-    condition: 'payload.importance = "high"', // JSONata over the event; optional
-  },
+await source.crossPostTo({
+  path: vars.target ?? "/examples/cross-post/target",
+  eventTypes: ["events.iterate.example/note"],
+  condition: 'payload.importance = "high"', // JSONata over the event; optional
 });
 
 await source.append(

@@ -1,72 +1,46 @@
 import { DurableObject } from "cloudflare:workers";
-import jsonata from "@mmkal/jsonata/sync";
 import { z } from "zod";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import type { DynamicWorkerRef } from "../workers/schemas.ts";
-import { defaultProjectWorkerRef } from "../repos/utils.ts";
-import { buildCrossPostAppendInput, type CrossPostProvenanceChain } from "./cross-post.ts";
-import type { ProcessorRuntimeState, StreamSubscriptionHandle } from "./rpc-types.ts";
+import { buildIngestAppendInputs } from "./cross-post.ts";
+import type {
+  ProcessorRuntimeState,
+  StreamPushEventBatch,
+  StreamSubscriptionHandle,
+} from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
-import type { StreamSubscriberWakeRequest } from "./stream-processor-host.ts";
-import { StreamEventLog } from "./stream-storage.ts";
-import { StreamConnections, type ConnectionRuntimeState } from "./stream-connections.ts";
+import { compileEventSelector } from "./event-selector.ts";
 import {
-  ProjectWorkerDelivery,
-  type ProjectWorkerDeliveryRuntimeState,
-} from "./project-worker-delivery.ts";
-import type { StreamEventBatch } from "./rpc-types.ts";
+  reconcileSubscriptionCursorRows,
+  SqliteSubscriptionCursorStore,
+  StreamEventLog,
+} from "./stream-storage.ts";
+import {
+  StreamSubscribers,
+  type ConnectionRuntimeState,
+  type SubscriptionRuntimeState,
+} from "./stream-subscribers.ts";
+import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
-  type ConfiguredSubscriberDurableObjectType,
   type CoreProcessorState,
-  type ConfiguredStreamSubscriber,
-  type LiveStreamSubscriberDescriptor,
-  type StreamSubscriptionType,
+  type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
 
-/** DO-KV key holding the project worker delivery checkpoint (see ProjectWorkerDelivery). */
-const WORKER_DELIVERY_CHECKPOINT_KEY = "project-worker-delivery:checkpoint";
-
-// A delivery that needs a cold worker build gives up after this long and
-// retries later; the build itself survives via waitUntil, so the retry hits
-// the warm cache (see withBuildBudget in worker-loader.ts).
-const WORKER_DELIVERY_BUILD_BUDGET_MS = 15_000;
-
 /**
- * Backstop cap on a cross-post provenance chain. The structural cycle guard
- * (never post into a stream already on the chain) is the real protection; the
- * cap only bounds acyclic rule graphs nobody should build (a 5-hop relay is a
- * design smell, not a use case).
+ * The subscription key of the birth-certificate worker feed every
+ * project-scoped stream configures on itself (see the constructor). Userspace
+ * overrides it by re-appending `subscription-configured` with this same key.
  */
-const MAX_CROSS_POST_HOPS = 5;
-
-// Compiled-condition cache: rules re-evaluate on every matching append, and a
-// stream's rule set is small and stable, so compile-once is the sensible
-// steady state. Bounded so a pathological churn of rule expressions cannot
-// grow the map without limit (clearing wholesale is fine — recompiling is
-// cheap, correctness never depends on the cache).
-const compiledConditions = new Map<string, jsonata.Expression>();
-const MAX_COMPILED_CONDITIONS = 200;
-
-/** Parse a JSONata cross-post condition, throwing on invalid expressions. */
-function compileCrossPostCondition(condition: string): jsonata.Expression {
-  const cached = compiledConditions.get(condition);
-  if (cached !== undefined) return cached;
-  const compiled = jsonata(condition);
-  if (compiledConditions.size >= MAX_COMPILED_CONDITIONS) compiledConditions.clear();
-  compiledConditions.set(condition, compiled);
-  return compiled;
-}
+const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -84,9 +58,10 @@ function compileCrossPostCondition(condition: string): jsonata.Expression {
  *    before it becomes a durable fact.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
  *    (`stream-storage.ts`) when missing or version-skewed.
- * 4. Subscriptions — live delivery connections managed by
- *    `stream-connections.ts`; this class only decides policy (who may
- *    subscribe, which configured subscribers to wake, what facts to append).
+ * 4. Delivery — every lane (ephemeral connections, wake pokes, push drains)
+ *    lives in `stream-subscribers.ts`, dialing transports through
+ *    `subscriber-sinks.ts`; this class only decides policy (who may
+ *    subscribe, what a config event means, which facts to append).
  *
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`. This class is deliberately NOT
@@ -97,75 +72,111 @@ function compileCrossPostCondition(condition: string): jsonata.Expression {
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
-  readonly #connections = new StreamConnections({
+  /**
+   * The spine's durable cursor rows. A field (not inlined into the hooks)
+   * because the core-state rebuild path also reconciles these rows against
+   * the freshly folded config — see #readCoreProcessorState.
+   */
+  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
       readEvents: (args) => this.getEvents(args),
       coreState: () => this.#coreProcessorState,
-      appendConnectedFact: (payload) =>
-        this.#appendPresenceFact({
-          type: "events.iterate.com/stream/subscriber-connected",
-          payload,
-        }),
-      appendDisconnectedFact: (payload) =>
-        this.#appendPresenceFact({
-          type: "events.iterate.com/stream/subscriber-disconnected",
-          payload,
-        }),
-      onConfiguredConnectionLost: () => this.#reconcileConnections(),
+      store: this.#subscriptionCursorStore,
+      dial: createSubscriberDial({
+        projectId: this.name.projectId,
+        exports: this.ctx.exports,
+        onDurableDeliveryError: (subscriptionKey, error) =>
+          this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
+      }),
+      appendFact: (event) => {
+        // Facts the delivery machinery produces (presence, parked, poison
+        // records) are observations; appending one must never mask the
+        // delivery-path operation that produced it, so failures log.
+        try {
+          this.append(event);
+        } catch (error) {
+          console.error("stream delivery fact append failed", { type: event.type, error });
+        }
+      },
+      now: () => Date.now(),
+      random: () => Math.random(),
+      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
-  /**
-   * Checkpointed delivery of every committed event to the project's default
-   * worker (`processEventBatch`). Derived, not configured: every project-scoped
-   * stream has exactly this one delivery, so it needs no subscription event and
-   * cannot drift. Global streams have no project worker to deliver to.
-   */
-  readonly #workerDelivery: ProjectWorkerDelivery | null =
-    this.name.projectId === null
-      ? null
-      : new ProjectWorkerDelivery({
-          readEvents: (args) => this.getEvents(args),
-          coreState: () => this.#coreProcessorState,
-          readCheckpoint: () =>
-            this.ctx.storage.kv.get<number>(WORKER_DELIVERY_CHECKPOINT_KEY) ?? 0,
-          writeCheckpoint: (offset) =>
-            this.ctx.storage.kv.put(WORKER_DELIVERY_CHECKPOINT_KEY, offset),
-          deliver: (batch) => this.#deliverToProjectWorker(batch),
-        });
-  // subscriptionKeys with a configured subscriber wakeup in flight, so concurrent
-  // reconciliation runs never wake the same subscriber twice.
-  readonly #connecting = new Set<string>();
-  // Retry bookkeeping for failed configured-subscriber wakes. Without a retry,
-  // one transient RPC failure (subscriber cold start, cross-script hiccup)
-  // silences the subscription until the NEXT qualifying append — which for
-  // write-once streams like secrets may never come
-  // (tasks/stream-subscriber-deliveries-stall-mid-turn.md). In-memory is
-  // deliberate: an eviction drops the timers, but the durable subscription
-  // config survives and the next append or subscriber read re-wakes.
-  readonly #wakeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  readonly #wakeRetryAttempts = new Map<string, number>();
   #coreProcessorState: CoreProcessorState;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
 
-    // The first boot appends the `created` fact; every wake (fetch, RPC, alarm)
-    // appends a `woken` fact. The woken fact is also what restores configured
-    // connections: the core processor's reconciler runs as its post-commit side
-    // effect, so a stream that wakes with configured subscriptions but no new
-    // appends still reconnects.
+    // The first boot appends the stream's birth certificate; every wake
+    // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
+    // also what re-establishes durable deliveries after hibernation.
+    //
+    // For project-scoped streams the birth certificate includes the worker
+    // feed: a `subscription-configured` push subscription to the project
+    // worker's `processEventBatch`, appended by the stream TO ITSELF in the
+    // same synchronous turn as `created`. Born-configured means zero wiring
+    // window — the feed is armed before the first user event can land (a
+    // voice stream streams from birth) — while remaining ordinary config:
+    // one registry, one spine, overridable by re-appending the same key.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
+      if (this.name.projectId !== null) {
+        this.append({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
+            delivery: { mode: "push", expression: ["processEventBatch"] },
+            // Everything, from the beginning: the worker sees the stream's
+            // full history once it first builds. No default selector —
+            // selection is the worker's own code (or a same-key override).
+            deliver: "all",
+            // One poison event must not silence a project's entire feed.
+            onPoison: "skip",
+          } satisfies SubscriptionConfiguredPayload,
+        });
+      }
     }
     this.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: crypto.randomUUID() },
     });
+  }
+
+  /** The DO alarm: the spine's durable retry timer. */
+  alarm(): void {
+    this.#alarmArmedForMs = null;
+    // The constructor's `woken` append already ran `#subscribers.wake()` via
+    // post-commit fan-out; this call re-arms the alarm for the next due retry
+    // (wake() itself only attempts rows whose backoff has elapsed).
+    this.#subscribers.onAlarm();
+  }
+
+  /**
+   * The earliest alarm time armed this incarnation, tracked in memory so two
+   * concurrent arms can't race each other through the async getAlarm/setAlarm
+   * pair (both observing null and the LATER one winning). Reset when the
+   * alarm fires; a stale-low value merely re-arms an already-set time.
+   */
+  #alarmArmedForMs: number | null = null;
+
+  /** Move the DO alarm earlier, never later (many rows share one alarm). */
+  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
+    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
+    this.#alarmArmedForMs = atMs;
+    try {
+      const current = await this.ctx.storage.getAlarm();
+      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
+    } catch (error) {
+      console.error("stream alarm arming failed", error);
+    }
   }
 
   // ===========================================================================
@@ -207,7 +218,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       // body against the contract schema, which has no `offset` key, so leaving
       // it attached made every asserted append of a core policy event fail with
       // a spurious "Unrecognized key: offset" instead of performing the assertion.
-      const { offset: expectedOffset, ...body } = StreamAppendInput.strict().parse(eventInput);
+      const { offset: expectedOffset, ...body } = StreamAppendInput.parse(eventInput);
 
       if (body.idempotencyKey !== undefined) {
         // Same-batch idempotency should behave like already-persisted idempotency.
@@ -236,7 +247,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       const previousState = workingState;
-      workingState = this.#reduce({ event: committed, state: previousState });
+      workingState = this.#reduce({ event: committed, state: previousState }, "append");
 
       // Core side effects are deferred until after the commit below: they can
       // call back into stream runtime state, so running them mid-batch would
@@ -263,35 +274,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#coreProcessorState = workingState;
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
-    // async, so nothing here can fail the append.
+    // async, so nothing here can fail the append. One wake covers every lane:
+    // live connection pumps re-arm, lagging wake subscribers get poked,
+    // lagging push subscriptions drain. The spine triggers on WATERMARK LAG,
+    // never on event types — a subscriber-disconnected fact whose teardown
+    // pre-advanced the watermark reconciles to a no-op instead of needing the
+    // event-type carve-out the old reconciler carried.
     for (const reduced of reducedEvents) this.#processEvent(reduced);
-    this.#connections.wake();
-    this.#workerDelivery?.wake();
-
-    // Re-wake any configured subscription left without a live connection (idle
-    // teardown, clean unsubscribe, …). The subscriber re-handshakes from its
-    // durable checkpoint, so replay covers this very event; a no-op once
-    // everything is connected.
-    //
-    // Exactly ONE event type is excluded as a re-wake trigger:
-    // `subscriber-disconnected`. `connection.close()` appends one as it removes
-    // the connection from the table, so at that instant `#needsConfiguredReconcile`
-    // is transiently true for the just-closed key — reconciling on it would
-    // immediately re-wake and undo every teardown. Re-wake must wait for the
-    // next genuine append. Every other event is safe: `woken` /
-    // `subscription-configured` / `subscriber-connected` all reach this line
-    // with the check already a no-op.
-    const hasRewakeTriggeringAppend = newEvents.some(
-      (event) => event.type !== "events.iterate.com/stream/subscriber-disconnected",
-    );
-    if (hasRewakeTriggeringAppend && this.#needsConfiguredReconcile()) {
-      this.#reconcileConnections();
-    }
+    this.#subscribers.wake();
 
     // Re-arm (or clear) the idle timer against the post-append connection set,
-    // so a stream that just went quiet sheds its configured delivery sessions
+    // so a stream that just went quiet sheds its durable delivery sessions
     // and lets both DOs hibernate.
-    this.#connections.armOrClearIdleTimer();
+    this.#subscribers.armOrClearIdleTimer();
 
     return events;
   }
@@ -351,49 +346,54 @@ export class StreamDurableObject extends DurableObject<Env> {
    * stream itself can reject an append based on core state.
    */
   #validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
-    if (args.event.type === "events.iterate.com/stream/subscription-configured") {
-      // Configured subscriptions are durable desired state. Once this event is
-      // committed, the reducer stores it in `configuredSubscribersByKey` and the
-      // stream is allowed to re-wake that subscriber forever. So target
-      // validation must happen here, before offset assignment and storage — not
-      // inside the later fire-and-forget wake path, where the invalid target
-      // would already be durable state that every future append re-reconciles.
-      // The lifecycle e2e tests ("configured durable object subscribers must
-      // target the stream project" and friends) assert both the rejection and
-      // that no event was committed.
+    // Control facts must be first-hand: a copied (cross-posted) stream/*
+    // control event is stored and visible but must never fold or validate as
+    // config — otherwise a cross-post subscription matching stream/* would
+    // replicate CONFIGURATION into its target (config propagation by copy).
+    // The reducer applies the same guard on the fold side.
+    const isFirstHand = args.event.source?.crossPostedFrom === undefined;
+
+    if (isFirstHand && args.event.type === "events.iterate.com/stream/subscription-configured") {
+      // Durable subscriptions are desired state. Once this event is committed,
+      // the reducer stores it and the spine is allowed to deliver against it
+      // forever. So validation must happen here, before offset assignment and
+      // storage — not inside the later fire-and-forget delivery path, where an
+      // invalid target/expression would already be durable state every future
+      // append re-reconciles. The lifecycle e2e tests assert both the
+      // rejection and that no event was committed.
+      // The contract schema already carries the structural delivery
+      // validation (expression grammar + the property-step tail rule, webhook
+      // URL shape); cross-project reach needs no check at all because
+      // persisted expressions are NAMES — every delivery re-derives authority
+      // from THIS stream's own itx root (project-scoped, or the deployment
+      // root for projectId: null streams).
       const event = CoreProcessorContract.parseEventInput(
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
-      this.#validateConfiguredSubscriberTarget(event.payload.subscriber);
-    }
-
-    if (args.event.type === "events.iterate.com/stream/rule-configured") {
-      const event = CoreProcessorContract.parseEventInput(
-        "events.iterate.com/stream/rule-configured",
-        args.event,
-      );
-      this.#validateStreamRuleTarget(event.payload);
-      // A rule condition is durable desired state the cross-post path evaluates
-      // on every future matching append, so an unparseable expression must be
-      // rejected here — before it commits — not discovered as a per-event
-      // error forever after.
-      if (event.payload.condition !== undefined) {
-        compileCrossPostCondition(event.payload.condition);
+      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
+        // Webhook POSTs ride the project egress lane (attribution +
+        // interception); a global stream has no project to attribute them to.
+        throw new Error("webhook subscriptions require a project-scoped stream");
       }
+      // An unparseable selector condition must be rejected before it commits,
+      // not discovered as a per-event error forever after. (compile throws.)
+      compileEventSelector(event.payload.selector);
     }
 
     if (!args.state.paused) return;
 
-    // Presence facts pass through the pause door alongside resume/error/woken:
-    // a paused stream still has subscribers attaching (e.g. an operator's
-    // browser), and the roster must stay truthful for the stream to recover.
+    // Presence and park facts pass through the pause door alongside
+    // resume/error/woken: a paused stream still has subscribers attaching
+    // (e.g. an operator's browser) and deliveries failing, and both rosters
+    // must stay truthful for the stream to recover.
     switch (args.event.type) {
       case "events.iterate.com/stream/resumed":
       case "events.iterate.com/stream/error-occurred":
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/subscriber-connected":
       case "events.iterate.com/stream/subscriber-disconnected":
+      case "events.iterate.com/stream/subscription-parked":
         return;
       default:
         throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
@@ -409,13 +409,60 @@ export class StreamDurableObject extends DurableObject<Env> {
   // validated at the trust boundary (the KV read and event-log recovery path
   // both parse). Re-validating the growing record fields on every append was
   // quadratic work for no added safety.
-  #reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
+  /**
+   * `mode` decides what a fold failure means. On the APPEND path a parse
+   * failure must THROW — the fold is part of the pre-commit gate for every
+   * core event #validateAppend does not special-case, and swallowing it would
+   * let malformed facts commit (thermo round 2, blocker 2: live-proven on
+   * preview). On the REPLAY path (state rebuild from the log) the same
+   * failure folds as INERT — counters + breaker only — because the event is
+   * already durable and throwing would brick the constructor forever (the
+   * #1714 parse-poison posture; pre-v10 journal shapes are the expected case).
+   */
+  #reduce(
+    args: { event: StreamEvent; state: CoreProcessorState },
+    mode: "append" | "replay",
+  ): CoreProcessorState {
+    if (mode === "append") return this.#reduceCore(args);
+    try {
+      return this.#reduceCore(args);
+    } catch (error) {
+      console.error("stream core reduce skipped unparseable event", {
+        offset: args.event.offset,
+        type: args.event.type,
+        error,
+      });
+      return this.#reduceCircuitBreaker({
+        event: args.event,
+        state: {
+          ...args.state,
+          eventCount: args.state.eventCount + 1,
+          maxOffset: args.event.offset,
+        },
+      });
+    }
+  }
+
+  #reduceCore(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
     const parse = CoreProcessorContract.parseEvent;
     let next: CoreProcessorState = {
       ...args.state,
       eventCount: args.state.eventCount + 1,
       maxOffset: args.event.offset,
     };
+
+    // Control facts must be first-hand: a cross-posted copy of a stream/*
+    // control event is stored and visible (it still counts toward offsets and
+    // the circuit breaker) but INERT — it configures nothing, connects
+    // nothing, parks nothing. This closes the config-propagation-by-copy hole
+    // no matter what selectors people write. See #validateAppend for the
+    // matching write-side guard on subscription-configured.
+    if (
+      args.event.type.startsWith("events.iterate.com/stream/") &&
+      args.event.source?.crossPostedFrom !== undefined
+    ) {
+      return this.#reduceCircuitBreaker({ event: args.event, state: next });
+    }
 
     switch (args.event.type) {
       case "events.iterate.com/stream/created": {
@@ -465,14 +512,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         };
       }
 
-      case "events.iterate.com/stream/metadata-updated": {
-        const event = parse("events.iterate.com/stream/metadata-updated", args.event);
-        return this.#reduceCircuitBreaker({
-          event: args.event,
-          state: { ...next, metadata: event.payload.metadata },
-        });
-      }
-
       case "events.iterate.com/stream/configured": {
         const event = parse("events.iterate.com/stream/configured", args.event);
         const circuitBreaker = event.payload.config.circuitBreaker;
@@ -503,18 +542,6 @@ export class StreamDurableObject extends DurableObject<Env> {
             },
           },
         };
-        // A processor announcement on the connect event feeds the stream's
-        // contract documentation registry (`processorsBySlug`).
-        const announcement = subscriber?.processor?.announcement;
-        if (announcement !== undefined) {
-          next = {
-            ...next,
-            processorsBySlug: {
-              ...next.processorsBySlug,
-              [announcement.slug]: { announcedAtOffset: event.offset, announcement },
-            },
-          };
-        }
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
       }
 
@@ -536,7 +563,14 @@ export class StreamDurableObject extends DurableObject<Env> {
             ...next,
             configuredSubscribersByKey: {
               ...next.configuredSubscribersByKey,
-              [event.payload.subscriptionKey]: latestConfiguredEvent(event),
+              [event.payload.subscriptionKey]: {
+                latestConfiguredEvent: {
+                  offset: event.offset,
+                  type: event.type,
+                  payload: event.payload,
+                  createdAt: event.createdAt,
+                },
+              },
             },
           },
         });
@@ -552,28 +586,52 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       }
 
-      case "events.iterate.com/stream/rule-configured": {
-        const event = parse("events.iterate.com/stream/rule-configured", args.event);
+      case "events.iterate.com/stream/subscription-parked": {
+        const event = parse("events.iterate.com/stream/subscription-parked", args.event);
+        const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
+        // A parked fact for a since-removed subscription folds to nothing.
+        if (existing === undefined) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
         return this.#reduceCircuitBreaker({
           event: args.event,
           state: {
             ...next,
-            rulesById: {
-              ...next.rulesById,
-              [event.payload.ruleId]: latestConfiguredEvent(event),
+            configuredSubscribersByKey: {
+              ...next.configuredSubscribersByKey,
+              [event.payload.subscriptionKey]: {
+                ...existing,
+                parkedAtOffset: event.payload.atOffset,
+              },
             },
           },
         });
       }
 
-      case "events.iterate.com/stream/rule-removed": {
-        const event = parse("events.iterate.com/stream/rule-removed", args.event);
-        const { [event.payload.ruleId]: _removed, ...rulesById } = next.rulesById;
+      case "events.iterate.com/stream/subscription-resumed": {
+        const event = parse("events.iterate.com/stream/subscription-resumed", args.event);
+        const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
+        if (existing === undefined) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
+        const { parkedAtOffset: _cleared, ...resumed } = existing;
         return this.#reduceCircuitBreaker({
           event: args.event,
-          state: { ...next, rulesById },
+          state: {
+            ...next,
+            configuredSubscribersByKey: {
+              ...next.configuredSubscribersByKey,
+              [event.payload.subscriptionKey]: resumed,
+            },
+          },
         });
       }
+
+      case "events.iterate.com/stream/subscription-cursor-set":
+        // The seek itself is a side effect on the spine's cursor row (see
+        // #processEvent); the fold only validates and counts the fact.
+        parse("events.iterate.com/stream/subscription-cursor-set", args.event);
+        return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       case "events.iterate.com/stream/child-stream-created": {
         const event = parse("events.iterate.com/stream/child-stream-created", args.event);
@@ -607,20 +665,52 @@ export class StreamDurableObject extends DurableObject<Env> {
   #processEvent(args: ReducedCoreEvent): void {
     this.#pauseIfCircuitBreakerTripped(args);
 
+    // Copied control events folded to nothing (first-hand guard in #reduce);
+    // they must produce no side effects either.
+    if (
+      args.event.type.startsWith("events.iterate.com/stream/") &&
+      args.event.source?.crossPostedFrom !== undefined
+    ) {
+      return;
+    }
+
     switch (args.event.type) {
-      case "events.iterate.com/stream/woken":
-      case "events.iterate.com/stream/subscription-configured":
-      case "events.iterate.com/stream/subscription-removed":
-        this.#reconcileConnections();
+      case "events.iterate.com/stream/subscription-configured": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-configured",
+          args.event,
+        );
+        this.#subscribers.onSubscriptionConfigured(event.payload, event.offset);
         return;
-      case "events.iterate.com/stream/rule-configured":
-      case "events.iterate.com/stream/rule-removed":
+      }
+      case "events.iterate.com/stream/subscription-removed": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-removed",
+          args.event,
+        );
+        this.#subscribers.onSubscriptionRemoved(event.payload.subscriptionKey);
         return;
+      }
+      case "events.iterate.com/stream/subscription-resumed": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-resumed",
+          args.event,
+        );
+        this.#subscribers.onResumed(event.payload.subscriptionKey, event.payload.afterOffset);
+        return;
+      }
+      case "events.iterate.com/stream/subscription-cursor-set": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-cursor-set",
+          args.event,
+        );
+        this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
+        return;
+      }
       case "events.iterate.com/stream/created":
         this.#announceToAncestors(args);
         return;
       default:
-        this.#crossPostMatchingRules(args);
         return;
     }
   }
@@ -685,7 +775,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#runInBackground(async () => {
       await Promise.all(
         ancestorPaths.map((ancestorPath) =>
-          this.appendToStreamPath(ancestorPath, {
+          this.#appendToStreamPath(ancestorPath, {
             type: "events.iterate.com/stream/child-stream-created",
             idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
             payload: { childPath: path },
@@ -696,308 +786,19 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Copy an event into every stream a matching cross-post rule targets.
-   *
-   * Every hop appends itself to the event's `source.crossPostedFrom` chain, so
-   * a multi-hop route stays legible end to end. Loop protection is structural:
-   * a copy is never posted into a stream that is already on the chain (which
-   * includes this stream, the newest hop), and the chain length is capped as a
-   * backstop against pathological rule graphs.
+   * Cross-post receiving end — an ordinary push SINK on the target stream
+   * (`(batch) => void`, the same shape every subscriber provides), reached by
+   * a source stream's push subscription (sugar: `crossPostTo`). All
+   * cross-post semantics — provenance, loop protection, idempotency keys, the
+   * optional JSONata transform — live in `cross-post.ts`; this method only
+   * appends the built inputs in its own synchronous turn.
    */
-  #crossPostMatchingRules(args: ReducedCoreEvent): void {
-    const chain = args.event.source?.crossPostedFrom ?? [];
-    if (chain.length >= MAX_CROSS_POST_HOPS) return;
-
-    const candidateRules = Object.values(args.state.rulesById)
-      .map(({ latestConfiguredEvent }) => latestConfiguredEvent.payload)
-      .filter((rule) => rule.eventTypes.includes(args.event.type));
-    if (candidateRules.length === 0) return;
-
-    const sourceProjectId = args.state.projectId ?? this.name.projectId;
-    const sourcePath = args.state.path ?? this.name.path;
-    const { createdAt, offset } = args.event;
-
-    this.#runInBackground(async () => {
-      await Promise.all(
-        candidateRules.map(async (rule) => {
-          const target = {
-            path: rule.path,
-            projectId: rule.projectId === undefined ? this.name.projectId : rule.projectId,
-          };
-          const hop = {
-            ruleId: rule.ruleId,
-            createdAt,
-            offset,
-            path: sourcePath,
-            projectId: sourceProjectId,
-            type: args.event.type,
-          };
-          const crossPostedFrom: CrossPostProvenanceChain = [...chain, hop];
-          const targetOnChain = crossPostedFrom.some(
-            (entry) => entry.projectId === target.projectId && entry.path === target.path,
-          );
-          if (targetOnChain) return;
-
-          if (rule.condition !== undefined) {
-            let matched: unknown;
-            try {
-              matched = compileCrossPostCondition(rule.condition).evaluate(args.event);
-            } catch (error) {
-              // The raw event stays authoritative; the durable error record
-              // just makes the skipped rule observable. Idempotent per
-              // (rule, offset) so redeliveries cannot spam it.
-              this.append({
-                type: "events.iterate.com/stream/error-occurred",
-                idempotencyKey: `cross-post-condition-failed:${rule.ruleId}:${offset}`,
-                payload: {
-                  message: `cross-post rule "${rule.ruleId}" condition failed on offset ${offset}: ${String(error)}`,
-                },
-              });
-              return;
-            }
-            if (matched !== true) return;
-          }
-
-          await this.#appendToStreamCoordinate(
-            target,
-            buildCrossPostAppendInput({
-              event: args.event,
-              crossPostedFrom,
-              idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
-            }),
-          );
-        }),
-      );
-    });
-  }
-
-  /** Fire-and-forget configured subscriber reconciliation; never blocks append. */
-  #reconcileConnections(): void {
-    try {
-      this.#reconcileConfiguredConnections();
-    } catch (error) {
-      console.error("Stream configured subscriber reconciliation failed", error);
-    }
-  }
-
-  /**
-   * Makes runtime configured connections match the persisted subscription config:
-   * closes connections whose config disappeared, wakes a subscriber for each
-   * configured subscription that has none. Triggered by woken/config changes and
-   * by configured connection loss, never per append.
-   */
-  #reconcileConfiguredConnections(): void {
-    const configured = this.#coreProcessorState.configuredSubscribersByKey;
-    for (const subscriptionKey of this.#connections.configuredKeys()) {
-      if (configured[subscriptionKey] === undefined) {
-        this.#connections.close(subscriptionKey, "subscription-removed");
-      }
-    }
-
-    for (const [subscriptionKey, entry] of Object.entries(configured)) {
-      if (
-        this.#connections.hasConfigured(subscriptionKey) ||
-        this.#connecting.has(subscriptionKey)
-      ) {
-        continue;
-      }
-
-      // Reserve the key before any await so a concurrent reconcile can't wake twice.
-      this.#connecting.add(subscriptionKey);
-      this.#runInBackground(async () => {
-        try {
-          await this.#wakeConfiguredSubscriber({ configured: entry, subscriptionKey });
-        } catch (error) {
-          console.error("Stream configured subscriber wakeup failed", { error, subscriptionKey });
-          this.#scheduleConfiguredWakeRetry(subscriptionKey);
-        } finally {
-          this.#connecting.delete(subscriptionKey);
-        }
-      });
-    }
-  }
-
-  /**
-   * True if a configured subscription currently has no live or in-flight
-   * connection and needs re-waking.
-   */
-  #needsConfiguredReconcile(): boolean {
-    return Object.keys(this.#coreProcessorState.configuredSubscribersByKey).some(
-      (subscriptionKey) =>
-        !this.#connections.hasConfigured(subscriptionKey) && !this.#connecting.has(subscriptionKey),
-    );
-  }
-
-  // Backoff retry for a failed configured-subscriber wake. Gives up after a
-  // bounded number of attempts (the subscriber is then genuinely broken, and
-  // every later append still re-triggers reconciliation).
-  #scheduleConfiguredWakeRetry(subscriptionKey: string): void {
-    const MAX_WAKE_RETRY_ATTEMPTS = 6;
-    if (this.#wakeRetryTimers.has(subscriptionKey)) return;
-    const attempt = (this.#wakeRetryAttempts.get(subscriptionKey) ?? 0) + 1;
-    this.#wakeRetryAttempts.set(subscriptionKey, attempt);
-    if (attempt > MAX_WAKE_RETRY_ATTEMPTS) {
-      console.error("Stream configured subscriber wakeup retries exhausted", {
-        subscriptionKey,
-        attempts: attempt - 1,
-      });
-      return;
-    }
-
-    const delayMs = Math.min(30_000, 500 * 2 ** (attempt - 1));
-    const timer = setTimeout(() => {
-      this.#wakeRetryTimers.delete(subscriptionKey);
-      if (!this.#needsConfiguredReconcile()) return;
-      this.#reconcileConnections();
-    }, delayMs);
-    this.#wakeRetryTimers.set(subscriptionKey, timer);
-  }
-
-  /**
-   * Ask a configured subscriber to subscribe back. This is the offer side of a
-   * live-capability handshake: the wake carries only serializable coordinates,
-   * and the woken subscriber responds with `subscribe({ configured: true })`,
-   * handing this stream a live `processEventBatch` callback capability (see
-   * `stream-processor-host.ts` for the subscriber side and
-   * `domains/capability-host/live-capability.ts` for the same pattern in itx).
-   */
-  async #wakeConfiguredSubscriber(args: {
-    configured: CoreProcessorState["configuredSubscribersByKey"][string];
-    subscriptionKey: string;
-  }): Promise<void> {
-    const { maxOffset, path, projectId } = this.#coreProcessorState;
-    if (projectId === undefined || path === undefined) {
-      throw new Error(
-        "Cannot wake configured subscriber before stream coordinates are initialized.",
-      );
-    }
-    const subscriber = args.configured.latestConfiguredEvent.payload.subscriber;
-    const request: StreamSubscriberWakeRequest = {
-      stream: { projectId, path, streamMaxOffset: maxOffset },
-      subscriptionKey: args.subscriptionKey,
-    };
-
-    // Belt-and-braces: normal writes are rejected in `validateAppend` before
-    // they become durable state. Keeping the same validation on the wake path
-    // protects older/broken persisted state and any future internal caller that
-    // reaches this method without going through append first.
-    this.#validateConfiguredSubscriberTarget(subscriber);
-
-    if (subscriber.type === "worker") {
-      await this.#wakeWorkerSubscriber(subscriber.workerRef, request);
-      return;
-    }
-    const durableObjectName = DurableObjectNameCodec.stringify(subscriber.address, {
-      allowNullProjectId: true,
-    });
-    await this.#configuredSubscriberDurableObject(
-      subscriber.type,
-      durableObjectName,
-    ).wakeStreamSubscriber(request);
-  }
-
-  #configuredSubscriberDurableObject(
-    type: ConfiguredSubscriberDurableObjectType,
-    durableObjectName: string,
-  ): ConfiguredSubscriberTarget {
-    const namespace = {
-      agent: this.env.AGENT,
-      "capability-host": this.env.CAPABILITY_HOST,
-      project: this.env.PROJECT,
-      repo: this.env.REPO,
-      scheduler: this.env.SCHEDULER,
-      secret: this.env.SECRET,
-    }[type];
-    return namespace.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
-  }
-
-  async #wakeWorkerSubscriber(
-    workerRef: DynamicWorkerRef,
-    request: StreamSubscriberWakeRequest,
-  ): Promise<void> {
-    if (this.name.projectId === null) {
-      throw new Error("configured worker subscribers require a project-scoped stream");
-    }
-    // The wake runs in the worker ref's own itx scope, carrying only
-    // serializable data.
-    await new DynamicWorkerRunner({
-      exports: this.ctx.exports,
+  ingest(batch: StreamPushEventBatch): void {
+    const inputs = buildIngestAppendInputs(batch, {
       projectId: this.name.projectId,
-      scopePath: workerRef.path,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
-    }).invokeCapability({
-      args: [request],
-      path: ["wakeStreamSubscriber"],
-      ref: workerRef,
+      path: this.name.path,
     });
-  }
-
-  /**
-   * One checkpointed delivery into the project's default worker. The batch is
-   * plain serializable data and the call is ordinary capability dispatch, so
-   * the worker sees exactly the envelope live subscribers get. Throws propagate
-   * to ProjectWorkerDelivery, which holds the checkpoint and retries.
-   */
-  async #deliverToProjectWorker(batch: StreamEventBatch): Promise<void> {
-    const projectId = this.name.projectId;
-    if (projectId === null) {
-      throw new Error("project worker delivery requires a project-scoped stream");
-    }
-    const ref = defaultProjectWorkerRef();
-    await new DynamicWorkerRunner({
-      exports: this.ctx.exports,
-      projectId,
-      scopePath: ref.path,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
-    }).invokeCapability({
-      args: [batch],
-      buildBudgetMs: WORKER_DELIVERY_BUILD_BUDGET_MS,
-      path: ["processEventBatch"],
-      ref,
-    });
-  }
-
-  #validateConfiguredSubscriberTarget(subscriber: ConfiguredStreamSubscriber): void {
-    if (subscriber.type === "worker") {
-      // Worker subscribers carry no Durable Object address: the wake path builds
-      // an itx/project scope from this stream's own projectId and invokes the
-      // DynamicWorkerRef inside it. That is why workers are safe for project
-      // streams without a separate target projectId field, and why global
-      // streams must reject them — there is no project boundary to supply.
-      if (this.name.projectId === null) {
-        throw new Error("configured worker subscribers require a project-scoped stream");
-      }
-      return;
-    }
-    // Durable Object subscribers do carry an address. Its projectId must equal
-    // the stream's projectId exactly; a global stream (`projectId: null`) may
-    // only target a global address, a project stream only Durable Objects in
-    // that same project. This is the configured-subscriber safety invariant:
-    // durable wakeup state must never encode cross-project authority.
-    const projectId = subscriber.address.projectId;
-    if (projectId !== this.name.projectId) {
-      throw new Error(
-        `configured ${subscriber.type} subscriber projectId ${projectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
-      );
-    }
-    if (projectId === null && subscriber.type !== "repo") {
-      throw new Error(`configured ${subscriber.type} subscribers must be project-scoped`);
-    }
-  }
-
-  #validateStreamRuleTarget(rule: { projectId?: string | null }): void {
-    // A cross-post writes into the target stream using THIS Stream DO's own
-    // authority, so a rule may only target streams within the source stream's
-    // own project scope (`undefined` = same project). Same cross-project safety
-    // invariant as configured subscribers: durable rule state must never let a
-    // project-scoped stream push events into a global or other-project stream,
-    // which would be a privilege escalation — global streams are admin-only.
-    const targetProjectId = rule.projectId === undefined ? this.name.projectId : rule.projectId;
-    if (targetProjectId === this.name.projectId) return;
-
-    throw new Error(
-      `cross-post rule target projectId ${targetProjectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
-    );
+    if (inputs.length > 0) this.append(...inputs);
   }
 
   #appendToStreamCoordinate(
@@ -1009,7 +810,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     ).append(...events);
   }
 
-  appendToStreamPath(path: string, ...events: StreamEventInput[]) {
+  #appendToStreamPath(path: string, ...events: StreamEventInput[]) {
     return this.#appendToStreamCoordinate({ path, projectId: this.name.projectId }, ...events);
   }
 
@@ -1025,19 +826,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     void promise.catch((error: unknown) => {
       console.error("stream core background work failed", error);
     });
-  }
-
-  /**
-   * Presence facts are observations appended exactly once per actual open/close,
-   * so they carry no idempotency keys. Close paths run during teardown where an
-   * append can fail; that must never mask the close itself, so failures log.
-   */
-  #appendPresenceFact(event: StreamEventInput): void {
-    try {
-      this.append(event);
-    } catch (error) {
-      console.error("stream presence fact append failed", { type: event.type, error });
-    }
   }
 
   // ===========================================================================
@@ -1058,29 +846,59 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const state = this.#catchUpCoreProcessorState(storedState);
 
+    if (!storedStateIsCurrent) {
+      // A version-mismatch rebuild replayed the config from the log, but the
+      // spine's SQLite cursor rows are storage and survived as-is — possibly
+      // describing a world the new fold no longer derives (a subscription
+      // whose config event no longer parses loses its config but kept its
+      // row; a row's backoff may blame code the new version replaced). Drop
+      // rows with no surviving config; keep progress (ackedOffset is
+      // monotonic truth about the same immutable log) but clear failure state
+      // so every survivor gets an immediate fresh try under the new fold.
+      reconcileSubscriptionCursorRows(
+        this.#subscriptionCursorStore,
+        new Set(Object.keys(state.configuredSubscribersByKey)),
+      );
+    }
+
     if (!storedStateIsCurrent || state.maxOffset !== storedState.maxOffset) {
       this.#writeCoreProcessorState(state);
     }
     return state;
   }
 
+  #stateVersionWritten = false;
+
   #writeCoreProcessorState(state: CoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
-    this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
+    // The version is a constant per deploy; re-putting it on every append is
+    // pure write amplification. Once per incarnation is exactly as durable.
+    if (!this.#stateVersionWritten) {
+      this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
+      this.#stateVersionWritten = true;
+    }
   }
 
   /** Fold any event-log rows past the checkpoint into the state (no side effects). */
   #catchUpCoreProcessorState(state: CoreProcessorState): CoreProcessorState {
     const highestOffset = this.#log.highestOffset();
     let next = state;
-    if (highestOffset <= next.maxOffset) return next;
-    for (const event of this.#log.getRange({
-      afterOffset: next.maxOffset,
-      beforeOffset: highestOffset + 1,
-      limit: highestOffset - next.maxOffset,
-    })) {
-      if (event.offset <= next.maxOffset) continue;
-      next = this.#reduce({ event, state: next });
+    // PAGED, never one monolithic read: this is also the version-bump rebuild
+    // path (replay from offset 0), and a capture stream's full log
+    // materialized into one array can exceed the DO's 128MB heap — an OOM in
+    // the CONSTRUCTOR, i.e. a stream bricked on every wake. The fold is
+    // incremental; only the read needed paging.
+    while (next.maxOffset < highestOffset) {
+      const page = this.#log.getRange({
+        afterOffset: next.maxOffset,
+        beforeOffset: highestOffset + 1,
+        limit: 500,
+      });
+      if (page.length === 0) break;
+      for (const event of page) {
+        if (event.offset <= next.maxOffset) continue;
+        next = this.#reduce({ event, state: next }, "replay");
+      }
     }
     return next;
   }
@@ -1120,41 +938,27 @@ export class StreamDurableObject extends DurableObject<Env> {
    * state-only subscription: same batches, `events` always `[]`, consecutive
    * appends coalesced into one state delivery.
    *
-   * This is the ONLY way a delivery connection is opened. Ephemeral and
-   * configured subscriptions share this verb and everything behind it; the
-   * `configured: true` branch below is just a different admission rule for
-   * the same connection machinery.
+   * This verb opens EPHEMERAL subscriptions only — session-scoped, forgotten
+   * on disconnect, zero return frames on the wire. Durable subscriptions are
+   * desired state (`subscription-configured` events); their connections are
+   * created exclusively by the stream's own spine (a poke's returned sink),
+   * never by an inbound subscribe call.
    */
   subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
-    if (args.configured === true) {
-      // The configured-subscriber handshake response: a woken subscriber calls
-      // the same public verb with its durable subscriptionKey to hand the
-      // stream its live `processEventBatch` callback (see
-      // `#wakeConfiguredSubscriber`). `StreamRpcTarget` restricts
-      // `configured: true` to trusted-internal callers.
-      const subscriptionKey = args.subscriptionKey?.trim() ?? "";
-      if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
-      if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] === undefined) {
-        throw new Error(`configured subscriber "${subscriptionKey}" is not configured`);
-      }
-      return this.#openSubscription({ ...args, subscriptionKey, subscriptionType: "configured" });
-    }
-
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
-      throw new Error(
-        `subscriptionKey "${subscriptionKey}" is reserved for a configured subscriber`,
-      );
+      throw new Error(`subscriptionKey "${subscriptionKey}" is reserved for a durable subscriber`);
     }
-    return this.#openSubscription({ ...args, subscriptionKey, subscriptionType: "ephemeral" });
-  }
+    if (
+      args.replayAfterOffset !== undefined &&
+      (!Number.isInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+    ) {
+      // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
+      // an unvalidated cursor produces a live-looking subscription that
+      // silently delivers nothing forever.
+      throw new Error(`replayAfterOffset must be a non-negative integer`);
+    }
 
-  #openSubscription(
-    args: Parameters<Stream["subscribe"]>[0] & {
-      subscriptionKey: string;
-      subscriptionType: StreamSubscriptionType;
-    },
-  ): StreamSubscriptionHandle {
     // Validate the caller-supplied descriptor at the boundary. The public
     // `Stream.subscribe` contract types `subscriber` as `unknown`, so without
     // this check a malformed descriptor would only fail later, deep inside the
@@ -1162,36 +966,34 @@ export class StreamDurableObject extends DurableObject<Env> {
     // append is wrapped in a catch-and-log, so the connection would already be
     // live and delivering with NO entry on the presence roster — the runtime
     // connection table and its event-sourced mirror would silently disagree.
-    // Parsing the serializable projection here rejects the subscribe call before
-    // any connection is registered; the live `getRuntimeState` capability is not
-    // part of the serializable descriptor and is passed through separately.
-    const subscriber = args.subscriber as LiveStreamSubscriberDescriptor | undefined;
+    // The live `getRuntimeState` capability rides as a SIBLING argument (the
+    // same position the wake handshake gives it), never inside the descriptor.
     const presence =
-      subscriber === undefined ? undefined : StreamSubscriberDescriptorSchema.parse(subscriber);
+      args.subscriber === undefined
+        ? undefined
+        : StreamSubscriberDescriptorSchema.parse(args.subscriber);
 
-    const connection = this.#connections.open({
-      subscriptionKey: args.subscriptionKey,
-      subscriptionType: args.subscriptionType,
-      processEventBatch: args.processEventBatch,
-      replayAfterOffset: args.replayAfterOffset,
-      eventTypes: args.eventTypes,
-      events: args.events,
-      presence,
-      getRuntimeState: subscriber?.processor?.getRuntimeState,
+    // One filter shape everywhere: `eventTypes` is sugar for the selector's
+    // type list (compileEventSelector also validates any condition upfront).
+    const selector = compileEventSelector({
+      ...args.selector,
+      ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
     });
 
-    // A live connection resets the wake-retry ledger for its key.
-    this.#wakeRetryAttempts.delete(args.subscriptionKey);
-    const pendingRetry = this.#wakeRetryTimers.get(args.subscriptionKey);
-    if (pendingRetry !== undefined) {
-      clearTimeout(pendingRetry);
-      this.#wakeRetryTimers.delete(args.subscriptionKey);
-    }
+    const connection = this.#subscribers.openEphemeral({
+      subscriptionKey,
+      sink: args.processEventBatch,
+      replayAfterOffset: args.replayAfterOffset,
+      selector,
+      events: args.events,
+      presence,
+      getRuntimeState: args.getRuntimeState,
+    });
 
     return new StreamSubscriptionRpcTarget({
       close: () => connection.close("unsubscribed"),
       isLive: () => connection.isLive(),
-      subscriptionKey: args.subscriptionKey,
+      subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
   }
@@ -1269,21 +1071,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.#connections.getProcessorRuntimeState(args.subscriptionKey);
+    return this.#subscribers.getProcessorRuntimeState(args.subscriptionKey);
   }
 
   runtimeState(): {
     coreProcessorState: CoreProcessorState;
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
-      workerDelivery: ProjectWorkerDeliveryRuntimeState | null;
+      subscriptions: Record<string, SubscriptionRuntimeState>;
     };
   } {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
-        connections: this.#connections.runtimeState(),
-        workerDelivery: this.#workerDelivery?.runtimeState() ?? null,
+        connections: this.#subscribers.connectionRuntimeState(),
+        subscriptions: this.#subscribers.subscriptionRuntimeState(),
       },
     };
   }
@@ -1292,9 +1094,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   // Operator/admin verbs.
   // ===========================================================================
 
-  /** Sever every idle configured connection now — the idle timer's action, exposed for tests/operators. */
+  /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
   runIdleTeardownNow(): void {
-    this.#connections.runIdleTeardownNow();
+    this.#subscribers.runIdleTeardownNow();
   }
 
   /**
@@ -1317,9 +1119,11 @@ export class StreamDurableObject extends DurableObject<Env> {
  * What `append` accepts over the wire: a public event input plus the optional
  * `offset` optimistic-concurrency assertion (split off before validation).
  */
+// Built ONCE: constructing a zod schema per appended event cost ~20µs/event
+// inside the synchronous commit turn (~50x the hoisted parse).
 const StreamAppendInput = StreamEventInputSchema.extend({
   offset: z.number().int().nonnegative().optional(),
-});
+}).strict();
 
 /**
  * One committed event with the core state before and after reducing it — what
@@ -1331,27 +1135,6 @@ type ReducedCoreEvent = {
   previousState: CoreProcessorState;
   state: CoreProcessorState;
 };
-
-/**
- * Builds the durable desired-state record the core reducer stores for
- * configured subscriptions and cross-post rules: the latest committed
- * configuration event, verbatim. Generic so the stored record keeps the
- * event's literal `type` (the state schema requires it).
- */
-function latestConfiguredEvent<
-  Event extends Pick<StreamEvent, "offset" | "type" | "payload" | "createdAt">,
->(
-  event: Event,
-): { latestConfiguredEvent: Pick<Event, "offset" | "type" | "payload" | "createdAt"> } {
-  return {
-    latestConfiguredEvent: {
-      offset: event.offset,
-      type: event.type,
-      payload: event.payload,
-      createdAt: event.createdAt,
-    } as Pick<Event, "offset" | "type" | "payload" | "createdAt">,
-  };
-}
 
 function resetCircuitBreaker(
   circuitBreaker: CoreProcessorState["circuitBreaker"],
@@ -1365,15 +1148,6 @@ function resetCircuitBreaker(
     trippedAtOffset: null,
   };
 }
-
-/**
- * The one method a configured subscriber Durable Object must expose. Stubs are
- * cast to this shape because the generated DurableObjectStub types would
- * otherwise chase each target class's full internal surface.
- */
-type ConfiguredSubscriberTarget = {
-  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<void>;
-};
 
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {

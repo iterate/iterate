@@ -15,6 +15,14 @@ export default defineConfig({
     },
   },
   test: {
+    server: {
+      deps: {
+        // Ships ESM with extensionless relative imports — fine for the vite
+        // bundle, but Node's ESM resolver (vitest's default for deps) rejects
+        // them; inlining lets vite resolve the package instead.
+        inline: ["codemirror-json-schema"],
+      },
+    },
     // Route `/api2/test` is implemented as `api2.test.ts` — not a Vitest file.
     exclude: [...defaultExclude, "e2e/**", "**/src/routes/**/*.test.ts", "**/*.workerd.test.ts"],
     fileParallelism: false,

@@ -2,11 +2,12 @@ import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
 import {
   assertObjectProcessorState,
+  cachedEventSchema,
   getConsumedEventDefinition,
   getEventInputSchema,
-  getEventSchema,
   getResolvedEventDefinition,
   type ConsumedEvent,
   type EmittedInput,
@@ -113,20 +114,20 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
 /**
  * A durable checkpoint: the reduced state plus the highest stream offset that
  * has been fully reduced and processed. Written atomically per batch.
+ *
+ * The canonical shapes live in rpc-types.ts (`ProcessorSnapshot` /
+ * `ProcessorRuntimeState`, the published contract); these are aliases under
+ * the engine's historical names so the two can never drift apart.
  */
-export type StreamProcessorSnapshot<State> = {
-  offset: number;
-  state: State;
-};
+export type StreamProcessorSnapshot<State> = ProcessorSnapshot<State>;
 
 /**
  * A processor's inspectable live state. `snapshot` is the durable checkpoint;
  * `runtime` is operational data useful to UIs and operators but not part of
  * replay correctness.
  */
-export type StreamProcessorRuntimeState<State> = {
+export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & {
   snapshot: StreamProcessorSnapshot<State>;
-  runtime?: Record<string, unknown>;
 };
 
 /** Callback registered via `onStateChange`; may be a remote RPC stub. */
@@ -482,8 +483,9 @@ export abstract class StreamProcessor<
     if (eventDefinition === undefined) return undefined;
 
     // Rebuilding the parser from the catalog key and payload schema keeps replay
-    // and live delivery on the same validation path.
-    const parsed = getEventSchema({
+    // and live delivery on the same validation path. Cached: constructing the
+    // zod wrapper per event cost ~20µs on the hot reduce path.
+    const parsed = cachedEventSchema({
       type: args.event.type,
       payloadSchema: eventDefinition.payloadSchema,
     }).safeParse(args.event);

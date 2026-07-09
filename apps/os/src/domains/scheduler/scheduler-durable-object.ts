@@ -1,10 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";
@@ -117,7 +118,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return this.#schedulerProcessor.listScheduleViews();
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 

@@ -9,10 +9,11 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
 import {
@@ -106,7 +107,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // door's belt-and-braces append) configured its subscription.
   readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 

@@ -3,10 +3,11 @@ import type { Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import {
@@ -94,7 +95,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     };
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
