@@ -104,6 +104,24 @@ const network = vi.hoisted(() => {
               return Response.json({ message: "Not Found" }, { status: 404 });
             }
             if (request.method === "POST" && /^\/orgs\/[^/]+\/repos$/.test(url.pathname)) {
+              if (network.state.githubCreateStatus === 422) {
+                // What real GitHub answers when the name is taken — the shape
+                // the exists-but-not-selected detection keys off.
+                return Response.json(
+                  {
+                    errors: [
+                      {
+                        code: "custom",
+                        field: "name",
+                        message: "name already exists on this account",
+                        resource: "Repository",
+                      },
+                    ],
+                    message: "Repository creation failed.",
+                  },
+                  { status: 422 },
+                );
+              }
               if (network.state.githubCreateStatus !== 201) {
                 return Response.json(
                   { message: "Resource not accessible by integration" },
@@ -245,6 +263,25 @@ describe("linkRepoToGithub", () => {
     network.state.githubCreateStatus = 403;
 
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(/could not be created/);
+    // Nothing was linked and no rule was installed.
+    expect(network.repoCalls).toEqual([]);
+    expect(
+      network.streams
+        .get(CONNECTION_STREAM)
+        ?.some((event) => event.type === "events.iterate.com/stream/rule-configured"),
+    ).toBe(false);
+  });
+
+  test("names the real cause when the repo exists but the installation cannot see it", async () => {
+    seedConnectedFact();
+    // GET /repos 404s (unselected repos are invisible to the installation)
+    // while the create 422s on the taken name — the exists-but-no-access case.
+    network.state.githubRepoExists = false;
+    network.state.githubCreateStatus = 422;
+
+    await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
+      /exists, but connection "install-789" \(App installation 789\) has no access to it.*github\.com\/organizations\/acme\/settings\/installations\/789/,
+    );
     // Nothing was linked and no rule was installed.
     expect(network.repoCalls).toEqual([]);
     expect(

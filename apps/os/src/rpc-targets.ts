@@ -59,11 +59,7 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import {
-  PROJECT_REPO_PATH,
-  PROJECT_WORKER_ENTRY_POINT,
-  PROJECT_WORKER_SOURCE_EXCLUDE,
-} from "./domains/repos/utils.ts";
+import { defaultProjectWorkerRef, PROJECT_REPO_PATH } from "./domains/repos/utils.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -122,7 +118,6 @@ import type {
   DynamicWorkerDispatchOptions,
   DynamicWorkerRef,
   ProjectWorker,
-  StatelessDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import {
@@ -153,6 +148,8 @@ import type {
   EditRepoFileResult,
   GithubSyncResult,
   LinkGithubResult,
+  RepoCommitDetails,
+  RepoLogResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -228,6 +225,12 @@ import {
 } from "./domains/email/utils.ts";
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
+import {
+  agentDefaultsForPath,
+  deploymentDefaultLlmProvider,
+  type AgentDefaultPolicy,
+  type AgentDefaultsOverrides,
+} from "./domains/agents/agent-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -401,11 +404,16 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state and open connections. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
+      workerDelivery: {
+        checkpoint: number;
+        consecutiveFailures: number;
+        retryScheduled: boolean;
+      } | null;
     };
   }> {
     return this.durableObjectStub.runtimeState();
@@ -632,6 +640,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return describeNode({
       instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
+        commitDetails:
+          "One commit's metadata plus its changed files with +/- line counts, diffed against its first parent ({ commitOid }).",
         commitFiles:
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
@@ -639,12 +649,13 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
+        log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile:
-          'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
+          'Read one file ({ path, encoding?, commitOid? }); encoding "base64" for binary files (images, PDFs), commitOid for a pinned read at a historic commit.',
         syncFromGithub:
-          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits).",
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
@@ -706,10 +717,30 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /**
-   * Committed file contents at HEAD; null when the path does not exist.
-   * `encoding: "base64"` reads raw bytes (images, PDFs) base64-encoded.
+   * Commit history of a branch, newest first — oid, message, author,
+   * timestamp (epoch ms), parent oids. Deliberately without per-commit file
+   * stats (those cost tree checkouts per commit); fetch them lazily per
+   * commit through `commitDetails`.
    */
-  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
+  log(input: { branch?: string; limit?: number } = {}): Promise<RepoLogResult> {
+    return this.#durableObjectStub.log(input);
+  }
+
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (the whole tree for the root commit), with `git diff --numstat`-shaped
+   * +/- line counts; binary files are flagged instead of counted.
+   */
+  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails> {
+    return this.#durableObjectStub.commitDetails(input);
+  }
+
+  /**
+   * Committed file contents at HEAD — or, with `commitOid`, pinned to that
+   * commit — null when the path does not exist there. `encoding: "base64"`
+   * reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -762,8 +793,13 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * Fast-forward only: fails when this repo has commits GitHub does not,
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
+   *
+   * Public repositories transfer server-side (any history size); private
+   * ones transfer in-process, where big histories need `depth`. `depth`
+   * prunes to the newest N commits — GitHub retains the full history, and a
+   * later deeper sync can always widen the window.
    */
-  syncFromGithub(input: { force?: boolean } = {}): Promise<GithubSyncResult> {
+  syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);
   }
 
@@ -835,7 +871,11 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     return describeNode({
       instructions:
         'Agent catalog: get("/agents/<name>") returns the agent control surface; list() the known agent streams.',
-      children: { get: "One agent by path.", list: "Known agents (from project state)." },
+      children: {
+        get: "One agent by path.",
+        list: "Known agents (from project state).",
+        defaults: "The platform's default agent policy, as data (forPath).",
+      },
       parent: "a project itx (itx.agents)",
     });
   }
@@ -863,6 +903,50 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]> {
     return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  }
+
+  /** The platform's default agent policy, as data. */
+  get defaults(): AgentDefaultsRpcTarget {
+    return new AgentDefaultsRpcTarget(this.props);
+  }
+}
+
+/**
+ * The `itx.agents.defaults` built-in: default agent POLICY as data. The
+ * project worker owns applying it — the seeded template reacts to
+ * `stream/child-stream-created` for `/agents/**` by appending
+ * `forPath(path).events` to the new agent stream (and edits the result to
+ * customize agents). The platform appends only mechanics (processor
+ * subscriptions); an agent nobody configures runs on stock defaults.
+ */
+class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, provider, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, provider selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, provider?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
+      children: { forPath: "Default policy (and its event batch) for one agent path." },
+      parent: "the agent catalog (itx.agents.defaults)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /**
+   * The default policy for one agent path: the named pieces plus the exact
+   * event batch that applies them. Events are idempotency-keyed on
+   * (projectId, path), so appending them twice — or racing a redelivery — is
+   * a no-op.
+   */
+  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+    return agentDefaultsForPath({
+      agentPath: normalizeAgentPath(path),
+      deploymentLlmProvider: deploymentDefaultLlmProvider(env),
+      projectId: this.props.projectId,
+      ...(overrides === undefined ? {} : { overrides }),
+    });
   }
 }
 
@@ -3697,21 +3781,6 @@ export function itxForScope(props: {
     ctx: props.ctx,
     projectId: props.projectId,
   });
-}
-
-export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
-  return {
-    path: "/",
-    source: {
-      files: {
-        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
-        repoPath: PROJECT_REPO_PATH,
-        type: "repo",
-      },
-      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
-    },
-    type: "stateless",
-  };
 }
 
 async function projectProcessorState(projectId: string) {
