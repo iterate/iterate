@@ -494,18 +494,17 @@ test("global cross-posts stay in the global namespace — a project stream is un
   await globalSource.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
 
   // The copy lands on the GLOBAL stream at the target path, provenance intact...
-  await expect
-    .poll(
-      async () => {
-        const events = await globalTarget.getEvents({ afterOffset: 0 });
-        return events.some(
-          (event) =>
-            event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPostedFrom !== undefined,
-        );
-      },
-      { timeout: 15_000 },
-    )
-    .toBe(true);
+  await waitFor(
+    async () => {
+      const events = await globalTarget.getEvents({ afterOffset: 0 });
+      return events.some(
+        (event) =>
+          event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPostedFrom !== undefined,
+      );
+    },
+    () => "global cross-post copy to land with provenance",
+    15_000,
+  );
 
   // ...and the PROJECT stream at the same path never sees anything.
   const projectEvents = await projectTarget.getEvents({ afterOffset: 0 });
@@ -584,6 +583,10 @@ function coreState(value: unknown): CoreStreamState {
   return state as CoreStreamState;
 }
 
-function waitFor(predicate: () => boolean, describe: () => string, timeoutMs = 10_000) {
+function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  describe: () => string,
+  timeoutMs = 10_000,
+) {
   return waitForCondition(predicate, { description: describe, intervalMs: 100, timeoutMs });
 }
