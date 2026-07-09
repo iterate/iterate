@@ -143,7 +143,7 @@ describe("event docs cross-references", () => {
     const event = getEventDocByType("events.iterate.com/agent/llm-request-completed");
 
     expect(event?.emittedBy.map((processor) => processor.contractSlug)).toEqual(
-      expect.arrayContaining(["cloudflare-ai", "openai-ws"]),
+      expect.arrayContaining(["agent"]),
     );
     expect(event?.consumedBy.map((processor) => processor.contractSlug)).toEqual(
       expect.arrayContaining(["agent", "slack-agent"]),

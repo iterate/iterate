@@ -78,7 +78,11 @@ test("append accepts an offset assertion on a subscription-configured core event
       subscriptionKey: `cross-post-${marker}`,
       delivery: {
         mode: "push",
-        expression: ["streams", ["get", `/e2e/security/offset-assert-target/${marker}`], "ingest"],
+        expression: [
+          "streams",
+          ["get", `/e2e/security/offset-assert-target/${marker}`],
+          "acceptCrossPost",
+        ],
       },
       selector: { eventTypes: [STREAM_EVENT_TYPE] },
     },

@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
@@ -11,7 +10,12 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
-import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
+import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
+import {
+  slackConnectionFromAgentPath,
+  telegramConnectionFromAgentPath,
+} from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
 import { mintProjectFileUrl } from "../files/project-files.ts";
@@ -19,12 +23,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
-import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
-import { AgentProcessorContract } from "./agent-processor-contract.ts";
-import { parseAgentDurableObjectName, readOpenAiApiKeyFromAppConfig } from "./utils.ts";
-
-const AGENT_PROMPT_EVENT_PAGE_SIZE = 500;
+import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -35,12 +34,15 @@ export class AgentDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
   readonly #agentProcessor = this.#processorHost.add(
     (deps) =>
       new AgentProcessor({
         ...deps,
+        ai: this.env.AI,
         // Oversized script results spill into the agent's OWN workspace (the
         // same checkout itx.workspace resolves to), so the model can page
         // through the file instead of blowing its context window. The first
@@ -52,24 +54,6 @@ export class AgentDurableObject extends DurableObject<Env> {
               projectId: this.#name.projectId,
             }),
           ).writeFile(path, content),
-      }),
-  );
-  readonly cloudflareAiProcessor = this.#processorHost.add(
-    (deps) =>
-      new CloudflareAiProcessor({
-        ...deps,
-        ai: this.env.AI,
-        readStreamEvents: () => this.#readAgentPromptEvents(),
-      }),
-  );
-  // Registered even without an OpenAI key: the processor then fails requests
-  // with a clear llm-request-completed error instead of crashing the host.
-  readonly openAiWsProcessor = this.#processorHost.add(
-    (deps) =>
-      new OpenAiWsProcessor({
-        ...deps,
-        apiKey: readOpenAiApiKeyFromAppConfig(this.env),
-        readStreamEvents: () => this.#readAgentPromptEvents(),
       }),
   );
 
@@ -129,6 +113,68 @@ export class AgentDurableObject extends DurableObject<Env> {
       }),
   );
 
+  // Registered on every agent host; it only wakes on routed Telegram agent
+  // streams (`/agents/telegram/**`) where the project processor configured its
+  // subscription. Two Telegram lanes with opposite failure policies: the
+  // typing chat action is best effort (a failure must never wedge the
+  // processor checkpoint), while the journaled send THROWS on failure so the
+  // send obligation holds the checkpoint and retries.
+  readonly telegramAgentProcessor = this.#processorHost.add(
+    (deps) =>
+      new TelegramAgentProcessor({
+        ...deps,
+        agentPath: this.#name.path,
+        callTelegramApi: async (method, body) => {
+          // Only best-effort UX side effects (the typing chat action) ride
+          // this dep. The agent path carries the named connection
+          // (/agents/telegram/{connection}/chat-{chatId}); without it there
+          // is no bot token, so skip rather than wedge the checkpoint.
+          const connection = telegramConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            console.error(
+              "[telegram-agent] agent path carries no connection; skipping Telegram call",
+              { method, path: this.#name.path },
+            );
+            return;
+          }
+          try {
+            await callProjectTelegramBotApi({
+              body,
+              connection,
+              method,
+              projectId: this.#name.projectId,
+            });
+          } catch (error) {
+            console.error("[telegram-agent] Telegram side effect failed", {
+              error,
+              method,
+              path: this.#name.path,
+            });
+          }
+        },
+        sendTelegramMessage: async (body) => {
+          // The journaled send (telegram/send-requested): deliberately NO
+          // catch — a failed delivery must reject the batch, hold the
+          // checkpoint, and be retried until the message-sent marker exists.
+          const connection = telegramConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            throw new Error(`agent path carries no Telegram connection: ${this.#name.path}`);
+          }
+          const result = await callProjectTelegramBotApi({
+            body,
+            connection,
+            method: "sendMessage",
+            projectId: this.#name.projectId,
+          });
+          const messageId = (result.result as { message_id?: unknown } | undefined)?.message_id;
+          if (typeof messageId !== "number") {
+            throw new Error("Telegram sendMessage returned no message_id");
+          }
+          return { messageId };
+        },
+      }),
+  );
+
   // Registered on every agent host; it wakes on routed email agent streams
   // (`/agents/email/**`) and on any agent stream an agent-scoped email.send
   // bound. Replies leave through itx.email.reply, called by the agent itself;
@@ -165,20 +211,6 @@ export class AgentDurableObject extends DurableObject<Env> {
   // linked connection's itx.integrations.github Octokit, called by the agent
   // itself, so there are no side-effect deps here.
   readonly prAgentProcessor = this.#processorHost.add((deps) => new PrAgentProcessor(deps));
-
-  async #readAgentPromptEvents(): Promise<StreamEvent[]> {
-    const events: StreamEvent[] = [];
-    using pager = this.#stream.readEvents({
-      afterOffset: 0,
-      eventTypes: AgentProcessorContract.consumes,
-      limit: AGENT_PROMPT_EVENT_PAGE_SIZE,
-    });
-    for (;;) {
-      const page = await pager.next();
-      events.push(...page);
-      if (page.length < AGENT_PROMPT_EVENT_PAGE_SIZE) return events;
-    }
-  }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);

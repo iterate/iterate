@@ -127,8 +127,8 @@ export class MemoryStream implements Stream {
     throw new Error("MemoryStream does not implement subscribe().");
   }
 
-  async ingest(): Promise<never> {
-    throw new Error("MemoryStream does not implement ingest().");
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
   }
 
   async crossPostTo(): Promise<never> {
@@ -138,25 +138,6 @@ export class MemoryStream implements Stream {
   async removeCrossPost(): Promise<never> {
     throw new Error("MemoryStream does not implement removeCrossPost().");
   }
-}
-
-export type ProcessorLike = {
-  ingest(input: { events: StreamEvent[]; streamMaxOffset: number }): Promise<void>;
-};
-
-/** Cursor-based delivery mirroring production subscription semantics, for
- * tests that drive a single processor without a host. */
-export async function deliverNewEvents(input: {
-  processor: ProcessorLike;
-  stream: MemoryStream;
-  cursors: Map<object, number>;
-}) {
-  const cursor = input.cursors.get(input.processor) ?? 0;
-  const events = input.stream.events.slice(cursor);
-  input.cursors.set(input.processor, input.stream.events.length);
-  if (events.length === 0) return;
-  const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
-  await input.processor.ingest({ events, streamMaxOffset });
 }
 
 /** The durable substrate an eviction does NOT destroy. */
@@ -271,6 +252,8 @@ export function createProcessorHostHarness<
     }) as unknown as Stream;
     host = createStreamProcessorHost(fakeDurableObjectState(store), {
       stream: fencedStream,
+      path: stream.path,
+      projectId: null,
       version:
         (typeof options.version === "function" ? options.version() : options.version) ?? "v-test",
       now: () => clock.now,

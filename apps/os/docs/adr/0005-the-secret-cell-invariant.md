@@ -5,10 +5,12 @@ A secret is a confinement cell with one property, stated in one sentence:
 
 There is no read lane, no reveal lane, no compute lane (`hmac`/`sign`/
 `matches`), and no cross-secret chaining. The Secret Durable Object's only
-material-touching verb is `fetch()`: substitute `getSecret(...)` header
-placeholders in trusted DO code and dispatch to a host on the secret's egress
-allowlist. Substitution is header-only, everywhere; one request references one
-secret.
+material-touching verb is `fetch()`: substitute `getSecret(...)` placeholders
+in trusted DO code and dispatch to a host on the secret's egress allowlist.
+Substitution reaches headers and the request URL PATH (added for Telegram,
+whose Bot API authenticates in the path `/bot<token>/…`) — never the query
+string, never the body; a placeholder anywhere else in the URL is rejected
+loudly rather than passed through. One request references one secret.
 
 Credential refresh does not weaken the invariant, because it runs INSIDE the
 cell: a **named strategy** (`oauth-refresh-token`, `github-app-installation`,

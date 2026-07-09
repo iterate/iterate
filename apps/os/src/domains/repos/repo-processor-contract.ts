@@ -50,10 +50,10 @@ export const RepoProcessorContract = defineProcessorContract({
       }),
       examples: [
         {
-          description: 'Project bootstrap requested the root repo at path "/".',
+          description: 'Project bootstrap requested the config repo at path "/repos/config".',
           payload: {
             projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-            path: "/",
+            path: "/repos/config",
           },
         },
       ],
@@ -70,14 +70,14 @@ export const RepoProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "The project's root repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
+            "The project's config repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
           payload: {
-            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--Lw",
+            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
             defaultBranch: "main",
-            path: "/",
+            path: "/repos/config",
             projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
             remote:
-              "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--Lw.git",
+              "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
           },
         },
       ],
@@ -265,8 +265,8 @@ export const RepoProcessorContract = defineProcessorContract({
             number: 42,
             owner: "acme-inc",
             repo: "acme-config",
-            repoPath: "/",
-            streamPath: "/agents/repos/root/pull-requests/42",
+            repoPath: "/repos/config",
+            streamPath: "/agents/repos/config/pull-requests/42",
           },
         },
       ],

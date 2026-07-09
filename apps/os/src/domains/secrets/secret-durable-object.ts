@@ -8,7 +8,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
@@ -18,9 +18,9 @@ import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   secretErrorResponse,
-  secretReferencesFromHeaders,
+  secretReferencesFromRequest,
   selectSecretField,
-  substituteSecretHeaders,
+  substituteSecretRequest,
   SecretSubstitutionError,
 } from "./utils.ts";
 
@@ -50,7 +50,16 @@ export class SecretDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    // Secret material is write-only: the live state that leaves this DO is the
+    // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
+    // processor facade applies via publicState. The explicit return type does
+    // double duty: it makes the host a LiveState<SecretDescription>, and it
+    // breaks the field-initializer inference cycle (this closure reads
+    // #secretProcessor, which is built from this host).
+    getLiveState: (): SecretDescription => describeSecretState(this.#secretProcessor.currentState),
   });
   readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
@@ -81,6 +90,11 @@ export class SecretDurableObject extends DurableObject<Env> {
       // the ciphertext, only the hasMaterial fact.
       publicState: describeSecretState,
     });
+  }
+
+  /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
+  get liveState() {
+    return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
   }
 
   async update(input: SecretUpdateInput) {
@@ -133,7 +147,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     let references;
     try {
-      references = secretReferencesFromHeaders(request.headers);
+      references = secretReferencesFromRequest(request);
     } catch {
       return secretErrorResponse("secret_reference_required");
     }
@@ -190,11 +204,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Substitute this secret's placeholders from decrypted material. */
+  /** Substitute this secret's placeholders (headers + URL) from decrypted material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
     const material =
       state.encryptedMaterial === null ? null : await this.#decrypt(state.encryptedMaterial);
-    return substituteSecretHeaders(request, (reference) => {
+    return substituteSecretRequest(request, (reference) => {
       if (material === null) throw new SecretSubstitutionError("secret_not_found");
       return selectSecretField(material, reference.field);
     });

@@ -168,6 +168,11 @@ export function GlobalCommandPalette() {
       currentPath={activeStream.streamPath}
       navigator={streamNavigator}
       scope={activeStream.projectId}
+      // The admin lane browses through the global admin session, and its
+      // `__null__` deployment namespace has no project DO to index — dialing
+      // `projects.get("__null__")` would just retry forever. Admin gets the
+      // tree; the live index is the app lane's.
+      liveIndex={adminStream == null}
     />
   );
 }

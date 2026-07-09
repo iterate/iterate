@@ -96,8 +96,10 @@ export async function resetWorkerDurableObjects(input: {
   | { action: "skipped"; reason: string }
   | { action: "reset"; deletedClasses: string[]; keptContainerClasses: string[] }
 > {
-  const scripts = await input.ctx.cf<{ id: string }[]>(`/workers/scripts`);
-  if (!scripts.some((script) => script.id === input.workerName)) {
+  const scripts =
+    await input.ctx.cf<{ id: string; migration_tag?: string | null }[]>(`/workers/scripts`);
+  const script = scripts.find((candidate) => candidate.id === input.workerName);
+  if (!script) {
     console.log(`DO reset: worker ${input.workerName} does not exist — nothing to destroy`);
     return { action: "skipped", reason: "script does not exist" };
   }
@@ -145,57 +147,81 @@ export async function resetWorkerDurableObjects(input: {
   // migrations first: on a worker that has never deployed with `exports`
   // this keeps the one-way exports door open, so the next deploy's
   // container-class bootstrap (ensureContainerClasses) can still legacy-
-  // create missing container classes container-enabled. A worker already on
-  // exports rejects the legacy upload with API 100403 — fall back to
-  // `exports` tombstones (kept container classes then need live entries and
-  // stub code exports; legacy mode needs neither, untouched classes just
-  // persist). From a temp dir so the generated config never dirties the
-  // repo tree.
-  const parkedDir = mkdtempSync(join(tmpdir(), "do-reset-"));
-  try {
-    const shared = {
-      name: input.workerName,
-      main: "worker.js",
+  // create missing container classes container-enabled.
+  //
+  // The legacy park is a RAW script upload, not a wrangler deploy, because
+  // the kept container classes force two metadata requirements wrangler
+  // cannot satisfy together: the module must keep exporting them (the API
+  // rejects an upload that drops a class whose objects still exist, error
+  // 10064 — and kept classes hold live objects on any slot whose sandboxes
+  // were used), and every exported container class must be NAMED in the
+  // upload's `containers` metadata. An upload that exports a container
+  // class without naming it there container-DISABLES its namespace, and no
+  // later upload can re-enable it (verified live 2026-07-09: parking
+  // preview-3/preview-5 with stub exports but no `containers` field
+  // permanently broke their sandbox classes — "Containers have not been
+  // enabled for this Durable Object class" from then on, through real
+  // deploys that do declare containers). Wrangler only emits `containers`
+  // metadata from a full containers config with a buildable image, which a
+  // parked stub doesn't have; the raw form upload names the classes
+  // directly, exactly like ensureContainerClasses' bootstrap upload.
+  const parkedModule = readFileSync(PARKED_WORKER_MODULE, "utf8");
+  const stubExports = kept
+    .map((className) => `export class ${className} { constructor() {} }`)
+    .join("\n");
+  const parkedModuleWithKeptClasses = `${parkedModule}\n${stubExports}\n`;
+
+  const form = new FormData();
+  form.append(
+    "metadata",
+    JSON.stringify({
+      main_module: "parked.mjs",
       compatibility_date: input.compatibilityDate,
-      // Existing zone routes stay untouched (wrangler only manages routes
-      // listed in config); don't let a route-less config enable workers.dev.
-      workers_dev: false,
-    };
-    const parkedModule = readFileSync(PARKED_WORKER_MODULE, "utf8");
-
-    writeFileSync(join(parkedDir, "worker.js"), parkedModule);
-    writeFileSync(
-      join(parkedDir, "wrangler.json"),
-      JSON.stringify({
-        ...shared,
-        migrations: [
-          { tag: `do-reset-${tagHash(deletedClasses)}`, deleted_classes: deletedClasses },
-        ],
-      }),
+      bindings: [],
+      // The load-bearing line (see block comment above): kept container
+      // classes stay container-enabled only while every upload that exports
+      // them also names them here.
+      containers: kept.map((className) => ({ class_name: className })),
+      migrations: {
+        ...(script.migration_tag ? { old_tag: script.migration_tag } : {}),
+        new_tag: `do-reset-${tagHash([script.migration_tag ?? null, deletedClasses])}`,
+        steps: [{ deleted_classes: deletedClasses }],
+      },
+    }),
+  );
+  form.append(
+    "parked.mjs",
+    new File([parkedModuleWithKeptClasses], "parked.mjs", {
+      type: "application/javascript+module",
+    }),
+    "parked.mjs",
+  );
+  try {
+    await input.ctx.cf(`/workers/scripts/${input.workerName}`, { method: "PUT", body: form });
+  } catch (error) {
+    if (!String(error).includes("100403")) throw error;
+    console.log(
+      `DO reset: ${input.workerName} is on the declarative exports flow (API 100403) — parking via exports tombstones instead`,
     );
-    const legacy = runWranglerDeploy({
-      configPath: join(parkedDir, "wrangler.json"),
-      cwd: input.cwd,
-      credentials: input.credentials,
-    });
-
-    if (!legacy.ok) {
-      if (!legacy.output.includes("100403")) {
-        throw new Error(
-          `DO reset: parked deploy failed for ${input.workerName} (see output above).`,
-        );
-      }
-      console.log(
-        `DO reset: ${input.workerName} is on the declarative exports flow (API 100403) — parking via exports tombstones instead`,
-      );
-      const stubExports = kept
-        .map((className) => `export class ${className} { constructor() {} }`)
-        .join("\n");
-      writeFileSync(join(parkedDir, "worker.js"), `${parkedModule}\n${stubExports}\n`);
+    // This fallback cannot name the kept classes in `containers` metadata
+    // (wrangler-only path, no containers config without an image). That is
+    // OK here: exports-mode uploads leave enablement alone (verified live
+    // 2026-07-09 — exports-parking preview-3 with stub exports and no
+    // containers field, then redeploying, kept its sandbox classes
+    // container-enabled and sandbox-exec e2e green). Only legacy-migrations
+    // uploads strip it, and those go through the raw upload above.
+    const parkedDir = mkdtempSync(join(tmpdir(), "do-reset-"));
+    try {
+      writeFileSync(join(parkedDir, "worker.js"), parkedModuleWithKeptClasses);
       writeFileSync(
         join(parkedDir, "wrangler.json"),
         JSON.stringify({
-          ...shared,
+          name: input.workerName,
+          main: "worker.js",
+          compatibility_date: input.compatibilityDate,
+          // Existing zone routes stay untouched (wrangler only manages routes
+          // listed in config); don't let a route-less config enable workers.dev.
+          workers_dev: false,
           exports: {
             ...Object.fromEntries(
               deletedClasses.map((className) => [
@@ -219,9 +245,9 @@ export async function resetWorkerDurableObjects(input: {
           `DO reset: parked deploy failed for ${input.workerName} (see output above).`,
         );
       }
+    } finally {
+      rmSync(parkedDir, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(parkedDir, { recursive: true, force: true });
   }
   console.log(
     `DO reset: ${input.workerName} destroyed ${deletedClasses.length} classes ` +

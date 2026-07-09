@@ -23,7 +23,6 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import type { ProjectProcessorState } from "../../../../../domains/projects/project-processor-contract.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
@@ -32,7 +31,7 @@ import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   path: z
@@ -81,10 +80,11 @@ function ProjectReposIndexContent() {
   });
   // The repos list is a slice of the project processor's reduced state; new
   // repos land here via the processor's state push, no invalidation needed.
-  const projectState = useItxState<ProjectProcessorState>(
-    (itx, setState) => itx.processor.onStateChange(setState),
+  const projectState = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced,
     [],
-  ).state;
+  ).value;
   const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
@@ -356,10 +356,6 @@ function compareRepoRows(
 }
 
 function repoPathToSplat(path: string) {
-  // TEMPORARY HACK: the legacy project repo lives at path "/", whose splat
-  // would be empty — its URL ".../repos//" normalizes to the repos index,
-  // making it unviewable. "ROOT" stands in for it until it becomes
-  // /repos/config. Must mirror repoPathFromSplat in ./$.tsx.
-  if (path === "/") return "ROOT";
+  // Must mirror repoPathFromSplat in ./$.tsx.
   return path.startsWith("/repos/") ? path.slice("/repos/".length) : path;
 }

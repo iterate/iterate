@@ -3,7 +3,6 @@
 // types, payloads, and idempotency keys are stable wire formats.
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   EmailProcessorContract,
   type EmailProcessorState,
@@ -113,6 +112,7 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
 
   protected override processEvent({
     append,
+    appendTo,
     blockProcessorWhile,
     event,
     previousState,
@@ -127,9 +127,9 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
       state: previousState,
     });
 
-    const forwardedEvent: StreamEventInput = {
-      type: "events.iterate.com/email/received",
-      idempotencyKey: `email:forward-received:${event.offset}`,
+    const forwardedEvent = {
+      type: "events.iterate.com/email/received" as const,
+      idempotencyKey: this.idempotencyKey("forward-received", event),
       payload: event.payload,
     };
 
@@ -156,14 +156,14 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
       // replays; idempotency keys make the replay dedupe.
       blockProcessorWhile(async () => {
         await append(routeEvent);
-        await this.stream.at(resolution.streamPath).append(routeEvent, forwardedEvent);
+        await appendTo(resolution.streamPath, routeEvent, forwardedEvent);
       });
       return;
     }
 
     // Durable obligation — same reasoning as the route-creation forward above.
     blockProcessorWhile(async () => {
-      await this.stream.at(resolution.streamPath).append(forwardedEvent);
+      await appendTo(resolution.streamPath, forwardedEvent);
     });
   }
 }

@@ -68,23 +68,6 @@ export interface Session {
   projects: ProjectCollection;
 }
 
-/**
- * The server-side **itx** — the object an `async (itx) => { … }` script holds and
- * what `env.ITX.get()` returns. One class serves the project root and every nested
- * (agent) scope; the injected `capabilityHost` selects which scope's dynamic
- * capability table backs it.
- *
- * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
- * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
- * in the isolate; only unknown roots fall through `withInvokeCapabilityFallback`
- * to the capability host's dynamic table (which itself chains up to enclosing
- * scopes). So the common `itx.streams.get(...)` path never makes a round trip
- * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
- * capability can never shadow a built-in name — the built-in always wins
- * (`rejectBuiltinCollision` enforces this at provide time). If we end up needing
- * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
- * round trip; today we don't.
- */
 export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
@@ -100,6 +83,10 @@ export interface Project {
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<ProjectLiveState>;
+  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (DO-backed). */
+  liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -158,7 +145,7 @@ export interface Project {
   schedulers: SchedulerCollection;
   /** Secret catalog by path. */
   secrets: SecretCollection;
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for `repos.get("/repos/config")`. */
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
@@ -175,8 +162,8 @@ export interface Project {
    * per-event work (policy, metrics, indexing feeds) can join the same
    * ordered, checkpointed delivery — with one rule when it does: platform
    * steps must be idempotent and must never throw; only the worker delegation
-   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
-   * such steps until a real second consumer earns its place.
+   * may reject into the spine's retry/park machinery. The streams index is the
+   * first such step (see `#indexStreamActivity`).
    *
    * Same trust model as `worker.processEventBatch` itself: any project
    * principal may call it.
@@ -219,9 +206,9 @@ export interface ProjectCollection {
    * `waitUntilCreated: false` to resolve as soon as the project EXISTS
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live processor state (`itx.processor.onStateChange` — `state.created`
-   * flips when bootstrap lands). The dashboard uses the fast path to redirect
-   * into the project instantly and play creation progress from pushes.
+   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap
+   * lands). The dashboard uses the fast path to redirect into the project
+   * instantly and play creation progress from pushes.
    */
   create(args: {
     organizationSlug?: string;
@@ -240,6 +227,38 @@ export interface ProjectCollection {
    * and is the default for non-user admin principals, which have no claims.
    */
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
+}
+
+/**
+ * A node's live state — a source-agnostic reactive value. `get()` reads it once;
+ * `subscribe()` opens a channel that pushes a full snapshot then minimal diffs
+ * (see `lib/live-state`), which the React `useLiveState` hook reassembles so
+ * components pick only the slice they render. ANY RpcTarget can expose one: a
+ * Durable Object over its folded state, or a stateless worker over state it
+ * computes or fetches.
+ *
+ * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
+ * reassembles it from its fold), so writes go through the node's own verbs —
+ * events appended, mutations called — never a generic `set`. A wire-level
+ * `set`/`assign` would let any principal that can reach the node broadcast
+ * fabricated state to every subscriber.
+ */
+export interface LiveStateRpc<State = unknown> {
+  get(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
+}
+
+/**
+ * Demo capability (`itx.liveDemo`) — a corner of the tree that exists only to
+ * exercise both live-state cases: `ticker` (stateless, above) and `increment()`
+ * (mutates the project DO's shared counter, which every watcher of `itx.liveState`
+ * sees — the Durable-Object-backed case).
+ */
+export interface LiveDemo {
+  /** Stateless live state: a poll-driven ticker, no Durable Object. */
+  ticker: LiveStateRpc<{ tick: number; startedAt: number }>;
+  /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
+  increment(): Promise<void>;
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
@@ -564,6 +583,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        connectTelegram: string;
         disconnect: string;
         getConnection: string;
         github: string;
@@ -572,6 +592,7 @@ export interface ProjectIntegrations {
         parallel: string;
         slack: string;
         startOAuthFlow: string;
+        telegram: string;
       };
       parent: string;
     }
@@ -581,10 +602,21 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * `ok: false, error: "telegram_bot_already_claimed"` arm so the caller can
+   * confirm and retry with `steal: true` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
+   */
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -596,7 +628,7 @@ export interface ProjectIntegrations {
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
@@ -789,6 +821,8 @@ export interface Repo {
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<RepoProcessorState>;
+  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<RepoProcessorState>;
 }
 
 /**
@@ -809,16 +843,19 @@ export interface DynamicWorkerCollection {
 /**
  * Catalog of durable workspaces within one project.
  *
- * A workspace is addressed by its FULL path, which always lives under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
+ * materialization of the config repo's main branch. Every other workspace is
+ * addressed by its FULL path under `/workspaces/` — the same domain-prefix
+ * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
+ * the agent path under the prefix (`/workspaces/agents/...`, exposed as
+ * `itx.workspace` in that agent's scope), and standalone workspaces live
+ * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
+ * root: writes stay local, missing reads fall through to latest main — no
+ * clone, usable instantly.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
   get(path: string): Workspace;
 }
 
@@ -933,13 +970,13 @@ export interface Stream {
    * appends the batch's events into THIS stream with provenance stamping,
    * structural loop protection, and source-derived idempotency keys. A source
    * stream cross-posts here by configuring
-   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
    */
-  ingest(batch: StreamPushEventBatch): Promise<void>;
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
   /**
    * "When events matching this land HERE, post them onto stream `path`" — the
    * cross-post verb. Pure sugar over appending a `subscription-configured`
-   * push subscription targeting the destination's `ingest` sink; the appended
+   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
    * event (returned) is the real interface and shows in the log like any
    * other config. Same-`key` calls replace the previous cross-post; remove
    * with `removeCrossPost`. Copies carry the full provenance chain
@@ -967,16 +1004,6 @@ export interface Stream {
 
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
-   * commit pushes and `snapshot()` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
@@ -1051,18 +1078,21 @@ export interface Secret {
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: WakeableStreamProcessorRpc<SecretDescription>;
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<SecretDescription>;
 }
 
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at `/` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. `git` publishes commits to the workspace's
- * own branch in the project repo (`workspaces/<path>`), never to main.
+ * Object (no container, always warm). The root workspace (`"/"`) is the
+ * read-only, always-fresh materialization of the config repo's main branch.
+ * Every other workspace is an OVERLAY over the root: reads see latest main
+ * until a local write shadows a path, writes and deletes stay private, and
+ * there is no clone — a new workspace is usable instantly. `git` publishes
+ * the overlay as snapshot commits on the workspace's own branch in the
+ * config repo (`workspaces/<path>`), never to main.
  *
- * Constraints: the `.git` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the `git` methods). Large files
+ * Constraints: the `.git` name is reserved (platform-managed). Large files
  * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
@@ -1078,11 +1108,21 @@ export interface Workspace {
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
   /**
-   * Wipe the checkout and re-clone the project repo on the next call — the
-   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
-   * commits survive on the workspace branch).
+   * Wipe the workspace back to pristine: the local layer and every deletion
+   * vanish, leaving a clean view of latest main (on the root, the next read
+   * re-materializes). Unpublished work is LOST (published snapshots survive
+   * on the workspace branch).
    */
   reset(): Promise<void>;
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void>;
+  /** Every file path in the merged view (local layer over latest main), sorted. */
+  listAllFiles(): Promise<string[]>;
   writeFile(path: string, content: string): Promise<void>;
   writeFileBytes(path: string, data: Uint8Array): Promise<void>;
   appendFile(path: string, content: string): Promise<void>;
@@ -1154,30 +1194,25 @@ export interface CfVideosCapability {
 }
 
 /**
- * Git operations over a workspace's checkout, mirroring `@cloudflare/shell`'s
- * git command names so upstream docs apply. The workflow is ordinary git:
- * `add({ filepath: "." })` stages everything, `commit({ message })` commits,
- * `push()` publishes to the workspace's own branch in the project repo.
- * Push credentials are injected inside the workspace Durable Object (from the
- * project repo's `gitAccess()`), so no token ever rides this surface.
+ * The publish surface of an overlay workspace. There is no staging area and
+ * no separate push: `commit({ message })` snapshots the whole merged view
+ * (latest main + the local layer, minus deletions and `.gitignore`d paths)
+ * as ONE commit force-pushed to the workspace's own branch in the project
+ * repo. Push credentials are injected inside the workspace Durable Object
+ * (from the config repo's `gitAccess()`), so no token ever rides this
+ * surface.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
-  /** Staging state of every changed file. */
-  status(): Promise<WorkspaceGitStatusEntry[]>;
-  /** Stage a file (`filepath: "."` stages everything). */
-  add(input: { filepath: string }): Promise<{ added: string }>;
-  /** Stage a file deletion. */
-  rm(input: { filepath: string }): Promise<{ removed: string }>;
+  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
+  status(): Promise<WorkspaceChange[]>;
+  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
-  }): Promise<{ message: string; oid: string }>;
-  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]>;
-  /** Changed files in the working tree relative to HEAD. */
-  diff(): Promise<{ filepath: string; status: string }[]>;
-  /** Push the workspace branch to the project repo. */
-  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }>;
+  }): Promise<WorkspacePublishResult>;
+  /** Published snapshots of this workspace, newest first. */
+  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -1279,7 +1314,7 @@ export type ProjectDescription = Description & {
  * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
  * processor wakes from the request's `processorSlug` — the inspection half of
  * this node reads the host's main processor.
  */
@@ -1315,6 +1350,29 @@ export type ProjectProcessorState = {
     createdAt: string;
     updatedAt: string;
   }[];
+};
+
+/**
+ * The project's LIVE state — what `itx.liveState` exposes and the dashboard renders.
+ *
+ * This is PROJECT state, NOT stream-processor state. The project Durable Object
+ * assembles it from independent sources, each a peer slice:
+ * - `reduced` — the event-sourced project facts (created flag, agent/repo/secret
+ *   catalogs) folded by the project processor. One contributor, not the base.
+ * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
+ *   its own SQLite (recency, counts). Nothing to do with the processor.
+ * - `liveDemo` — plain DO memory, for the live-state playground.
+ *
+ * A `useLiveState` selector picks whichever slice a component renders, so a
+ * change in one slice never re-renders watchers of another.
+ */
+export type ProjectLiveState = {
+  /** Event-sourced project facts, folded by the project processor — one source among several. */
+  reduced: ProjectProcessorState;
+  /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
+  streamsIndex: Record<string, StreamIndexRow>;
+  /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
+  liveDemo: { count: number };
 };
 
 /** Capability recipe accepted by `provideCapability`. */
@@ -1461,6 +1519,42 @@ export type StreamSubscriberWakeResponse = {
   getRuntimeState?: GetProcessorRuntimeState;
 };
 
+/**
+ * One message pushed down a live-state subscription. The first is always a
+ * `snapshot` (a resync sends a fresh one); every message after carries only the
+ * diff from revision `from` to `to`. Revisions are monotonic for the life of one
+ * subscription, so a gap (`from` ≠ the client's revision) means a message was
+ * missed and the client should resubscribe.
+ *
+ * `State` is asserted by the caller of `useLiveState` — the wire itself is
+ * structure-agnostic.
+ */
+export type LiveUpdate<State = unknown> =
+  | { type: "snapshot"; revision: number; state: State }
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+
+/**
+ * Live handle for one live-state subscription. `ping()` reports liveness (and
+ * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
+ */
+export type LiveStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
+/** One row of the streams index: a stream and its activity, for the ⌘K list and recency sort. */
+export type StreamIndexRow = {
+  path: string;
+  /** First time we saw the stream (its earliest observed activity). */
+  createdAt: string;
+  /** Most recent activity — the recency sort key. Monotonic (never moves backwards). */
+  lastActivityAt: string;
+  /** Type of the most recent event. */
+  lastType: string;
+  /** How many events we've observed on the stream. */
+  eventCount: number;
+};
+
 export type CfMarkdownConversionArgs =
   | []
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
@@ -1495,9 +1589,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 
 /**
  * The agent processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape (the old hand-written copy
- * in the former types.ts silently omitted `llmProviderConfigured` and
- * `requestGeneration`).
+ * `stateSchema`.
  */
 export type AgentProcessorState = {
   systemPrompt: string;
@@ -1509,29 +1601,20 @@ export type AgentProcessorState = {
       | undefined;
   }[];
   llmConfig: { model: string };
-  llmProvider: "cloudflare-ai" | "openai-ws";
-  llmProviderConfigured: boolean;
+  llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | {
-        phase: "requested";
-        llmRequestId: number;
-        requestedAt?: number | undefined;
-        provider?: "cloudflare-ai" | "openai-ws" | undefined;
-      }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;
   requestGeneration: number;
   consecutiveLlmFailures: number;
-  inProgressScriptExecutions: {
-    code: string;
-    executionId: string;
-    requestedOffset: number;
-    startedAt: string;
-  }[];
-  scriptExecutionsCompleted: string[];
+  llmRequests: Record<
+    string,
+    { status: "requested" | "started"; model: string; expiresAt: number }
+  >;
 };
 
 export type StreamEvent = {
@@ -1540,7 +1623,14 @@ export type StreamEvent = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -1646,7 +1736,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1654,6 +1744,40 @@ export type IntegrationConnectionStatus = {
   externalId: string | null;
   metadata: Record<string, unknown>;
 };
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured `ok: false` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. `steal: true` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
+ */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with `steal: true` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+/** The built-ins that connect via a redirect flow (OAuth code exchange or
+ * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
+ * Telegram is excluded: it connects by bot-token paste (`connectTelegram`),
+ * with no redirect and no signed state. */
+export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
@@ -1932,7 +2056,14 @@ export type StreamEventInput = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -1985,7 +2116,7 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
 /**
  * Live subscription handle returned by `Stream.subscribe`.
  *
- * `ping()` mirrors {@link ProcessorStateSubscriptionHandle.ping}: `true` while
+ * `ping()` reports liveness: `true` while
  * the connection is still open on the live stream, `false` after it closed
  * (replaced, delivery failure, unsubscribe); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the
@@ -2017,20 +2148,18 @@ export type ProcessorSnapshot<State> = {
 };
 
 /**
- * Live handle for one `onStateChange` subscription.
- *
- * `ping()` is the liveness probe: `true` while the subscription is still
- * registered on the live processor, `false` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, `false` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
+ * A structural patch turning a previous JSON value into the next one. Two
+ * shapes, discriminated by whether the `set` key is present:
+ * - `{ set }` — replace this position wholesale. Used for primitives, arrays
+ *   (treated as opaque leaves, never diffed positionally), `null`, type changes,
+ *   and newly-added object keys.
+ * - `{ fields?, drop? }` — descend into a plain object: `fields` maps each
+ *   changed key to its own patch; `drop` lists keys that disappeared. At least
+ *   one is present (an empty descend never gets emitted).
  */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
+export type LiveStatePatch =
+  | { set: unknown }
+  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
@@ -2066,7 +2195,6 @@ export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 /** Caller-supplied policy overrides, baked into the returned events. */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
-  provider?: AgentLlmProvider;
   model?: string;
 };
 
@@ -2074,7 +2202,6 @@ export type AgentDefaultsOverrides = {
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
   systemPrompt: string;
-  provider: AgentLlmProvider;
   model: string;
   events: AgentPolicyEventInput[];
 };
@@ -2283,8 +2410,6 @@ export type StreamEventBatch = {
   state: unknown;
 };
 
-export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
-
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection
  * stays self-contained. */
@@ -2375,25 +2500,32 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** One file's staging state returned by `WorkspaceGit.status`. */
-export type WorkspaceGitStatusEntry = {
-  filepath: string;
-  /** HEAD status: 0=absent, 1=present. */
-  head: number;
-  /** Stage status: 0=absent, 1=identical, 2=modified, 3=added. */
-  stage: number;
-  /** Human-readable status (e.g. "modified", "added"). */
-  status: string;
-  /** Workdir status: 0=absent, 1=identical, 2=modified. */
-  workdir: number;
+/**
+ * One overlay change returned by `WorkspaceGit.status`: a local file that
+ * shadows a parent file ("modified"), one the parent does not have ("added"),
+ * or a parent file hidden by a local delete ("deleted"). "modified" means
+ * shadowed, not necessarily different — the overlay never diffs content.
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
 };
 
-/** One commit returned by `WorkspaceGit.log`. */
+/** Result of `WorkspaceGit.commit` — the published snapshot. */
+export type WorkspacePublishResult = {
+  branch: string;
+  /** Paths committed (after .gitignore filtering) plus deletions applied. */
+  changedPaths: string[];
+  commitOid: string;
+};
+
+/** One commit returned by `WorkspaceGit.log` (the workspace branch's history). */
 export type WorkspaceGitLogEntry = {
-  author: { email: string; name: string; timestamp: number };
+  author: { email: string; name: string };
   message: string;
   oid: string;
-  parent: string[];
+  /** Epoch milliseconds. */
+  timestamp: number;
 };
 
 export type CfImageTransformOptions = { [x: string]: unknown };

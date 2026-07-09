@@ -110,7 +110,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         ) => {
           await append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `slack-agent:webhook-to-agent-input:${event.offset}`,
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: slackWebhookAgentInput(event.payload),
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
@@ -169,7 +169,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           blockProcessorWhile(async () => {
             await append({
               type: "events.iterate.com/capability-host/script-execution-requested",
-              idempotencyKey: `slack-agent:bang-command:${event.offset}`,
+              idempotencyKey: this.idempotencyKey("bang-command", event),
               payload: {
                 code: bangCommand.code,
                 executionId: `slack-bang-command-${event.offset}`,

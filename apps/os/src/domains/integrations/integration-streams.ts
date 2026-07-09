@@ -157,7 +157,9 @@ export async function routeIntegrationWebhook(input: {
 /**
  * Append a claim (or unclaim) to the directory. Called synchronously by
  * connect/disconnect (D4): the caller must first reject a conflicting claim
- * with `external_id_already_claimed` (see connect-flows).
+ * with `external_id_already_claimed` (see connect-flows). Flows that MOVE an
+ * external id between projects (telegram's steal) use the batch variant so
+ * the unclaim and the new claim commit atomically.
  */
 export async function appendConnectionDirectoryEvent(input: {
   claimed: boolean;
@@ -166,13 +168,34 @@ export async function appendConnectionDirectoryEvent(input: {
   projectId: string;
   slug: string;
 }): Promise<void> {
-  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append({
-    type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
-    payload: {
-      connection: input.connection,
-      externalId: input.externalId,
-      projectId: input.projectId,
-      slug: input.slug,
-    },
-  });
+  await appendConnectionDirectoryEvents([input]);
+}
+
+/**
+ * Append several claim/unclaim facts to the directory in ONE stream append —
+ * one commit, so a fold can never observe a state between them. This is what
+ * makes a steal safe for a bot with live traffic: [unclaim old, claim new] as
+ * a batch leaves no unclaimed window where the door would ACK-and-drop
+ * inbound events that Telegram never retries.
+ */
+export async function appendConnectionDirectoryEvents(
+  inputs: readonly {
+    claimed: boolean;
+    connection: string;
+    externalId: string;
+    projectId: string;
+    slug: string;
+  }[],
+): Promise<void> {
+  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append(
+    ...inputs.map((input) => ({
+      type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
+      payload: {
+        connection: input.connection,
+        externalId: input.externalId,
+        projectId: input.projectId,
+        slug: input.slug,
+      },
+    })),
+  );
 }

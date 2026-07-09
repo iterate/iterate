@@ -4,6 +4,7 @@
  * These are hand-authored shapes (generics preserved) that both the public itx
  * contract and the server-side host/subscriber machinery build against.
  */
+import type { LiveUpdate } from "../../lib/live-state/protocol.ts";
 import type { StreamEvent } from "./schemas.ts";
 
 /** Stable identity for one stream subscription connection. */
@@ -27,22 +28,6 @@ export type ProcessorSnapshot<State> = {
 };
 
 /**
- * Live handle for one `onStateChange` subscription.
- *
- * `ping()` is the liveness probe: `true` while the subscription is still
- * registered on the live processor, `false` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, `false` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
- */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
-
-/**
  * A processor node that is also its HOST's wake-mode delivery door. This is
  * what the domain surfaces expose (`itx.agents.get(path).processor`,
  * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
@@ -53,7 +38,7 @@ export type ProcessorStateSubscriptionHandle = Disposable & {
  * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
  * processor wakes from the request's `processorSlug` — the inspection half of
  * this node reads the host's main processor.
  */
@@ -63,18 +48,36 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
-   * commit pushes and `snapshot()` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+}
+
+/**
+ * Live handle for one live-state subscription. `ping()` reports liveness (and
+ * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
+ */
+export type LiveStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
+/**
+ * A node's live state — a source-agnostic reactive value. `get()` reads it once;
+ * `subscribe()` opens a channel that pushes a full snapshot then minimal diffs
+ * (see `lib/live-state`), which the React `useLiveState` hook reassembles so
+ * components pick only the slice they render. ANY RpcTarget can expose one: a
+ * Durable Object over its folded state, or a stateless worker over state it
+ * computes or fetches.
+ *
+ * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
+ * reassembles it from its fold), so writes go through the node's own verbs —
+ * events appended, mutations called — never a generic `set`. A wire-level
+ * `set`/`assign` would let any principal that can reach the node broadcast
+ * fabricated state to every subscriber.
+ */
+export interface LiveStateRpc<State = unknown> {
+  get(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
 }
 
 /**
@@ -209,7 +212,7 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
 /**
  * Live subscription handle returned by `Stream.subscribe`.
  *
- * `ping()` mirrors {@link ProcessorStateSubscriptionHandle.ping}: `true` while
+ * `ping()` reports liveness: `true` while
  * the connection is still open on the live stream, `false` after it closed
  * (replaced, delivery failure, unsubscribe); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-`true` outcome means the

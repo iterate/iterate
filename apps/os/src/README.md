@@ -192,7 +192,8 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 `session.projects.create({ slug })` registers the project with the auth worker
 (the project directory — OS has no database of its own), primes the KV cache,
 then appends the create-request onto the project's root stream. The project
-processor seeds the default repo at `/` from the template folder at
+processor seeds the config repo at `/repos/config` (an ordinary repo on its
+own stream — `itx.repo` is the shorthand) from the template folder at
 `apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`
 — platform types come from its `iterate` devDependency's `iterate/sdk` export,
 re-exported by the small seeded `sdk.ts` alongside the `IterateProjectWorker`
@@ -200,9 +201,11 @@ base class — `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map i
 `domains/repos/project-repo-template.generated.ts` in sync), builds and loads
 the seeded project worker through the worker build pipeline, boots the
 onboarding agent,
-and only then emits `events.iterate.com/project/created`. Streams are the
-coordination layer for all of this — bootstrap is events and processors, not a
-setup RPC.
+and only then emits `events.iterate.com/project/created`. The config repo's
+stream carries a `cross-post:/` subscription from birth, so every config-repo
+event (the saga's `repo/created` included) is copied onto the project stream
+`/` with provenance. Streams are the coordination layer for all of this —
+bootstrap is events and processors, not a setup RPC.
 
 ## Events
 
@@ -298,13 +301,12 @@ calling methods on them.
 ## Agents
 
 An agent is a stream (`/agents/<name>`) plus processors. `agent.sendMessage()`
-appends `events.iterate.com/agents/user-message-received`; the agent core
+appends `events.iterate.com/agents/user-message-received`; the single agent
 processor renders inputs into history, applies the input policy, debounces,
 and appends `events.iterate.com/agent/llm-request-requested` — **by
-reference**: no prompt body, the offset is the `llmRequestId`. A subscribed
-provider processor (`cloudflare-ai` or `openai-ws`; default computed in the
-project DO — openai-ws when the OpenAI key is present) rebuilds the request by
-reducing committed history up to that offset, executes the call, and appends
+reference**: no prompt body, the offset is the `llmRequestId`. That same
+processor rebuilds the request by reducing committed history up to that
+offset, runs it through the Cloudflare AI binding (`env.AI`), and appends
 started/chunk/output/completed events. The agent contract: respond with
 exactly one fenced JavaScript block containing a single
 `async (itx) => { … }`, which the ITX processor executes; replies reach the

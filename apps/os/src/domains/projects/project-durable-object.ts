@@ -4,6 +4,7 @@ import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
+  LiveStateRpcTarget,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -19,30 +20,53 @@ import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.
 import {
   platformReferencesFromHeaders,
   secretErrorResponse,
-  secretReferencePathsFromHeaders,
+  secretReferencePathsFromRequest,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
 import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
+import { StreamDatabase, type TouchInput } from "./stream-database.ts";
+import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
+  // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
+  // shared-engine case — and dogfoods the `getLiveState` fold the streams index
+  // will use.
+  #liveDemo: { count: number } = { count: 0 };
+  // The project's streams index — a materialized view in the DO's own SQLite,
+  // touched from the processEventBatch fan-in (see touchStreamActivity).
+  readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    // `itx.liveState` = the project's composite live state (see ProjectLiveState):
+    // the processor's fold is ONE peer slice, alongside the streams index the DO
+    // keeps in SQLite and the demo counter.
+    getLiveState: (): ProjectLiveState => {
+      const reduced = this.#projectProcessor.currentState;
+      // Reconcile any catalog stream missing an index row (cheap when none are),
+      // so newly-created quiet streams show up in ⌘K without waiting for events.
+      this.#streamDatabase.seedMissing(reduced.streams);
+      return { reduced, streamsIndex: this.#streamDatabase.all(), liveDemo: this.#liveDemo };
+    },
   });
   readonly #projectProcessor = this.#processorHost.add(
     (deps) =>
@@ -102,6 +126,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   });
 
+  // The Telegram webhook router — same hosting shape as the Slack router: it
+  // only ever WAKES on `/integrations/telegram/{connection}` instances, where
+  // connectTelegram configured its subscription. No routed-webhook ack dep:
+  // Telegram has no reaction primitive; the telegram-agent processor's
+  // "typing…" chat action covers acknowledgement.
+  protected readonly telegramRouterRegistration = this.#processorHost.add((deps) => {
+    return new TelegramProcessor({
+      ...deps,
+      connection: connectionFromIntegrationStreamPath(this.#name.path),
+    });
+  });
+
   // The email thread router — same hosting shape as the Slack router: it only
   // ever WAKES on the Durable Object instance addressed at
   // `/integrations/email`, where project bootstrap (or the email ingress
@@ -147,6 +183,28 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** The project's live state — the get/set/assign/subscribe surface behind `itx.liveState`. */
+  get liveState() {
+    return new LiveStateRpcTarget(this.#processorHost);
+  }
+
+  /** Demo mutation: bump the shared counter and push it to every `itx.liveState` watcher. */
+  incrementLiveDemo(): void {
+    this.#liveDemo = { count: this.#liveDemo.count + 1 };
+    this.#processorHost.refreshLive();
+  }
+
+  /**
+   * Record stream activity in the index and push it to `itx.liveState`. Called
+   * from the project's `processEventBatch` fan-in (every project-scoped
+   * stream's events flow through it). Idempotent — `StreamDatabase.touch` only
+   * advances recency — so a redelivered batch is harmless.
+   */
+  touchStreamActivity(input: TouchInput): void {
+    this.#streamDatabase.touch(input);
+    this.#processorHost.refreshLive();
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
@@ -156,7 +214,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     let secretPaths: string[];
     try {
-      secretPaths = secretReferencePathsFromHeaders(request.headers);
+      // Placeholders live in the request envelope: headers, or the URL for
+      // providers that authenticate in the URL path (Telegram).
+      secretPaths = secretReferencePathsFromRequest(request);
     } catch {
       return secretErrorResponse("secret_reference_required");
     }

@@ -16,7 +16,6 @@ on:
       - apps/semaphore/**
       - packages/shared/**
       - packages/ui/**
-      - packages/mock-http-proxy/**
   workflow_dispatch:
     inputs:
       ref:

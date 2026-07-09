@@ -100,8 +100,8 @@ class MemoryStream implements Stream {
     throw new Error("MemoryStream does not implement subscribe().");
   }
 
-  async ingest(): Promise<never> {
-    throw new Error("MemoryStream does not implement ingest().");
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
   }
 
   async crossPostTo(): Promise<never> {
@@ -132,6 +132,8 @@ function makeHarness(options?: {
   const snapshotStore = options?.snapshotStore ?? { snapshot: undefined };
   const processor = new SchedulerProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     dynamicWorkers: { invokeCapability },
     now: () => clock.now,
     readAlarm: async () => null,
