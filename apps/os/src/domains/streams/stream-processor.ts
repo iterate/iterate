@@ -172,37 +172,6 @@ export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & 
   snapshot: StreamProcessorSnapshot<State>;
 };
 
-/** Callback registered via `onStateChange`; may be a remote RPC stub. */
-type StateChangeCallback<State> = (snapshot: StreamProcessorSnapshot<State>) => unknown;
-/** A state-change callback after retention: disposal releases the duplicated stub. */
-type RetainedStateChangeCallback<State> = StateChangeCallback<State> &
-  Disposable & {
-    onRpcBroken?(callback: (error: unknown) => void): void;
-  };
-
-/**
- * One registered `onStateChange` subscriber. `deliver` pushes a checkpoint
- * snapshot into the retained callback and observes the result; `drop` removes
- * the subscription and releases the retained stub. All removal paths (explicit
- * unsubscribe, sync throw, async delivery rejection, transport brokenness) go
- * through `drop`, so membership in the subscription set is the single source
- * of truth that `ping()` reports to clients.
- */
-type StateChangeSubscription<State> = {
-  deliver(snapshot: StreamProcessorSnapshot<State>): void;
-  drop(): void;
-};
-
-/**
- * In-process handle returned by `StreamProcessor.onStateChange`.
- * `unsubscribe()` (or disposal) drops the subscription; `isLive()` backs the
- * RPC facade's `ping()`.
- */
-export type StreamProcessorStateSubscriptionHandle = Disposable & {
-  isLive(): boolean;
-  unsubscribe(): void;
-};
-
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
  *  when a delivered event matches, and an optional timeout handle to clear on
  *  resolution (so a satisfied waiter never later rejects). */
@@ -278,6 +247,7 @@ export abstract class StreamProcessor<
   #checkpointOffset = 0;
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
   #loaded: Promise<void> | undefined;
+  #hasLoaded = false;
   #processing: Promise<void> = Promise.resolve();
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
@@ -288,7 +258,9 @@ export abstract class StreamProcessor<
   readonly #writeState: (
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
-  readonly #stateChangeSubscriptions = new Set<StateChangeSubscription<ProcessorState<Contract>>>();
+  readonly #stateChangeObservers = new Set<
+    (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void
+  >();
   readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
@@ -341,65 +313,6 @@ export abstract class StreamProcessor<
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
-  }
-
-  async onStateChange(
-    cb: StateChangeCallback<ProcessorState<Contract>>,
-  ): Promise<StreamProcessorStateSubscriptionHandle> {
-    await this.#loadState();
-    const retained = retainStateChangeCallback(cb);
-    const subscriptions = this.#stateChangeSubscriptions;
-    const subscription: StateChangeSubscription<ProcessorState<Contract>> = {
-      deliver(snapshot) {
-        let result: unknown;
-        try {
-          result = retained(snapshot);
-        } catch (error) {
-          // A disposed/broken stub can throw synchronously at call time.
-          subscription.drop();
-          throw error;
-        }
-        if (isThenable(result)) {
-          // Delivery stays fire-and-forget, but the rejection must be
-          // observed: a dead remote rejects every push, and swallowing that
-          // would keep the dead callback registered (and its ping() lying)
-          // forever. State pushes coalesce to one per checkpointed batch, so
-          // the resolve frame per push is affordable — unlike the per-event
-          // stream fast path (see retainProcessEventBatch).
-          void Promise.resolve(result)
-            .then(undefined, (error: unknown) => {
-              if (!subscriptions.has(subscription)) return;
-              console.error(
-                "stream processor state change delivery failed; dropping subscription",
-                error,
-              );
-              subscription.drop();
-            })
-            .finally(() => disposeIgnoredRpcResult(result));
-          return;
-        }
-        disposeIgnoredRpcResult(result);
-      },
-      drop() {
-        if (!subscriptions.delete(subscription)) return;
-        retained[Symbol.dispose]();
-      },
-    };
-    subscriptions.add(subscription);
-    // Transport-level death signal, best-effort (see retainStateChangeCallback
-    // on why registration is defensive): the delivery-rejection path above is
-    // the guaranteed cleanup; this one is just earlier when available.
-    retained.onRpcBroken?.(() => subscription.drop());
-
-    // The initial push: current state IS the first paint. A synchronously
-    // failing callback never becomes a subscription (deliver dropped it).
-    subscription.deliver({ offset: this.#checkpointOffset, state: this.#getState() });
-
-    return {
-      isLive: () => subscriptions.has(subscription),
-      unsubscribe: () => subscription.drop(),
-      [Symbol.dispose]: () => subscription.drop(),
-    };
   }
 
   /**
@@ -644,6 +557,10 @@ export abstract class StreamProcessor<
     await this.#writeState({ offset: checkpointOffset, state });
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
+    // The state now reflects a folded journal prefix — which is what isLoaded
+    // asserts. This is how a processor whose checkpoint was DISCARDED at load
+    // (schema mismatch) becomes loaded again: the refold lands here.
+    this.#hasLoaded = true;
     if (!Object.is(previousState, state)) {
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
@@ -761,13 +678,56 @@ export abstract class StreamProcessor<
     }
   }
 
+  /**
+   * The current reduced state, synchronously (the schema default until the first
+   * load). Lets a host assemble its live state without an async hop.
+   */
+  get currentState(): ProcessorState<Contract> {
+    return this.#getState();
+  }
+
+  /**
+   * Whether `currentState` IS the fold rather than the schema default. Hosts
+   * gate live-state assembly on it: assembling a cold processor's default would
+   * push patches that wipe real facts to subscribers. True after a checkpoint
+   * loads cleanly (or was found absent on a fresh processor), after any ingested
+   * batch (the state then reflects the journal prefix), or via {@link markLoaded}.
+   * A checkpoint DISCARDED at load (schema mismatch after a state-shape deploy)
+   * leaves this false — the state is the default with a refold pending, exactly
+   * what the gate exists to keep away from subscribers.
+   */
+  get isLoaded(): boolean {
+    return this.#hasLoaded;
+  }
+
+  /**
+   * The host's confirmation that the journal has been folded through head, for
+   * the one case ingest can't cover: a clean catch-up that delivered ZERO
+   * batches. Then whatever `currentState` is — including the schema default
+   * over an empty journal — is by construction the fold.
+   */
+  markLoaded(): void {
+    this.#hasLoaded = true;
+  }
+
+  /**
+   * Observe reduced-state changes IN-PROCESS: the observer is a local function
+   * (the host wires it to refresh its live-state engine), not a retained RPC
+   * stub. Returns an unsubscribe.
+   */
+  observeStateChanges(
+    observer: (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void,
+  ): () => void {
+    this.#stateChangeObservers.add(observer);
+    return () => void this.#stateChangeObservers.delete(observer);
+  }
+
   #notifyStateChange(snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>): void {
-    for (const subscription of [...this.#stateChangeSubscriptions]) {
+    for (const observer of [...this.#stateChangeObservers]) {
       try {
-        subscription.deliver(snapshot);
+        observer(snapshot);
       } catch (error) {
-        // deliver() already dropped the subscription on a synchronous throw.
-        console.error("stream processor state change callback failed", error);
+        console.error("stream processor state-change observer failed", error);
       }
     }
   }
@@ -797,7 +757,10 @@ export abstract class StreamProcessor<
       await this.prepare();
       const snapshot = await this.#readState();
       if (snapshot === undefined) {
+        // Fresh processor, no checkpoint: nothing has been observed yet, so
+        // the schema default IS the fold of the (empty) delivered prefix.
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        this.#hasLoaded = true;
         return;
       }
       // The checkpoint is a disposable CACHE of the fold (see
@@ -815,10 +778,16 @@ export abstract class StreamProcessor<
           parsed.error,
         );
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        // Deliberately NOT loaded: the state is the schema default with a
+        // refold pending — exactly what the isLoaded gate keeps away from
+        // live-state subscribers. The refold flips it: ingest (a replayed
+        // delivery or the host's catch-up), or the host's zero-batch
+        // {@link markLoaded} confirmation.
         return;
       }
       this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
+      this.#hasLoaded = true;
     })().catch((error: unknown) => {
       // Clear the memoized load so a later batch retries the snapshot read
       // instead of replaying this rejection forever.
@@ -831,71 +800,5 @@ export abstract class StreamProcessor<
   #getState(): ProcessorState<Contract> {
     this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
     return this.#state;
-  }
-}
-
-function retainStateChangeCallback<State>(
-  cb: StateChangeCallback<State>,
-): RetainedStateChangeCallback<State> {
-  const retainable = cb as StateChangeCallback<State> &
-    Partial<Disposable> & {
-      dup?(): RetainedStateChangeCallback<State>;
-      onRpcBroken?(callback: (error: unknown) => void): void;
-    };
-  const retained = retainable.dup?.() ?? retainable;
-  const dispose = retained[Symbol.dispose]?.bind(retained);
-  const wrapped: RetainedStateChangeCallback<State> = Object.assign(
-    (snapshot: StreamProcessorSnapshot<State>) => retained(snapshot),
-    {
-      [Symbol.dispose]() {
-        dispose?.();
-      },
-    },
-  );
-  // Same defensive wiring as retainProcessEventBatch (stream-connections.ts):
-  // Cap'n Web stubs intercept onRpcBroken locally but expose no own property
-  // descriptors, and a Workers RPC property access can fabricate a pipelined
-  // method that rejects at call time — so wire whatever the stub claims to
-  // have and swallow registration failures.
-  const onRpcBroken = retained.onRpcBroken;
-  if (typeof onRpcBroken === "function") {
-    wrapped.onRpcBroken = (brokenCallback: (error: unknown) => void) => {
-      try {
-        const result = onRpcBroken.call(retained, brokenCallback) as unknown;
-        if (isThenable(result)) {
-          void Promise.resolve(result).catch(() => {
-            // Pipelined fake: the remote has no onRpcBroken method.
-          });
-        }
-      } catch {
-        // Registration is best-effort.
-      }
-    };
-  }
-  return wrapped;
-}
-
-/** Shared thenable probe for RPC results (stubs are thenable-shaped). */
-export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as PromiseLike<unknown>).then === "function"
-  );
-}
-
-/**
- * Dispose an ignored RPC call result. Reading a Cap'n Web / Workers RPC method
- * yields a disposable stub even when the caller ignores the value; dropping it
- * without disposal leaks the remote reference. Exported so the stream
- * connection code shares one implementation.
- */
-export function disposeIgnoredRpcResult(result: unknown): void {
-  if (
-    result !== null &&
-    (typeof result === "object" || typeof result === "function") &&
-    Symbol.dispose in result
-  ) {
-    (result as Disposable)[Symbol.dispose]();
   }
 }
