@@ -25,11 +25,6 @@ const DEFAULT_COMMIT_AUTHOR = { email: "support@iterate.com", name: "Iterate" };
 // (observed in preview e2e; the sandbox clone path carries the same loop).
 const CLONE_ATTEMPTS = 3;
 
-// Files are stored inline in DO SQLite (no R2 spillover is configured), and
-// SQLite caps a row at 2MB — reject writes past @cloudflare/shell's inline
-// threshold with a diagnosable error instead of letting the row insert throw.
-const MAX_FILE_BYTES = 1_500_000;
-
 // shell's Workspace.readDir defaults to a silent 1000-entry limit. That
 // default also feeds the git fs-adapter's directory walker, where a truncated
 // listing makes `add(".")` treat unlisted files as deleted — so raise it far
@@ -71,6 +66,15 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
   readonly #workspace = new UnboundedWorkspace({
     sql: this.ctx.storage.sql,
     name: () => this.ctx.id.name,
+    // Files past @cloudflare/shell's inline threshold (1.5MB — the DO SQLite
+    // row cap zone) spill transparently to R2, so workspace files have no
+    // practical size limit. The bucket is shared with the files domain, whose
+    // keys always start "{projectId}.iterate" (project ids are prj_-prefixed)
+    // — the "workspace/" prefix can never collide with them. The shell owns
+    // the object lifecycle: rm/mv/overwrite/recursive-delete all clean up the
+    // bucket objects, so reset()'s wipe leaves nothing orphaned.
+    r2: this.env.FILES_BUCKET,
+    r2Prefix: `workspace/${this.ctx.id.name!}`,
   });
   readonly #git = createGit(new WorkspaceFileSystem(this.#workspace), "/");
   readonly #branch = workspaceBranchName(this.#name.path);
@@ -192,14 +196,6 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     }
   }
 
-  #assertWritableSize(path: string, bytes: number): void {
-    if (bytes > MAX_FILE_BYTES) {
-      throw new Error(
-        `Workspace files are capped at ${MAX_FILE_BYTES} bytes for now ("${path}" would be ${bytes}). Store large blobs with itx.files instead.`,
-      );
-    }
-  }
-
   // -- filesystem (mirrors @cloudflare/shell's Workspace surface) ----------
 
   async readFile(path: string): Promise<string | null> {
@@ -215,27 +211,19 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
   async writeFile(path: string, content: string): Promise<void> {
     await this.#ready();
     this.#assertWritablePath(path);
-    this.#assertWritableSize(path, utf8ByteLength(content));
     return this.#serializeWrite(() => this.#workspace.writeFile(path, content));
   }
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
     await this.#ready();
     this.#assertWritablePath(path);
-    // Bytes are base64-encoded into the SQLite row (4/3 expansion), so the
-    // effective cap is lower than for text.
-    this.#assertWritableSize(path, Math.ceil((data.byteLength * 4) / 3));
     return this.#serializeWrite(() => this.#workspace.writeFileBytes(path, data));
   }
 
   async appendFile(path: string, content: string): Promise<void> {
     await this.#ready();
     this.#assertWritablePath(path);
-    return this.#serializeWrite(async () => {
-      const existing = await this.#workspace.stat(path);
-      this.#assertWritableSize(path, (existing?.size ?? 0) + utf8ByteLength(content));
-      return this.#workspace.appendFile(path, content);
-    });
+    return this.#serializeWrite(() => this.#workspace.appendFile(path, content));
   }
 
   async deleteFile(path: string): Promise<boolean> {
@@ -269,7 +257,6 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
         newString: input.newString,
         oldString: input.oldString,
       });
-      this.#assertWritableSize(input.path, utf8ByteLength(edited));
       await this.#workspace.writeFile(input.path, edited);
       return { occurrenceCount, path: input.path };
     });
@@ -412,8 +399,4 @@ function resolveAbsolutePath(path: string): string {
     else resolved.push(segment);
   }
   return `/${resolved.join("/")}`;
-}
-
-function utf8ByteLength(content: string): number {
-  return new TextEncoder().encode(content).byteLength;
 }

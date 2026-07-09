@@ -116,6 +116,111 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
+  it("spills an oversized script result to a workspace file and references it", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    const result = { items: "x".repeat(50_000) };
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    // The scratch dir self-ignores so `git.add({ filepath: "." })` never
+    // commits spills to the workspace branch.
+    expect(writes.map((write) => write.path)).toEqual([
+      "/script-results/.gitignore",
+      "/script-results/agent-output-7.json",
+    ]);
+    expect(writes[0]!.content).toBe("*\n");
+    expect(writes[1]!.content).toBe(JSON.stringify(result, null, 2));
+
+    const input = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    const content = input?.payload?.content as string;
+    expect(content).toContain("Your script returned");
+    expect(content).toContain('saved in your workspace at "/script-results/agent-output-7.json"');
+    expect(content).toContain('itx.workspace.readFile("/script-results/agent-output-7.json")');
+    // The inline preview stays bounded: head slice, not the whole result.
+    expect(content.length).toBeLessThan(32_000);
+  });
+
+  it("spills a multi-megabyte result as ONE file (R2 handles the size)", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    // Well past the workspace inline threshold — the workspace spills the
+    // file to R2 itself, so no splitting happens here.
+    const result = "x".repeat(9_200_000);
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const files = writes.filter((write) => !write.path.endsWith(".gitignore"));
+    expect(files.map((write) => write.path)).toEqual(["/script-results/agent-output-7.json"]);
+    expect(files[0]!.content).toBe(JSON.stringify(result, null, 2));
+  });
+
+  it("falls back to inline truncation when the workspace spill fails", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async () => {
+        throw new Error("workspace unavailable");
+      },
+    });
+
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: { items: "x".repeat(50_000) } },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const content = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    )?.payload?.content as string;
+    expect(content).toMatch(/truncated \(\d+ chars total — return less/);
+    expect(content).not.toContain("saved in your workspace");
+  });
+
+  it("does not spill small script results", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: { ok: true } },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    expect(writes).toEqual([]);
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toBe(true);
+  });
+
   it("tracks in-progress script executions in reduced state", async () => {
     const stream = new MemoryStream();
     await stream.append({
