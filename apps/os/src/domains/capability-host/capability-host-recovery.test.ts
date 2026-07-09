@@ -102,6 +102,53 @@ describe("script execution reconciliation", () => {
     expect(ran).toEqual(["async () => 2"]);
   });
 
+  it("a failed started-append leaves the obligation requested (no body run, no completion) and retries", async () => {
+    const stream = new MemoryStream();
+    let failStartedAppends = true;
+    const realAppend = stream.append.bind(stream);
+    stream.append = async (...inputs) => {
+      if (failStartedAppends && inputs.some((input) => input.type === T.started)) {
+        throw new Error("stream hiccup");
+      }
+      return realAppend(...inputs);
+    };
+    const ran: string[] = [];
+    const processor = makeProcessor({
+      stream,
+      run: async (code) => {
+        ran.push(code);
+        return "ok";
+      },
+    });
+    await realAppend({
+      type: T.requested,
+      payload: { code: "async () => 5", executionId: "exec-5" },
+    });
+    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
+    // Give the failed attempt a beat: nothing may have run or settled — the
+    // evidence rule ("no started fact ⇒ never ran") must stay true.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(ran).toEqual([]);
+    expect(stream.events.some((event) => event.type === T.completed)).toBe(false);
+    expect(processor.state.scriptExecutions["exec-5"]).toMatchObject({ status: "requested" });
+
+    // The stream recovers; the next reconciliation (any batch — even one of
+    // events this processor does not consume) retries the whole attempt from
+    // the fold.
+    failStartedAppends = false;
+    const [nudge] = await realAppend({ type: "events.iterate.com/test/nudge", payload: {} });
+    await processor.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
+    await vi.waitFor(() => {
+      const completed = stream.events.find(
+        (event) =>
+          event.type === T.completed &&
+          (event.payload as { executionId: string }).executionId === "exec-5",
+      );
+      expect(completed?.payload).toMatchObject({ executionId: "exec-5", result: "ok" });
+    });
+    expect(ran).toEqual(["async () => 5"]);
+  });
+
   it("settles an expired request without running it (only-settle-past-expiry)", async () => {
     const stream = new MemoryStream();
     await stream.append({

@@ -461,21 +461,25 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     try {
       // Started-evidence lands durably BEFORE the script body runs, so the
       // fold can always tell "provably never ran" (requested, startable late)
-      // from "may have half-run" (started, settle-only). If this append
-      // fails, the script does not run — the obligation stays `requested`
-      // and a later reconciliation retries the whole attempt.
+      // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
+      // the try below: if this append fails the script never ran, so no
+      // completion may be appended — the obligation stays `requested`, the
+      // rethrow marks the keepalive window failed, and a later reconciliation
+      // retries the whole attempt. (Same shape as the LLM providers.)
       await this.stream.append({
         type: "events.iterate.com/capability-host/script-execution-started",
         idempotencyKey: `capability-host/script-execution-started@${input.executionId}`,
         payload: { executionId: input.executionId },
       });
-      const result = await this.#scriptExecutionEntrypoint.run(input.code);
-      await this.#appendCompletion({ executionId: input.executionId, result });
-    } catch (error) {
-      await this.#appendCompletion({
-        executionId: input.executionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        const result = await this.#scriptExecutionEntrypoint.run(input.code);
+        await this.#appendCompletion({ executionId: input.executionId, result });
+      } catch (error) {
+        await this.#appendCompletion({
+          executionId: input.executionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       this.#liveExecutions.delete(input.executionId);
     }
