@@ -1069,11 +1069,33 @@ function TelegramConnectSheet({
           <SheetHeader>
             <SheetTitle>Connect a Telegram bot</SheetTitle>
             <SheetDescription>
-              In Telegram, message @BotFather, send /newbot (or /token for an existing bot), and
-              paste the token here. The token is stored write-only and only ever leaves toward
-              api.telegram.org.
+              First-time setup happens in Telegram — create the bot there, then come back with its
+              token:
             </SheetDescription>
           </SheetHeader>
+          {/* Abbreviated first-time setup: a user who has never made a Telegram
+              bot lands here needing to be told the bot is created IN Telegram. */}
+          <ol className="list-decimal space-y-1 py-2 pr-4 pl-9 text-sm text-muted-foreground">
+            <li>
+              Open Telegram and message{" "}
+              <a
+                className="font-medium text-foreground underline underline-offset-2"
+                href="https://t.me/BotFather"
+                rel="noreferrer"
+                target="_blank"
+              >
+                @BotFather
+              </a>
+              .
+            </li>
+            <li>
+              Send <code className="rounded bg-muted px-1 font-mono text-xs">/newbot</code> and
+              follow the prompts (or{" "}
+              <code className="rounded bg-muted px-1 font-mono text-xs">/token</code> for an
+              existing bot).
+            </li>
+            <li>Copy the token BotFather gives you and paste it below.</li>
+          </ol>
           <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
             <Field>
               <FieldLabel htmlFor="telegram-bot-token">Bot token</FieldLabel>
@@ -1086,8 +1108,9 @@ function TelegramConnectSheet({
                 required
               />
               <FieldDescription>
-                Note: by default, bots in group chats only see commands and mentions
-                (Telegram&apos;s privacy mode); direct messages always work.
+                The token is stored write-only and only ever leaves toward api.telegram.org. Note:
+                by default, bots in group chats only see commands and mentions (Telegram&apos;s
+                privacy mode); direct messages always work.
               </FieldDescription>
             </Field>
           </FieldGroup>
