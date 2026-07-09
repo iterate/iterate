@@ -889,11 +889,12 @@ describe("minimal web-chat agent processors", () => {
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
   });
 
-  it("fails orphaned requests a dead incarnation left behind (recovery sweep)", async () => {
+  it("cancels in-flight requests a dead incarnation left behind (recovery sweep)", async () => {
     // Regression for the 2026-07-07 prd email-thread wedge: an incarnation
     // accepted a request (runInBackground advanced the checkpoint), got
     // evicted before completing it, and the agent queued every later input
-    // behind the never-completing request forever.
+    // behind the never-completing request forever. The in-flight attempt is
+    // cancelled (durable-object-crashed), not failed as a completed LLM call.
     const stream = new MemoryStream();
     // Incarnation 1: accepted the request and appended started, then died —
     // simulated by writing the events directly, never running a processor.
@@ -919,25 +920,31 @@ describe("minimal web-chat agent processors", () => {
       readStreamEvents: () => stream.getEvents(),
     });
     // At-head fold of the dead incarnation's events: obligation is `started`
-    // with nobody live → reconciler settles as orphan without re-driving AI.
+    // with nobody live → reconciler cancels without re-driving AI.
     await agent.ingest({
       events: stream.events,
       streamMaxOffset: stream.events.length,
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const completions = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+    const cancellations = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-cancelled",
     );
-    expect(completions).toHaveLength(1);
-    expect(completions[0]!.payload).toMatchObject({
+    expect(cancellations).toHaveLength(1);
+    expect(cancellations[0]!.payload).toMatchObject({
+      phase: "requested",
+      reason: "durable-object-crashed",
       llmRequestId: requested!.offset,
-      result: { status: "failure", error: { message: expect.stringContaining("orphaned") } },
     });
+    expect(
+      stream.events.some(
+        (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+      ),
+    ).toBe(false);
 
     // A LIVE request in this incarnation is never swept: accept a new request
-    // (execution registers synchronously) and deliver the batch — no failure
-    // completion appears for it while it runs.
+    // (execution registers synchronously) and deliver the batch — no crash
+    // cancel appears for it while it runs.
     const [second] = await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:gen-2" },
@@ -948,9 +955,8 @@ describe("minimal web-chat agent processors", () => {
     });
     const sweptSecond = stream.events.filter(
       (event) =>
-        event.type === "events.iterate.com/agent/llm-request-completed" &&
-        (event.payload as { llmRequestId: number }).llmRequestId === second!.offset &&
-        JSON.stringify(event.payload).includes("orphaned"),
+        event.type === "events.iterate.com/agent/llm-request-cancelled" &&
+        (event.payload as { llmRequestId: number }).llmRequestId === second!.offset,
     );
     expect(sweptSecond).toHaveLength(0);
   });

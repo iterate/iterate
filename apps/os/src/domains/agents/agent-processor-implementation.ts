@@ -231,14 +231,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    *
    * - `requested`, not live, not expired → START the attempt
    * - `requested` but expired → settle as expired failure
-   * - `started`, not live → orphaned failure (never re-drive)
+   * - `started`, not live → CANCEL as durable-object-crashed (in-flight when
+   *   the incarnation died — kill/reset/eviction). Never re-drive: the model
+   *   may have partially streamed, and a cancel is the honest journal fact.
    */
   async #reconcileLlmRequests(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     if (args.checkpointOffset < args.streamMaxOffset) return;
     const now = this.#now();
-    const settle: { llmRequestId: number; message: string }[] = [];
+    const cancelCrashed: number[] = [];
+    const expire: { llmRequestId: number; message: string }[] = [];
     for (const [id, request] of Object.entries(args.state.llmRequests)) {
       const llmRequestId = Number(id);
       if (this.#liveLlmExecutions.has(llmRequestId)) continue;
@@ -253,17 +256,33 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         });
         continue;
       }
-      settle.push({
+      if (request.status === "started") {
+        cancelCrashed.push(llmRequestId);
+        continue;
+      }
+      expire.push({
         llmRequestId,
         message:
-          request.status === "started"
-            ? "LLM request orphaned: the incarnation executing it went away before completing (eviction or wedged call). Failed by the reconciler; the agent's next trigger reschedules."
-            : "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
+          "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
       });
     }
-    if (settle.length === 0) return;
+    if (cancelCrashed.length === 0 && expire.length === 0) return;
     args.blockProcessorWhile(async () => {
-      for (const { llmRequestId, message } of settle) {
+      for (const llmRequestId of cancelCrashed) {
+        console.error("[agent] cancelling in-flight llm request after durable-object crash", {
+          llmRequestId,
+        });
+        await args.append({
+          type: "events.iterate.com/agent/llm-request-cancelled",
+          idempotencyKey: `agent/llm-request-cancelled@requested:${llmRequestId}`,
+          payload: {
+            phase: "requested",
+            reason: "durable-object-crashed",
+            llmRequestId,
+          },
+        });
+      }
+      for (const { llmRequestId, message } of expire) {
         console.error("[agent] settling undriven llm request", { llmRequestId, message });
         await args.append({
           type: "events.iterate.com/agent/llm-request-completed",
@@ -720,18 +739,21 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
-      if (
-        event.payload.phase === "requested" &&
-        state.currentRequest?.phase === "requested" &&
-        state.currentRequest.llmRequestId === event.payload.llmRequestId
-      ) {
+      if (event.payload.phase === "requested") {
+        // Always drop the obligation (crash-cancel may arrive when currentRequest
+        // was never set, e.g. a bare seeded requested+started history). Clear
+        // currentRequest only when this was the agent-visible current attempt.
         const llmRequests = { ...state.llmRequests };
         delete llmRequests[String(event.payload.llmRequestId)];
+        const isCurrent =
+          state.currentRequest?.phase === "requested" &&
+          state.currentRequest.llmRequestId === event.payload.llmRequestId;
         return {
           ...state,
-          currentRequest: null,
-          requestGeneration: state.requestGeneration + 1,
           llmRequests,
+          ...(isCurrent
+            ? { currentRequest: null, requestGeneration: state.requestGeneration + 1 }
+            : {}),
         };
       }
       return state;

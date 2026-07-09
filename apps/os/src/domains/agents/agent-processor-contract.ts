@@ -528,7 +528,7 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          reason: z.literal("interrupted-by-user-input"),
+          reason: z.enum(["interrupted-by-user-input", "durable-object-crashed"]),
           llmRequestId: z.number().int().positive(),
         }),
       ]),
@@ -544,6 +544,15 @@ export const AgentProcessorContract = defineProcessorContract({
         {
           description: "New user input interrupted a request already running at the provider.",
           payload: { phase: "requested", reason: "interrupted-by-user-input", llmRequestId: 58 },
+        },
+        {
+          description:
+            "The Durable Object incarnation died mid-attempt (kill/reset/eviction); the reconciler cancelled the in-flight request.",
+          payload: {
+            phase: "requested",
+            reason: "durable-object-crashed",
+            llmRequestId: 61,
+          },
         },
       ],
     },

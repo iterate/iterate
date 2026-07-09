@@ -23,6 +23,7 @@ const T = {
   requested: "events.iterate.com/agent/llm-request-requested",
   started: "events.iterate.com/agent/llm-request-started",
   completed: "events.iterate.com/agent/llm-request-completed",
+  cancelled: "events.iterate.com/agent/llm-request-cancelled",
   output: "events.iterate.com/agent/output-added",
   revived: PROCESSOR_HOST_REVIVED_EVENT_TYPE,
 } as const;
@@ -75,7 +76,7 @@ describe("eviction recovery, end to end", () => {
     clearInterval(pump);
   });
 
-  it("recovers a deploy mid-LLM-call: alarm → revival fact → orphan settled → agent retries → reply", async () => {
+  it("cancels an in-flight LLM call after deploy: alarm → revival → durable-object-crashed cancel", async () => {
     await h.stream.append({
       type: T.userMessage,
       payload: { origin: "web", content: "hello?" },
@@ -83,6 +84,7 @@ describe("eviction recovery, end to end", () => {
 
     // Incarnation 1 accepts the request and hangs on the AI binding.
     const started = await h.stream.waitForEvent({ eventTypes: [T.started], timeoutMs: 5_000 });
+    const inFlightRequestId = h.stream.events.find((e) => e.type === T.requested)!.offset;
     // In-flight work parked a durable revival alarm ahead of itself.
     expect(h.store.alarm.at).not.toBeNull();
 
@@ -90,43 +92,29 @@ describe("eviction recovery, end to end", () => {
 
     await h.advance(15_000); // the alarm fires; the whole revival pass runs live
 
-    // The recovered turn completes: incarnation 2's AI answers.
-    const output = await h.stream.waitForEvent({ eventTypes: [T.output], timeoutMs: 5_000 });
-    expect(output.payload).toMatchObject({
-      content: expect.stringContaining("recovered!"),
-    });
-    await h.stream.waitForEvent({
-      eventTypes: [T.completed],
-      predicate: (event) =>
-        (event.payload as { result: { status: string } }).result.status === "success",
-      timeoutMs: 5_000,
-    });
-
-    // The journal narrates the whole episode, in order: the request that
-    // died, the revival, its orphan settlement, and the retried request.
+    // The journal narrates the crash: the request that died, the revival, and
+    // a cancel (not a failed llm-request-completed) for the in-flight attempt.
     const types = h.stream.events.map((event) => event.type);
     expect(types.indexOf(T.revived)).toBeGreaterThan(types.indexOf(T.started));
-    const orphanCompletion = h.stream.events.find(
-      (event) =>
-        event.type === T.completed &&
-        (event.payload as { llmRequestId: number }).llmRequestId ===
-          h.stream.events.find((e) => e.type === T.requested)!.offset,
-    );
-    expect(orphanCompletion!.payload).toMatchObject({
-      result: { status: "failure", error: { message: expect.stringContaining("orphaned") } },
+    const crashCancel = await h.stream.waitForEvent({
+      eventTypes: [T.cancelled],
+      predicate: (event) =>
+        (event.payload as { llmRequestId: number }).llmRequestId === inFlightRequestId,
+      timeoutMs: 5_000,
     });
-    expect(types.indexOf(T.output)).toBeGreaterThan(types.indexOf(T.revived));
-
-    // Exactly one reply and one success: the dead incarnation's attempt
-    // produced nothing, and the recovered attempt ran exactly once.
-    expect(types.filter((type) => type === T.output)).toHaveLength(1);
+    expect(crashCancel.payload).toMatchObject({
+      phase: "requested",
+      reason: "durable-object-crashed",
+      llmRequestId: inFlightRequestId,
+    });
+    // In-flight death is a cancel, not a completed failure.
     expect(
-      h.stream.events.filter(
+      h.stream.events.some(
         (event) =>
           event.type === T.completed &&
-          (event.payload as { result: { status: string } }).result.status === "success",
+          (event.payload as { llmRequestId: number }).llmRequestId === inFlightRequestId,
       ),
-    ).toHaveLength(1);
+    ).toBe(false);
     expect(started).toBeDefined();
   });
 
