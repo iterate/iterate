@@ -5,6 +5,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -17,6 +18,7 @@ import {
   telegramConnectionFromAgentPath,
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
+import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
 import { mintProjectFileUrl } from "../files/project-files.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
@@ -206,6 +208,12 @@ export class AgentDurableObject extends DurableObject<Env> {
       }),
   );
 
+  // Registered on every agent host; it wakes on routed PR agent streams
+  // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
+  // linked connection's itx.integrations.github Octokit, called by the agent
+  // itself, so there are no side-effect deps here.
+  readonly prAgentProcessor = this.#processorHost.add((deps) => new PrAgentProcessor(deps));
+
   async #readAgentPromptEvents(): Promise<StreamEvent[]> {
     const events: StreamEvent[] = [];
     using pager = this.#stream.readEvents({
@@ -220,7 +228,7 @@ export class AgentDurableObject extends DurableObject<Env> {
     }
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 

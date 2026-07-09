@@ -310,7 +310,7 @@ messageId }`. A request without a marker is an unmet obligation (crash →
       tolerate the extra segment_
 - [x] Router (`telegram-processor-implementation.ts` + contract): fold
       per-chat session starts from `/new` messages and `message_id →
-  sessionPath` from the connection-stream sent-claims; route everything
+sessionPath` from the connection-stream sent-claims; route everything
       to the latest session — _state = `sessionsByChat` (full history per
       chat, ordered `(date, message_id)` with a backwards-roll guard — the
       history serves the reply-date fallback) + `sentMessages`

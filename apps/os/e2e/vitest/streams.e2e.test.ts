@@ -1,9 +1,10 @@
 // OS stream e2e migration guards, ported to the v4 stream contract.
 //
 // These deliberately cover only deployment-style ITX/WebSocket behavior: project
-// stream access, append/read, replay/live subscriptions, unsubscribe, and
-// state-only subscription pushes. Unit and workerd-only stream regression tests
-// stay out of this file.
+// stream access, append/read, replay/live subscriptions, unsubscribe,
+// state-only subscription pushes, and cross-posting (durable push subscriptions
+// targeting another stream's ingest sink, via the crossPostTo sugar). Unit and
+// workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
 import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
@@ -230,11 +231,11 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await subscription.unsubscribe();
 });
 
-test("stream rules cross-post matching events with source provenance", async () => {
+test("crossPostTo copies matching events with source provenance", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post/source/${marker}`;
   const targetPath = `/e2e/os-port/cross-post/target/${marker}`;
-  const ruleId = `copy-${marker}`;
+  const subscriptionKey = `copy-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
@@ -246,20 +247,16 @@ test("stream rules cross-post matching events with source provenance", async () 
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
-  await source.append({
-    type: "events.iterate.com/stream/rule-configured",
-    payload: {
-      eventTypes: [CROSS_POST_EVENT_TYPE],
-      path: targetPath,
-      ruleId,
-      type: "cross-post",
-    },
+  await source.crossPostTo({
+    path: targetPath,
+    key: subscriptionKey,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
   });
 
   const copied = target.waitForEvent({
     afterOffset: 0,
     eventTypes: [CROSS_POST_EVENT_TYPE],
-    timeoutMs: 10_000,
+    timeoutMs: 15_000,
   });
   const [sourceEvent] = await source.append({
     type: CROSS_POST_EVENT_TYPE,
@@ -267,13 +264,15 @@ test("stream rules cross-post matching events with source provenance", async () 
   });
   const copiedEvent = await copied;
 
+  // The idempotency key is derived from the source coordinate, so the durable
+  // subscription's at-least-once delivery collapses to exactly-once appends.
   expect(copiedEvent).toMatchObject({
-    idempotencyKey: `cross-post:${ruleId}:${projectDescription.projectId}:${sourcePath}:${sourceEvent!.offset}`,
+    idempotencyKey: `xpost:${subscriptionKey}:${projectDescription.projectId}:${sourcePath}:${sourceEvent!.offset}`,
     payload: { marker },
     source: {
       crossPostedFrom: [
         {
-          ruleId,
+          subscriptionKey,
           createdAt: sourceEvent!.createdAt,
           offset: sourceEvent!.offset,
           path: sourcePath,
@@ -286,11 +285,10 @@ test("stream rules cross-post matching events with source provenance", async () 
   });
 });
 
-test("stream rule conditions gate cross-posting on event content", async () => {
+test("cross-post conditions gate cross-posting on event content", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post-condition/source/${marker}`;
   const targetPath = `/e2e/os-port/cross-post-condition/target/${marker}`;
-  const ruleId = `condition-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
@@ -304,22 +302,19 @@ test("stream rule conditions gate cross-posting on event content", async () => {
   using target = project.streams.get(targetPath);
 
   // The GitHub-backed-repo shape: one connection stream carries webhooks for
-  // every repository of an installation; a condition narrows a rule to one.
-  await source.append({
-    type: "events.iterate.com/stream/rule-configured",
-    payload: {
-      condition: `payload.repository = "acme/widgets"`,
-      eventTypes: [CROSS_POST_EVENT_TYPE],
-      path: targetPath,
-      ruleId,
-      type: "cross-post",
-    },
+  // every repository of an installation; a JSONata condition on the cross-post
+  // subscription's selector narrows the copies to one repository.
+  await source.crossPostTo({
+    path: targetPath,
+    key: `condition-${marker}`,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    condition: `payload.repository = "acme/widgets"`,
   });
 
   const copied = target.waitForEvent({
     afterOffset: 0,
     eventTypes: [CROSS_POST_EVENT_TYPE],
-    timeoutMs: 10_000,
+    timeoutMs: 15_000,
   });
   await source.append(
     { type: CROSS_POST_EVENT_TYPE, payload: { marker, repository: "acme/other" } },
@@ -336,7 +331,7 @@ test("stream rule conditions gate cross-posting on event content", async () => {
   expect(copies.map((event) => event.payload?.repository)).toEqual(["acme/widgets"]);
 });
 
-test("stream rules reject unparseable conditions before they commit", async () => {
+test("cross-post subscriptions reject unparseable conditions before they commit", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post-bad-condition/source/${marker}`;
 
@@ -350,21 +345,20 @@ test("stream rules reject unparseable conditions before they commit", async () =
   });
   using source = project.streams.get(sourcePath);
 
+  // crossPostTo is sugar over appending subscription-configured; an
+  // uncompilable selector condition must fail the append, not become durable
+  // desired state that errors on every later event.
   await expect(
-    source.append({
-      type: "events.iterate.com/stream/rule-configured",
-      payload: {
-        condition: "payload.((((",
-        eventTypes: [CROSS_POST_EVENT_TYPE],
-        path: `/e2e/os-port/cross-post-bad-condition/target/${marker}`,
-        ruleId: `bad-${marker}`,
-        type: "cross-post",
-      },
+    source.crossPostTo({
+      path: `/e2e/os-port/cross-post-bad-condition/target/${marker}`,
+      key: `bad-${marker}`,
+      eventTypes: [CROSS_POST_EVENT_TYPE],
+      condition: "payload.((((",
     }),
   ).rejects.toThrow();
 });
 
-test("cross-post chains accumulate provenance hops and rule removal stops forwarding", async () => {
+test("cross-post chains accumulate provenance hops and removeCrossPost stops forwarding", async () => {
   const marker = crypto.randomUUID();
   const pathA = `/e2e/os-port/cross-post-chain/a/${marker}`;
   const pathB = `/e2e/os-port/cross-post-chain/b/${marker}`;
@@ -382,45 +376,34 @@ test("cross-post chains accumulate provenance hops and rule removal stops forwar
   using streamB = project.streams.get(pathB);
   using streamC = project.streams.get(pathC);
 
-  await streamA.append({
-    type: "events.iterate.com/stream/rule-configured",
-    payload: {
-      eventTypes: [CROSS_POST_EVENT_TYPE],
-      path: pathB,
-      ruleId: `a-to-b-${marker}`,
-      type: "cross-post",
-    },
+  await streamA.crossPostTo({
+    path: pathB,
+    key: `a-to-b-${marker}`,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
   });
-  await streamB.append({
-    type: "events.iterate.com/stream/rule-configured",
-    payload: {
-      eventTypes: [CROSS_POST_EVENT_TYPE],
-      path: pathC,
-      ruleId: `b-to-c-${marker}`,
-      type: "cross-post",
-    },
+  await streamB.crossPostTo({
+    path: pathC,
+    key: `b-to-c-${marker}`,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
   });
 
   const arrived = streamC.waitForEvent({
     afterOffset: 0,
     eventTypes: [CROSS_POST_EVENT_TYPE],
-    timeoutMs: 10_000,
+    timeoutMs: 15_000,
   });
   await streamA.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
   const chained = await arrived;
 
-  // Two hops, oldest first: A's rule copied A→B, then B's rule copied B→C.
+  // Two hops, oldest first: A's subscription copied A→B, then B's copied B→C.
   expect(chained.source?.crossPostedFrom?.map((hop) => hop.path)).toEqual([pathA, pathB]);
-  expect(chained.source?.crossPostedFrom?.map((hop) => hop.ruleId)).toEqual([
+  expect(chained.source?.crossPostedFrom?.map((hop) => hop.subscriptionKey)).toEqual([
     `a-to-b-${marker}`,
     `b-to-c-${marker}`,
   ]);
 
-  // Removing A's rule stops the chain at its first hop.
-  await streamA.append({
-    type: "events.iterate.com/stream/rule-removed",
-    payload: { ruleId: `a-to-b-${marker}` },
-  });
+  // Removing A's cross-post stops the chain at its first hop.
+  await streamA.removeCrossPost({ key: `a-to-b-${marker}` });
   await streamA.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker: `${marker}-after` } });
   await new Promise((resolve) => setTimeout(resolve, 750));
   const bEvents = await streamB.getEvents({ afterOffset: 0 });
@@ -428,7 +411,7 @@ test("cross-post chains accumulate provenance hops and rule removal stops forwar
   expect(bCopies.map((event) => event.payload?.marker)).toEqual([marker]);
 });
 
-test("stream rules do not recursively cross-post events that are already cross-posted", async () => {
+test("cross-posts do not recursively copy events that are already cross-posted", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post-loop/source/${marker}`;
   const targetPath = `/e2e/os-port/cross-post-loop/target/${marker}`;
@@ -444,31 +427,26 @@ test("stream rules do not recursively cross-post events that are already cross-p
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
+  // Loop protection is structural: ingest never appends an event whose
+  // provenance chain already contains the receiving stream, so wiring two
+  // streams at each other is safe.
   await Promise.all([
-    source.append({
-      type: "events.iterate.com/stream/rule-configured",
-      payload: {
-        eventTypes: [CROSS_POST_EVENT_TYPE],
-        path: targetPath,
-        ruleId: `source-to-target-${marker}`,
-        type: "cross-post",
-      },
+    source.crossPostTo({
+      path: targetPath,
+      key: `source-to-target-${marker}`,
+      eventTypes: [CROSS_POST_EVENT_TYPE],
     }),
-    target.append({
-      type: "events.iterate.com/stream/rule-configured",
-      payload: {
-        eventTypes: [CROSS_POST_EVENT_TYPE],
-        path: sourcePath,
-        ruleId: `target-to-source-${marker}`,
-        type: "cross-post",
-      },
+    target.crossPostTo({
+      path: sourcePath,
+      key: `target-to-source-${marker}`,
+      eventTypes: [CROSS_POST_EVENT_TYPE],
     }),
   ]);
 
   const copied = target.waitForEvent({
     afterOffset: 0,
     eventTypes: [CROSS_POST_EVENT_TYPE],
-    timeoutMs: 10_000,
+    timeoutMs: 15_000,
   });
   await source.append({
     type: CROSS_POST_EVENT_TYPE,
@@ -484,11 +462,10 @@ test("stream rules do not recursively cross-post events that are already cross-p
   expect(sourceCopies).toEqual([]);
 });
 
-test("stream rules cannot cross-post project stream events into global streams", async () => {
+test("global cross-posts stay in the global namespace — a project stream is unreachable", async () => {
   const marker = crypto.randomUUID();
-  const sourcePath = `/e2e/os-port/cross-post-global/source/${marker}`;
-  const globalPath = `/e2e/os-port/cross-post-global/target/${marker}`;
-  const ruleId = `project-to-global-${marker}`;
+  const globalPath = `/e2e/os-port/cross-post-global/source/${marker}`;
+  const targetPath = `/e2e/os-port/cross-post-global/target/${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
@@ -498,34 +475,100 @@ test("stream rules cannot cross-post project stream events into global streams",
   using project = itx.projects.create({
     slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
   });
-  using source = project.streams.get(sourcePath);
-  using globalTarget = itx.streams.get(globalPath);
+  using globalSource = itx.streams.get(globalPath);
+  using globalTarget = itx.streams.get(targetPath);
+  using projectTarget = project.streams.get(targetPath);
 
-  // A cross-post writes into the target stream using the source Stream DO's own
-  // authority. A project-scoped stream must therefore NOT be able to configure a
-  // rule targeting a global (projectId: null) stream: that would let any project
-  // principal inject events into deployment-wide streams, which are otherwise
-  // admin-only. The rule-configured append must be rejected before it commits.
-  await expect(
-    source.append({
-      type: "events.iterate.com/stream/rule-configured",
-      payload: {
-        eventTypes: [CROSS_POST_EVENT_TYPE],
-        path: globalPath,
-        projectId: null,
-        ruleId,
-        type: "cross-post",
+  // A delivery expression evaluates against the source stream's OWN authority
+  // root. For a global (projectId: null) stream that is the deployment root,
+  // whose `streams` collection is the deployment-wide (projectId: null)
+  // namespace — so `["streams", ["get", path], "ingest"]` from a global source
+  // can only ever name another GLOBAL stream. A project stream at the same
+  // path is a different coordinate entirely: smuggling events across the
+  // project boundary is unexpressible, not checked.
+  await globalSource.crossPostTo({
+    path: targetPath,
+    key: `global-to-global-${marker}`,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+  });
+  await globalSource.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
+
+  // The copy lands on the GLOBAL stream at the target path, provenance intact...
+  await expect
+    .poll(
+      async () => {
+        const events = await globalTarget.getEvents({ afterOffset: 0 });
+        return events.some(
+          (event) =>
+            event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPostedFrom !== undefined,
+        );
       },
-    }),
-  ).rejects.toThrow(/does not match stream projectId/);
+      { timeout: 15_000 },
+    )
+    .toBe(true);
 
-  // Because the rule never committed, appending a matching event cross-posts
-  // nothing to the global stream.
-  await source.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
-  await new Promise((resolve) => setTimeout(resolve, 750));
+  // ...and the PROJECT stream at the same path never sees anything.
+  const projectEvents = await projectTarget.getEvents({ afterOffset: 0 });
+  expect(projectEvents.some((event) => event.type === CROSS_POST_EVENT_TYPE)).toBe(false);
+});
 
-  const globalEvents = await globalTarget.getEvents({ afterOffset: 0 });
-  expect(globalEvents.some((event) => event.type === CROSS_POST_EVENT_TYPE)).toBe(false);
+test("crossPostTo transform reshapes the copied event and keeps the provenance chain intact", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post-transform/source/${marker}`;
+  const targetPath = `/e2e/os-port/cross-post-transform/target/${marker}`;
+  const subscriptionKey = `transform-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-xform-${RUN_SUFFIX}-${marker}`,
+  });
+  const projectDescription = await project.__describe();
+  using source = project.streams.get(sourcePath);
+  using target = project.streams.get(targetPath);
+
+  // The transform is a JSONata expression CONSTRUCTING the copied event's
+  // body ({type?, payload?, metadata?}) from the original event.
+  await source.crossPostTo({
+    path: targetPath,
+    key: subscriptionKey,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    transform: '{ "type": "e2e/summary", "payload": { "from": payload.original } }',
+  });
+
+  const copied = target.waitForEvent({
+    afterOffset: 0,
+    eventTypes: ["e2e/summary"],
+    timeoutMs: 15_000,
+  });
+  const [sourceEvent] = await source.append({
+    type: CROSS_POST_EVENT_TYPE,
+    payload: { original: marker },
+  });
+  const copiedEvent = await copied;
+
+  // The body is reshaped, but provenance is stamped AFTER the transform: the
+  // chain still names the ORIGINAL event's type and source coordinate, and a
+  // transform can never forge or drop it.
+  expect(copiedEvent).toMatchObject({
+    payload: { from: marker },
+    source: {
+      crossPostedFrom: [
+        {
+          subscriptionKey,
+          createdAt: sourceEvent!.createdAt,
+          offset: sourceEvent!.offset,
+          path: sourcePath,
+          projectId: projectDescription.projectId,
+          type: CROSS_POST_EVENT_TYPE,
+        },
+      ],
+    },
+    type: "e2e/summary",
+  });
 });
 
 function coreState(value: unknown): CoreStreamState {

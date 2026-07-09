@@ -77,6 +77,11 @@ export function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** `value` as a finite number when it is one; undefined otherwise (webhook bodies are untrusted). */
+export function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 /**
  * Normalizes an arbitrary string (Slack team domain, Gmail local part, …) into
  * a connection name that is safe as a single path segment: lowercased, runs of

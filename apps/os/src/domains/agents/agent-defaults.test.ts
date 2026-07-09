@@ -35,6 +35,12 @@ describe("agentDefaultsForPath", () => {
     expect(config?.payload.systemPrompt).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
   });
 
+  it("gives pull-request agents the GitHub PR prompt (reply door = createComment)", () => {
+    const prompt = defaultsFor("/agents/repos/root/pull-requests/7").systemPrompt;
+    expect(prompt).toContain("attached to one GitHub pull request");
+    expect(prompt).toContain("rest.issues.createComment");
+  });
+
   it("only the onboarding agent gets the kickoff input", () => {
     const kickoffTypes = (path: string) =>
       defaultsFor(path).events.filter(

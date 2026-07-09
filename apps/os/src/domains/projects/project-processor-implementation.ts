@@ -21,6 +21,8 @@ import {
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
+import { PrAgentProcessorContract } from "../repos/pr-agent-processor-contract.ts";
+import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
@@ -109,8 +111,8 @@ export class ProjectProcessor extends StreamProcessor<
                     projectId: this.deps.itx.projectId,
                     path: "/",
                   }),
+                  processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
-                  subscriberType: "capability-host",
                 }),
                 {
                   type: "events.iterate.com/repo/create-requested",
@@ -137,8 +139,8 @@ export class ProjectProcessor extends StreamProcessor<
                     path: EMAIL_INTEGRATION_STREAM_PATH,
                   }),
                   idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processor: ["email", "processor"],
                   processorSlug: EmailProcessorContract.slug,
-                  subscriberType: "project",
                 }),
                 ...(event.payload.creatorEmail === undefined
                   ? []
@@ -180,8 +182,8 @@ export class ProjectProcessor extends StreamProcessor<
               buildDurableObjectProcessorSubscriptionConfiguredEvent({
                 durableObjectName,
                 idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
+                processor: ["schedulers", ["get", childPath], "processor"],
                 processorSlug: SchedulerProcessorContract.slug,
-                subscriberType: "scheduler",
               }),
             );
             return;
@@ -203,6 +205,7 @@ export class ProjectProcessor extends StreamProcessor<
               ...agentSubscriptionEvents({
                 childPath,
                 email: isEmailAgentPath(childPath),
+                githubPr: isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
                 telegram: isTelegram,
@@ -214,8 +217,8 @@ export class ProjectProcessor extends StreamProcessor<
           await this.deps.itx.streams.get(childPath).append(
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName,
+              processor: ["secrets", ["get", childPath], "processor"],
               processorSlug: SecretProcessorContract.slug,
-              subscriberType: "secret",
             }),
           );
         });
@@ -294,6 +297,7 @@ function onboardingAgentStartEvents(deps: { itx: Pick<ProjectRpcTarget, "project
 function agentSubscriptionEvents(input: {
   childPath: string;
   email?: boolean;
+  githubPr?: boolean;
   projectId: string;
   slack?: boolean;
   telegram?: boolean;
@@ -302,12 +306,15 @@ function agentSubscriptionEvents(input: {
     projectId: input.projectId,
     path: input.childPath,
   });
-  const subscription = (processorSlug: string, subscriberType: "agent" | "capability-host") =>
+  const subscription = (processorSlug: string, hostKind: "agent" | "capability-host") =>
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
+      processor:
+        hostKind === "agent"
+          ? ["agents", ["get", input.childPath], "processor"]
+          : ["capabilityHosts", ["get", input.childPath], "processor"],
       processorSlug,
-      subscriberType,
     });
   return [
     subscription(AgentProcessorContract.slug, "agent"),
@@ -319,6 +326,7 @@ function agentSubscriptionEvents(input: {
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
+    ...(input.githubPr ? [subscription(PrAgentProcessorContract.slug, "agent")] : []),
   ];
 }
 

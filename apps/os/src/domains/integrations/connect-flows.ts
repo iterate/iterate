@@ -292,7 +292,12 @@ async function recordConnection(input: {
   /** Arm a webhook-router processor on the connection stream (providers that
    * route inbound events). Connect time is THE arming point — connection
    * streams are born here, not at project create. */
-  processorSubscription?: { idempotencyKey: string; processorSlug: string };
+  processorSubscription?: {
+    idempotencyKey: string;
+    /** Itx expression to the router's processor node (see the subscription builder). */
+    processor: (string | [string, ...unknown[]])[];
+    processorSlug: string;
+  };
   /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
    * route inbound events (D4). */
@@ -317,8 +322,8 @@ async function recordConnection(input: {
               path: streamPath,
             }),
             idempotencyKey: input.processorSubscription.idempotencyKey,
+            processor: input.processorSubscription.processor,
             processorSlug: input.processorSubscription.processorSlug,
-            subscriberType: "project" as const,
           }),
         ]
       : []),
@@ -441,6 +446,7 @@ async function recordSlackConnection(input: {
     },
     processorSubscription: {
       idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
+      processor: ["integrations", "slack", input.connection, "processor"],
       processorSlug: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
@@ -704,6 +710,7 @@ export async function connectTelegram(input: {
     },
     processorSubscription: {
       idempotencyKey: `telegram-router-subscription:${input.projectId}:${connection}`,
+      processor: ["integrations", "telegram", connection, "processor"],
       processorSlug: TelegramProcessorContract.slug,
     },
     directoryClaim: { externalId: bot.id },

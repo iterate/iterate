@@ -4,6 +4,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -117,7 +118,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return this.#schedulerProcessor.listScheduleViews();
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 

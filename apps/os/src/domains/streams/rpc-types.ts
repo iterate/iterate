@@ -42,6 +42,25 @@ export type ProcessorStateSubscriptionHandle = Disposable & {
   unsubscribe(): void;
 };
 
+/**
+ * A processor node that is also its HOST's wake-mode delivery door. This is
+ * what the domain surfaces expose (`itx.agents.get(path).processor`,
+ * `itx.repos.get(path).processor`, `itx.processor`, …) and what wake-mode
+ * stream subscriptions persist as their delivery expression:
+ * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
+ *
+ * `wakeStreamSubscriber` is dialed by stream delivery spines only
+ * (trusted-internal): the handshake's sink drives the host's durable
+ * checkpoint, so an ordinary session poking it could feed fabricated batches
+ * and fast-forward the checkpoint past real events. Multi-processor hosts (an
+ * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * processor wakes from the request's `processorSlug` — the inspection half of
+ * this node reads the host's main processor.
+ */
+export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+};
+
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   /**
@@ -79,6 +98,89 @@ export type StreamEventBatch = {
  * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/**
+ * The batch a PUSH subscription's receiver is invoked with: the ordinary
+ * {@link StreamEventBatch} envelope every other subscriber gets ("stream
+ * processor" is one shape), plus the fields an at-least-once stateless
+ * receiver needs to dedupe and self-configure.
+ */
+export type StreamPushEventBatch = StreamEventBatch & {
+  subscriptionKey: SubscriptionKey;
+  /**
+   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * so receivers can dedupe redeliveries even without per-event bookkeeping.
+   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
+   */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this batch. */
+  attempt: number;
+  /**
+   * The committed `subscription-configured` event this delivery serves — so a
+   * receiver can configure itself from committed stream state without a
+   * side-channel registry (which stream, which selector, whose params).
+   * Narrowed to the fields the fold stores; an honest shape instead of a
+   * `StreamEvent` cast that pretends metadata/source survived.
+   */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+};
+
+/**
+ * One webhook delivery: a single committed event POSTed as JSON to the
+ * subscription's URL. Deliberately per-EVENT (external webhook consumers
+ * expect individual events, and per-event acking gives mid-batch
+ * resumability) and deliberately WITHOUT the `state` other lanes carry — core
+ * reduced state is internal and has no business leaving the deployment.
+ */
+export type StreamWebhookDelivery = {
+  projectId: string | null;
+  path: string;
+  event: StreamEvent;
+  subscriptionKey: SubscriptionKey;
+  /** Stable across retries of this event (`${subscriptionKey}:${offset}-${offset}`). */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this event. */
+  attempt: number;
+  /** The committed `subscription-configured` event this delivery serves (see {@link StreamPushEventBatch}). */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+};
+
+/**
+ * What the stream sends when poking a durable wake-mode subscriber
+ * (`wakeStreamSubscriber`): serializable coordinates only.
+ */
+export type StreamSubscriberWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: SubscriptionKey;
+  /** Which hosted processor the poke is for (multi-processor hosts resolve on it). */
+  processorSlug?: string;
+};
+
+/**
+ * What the poked subscriber hands back — the entire handshake in one return
+ * value. The stream retains `sink` (ownership of a returned stub transfers to
+ * the caller) and streams one-way batches into it from `checkpointOffset + 1`;
+ * there is no subscribe-back call and therefore no handshake race to fence.
+ */
+export type StreamSubscriberWakeResponse = {
+  /** The processor's durable checkpoint offset — replay resumes after it. */
+  checkpointOffset: number;
+  /** The live delivery callback the stream retains and invokes per batch. */
+  sink: ProcessEventBatch;
+  /**
+   * Serializable subscriber identity (validated against
+   * `StreamSubscriberDescriptor` by the stream) appended as the
+   * subscriber-connected presence fact; carries the processor's contract
+   * announcement for the stream's `processorsBySlug` registry.
+   */
+  subscriber?: unknown;
+  /** Live runtime-state capability, retained for the connection lifetime. */
+  getRuntimeState?: GetProcessorRuntimeState;
+};
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
 export type ProcessorRuntimeState<State = unknown> = {

@@ -6,6 +6,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
@@ -57,7 +58,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   // trip provider rate limits and race last-write-wins on the stored token.
   #refreshing: Promise<void> | undefined;
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
