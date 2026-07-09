@@ -1,0 +1,74 @@
+import { connectAdminItx } from "./test-support/forged-session.ts";
+import { test } from "./test-support/test.ts";
+
+/**
+ * The repos mini IDE golden path: a repo page is a small vscode — pierre file
+ * tree, editable CodeMirror buffers, a git-shaped working tree (persisted in
+ * the browser per HEAD commit), staging, an inline diff, and Commit flushing
+ * through `repo.commitFiles`.
+ */
+test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  await using fixture = await helpers.createFixture("repo-ide");
+
+  // Repos are template-seeded on create, so the IDE opens onto real files.
+  using itx = await connectAdminItx(baseURL!);
+  using project = itx.projects.get(fixture.project.id);
+  await project.repos.create({ path: "/repos/ide" });
+
+  await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
+
+  // Open a seeded file from the tree (pierre renders rows in a shadow root;
+  // playwright locators pierce it — target the exact path, the template also
+  // ships an integrations/waitrose/README.md) and edit it.
+  await page.locator('[data-item-path="README.md"]').click();
+  await page.locator(".cm-content").click();
+  // Select-all + ArrowRight parks the cursor at the end of the document on
+  // every platform (Cmd/Ctrl+End bindings differ between mac and linux).
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("\nAn uncommitted line.");
+  await page.getByText("modified", { exact: true }).waitFor();
+
+  // Dirtiness lives in localStorage keyed by HEAD oid: a reload keeps it.
+  await page.reload();
+  await page.getByText("modified", { exact: true }).waitFor();
+
+  // The inline diff is the same editable buffer viewed against its baseline.
+  await page.getByRole("button", { name: "Diff" }).click();
+  await page.getByText("README.md (Working Tree)").waitFor();
+  await page.getByRole("button", { name: "Diff" }).click();
+
+  // Stage the file: it moves from Changes to Staged Changes, and Commit
+  // narrows to "what's staged".
+  await page.getByRole("button", { name: "Stage" }).click();
+  await page.getByRole("button", { name: "Source control" }).click();
+  await page.getByText("Staged Changes").waitFor();
+  await page.getByRole("button", { name: "Commit 1 staged" }).waitFor();
+
+  // Editing again after staging puts the file in BOTH sections.
+  await page.locator(".cm-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("\nA second, unstaged line.");
+  await page.getByRole("button", { name: "README.md" }).nth(1).waitFor();
+
+  // The staged row opens the readonly "(Index)" pseudo-file: locked, always
+  // a diff, with Unstage and an escape back to the editable working tree.
+  await page.getByRole("button", { name: "README.md" }).first().click();
+  await page.getByText("README.md (Index)").waitFor();
+  await page.getByRole("button", { name: "Open file" }).click();
+  // Back on the editable working-tree file — Discard only exists there.
+  await page.getByRole("button", { name: "Discard", exact: true }).waitFor();
+
+  // Commit what's staged; the unstaged edit survives against the new HEAD.
+  await page.getByPlaceholder("Commit message").fill("Stage-only commit");
+  await page.getByRole("button", { name: "Commit 1 staged" }).click();
+  await page.getByText(/Committed 1 file/).waitFor();
+  // Only the unstaged edit remains: Commit widens back to "everything".
+  await page.getByRole("button", { name: /^Commit 1$/ }).waitFor();
+  await page.getByRole("button", { name: "README.md" }).waitFor();
+});
