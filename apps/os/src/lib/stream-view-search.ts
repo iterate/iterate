@@ -65,7 +65,7 @@ export const StreamViewSearch = z.object({
 export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
 
 /** What filter / body surfaces a mode exposes. Modes encode this as the preset. */
-export type StreamModeCapabilities = {
+type StreamModeCapabilities = {
   /** Agent chat collection (agent_feed_items). */
   agentFeed: boolean;
   /** Include agent-ui debug kinds (wakes, etc.) in the agent feed. */
@@ -89,7 +89,7 @@ export type StreamModeCapabilities = {
 };
 
 /** One header mode tab offered by a stream path. */
-export type StreamModeDefinition = {
+type StreamModeDefinition = {
   id: StreamViewMode;
   label: string;
   capabilities: StreamModeCapabilities;
@@ -154,7 +154,7 @@ export function defaultModeForStream(streamPath: string): StreamViewMode {
 }
 
 /** Normalize legacy `pretty-debug` → `pretty-raw`. */
-export function normalizeStreamViewMode(
+function normalizeStreamViewMode(
   mode: z.infer<typeof StreamViewModeRaw> | undefined,
 ): StreamViewMode | undefined {
   if (mode == null) return undefined;
@@ -198,21 +198,6 @@ export function modeCapabilities(
     };
   }
   return base;
-}
-
-/** Whether the raw feed rail should render (mode + optional `raw=false`). */
-export function rawFeedEnabled(search: StreamViewSearch, streamPath: string): boolean {
-  return modeCapabilities(search, streamPath).rawFeed;
-}
-
-export function activeModeDefinition(
-  search: StreamViewSearch,
-  streamPath: string,
-): StreamModeDefinition | null {
-  const modes = modesForStream(streamPath);
-  if (modes.length === 0) return null;
-  const id = streamViewMode(search, streamPath);
-  return modes.find((entry) => entry.id === id) ?? modes[0]!;
 }
 
 /**

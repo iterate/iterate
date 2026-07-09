@@ -216,6 +216,3 @@ export function shortEventType(type: string): string {
 export function shortComponent(component: string): string {
   return component.startsWith("stream.") ? component.slice("stream.".length) : component;
 }
-
-/** Agent-ui feed kinds treated as debug-only (hidden in Pretty). */
-export const AGENT_FEED_DEBUG_KINDS = ["stream-woken"] as const;
