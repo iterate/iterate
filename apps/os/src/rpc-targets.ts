@@ -3054,7 +3054,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like `message`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget.
+   * does not refill the receiver's autonomous turn budget. NOT the tool for
+   * SUBAGENTS: they are prompted to report via `parent.message` (their
+   * inputs), never web chat, so an ask() at a subagent times out — use
+   * `message()` and read the report from your own inputs.
    */
   async ask(input: {
     message: string;

@@ -862,6 +862,27 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
+  it("still blanks pre-unification slack yaml inputs from old journals", () => {
+    const file = {
+      contentType: "image/png",
+      filename: "screenshot.png",
+      path: "files/screenshot.png",
+      size: 123,
+      url: "https://files.example/screenshot.png",
+    };
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: "slack-agent:webhook-to-agent-input:41",
+        payload: { content: "```yaml\nbody: ...\n```", files: [file] },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { kind: "user", text: "", files: [file], via: { service: "slack" } },
+    ]);
+  });
+
   it("renders inter-agent mail as a labeled user bubble", () => {
     const state = reduceAll([
       {

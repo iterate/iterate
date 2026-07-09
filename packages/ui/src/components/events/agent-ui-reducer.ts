@@ -287,12 +287,20 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // web-message-sent event already rendered as an assistant bubble —
       // they exist for the model's eyes, not the user's.
       if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
+      // Pre-unification journals: the slack transcriber used to append its
+      // model-facing YAML dump as input-added under this key (today it emits
+      // agents/message-received). The raw webhook already rendered the
+      // bubble; surface only the stored attachments, exactly as before.
+      const isLegacySlackInput = event.idempotencyKey?.startsWith(
+        "slack-agent:webhook-to-agent-input:",
+      );
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-file-${event.offset}`,
-        text,
+        text: isLegacySlackInput ? "" : text,
         files,
         timestampMs,
+        ...(isLegacySlackInput ? { via: { service: "slack" as const } } : {}),
       });
     }
 
