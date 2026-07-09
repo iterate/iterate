@@ -115,7 +115,6 @@
     "iterate/no-sr-only-data-attributes": "error",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
-    "iterate/drizzle-conventions": "error",
     "iterate/no-raw-durable-object-binding-access": "error",
     "iterate/no-implied-eval": "error",
     "iterate/no-single-use-helpers": "error",

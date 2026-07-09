@@ -21,10 +21,24 @@ import {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/** One owned event: its payload schema plus optional human description. */
+/**
+ * One documented example payload for an owned event, rendered on the public
+ * event docs site (events.iterate.com). The payload must parse against the
+ * event's `payloadSchema` — enforced by the event-docs unit tests rather than
+ * at module load, so a bad example fails CI instead of bricking a worker boot.
+ */
+export type EventExample = {
+  /** What this example shows, e.g. "Push delivery to another stream's ingest". */
+  description: string;
+  /** The example payload, in the payload schema's input shape. */
+  payload: unknown;
+};
+
+/** One owned event: its payload schema plus optional human description and examples. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
+  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */

@@ -261,7 +261,15 @@ export async function deploy(
       async (app) => {
         return await deployPreviewAppWithStatus({
           app,
-          commandEnvironment: runtime.commandEnvironment,
+          commandEnvironment: {
+            ...runtime.commandEnvironment,
+            // apps/os/scripts/deploy.ts turns this into
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
+            // preview install this head's pkg.pr.new `iterate` build, not
+            // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
+            // targets, while the sha pins the exact build this deploy shipped.
+            PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
+          },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
           pullRequestHeadSha: context.pullRequestHeadSha,
@@ -1154,9 +1162,10 @@ export const cloudflareAppSharedPaths = [
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
-  // The preview deploy + e2e + cleanup lifecycle is one Depot CI workflow.
-  // Keep this in sync with that file's own `on.pull_request.paths` list: a
-  // change to the workflow (or the shared preview orchestration) triggers a
+  // The preview deploy + e2e lifecycle is one Depot CI workflow; cleanup on
+  // close lives in cloudflare-preview-cleanup.yml, which mirrors the same
+  // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
+  // a change to the workflow (or the shared preview orchestration) triggers a
   // full-fleet preview.
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,

@@ -23,6 +23,15 @@ test("itx-api.generated.ts is fresh (pnpm generate:itx-api)", () => {
   expect(readFileSync(generatedPath, "utf8")).toBe(generateItxApi());
 }, 60_000);
 
+test("the packages/iterate copy (published as iterate/sdk) is fresh (pnpm generate:itx-api)", () => {
+  // packages/iterate is excluded from the root CI pipelines (--filter
+  // '!iterate'), so the guard for its copy lives here with the other one.
+  const packageCopyPath = fileURLToPath(
+    new URL("../../../packages/iterate/src/itx-api.generated.ts", import.meta.url),
+  );
+  expect(readFileSync(packageCopyPath, "utf8")).toBe(readFileSync(generatedPath, "utf8"));
+});
+
 test("itx-api.generated.ts is a standalone module (itx scripts can typecheck against it alone)", () => {
   const script = `
     import type { Project, StreamEvent } from "./itx-api.generated.ts";

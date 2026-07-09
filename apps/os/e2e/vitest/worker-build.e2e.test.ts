@@ -3,10 +3,10 @@ import { startMockSlackApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // The worker build pipeline end-to-end: multi-file TypeScript sources built
-// by the builder worker into the KV artifact cache, then the seeded
-// TypeScript template's userland Slack SDK surface. Split from the itx
-// monolith: these tests pay a cold bundler run (npm installs included), so
-// they earn their own file-level parallelism.
+// by the builder worker into the KV artifact cache, then userland npm
+// dependencies committed to a project repo. Split from the itx monolith:
+// these tests pay a cold bundler run (npm installs included), so they earn
+// their own file-level parallelism.
 describe("worker builds", () => {
   test("Worker build pipeline bundles multi-file TypeScript inline sources", async () => {
     using session = withItxSession();
@@ -68,7 +68,7 @@ describe("worker builds", () => {
     });
   });
 
-  // First use after the config commit is always a cold build (new contentHash)
+  // First use after the config edit is always a cold build (new contentHash)
   // including an npm install of @slack/web-api inside the bundler — give it
   // generous headroom so a slow registry surfaces as a build error, not an
   // opaque vitest timeout.
@@ -87,21 +87,14 @@ describe("worker builds", () => {
 
         // The Slack surface is USERLAND: worker.ts constructs a real
         // @slack/web-api WebClient (installed from the seeded package.json by
-        // the build pipeline) from the committed slack.config.ts. Point it at
-        // the mock; the branch head moves, so the next worker use rebuilds.
-        await project.repo.commitFiles({
-          changes: [
-            {
-              path: "slack.config.ts",
-              content: [
-                "export const slackConfig: { slackApiUrl: string | null; token: string | null } = {",
-                `  slackApiUrl: ${JSON.stringify(mock.url)},`,
-                '  token: "xoxb-e2e-test-token",',
-                "};",
-                "",
-              ].join("\n"),
-            },
-          ],
+        // the build pipeline) from the `slackConfig` constant at the top of
+        // the seeded worker.ts. Point it at the mock the same way a user
+        // would — an exact-string edit; the branch head moves, so the next
+        // worker use rebuilds.
+        await project.repo.edit({
+          path: "worker.ts",
+          oldString: "  slackApiUrl: null,\n  token: null,",
+          newString: `  slackApiUrl: ${JSON.stringify(mock.url)},\n  token: "xoxb-e2e-test-token",`,
           message: "Point the Slack SDK at the e2e mock",
         });
 

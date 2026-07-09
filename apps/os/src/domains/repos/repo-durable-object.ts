@@ -8,7 +8,7 @@ import type {
 } from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
@@ -31,7 +31,7 @@ import type {
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { diffFileMaps } from "./line-diff.ts";
 import { RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
+import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
@@ -60,6 +60,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     }),
     path: this.#name.path,
     projectId: this.#name.projectId,
+    version: workerVersion(this.env),
   });
   readonly #repoProcessor = this.#host.add(
     (deps) =>
@@ -71,6 +72,16 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#host.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#host.handleAlarm();
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {
@@ -870,7 +881,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: PROJECT_REPO_INITIAL_FILES,
+        files: projectRepoSeedFiles(parseConfig(this.env).iterateSdkPackageSpec),
         remote,
         token,
       }),

@@ -1,9 +1,12 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
+  AGENT_LLM_REQUEST_BACKSTOP_MS,
   AgentProcessorContract,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+  DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
@@ -20,11 +23,17 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  */
 type AgentProcessorDeps = {
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
+  /** Injected clock (expiry stamps + backstop deadline); defaults to Date.now. */
+  now?: () => number;
 };
 
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
   readonly #scheduledRequestsWithActiveTimers = new Set<string>();
+
+  #now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
 
   protected override reduce({
     event,
@@ -94,19 +103,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
+        // The debounce timer is a droppable ATTEMPT: the scheduled event is
+        // the durable evidence, and #settleLlmRequestScheduling re-derives a
+        // lost timer from the fold. Losing this closure costs latency, never
+        // the request.
         this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
         runInBackground(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
           try {
-            await append({
-              type: "events.iterate.com/agent/llm-request-requested",
-              idempotencyKey: this.#llmRequestRequestedKey(event.offset),
-              payload: {
+            await append(
+              this.#buildLlmRequestRequested({
                 model: event.payload.model,
                 provider: event.payload.provider,
                 requestId: event.payload.requestId,
-              },
-            });
+                scheduledOffset: event.offset,
+              }),
+            );
           } finally {
             this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
           }
@@ -122,6 +134,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             payload: {
               code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
+              expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
             },
           });
         });
@@ -205,6 +218,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   async #settleLlmRequestScheduling(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
+    // At-head gate (see OpenAiWsProcessor.processEventBatch): scheduling
+    // decisions and the backstop must never fire from a mid-catch-up fold —
+    // a long-settled request transiently looks `requested` mid-refold, and
+    // backstopping it would journal a false failure.
+    if (args.checkpointOffset < args.streamMaxOffset) return;
     const { state } = args;
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
@@ -239,29 +257,67 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       });
       return;
     }
-    if (state.currentRequest.phase !== "scheduled") return;
+    if (state.currentRequest.phase === "requested") {
+      // The BACKSTOP: providers settle their own undriven requests, so a
+      // `requested` this old means the provider layer never answered at all.
+      // Settling it un-wedges the queue — the failure input (rendered by
+      // processEvent above on the next batch) tells the model what happened.
+      const requestedAt = state.currentRequest.requestedAt;
+      if (requestedAt === undefined) return;
+      if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
+      const llmRequestId = state.currentRequest.llmRequestId;
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: `agent/backstop-completed@${llmRequestId}`,
+        payload: {
+          durationMs: this.#now() - requestedAt,
+          llmRequestId,
+          provider: state.currentRequest.provider ?? state.llmProvider,
+          result: {
+            status: "failure",
+            error: {
+              message: `No LLM provider settled this request within ${AGENT_LLM_REQUEST_BACKSTOP_MS / 60_000} minutes; failed by the agent's backstop reconciler.`,
+            },
+          },
+        },
+      });
+      return;
+    }
     if (this.#scheduledRequestsWithActiveTimers.has(state.currentRequest.requestId)) return;
     // No active timer for this scheduled request: the DO restarted and lost the
     // debounce. Fire llm-request-requested immediately. The idempotency key
     // makes this safe if the timer also fires concurrently.
-    await args.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      idempotencyKey: this.#llmRequestRequestedKey(state.currentRequest.scheduledOffset),
-      payload: {
+    await args.append(
+      this.#buildLlmRequestRequested({
         model: state.llmConfig.model,
         provider: state.llmProvider,
         requestId: state.currentRequest.requestId,
-      },
-    });
+        scheduledOffset: state.currentRequest.scheduledOffset,
+      }),
+    );
   }
 
-  /**
-   * The debounce timer and the restart-recovery lane both fire the request for
-   * one llm-request-scheduled event; the SHARED key (per scheduled offset) is
-   * what collapses the race to a single llm-request-requested.
-   */
-  #llmRequestRequestedKey(scheduledOffset: number): string {
-    return this.idempotencyKey(`llm-request-requested@${scheduledOffset}`);
+  /** The one construction of llm-request-requested — the debounce timer and
+   * the restart-recovery lane both fire the request for one
+   * llm-request-scheduled event, and the SHARED key (per scheduled offset) is
+   * what collapses that race to a single append; building the whole event in
+   * one place also keeps the expiry stamp and key from drifting apart. */
+  #buildLlmRequestRequested(input: {
+    model: string;
+    provider: AgentState["llmProvider"];
+    requestId: string;
+    scheduledOffset: number;
+  }) {
+    return {
+      type: "events.iterate.com/agent/llm-request-requested" as const,
+      idempotencyKey: this.idempotencyKey(`llm-request-requested@${input.scheduledOffset}`),
+      payload: {
+        model: input.model,
+        provider: input.provider,
+        requestId: input.requestId,
+        expiresAt: this.#now() + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
+      },
+    };
   }
 
   #cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
@@ -414,7 +470,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return state;
       return {
         ...state,
-        currentRequest: { phase: "requested", llmRequestId: event.offset },
+        currentRequest: {
+          phase: "requested",
+          llmRequestId: event.offset,
+          requestedAt: Date.parse(event.createdAt),
+          provider: event.payload.provider,
+        },
         pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
@@ -606,7 +667,15 @@ function spillNotice(input: { path: string; totalChars: number }): string {
 }
 
 function extractAsyncJsSnippet(content: string): string | null {
-  const fenced = content.match(/```(?:js|javascript|ts|typescript)?\s*([\s\S]*?)```/i);
+  // Fences count only at line starts: scripts legitimately carry ``` inside
+  // string literals (chat messages formatted as markdown), and in valid JS
+  // those always sit mid-line — a raw newline cannot appear in a string
+  // literal, and an unescaped ``` would terminate a template literal. A fence
+  // match anywhere used to cut the script at the first embedded ``` and
+  // execute an unparseable prefix (unclosed string literal).
+  const fenced = content.match(
+    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
+  );
   const code = (fenced?.[1] ?? content).trim();
   return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
 }

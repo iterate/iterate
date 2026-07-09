@@ -14,7 +14,10 @@ import type {
   RevokeCapabilityInput,
 } from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+} from "./capability-host-processor-contract.ts";
 import {
   evaluateItxExpression,
   invokeNormalizedCapability,
@@ -104,6 +107,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   #itx: Project;
   #path: string;
   #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
+  /** Injected clock (expiry decisions); production defaults to Date.now. */
+  #now: (() => number) | undefined;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -113,6 +118,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       path: string;
       /** Runs run-script workers in this scope. */
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
+      /** Injected clock (expiry decisions); production defaults to Date.now. */
+      now?: () => number;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -123,6 +130,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
+    this.#now = args.now;
     this.#parent = args.parent;
   }
 
@@ -166,31 +174,85 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       case "events.iterate.com/capability-host/script-execution-requested":
         return {
           ...state,
-          pendingScriptExecutions: {
-            ...state.pendingScriptExecutions,
-            [event.payload.executionId]: true,
+          scriptExecutions: {
+            ...state.scriptExecutions,
+            [event.payload.executionId]: {
+              status: "requested" as const,
+              code: event.payload.code,
+              expiresAt:
+                event.payload.expiresAt ??
+                Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+            },
           },
         };
+      case "events.iterate.com/capability-host/script-execution-started": {
+        const existing = state.scriptExecutions[event.payload.executionId];
+        if (existing === undefined) return state;
+        return {
+          ...state,
+          scriptExecutions: {
+            ...state.scriptExecutions,
+            [event.payload.executionId]: { ...existing, status: "started" as const },
+          },
+        };
+      }
       case "events.iterate.com/capability-host/script-execution-completed": {
-        const pendingScriptExecutions = { ...state.pendingScriptExecutions };
-        delete pendingScriptExecutions[event.payload.executionId];
-        return { ...state, pendingScriptExecutions };
+        const scriptExecutions = { ...state.scriptExecutions };
+        delete scriptExecutions[event.payload.executionId];
+        return { ...state, scriptExecutions };
       }
       default:
         return state;
     }
   }
 
-  protected override processEvent({
-    event,
-    runInBackground,
-    state,
-  }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/capability-host/script-execution-requested") return;
-    if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
-    runInBackground(() =>
-      this.#executeScript({ code: event.payload.code, executionId: event.payload.executionId }),
-    );
+  /** Script executions alive in THIS incarnation — the "actual" half of the
+   * reconciliation below. */
+  readonly #liveExecutions = new Set<string>();
+
+  /**
+   * End-of-batch reconciliation of desired (open script obligations in the
+   * fold) against actual (this incarnation's live executions) — the same
+   * shape as the LLM providers' (see OpenAiWsProcessor.processEventBatch for
+   * the doctrine), with one policy difference: a `started` script that lost
+   * its incarnation is settled as a FAILURE and never re-run, because a
+   * script may have half-executed its side effects and scripts are not
+   * assumed idempotent. The agent renders the failure and the model decides
+   * whether to retry.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    // At-head gate — see OpenAiWsProcessor.processEventBatch.
+    if (args.checkpointOffset < args.streamMaxOffset) return;
+    const now = (this.#now ?? Date.now)();
+    const settle: { executionId: string; error: string }[] = [];
+    for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
+      if (this.#liveExecutions.has(executionId)) continue;
+      if (execution.status === "requested" && now < execution.expiresAt) {
+        this.#liveExecutions.add(executionId);
+        args.runInBackground(() => this.#executeScript({ code: execution.code, executionId }));
+        continue;
+      }
+      settle.push({
+        executionId,
+        error:
+          execution.status === "started"
+            ? "Script execution orphaned: the incarnation running it went away before completing (eviction mid-run). It may have partially executed; it was NOT re-run."
+            : "Script execution expired before any attempt started (the host was down past the request's expiry). It never ran.",
+      });
+    }
+    if (settle.length === 0) return;
+    args.blockProcessorWhile(async () => {
+      for (const { executionId, error } of settle) {
+        console.error("[capability-host] settling undriven script execution", {
+          executionId,
+          error,
+        });
+        await this.#appendCompletion({ executionId, error });
+      }
+    });
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
@@ -403,30 +465,53 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async #executeScript(input: { code: string; executionId: string }) {
-    const complete = (payload: { error?: string; result?: unknown }) => {
-      const completionPayload =
-        payload.error !== undefined
-          ? { error: payload.error, executionId: input.executionId }
-          : {
-              executionId: input.executionId,
-              // A script that returns undefined omits `result` entirely. The
-              // distinction is load-bearing for agents: "returned a value"
-              // feeds the result back for another turn, "returned nothing"
-              // ends the loop.
-              ...(payload.result === undefined ? {} : { result: json(payload.result) }),
-            };
-      return this.append({
-        type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: completionPayload,
-      });
-    };
-
     try {
-      const result = await this.#scriptExecutionEntrypoint.run(input.code);
-      await complete({ result });
-    } catch (error) {
-      await complete({ error: error instanceof Error ? error.message : String(error) });
+      // Started-evidence lands durably BEFORE the script body runs, so the
+      // fold can always tell "provably never ran" (requested, startable late)
+      // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
+      // the try below: if this append fails the script never ran, so no
+      // completion may be appended — the obligation stays `requested`, the
+      // rethrow marks the keepalive window failed, and a later reconciliation
+      // retries the whole attempt. (Same shape as the LLM providers.)
+      await this.append({
+        type: "events.iterate.com/capability-host/script-execution-started",
+        idempotencyKey: this.idempotencyKey(`script-execution-started@${input.executionId}`),
+        payload: { executionId: input.executionId },
+      });
+      try {
+        const result = await this.#scriptExecutionEntrypoint.run(input.code);
+        await this.#appendCompletion({ executionId: input.executionId, result });
+      } catch (error) {
+        await this.#appendCompletion({
+          executionId: input.executionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } finally {
+      this.#liveExecutions.delete(input.executionId);
     }
+  }
+
+  /** The one durable outcome of a script execution. The reconciler's settle
+   * path and the normal run share the idempotency key, so races collapse to
+   * one completion at the append dedup layer. */
+  #appendCompletion(input: { executionId: string; error?: string; result?: unknown }) {
+    const payload =
+      input.error !== undefined
+        ? { error: input.error, executionId: input.executionId }
+        : {
+            executionId: input.executionId,
+            // A script that returns undefined omits `result` entirely. The
+            // distinction is load-bearing for agents: "returned a value"
+            // feeds the result back for another turn, "returned nothing"
+            // ends the loop.
+            ...(input.result === undefined ? {} : { result: json(input.result) }),
+          };
+    return this.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      idempotencyKey: this.idempotencyKey(`script-execution-completed@${input.executionId}`),
+      payload,
+    });
   }
 }
 

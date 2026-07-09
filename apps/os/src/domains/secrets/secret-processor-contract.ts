@@ -67,6 +67,33 @@ export const SecretProcessorContract = defineProcessorContract({
         // `null` clears a configured strategy; omitted leaves it unchanged.
         refresh: SecretRefresh.nullable().optional(),
       }),
+      examples: [
+        {
+          description:
+            "A Slack bot token is stored: encrypted-at-rest material plus the egress origins it may be substituted into.",
+          payload: {
+            encryptedMaterial: {
+              algorithm: "AES-GCM-SHA256",
+              ciphertext: "nJ2xkV8mPqvGdL5tYw3eBg==",
+              iv: "9EMTZWEeC2Iy5W5m",
+            },
+            egress: { urls: ["https://slack.com", "https://files.slack.com"] },
+          },
+        },
+        {
+          description:
+            "A GitHub connection secret gets the github-app-installation refresh strategy: the DO mints installation tokens on demand, signing with the platform-owned App key.",
+          payload: {
+            refresh: {
+              kind: "github-app-installation",
+              apiBase: "https://api.github.com",
+              appId: "312345",
+              installationId: "45678901",
+              privateKey: { platform: "integrations.github" },
+            },
+          },
+        },
+      ],
     },
     "events.iterate.com/secret/used": {
       description: "Records that secret material was substituted into an egress request.",
@@ -75,6 +102,17 @@ export const SecretProcessorContract = defineProcessorContract({
         usedBy: z.string().optional(),
         url: z.string().optional(),
       }),
+      examples: [
+        {
+          description:
+            "The secret's material was substituted into a Slack Web API call at the egress door.",
+          payload: {
+            usedAt: "2026-07-08T14:31:09.412Z",
+            usedBy: "prj_b9f2c81d4e6a4f0a9c3d7e5b1a8f2c4d",
+            url: "https://slack.com/api/chat.postMessage",
+          },
+        },
+      ],
     },
   },
   consumes: ["events.iterate.com/secret/updated", "events.iterate.com/secret/used"],

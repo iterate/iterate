@@ -7,8 +7,24 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Runs agent LLM requests through an AI binding shaped like env.AI.",
   stateSchema: z.object({
+    /**
+     * The provider's open OBLIGATIONS, keyed by llmRequestId — the exact
+     * shape (and reconciliation semantics) of the openai-ws sibling; see
+     * OpenAiWsProcessorContract.stateSchema. The earlier shape here only
+     * tracked started/completed, so a request whose incarnation died between
+     * `requested` and `started` was invisible to recovery — the sibling
+     * drift this contract's parity now prevents.
+     */
     requests: z
-      .record(z.string(), z.object({ status: z.enum(["started", "completed"]) }))
+      .record(
+        z.string(),
+        z.object({
+          status: z.enum(["requested", "started"]),
+          model: z.string().min(1),
+          /** Epoch ms past which no attempt may START (only-settle-past-expiry). */
+          expiresAt: z.number().int().positive(),
+        }),
+      )
       .default({}),
   }),
   events: {
@@ -18,6 +34,13 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         model: z.string().min(1),
       }),
+      examples: [
+        {
+          description:
+            "The provider picks up a scheduled request; llmRequestId is the stream offset of the agent's llm-request-requested event.",
+          payload: { llmRequestId: 117, model: "@cf/moonshotai/kimi-k2.7-code" },
+        },
+      ],
     },
     "events.iterate.com/cloudflare-ai/llm-response-chunk": {
       description: "One streamed provider chunk received from the AI binding.",
@@ -26,6 +49,12 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         sequence: z.number().int().nonnegative(),
       }),
+      examples: [
+        {
+          description: "The first streamed Workers AI delta of a response.",
+          payload: { chunk: { response: "Hello" }, llmRequestId: 117, sequence: 0 },
+        },
+      ],
     },
     "events.iterate.com/cloudflare-ai/llm-request-completed": {
       description: "The Cloudflare AI processor finished an agent LLM request.",
@@ -45,11 +74,40 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
           }),
         ]),
       }),
+      examples: [
+        {
+          description: "The request finished successfully after a few seconds of streaming.",
+          payload: {
+            durationMs: 2843,
+            llmRequestId: 117,
+            result: {
+              status: "success",
+              usage: { completion_tokens: 96, prompt_tokens: 412, total_tokens: 508 },
+            },
+          },
+        },
+        {
+          description: "The request failed because the model was temporarily overloaded.",
+          payload: {
+            durationMs: 4519,
+            llmRequestId: 121,
+            result: {
+              error: {
+                message:
+                  "InferenceUpstreamError: 3040: Capacity temporarily exceeded for @cf/moonshotai/kimi-k2.7-code, please try again",
+              },
+              status: "failure",
+            },
+          },
+        },
+      ],
     },
   },
   processorDeps: [AgentProcessorContract],
   consumes: [
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-cancelled",
+    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/cloudflare-ai/llm-request-started",
     "events.iterate.com/cloudflare-ai/llm-request-completed",
   ],

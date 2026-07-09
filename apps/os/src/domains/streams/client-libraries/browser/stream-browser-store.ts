@@ -129,11 +129,7 @@ export type StreamBrowserStore = Disposable & {
   getProcessorRuntimeState(args: {
     subscriptionKey: SubscriptionKey;
   }): StreamRpcResult<ProcessorRuntimeState | null>;
-  /**
-   * Mirror reset is local-only on itx: the `Stream` capability has
-   * no `kill()`/`reset()`, so this clears the local tables + checkpoint and
-   * reconnects, letting reconcile + replay rebuild the mirror from the server.
-   */
+  /** Clear local tables + checkpoint and reconnect, letting reconcile + replay rebuild the mirror from the server. */
   clearLocalDatabase(): Promise<void>;
   /**
    * On-demand delivery check for when the caller knows the server is about to

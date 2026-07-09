@@ -321,13 +321,14 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains).`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains).`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
         crossPostTo: "Copy matching events onto another stream (optionally JSONata-transformed).",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
+        kill: "Abort the current Durable Object incarnation; the next request boots it again.",
         readEvents: "Create a pager for bounded event pages.",
         removeCrossPost: "Remove a cross-post configured by crossPostTo.",
         subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
@@ -436,6 +437,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     };
   }> {
     return this.durableObjectStub.runtimeState();
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /**
@@ -618,6 +624,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
         "outcome is an event on this stream.",
       children: {
         cancel: "Remove a Schedule by key (idempotent).",
+        kill: "Abort this Scheduler Durable Object incarnation; the next request boots it again.",
         list: "Every Schedule, reduced from the stream.",
         processor: "The scheduler stream processor (snapshot/state).",
         set: "Upsert a Schedule: { key, recurrence, script, metadata? }.",
@@ -662,6 +669,11 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void> {
     return this.#durableObjectStub.cancelSchedule(key);
+  }
+
+  /** Abort this Scheduler Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   list(): Promise<ScheduleView[]> {
@@ -766,6 +778,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
+        kill: "Abort this Repo Durable Object incarnation; the next request boots it again.",
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
@@ -816,6 +829,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** Repo identity string (debug). */
   whoami(): Promise<string> {
     return this.#durableObjectStub.whoami();
+  }
+
+  /** Abort this Repo Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */
@@ -1104,7 +1122,7 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
+        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy()/kill() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
       children: {
         create: "Create a sandbox (strict: existing/destroyed names are errors). Returns { path }.",
         get: "The sandbox at a created path (boots the container on first use).",
@@ -1305,6 +1323,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         exists: "Whether a path exists.",
         git: "Git over this checkout: status/add/rm/commit/log/diff/push — push goes to this workspace's own branch.",
         glob: "Files matching a glob pattern.",
+        kill: "Abort this Workspace Durable Object incarnation; the next request boots it again.",
         mkdir: "Create a directory ({ recursive } for parents).",
         mv: "Move/rename a file or directory.",
         readDir: "List a directory (defaults to the root).",
@@ -1339,6 +1358,11 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /** Workspace identity string (debug). */
   whoami(): Promise<string> {
     return this.durableObjectStub.whoami();
+  }
+
+  /** Abort this Workspace Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /** File contents, or null when the path does not exist. */
@@ -1548,6 +1572,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
         fetch: "Egress fetch with secret placeholders substituted server-side.",
+        kill: "Abort this Secret Durable Object incarnation; the next request boots it again.",
         update: "Set the value, egress URLs, and/or refresh strategy.",
       },
       parent: "itx.secrets.get(path)",
@@ -1573,6 +1598,11 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response> {
     return this.durableObjectStub.fetch(request);
+  }
+
+  /** Abort this Secret Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /** Set the secret material and/or its egress allowlist. */
@@ -2879,6 +2909,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         ask: "Send a message and wait for the agent's next chat reply.",
         capabilityHost: "This agent scope's durable capability table.",
         chat: "The agent's web-chat door (sendMessage).",
+        kill: "Abort this Agent Durable Object incarnation; the next request boots it again.",
         processor: "The agent stream processor (snapshot/state).",
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
@@ -2890,6 +2921,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       whoami: `agent ${this.#props.projectId}:${this.#path}`,
     });
+  }
+
+  /** Abort this Agent Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 }
 
@@ -2940,9 +2976,9 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
  * RPC wrapper around a single DynamicWorkerRef.
  *
  * The returned object is a path proxy: unknown properties become path segments
- * and eventually call `invokeCapability`. Dynamic workers do not share a fixed
- * method surface, so this wrapper deliberately exposes no method names beyond
- * the flattened capability dispatcher.
+ * and eventually call `invokeCapability`. Dynamic workers reserve a tiny
+ * platform lifecycle surface (`invokeCapability`, `kill`, disposal); everything
+ * else belongs to the loaded worker.
  */
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
@@ -3009,6 +3045,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
         'To ask the worker to describe ITSELF (boots it; only works if its code implements `__describe`), call `invokeCapability({ path: ["__describe"] })`.',
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
+        kill: "Abort the stateful worker Durable Object incarnation; stateless worker refs reject.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -3046,6 +3083,14 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       path,
       ref: this.#ref,
     });
+  }
+
+  /** Abort the stateful worker Durable Object incarnation; stateless worker refs reject. */
+  async kill(): Promise<void> {
+    if (this.#ref.type !== "stateful") {
+      throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
+    }
+    await this.#runner.kill(this.#ref);
   }
 }
 
@@ -3485,6 +3530,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       children: {
         invokeCapability:
           "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
+        kill: "Abort this Capability Host Durable Object incarnation; the next request boots it again.",
         provideCapability: "Mount a capability on THIS scope; returns a revoke handle.",
         revokeCapability: "Remove a mount from THIS scope.",
         runScript: "Run an async (itx) => {...} script in this scope.",
@@ -3502,6 +3548,11 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     result: unknown;
   }> {
     return await this.#durableObject.runScript(code);
+  }
+
+  /** Abort this Capability Host Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.#durableObject.kill());
   }
 }
 
@@ -3554,6 +3605,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
     'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
+  kill: "Abort this Project Durable Object incarnation; the next request boots it again.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
@@ -3696,6 +3748,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       `Path: \`${streamPath}\``,
       `Project: \`${project?.slug ?? this.#props.projectId}\``,
     ].join("\n");
+  }
+
+  /** Abort this Project Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */

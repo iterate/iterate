@@ -8,6 +8,32 @@ export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
 
 /**
+ * How stale an llm-request-requested's INTENT may be before providers must
+ * refuse to start an attempt and settle it as expired instead. Recovery can
+ * deliver a requested event arbitrarily late (a host revived days after a
+ * crash loop); expiry is what makes late recovery safe — wake whenever,
+ * act only within the intent's validity horizon. Matches the providers'
+ * in-flight deadline: an attempt that would still be running is worth
+ * starting; one whose whole lifetime has lapsed is not.
+ */
+export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
+
+/**
+ * The agent's own outer deadline on a `requested` request, enforced by its
+ * per-batch reconciliation. Providers normally settle their own orphans well
+ * before this; the backstop only fires when the provider layer is entirely
+ * absent (the cloudflare-ai-without-recovery class of bug). It sits past TWO
+ * provider deadlines so even an attempt queued behind another full-length
+ * request finishes or fails first. If the pathological case still occurs (a
+ * deep execution queue), the outcomes CONVERGE rather than conflict: the
+ * backstop failure and any late provider completion carry idempotent keys,
+ * the reducer ignores completions for a request that is no longer current,
+ * and the late attempt's output is gated on request currency — the journal
+ * records both facts, the fold believes exactly one.
+ */
+export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
+
+/**
  * Snippet-writing guidance shared by every codemode prompt (web-chat default,
  * Slack). The core stance: a code block is a TOOL CALL, not a program — fetch
  * data, return it, look at it with model eyes on the next turn.
@@ -180,6 +206,14 @@ export const AgentProcessorContract = defineProcessorContract({
         z.object({
           phase: z.literal("requested"),
           llmRequestId: z.number().int().positive(),
+          /** Epoch ms the requested event committed (its createdAt), driving
+           * the reconciler's backstop deadline. Optional: raw appends and
+           * pre-backstop checkpoints lack it, and the backstop then skips. */
+          requestedAt: z.number().int().positive().optional(),
+          /** The provider the request was addressed to, so a backstop
+           * settlement attributes the failure honestly even if the agent's
+           * configured provider changed while the request sat unanswered. */
+          provider: AgentLlmProvider.optional(),
         }),
       ])
       .nullable()
@@ -219,12 +253,30 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         systemPrompt: z.string().optional(),
       }),
+      examples: [
+        {
+          description: "A project configures the agent with a custom system prompt at setup time.",
+          payload: {
+            systemPrompt:
+              "You are the support agent for Acme Corp. Answer billing questions concisely and escalate refund requests to a human.",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
       payloadSchema: z.object({
         systemPrompt: z.string(),
       }),
+      examples: [
+        {
+          description: "The system prompt is replaced for every LLM request from here on.",
+          payload: {
+            systemPrompt:
+              "You are Acme's release manager. Track open pull requests and nag reviewers politely.",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/input-added": {
       description: "A normalized model-visible input was added.",
@@ -234,6 +286,33 @@ export const AgentProcessorContract = defineProcessorContract({
         files: z.array(AgentFileAttachment).optional(),
         llmRequestPolicy: LlmRequestPolicy,
       }),
+      examples: [
+        {
+          description:
+            "A script result becomes a model-visible input; the next LLM turn starts once the current request (if any) finishes.",
+          payload: {
+            content: 'Script result:\n```json\n{ "unread": 4 }\n```',
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+        {
+          description:
+            "A file lands in the conversation as an attachment, recorded without triggering an LLM turn.",
+          payload: {
+            content: "[Files attached: report.pdf]",
+            files: [
+              {
+                contentType: "application/pdf",
+                filename: "report.pdf",
+                path: "/uploads/2026-07-09/report.pdf",
+                size: 482133,
+                url: "https://iterate-files--acme.iterate.app/uploads/2026-07-09/report.pdf?exp=1783555200&sig=8c1f2ab9d4e7c0a3",
+              },
+            ],
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          },
+        },
+      ],
     },
     "events.iterate.com/agents/user-message-received": {
       description:
@@ -242,6 +321,16 @@ export const AgentProcessorContract = defineProcessorContract({
         content: z.string(),
         origin: z.enum(["web", "mcp"]),
       }),
+      examples: [
+        {
+          description: "A user sends a chat message from the web UI.",
+          payload: { content: "What's on my calendar today?", origin: "web" },
+        },
+        {
+          description: "An MCP client asks the agent a question on the project owner's behalf.",
+          payload: { content: "Summarize the open incidents in this project.", origin: "mcp" },
+        },
+      ],
     },
     "events.iterate.com/agents/web-message-sent": {
       description: "A visible agent message was sent to the web UI.",
@@ -250,6 +339,15 @@ export const AgentProcessorContract = defineProcessorContract({
         /** Files attached to the message — see {@link AgentFileAttachment}. */
         files: z.array(AgentFileAttachment).optional(),
       }),
+      examples: [
+        {
+          description: "The agent sends a visible chat reply to the web UI.",
+          payload: {
+            message:
+              "You have 4 unread emails. The two that look important are from Dana (contract renewal) and GitHub (a failing build on main).",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/output-added": {
       description: "The LLM provider produced assistant output.",
@@ -257,6 +355,17 @@ export const AgentProcessorContract = defineProcessorContract({
         content: z.string(),
         llmRequestId: z.number().int().positive().optional(),
       }),
+      examples: [
+        {
+          description:
+            "The model answered with a codemode script; llmRequestId is the offset of the llm-request-requested event it answers.",
+          payload: {
+            content:
+              '```js\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
+            llmRequestId: 57,
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-provider-selected": {
       description: "Selects the model for future LLM requests.",
@@ -265,6 +374,21 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
         provider: AgentLlmProvider,
       }),
+      examples: [
+        {
+          description:
+            "Agent birth applies the platform default model unless something already chose one.",
+          payload: {
+            ifUnset: true,
+            model: "@cf/moonshotai/kimi-k2.7-code",
+            provider: "cloudflare-ai",
+          },
+        },
+        {
+          description: "The project explicitly switches the agent to an OpenAI model.",
+          payload: { model: "gpt-5.5", provider: "openai-ws" },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-scheduled": {
       description: "An LLM request was scheduled after a trigger.",
@@ -274,6 +398,18 @@ export const AgentProcessorContract = defineProcessorContract({
         provider: AgentLlmProvider,
         requestId: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "A user input triggered a request, debounced 250ms so rapid-fire inputs collapse into one turn.",
+          payload: {
+            debounceMs: 250,
+            model: "@cf/moonshotai/kimi-k2.7-code",
+            provider: "cloudflare-ai",
+            requestId: "llm-request:gen-3",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
@@ -282,7 +418,22 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
         provider: AgentLlmProvider,
         requestId: z.string(),
+        /** Epoch ms past which no provider may START an attempt; stale intent
+         * settles as an expired failure instead. Absent (raw appends), the
+         * providers default to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
+        expiresAt: z.number().int().positive().optional(),
       }),
+      examples: [
+        {
+          description:
+            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestId the provider answers to.",
+          payload: {
+            model: "@cf/moonshotai/kimi-k2.7-code",
+            provider: "cloudflare-ai",
+            requestId: "llm-request:gen-3",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-completed": {
       description: "A provider processor finished an LLM request.",
@@ -303,6 +454,34 @@ export const AgentProcessorContract = defineProcessorContract({
           }),
         ]),
       }),
+      examples: [
+        {
+          description:
+            "The provider returned assistant output, with token usage as the model reported it.",
+          payload: {
+            durationMs: 2340,
+            llmRequestId: 57,
+            provider: "cloudflare-ai",
+            result: {
+              status: "success",
+              usage: { completion_tokens: 118, prompt_tokens: 4096, total_tokens: 4214 },
+            },
+          },
+        },
+        {
+          description:
+            "The provider call failed; the error becomes a model-visible input so the agent can react.",
+          payload: {
+            durationMs: 30012,
+            llmRequestId: 61,
+            provider: "openai-ws",
+            result: {
+              error: { message: "Provider request timed out after 30000ms" },
+              status: "failure",
+            },
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-cancelled": {
       description: "The current scheduled or requested LLM request was cancelled.",
@@ -318,6 +497,20 @@ export const AgentProcessorContract = defineProcessorContract({
           llmRequestId: z.number().int().positive(),
         }),
       ]),
+      examples: [
+        {
+          description: "New user input interrupted a request still in its debounce window.",
+          payload: {
+            phase: "scheduled",
+            reason: "interrupted-by-user-input",
+            requestId: "llm-request:gen-4",
+          },
+        },
+        {
+          description: "New user input interrupted a request already running at the provider.",
+          payload: { phase: "requested", reason: "interrupted-by-user-input", llmRequestId: 58 },
+        },
+      ],
     },
     "events.iterate.com/agent/loop-stopped": {
       description:
@@ -327,6 +520,17 @@ export const AgentProcessorContract = defineProcessorContract({
         reason: z.string().trim().min(1),
         triggerOffset: z.number().int().positive(),
       }),
+      examples: [
+        {
+          description:
+            "The circuit breaker halted an agent that chained 20 autonomous script turns without human input.",
+          payload: {
+            maxAutonomousTurns: 20,
+            reason: "Agent circuit breaker stopped after 20 consecutive autonomous turns.",
+            triggerOffset: 143,
+          },
+        },
+      ],
     },
   },
   processorDeps: [CapabilityHostProcessorContract],
@@ -352,6 +556,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
+    // The reconciler's backstop: normally providers append the completion,
+    // but a request whose provider layer never answers at all is settled by
+    // the agent itself past AGENT_LLM_REQUEST_BACKSTOP_MS.
+    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
   ],

@@ -96,7 +96,6 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
       "e2e/**/*.ts",
       "scripts/**/*.ts",
       "src/**/*.{ts,tsx}!",
-      "!drizzle/**!",
       "!.output/**!",
       "!dist/**!",
     ],
