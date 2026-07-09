@@ -39,6 +39,8 @@ async function withRequestDeadline<T>(work: Promise<T>): Promise<T> {
  * fullness from the event alone.
  */
 const CLOUDFLARE_AI_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  // The model page says 262,144 (256Ki); the decimal reading keeps a 2%
+  // safety margin.
   "@cf/moonshotai/kimi-k2.7-code": 256_000,
 };
 const DEFAULT_CLOUDFLARE_AI_CONTEXT_WINDOW_TOKENS = 128_000;

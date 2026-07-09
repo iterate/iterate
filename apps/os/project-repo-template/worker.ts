@@ -88,6 +88,20 @@ const COMPACTION_PROMPT =
   "anything the agent promised to do. Write it so the agent can continue as if it " +
   "remembered everything.";
 
+/** Workers AI models answer in two shapes: `{ response }` or OpenAI-chat
+ * `{ choices: [{ message: { content } }] }` (kimi does the latter). */
+function extractCompletionText(raw: unknown): string {
+  if (typeof raw === "object" && raw !== null) {
+    if ("response" in raw && typeof (raw as { response: unknown }).response === "string") {
+      return (raw as { response: string }).response;
+    }
+    const content = (raw as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]
+      ?.message?.content;
+    if (typeof content === "string") return content;
+  }
+  return JSON.stringify(raw);
+}
+
 const CompactionProcessorContract = defineProcessorContract({
   slug: "compaction",
   version: "0.1.0",
@@ -215,10 +229,7 @@ class CompactionProcessor extends StreamProcessor<
             { role: "user", content: transcript },
           ],
         });
-        const summary =
-          typeof raw === "object" && raw !== null && "response" in raw
-            ? String((raw as { response: unknown }).response)
-            : JSON.stringify(raw);
+        const summary = extractCompletionText(raw);
         // The summary took a while; re-snapshot before resetting. Turns that
         // landed during summarization ride along verbatim after the summary
         // instead of being clobbered. If the summarized history is no longer

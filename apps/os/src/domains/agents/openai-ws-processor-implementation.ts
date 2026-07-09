@@ -81,6 +81,11 @@ const OpenAiResponsesUsage = z.looseObject({
  * so the number rides in every token-usage-reported payload.
  */
 const OPENAI_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  // gpt-5.5's raw window is 1.05M, but input past 272k is priced at 2x (and
+  // 272k is gpt-5's max input). Reporting the price cliff as the window makes
+  // downstream policy (userspace compaction at 50%) compact well before the
+  // expensive regime instead of at half a million tokens of degraded
+  // attention. Revisit if a consumer ever needs the raw window.
   "gpt-5.5": 272_000,
   "gpt-5": 272_000,
 };
