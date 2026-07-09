@@ -17,8 +17,11 @@ export function ProjectStreamView(props: ProjectStreamViewProps) {
   return (
     <Suspense
       fallback={
-        <div className="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
-          Loading stream view
+        <div
+          className="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground"
+          data-spinner="true"
+        >
+          Loading stream view…
         </div>
       }
     >
