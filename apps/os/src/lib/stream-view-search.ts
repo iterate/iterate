@@ -225,25 +225,32 @@ export function useStreamViewSearch(): {
 
 /**
  * URL state for the stream view's right-edge overlays — the raw-event
- * inspector and the processors sheet. They share the same screen edge, so
- * every setter keeps them mutually exclusive; if a hand-edited URL asks for
- * both, the inspector wins.
+ * inspector, the processors sheet, and (on full-panel layouts) the Events
+ * sheet. They share the same screen edge, so every setter keeps them
+ * mutually exclusive; if a hand-edited URL asks for more than one, the
+ * inspector beats the processors sheet, which beats the Events sheet.
+ * (The inspector renders INSIDE the Events sheet's feed, so those two
+ * compose rather than compete.)
  */
 export function useStreamViewPanels(): {
   inspectedOffset: number | null;
   focusedProcessorKey: string | null;
   processorsPanelOpen: boolean;
+  eventsSheetOpen: boolean;
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
+  openEventsSheet: () => void;
+  closeEventsSheet: () => void;
 } {
   const { search, setSearch } = useStreamViewSearch();
   const inspectedOffset = search.event ?? null;
   const focusedProcessorKey = search.processor ?? null;
   const processorsPanelOpen =
     inspectedOffset == null && (search.panel === true || focusedProcessorKey != null);
+  const eventsSheetOpen = search.events === true && !processorsPanelOpen;
   const inspectEvent = useCallback(
     (offset: number) => setSearch({ event: offset, panel: undefined, processor: undefined }),
     [setSearch],
@@ -251,25 +258,33 @@ export function useStreamViewPanels(): {
   const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
   const focusProcessor = useCallback(
     (subscriptionKey: string) =>
-      setSearch({ panel: true, processor: subscriptionKey, event: undefined }),
+      setSearch({ panel: true, processor: subscriptionKey, event: undefined, events: undefined }),
     [setSearch],
   );
   const openProcessorsOverview = useCallback(
-    () => setSearch({ panel: true, processor: undefined, event: undefined }),
+    () => setSearch({ panel: true, processor: undefined, event: undefined, events: undefined }),
     [setSearch],
   );
   const closeProcessorsPanel = useCallback(
     () => setSearch({ panel: undefined, processor: undefined }),
     [setSearch],
   );
+  const openEventsSheet = useCallback(
+    () => setSearch({ events: true, panel: undefined, processor: undefined }),
+    [setSearch],
+  );
+  const closeEventsSheet = useCallback(() => setSearch({ events: undefined }), [setSearch]);
   return {
     inspectedOffset,
     focusedProcessorKey,
     processorsPanelOpen,
+    eventsSheetOpen,
     inspectEvent,
     closeInspector,
     focusProcessor,
     openProcessorsOverview,
     closeProcessorsPanel,
+    openEventsSheet,
+    closeEventsSheet,
   };
 }

@@ -73,7 +73,14 @@ export function StreamViewHeader({
   streamPath: string;
 }) {
   const { search, setSearch } = useStreamViewSearch();
-  const { focusedProcessorKey, focusProcessor, openProcessorsOverview } = useStreamViewPanels();
+  const {
+    focusedProcessorKey,
+    focusProcessor,
+    openProcessorsOverview,
+    eventsSheetOpen,
+    openEventsSheet,
+    closeEventsSheet,
+  } = useStreamViewPanels();
   const caps = modeCapabilities(search, streamPath);
   const toolsOpen = search.filter === true;
   const showFilterToggle = eventsToggle == null && caps.filters;
@@ -143,8 +150,8 @@ export function StreamViewHeader({
             variant="outline"
             size="sm"
             title="Stream events"
-            aria-expanded={search.events === true}
-            onClick={() => setSearch({ events: search.events === true ? undefined : true })}
+            aria-expanded={eventsSheetOpen}
+            onClick={() => (eventsSheetOpen ? closeEventsSheet() : openEventsSheet())}
             className="text-xs font-normal"
           >
             <HistoryIcon className="size-3.5" />

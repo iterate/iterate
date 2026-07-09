@@ -408,10 +408,11 @@ export function ProjectStreamView({
  */
 function StreamEventsSheet({ children, streamPath }: { children: ReactNode; streamPath: string }) {
   const { search, setSearch } = useStreamViewSearch();
+  const { eventsSheetOpen, openEventsSheet, closeEventsSheet } = useStreamViewPanels();
   return (
     <Sheet
-      open={search.events === true}
-      onOpenChange={(open) => setSearch({ events: open ? true : undefined })}
+      open={eventsSheetOpen}
+      onOpenChange={(open) => (open ? openEventsSheet() : closeEventsSheet())}
     >
       <SheetContent
         side="right"
@@ -439,7 +440,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
               variant="ghost"
               size="icon"
               title="Close events"
-              onClick={() => setSearch({ events: undefined })}
+              onClick={closeEventsSheet}
               className="rounded-full text-muted-foreground"
             >
               <XIcon className="size-3.5" />
