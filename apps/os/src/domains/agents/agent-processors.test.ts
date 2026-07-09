@@ -13,10 +13,7 @@ import {
 } from "./agent-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
-function agentRequestEvents(
-  content: string,
-  model = "@cf/moonshotai/kimi-k2.7-code",
-): StreamEventInput[] {
+function agentRequestEvents(content: string, model = "openai/gpt-5.5"): StreamEventInput[] {
   return [
     {
       type: "events.iterate.com/agent/input-added",
@@ -586,7 +583,7 @@ describe("minimal web-chat agent processors", () => {
         type: "events.iterate.com/agent/llm-request-scheduled",
         payload: {
           debounceMs: 250,
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "openai/gpt-5.5",
           requestId: "llm-request:1",
         },
       },
@@ -657,14 +654,14 @@ describe("minimal web-chat agent processors", () => {
         type: "events.iterate.com/agent/llm-request-scheduled",
         payload: {
           debounceMs: 0,
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "openai/gpt-5.5",
           requestId: "llm-request:1",
         },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: {
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "openai/gpt-5.5",
           requestId: "llm-request:1",
         },
       },

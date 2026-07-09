@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import type { RepoCommitFileChange } from "~/domains/repos/types.ts";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
@@ -64,7 +64,7 @@ export function CommitHistoryPanel({
                   <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     <span className="min-w-0 truncate">{commit.author.name}</span>
                     <span className="shrink-0">
-                      {formatRelativeTime(new Date(commit.timestamp).toISOString())}
+                      {formatTimeAgo(new Date(commit.timestamp).toISOString())}
                     </span>
                     <span className="ml-auto shrink-0 font-mono">{commit.oid.slice(0, 7)}</span>
                   </span>

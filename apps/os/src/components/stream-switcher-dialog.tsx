@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
@@ -13,6 +13,7 @@ import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
@@ -21,6 +22,10 @@ const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_-]+)+$/;
 
 // The "what's happening right now" window for the default ⌘K list.
 const RECENT_WINDOW_MS = 5 * 60_000;
+
+// How often the open dialog re-reads the clock: refreshes the "ago" labels and
+// lets quiet streams age out of the recent window without a reopen.
+const CLOCK_TICK_MS = 5_000;
 
 // The destination input prefills with the parent of the current stream, so the
 // default action creates a *sibling* (type a leaf, hit Create). Keep typing
@@ -91,6 +96,11 @@ function MatchedStreamPath({ path, query }: { path: string; query: string }) {
  * jump elsewhere. A quiet project (nothing to list) falls back to the browsable
  * tree, expanded along the current path.
  *
+ * The list wears its liveness: rows are newest-first (labelled), every row shows
+ * how long ago its stream was last active (ticking while open), and a stream
+ * touched while you watch FLASHES as it jumps (a keyed remount replays a
+ * one-shot CSS fade) — reordering reads as activity, not as rows teleporting.
+ *
  * The dialog takes a FIXED two-thirds of the viewport; the list/tree scrolls
  * inside it, so navigating never resizes or re-centers the dialog.
  */
@@ -123,10 +133,20 @@ export function StreamSwitcherDialog({
   // The keyboard cursor into the result list. -1 = nothing highlighted (fresh open,
   // before you arrow or type), so Enter falls through to "create the typed path".
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  // The "recently active" cutoff, snapshotted per open (never Date.now() in
-  // render: impure under concurrent replays, and the window would only drift
-  // when something else happened to re-render).
-  const [recentSince, setRecentSince] = useState(0);
+  // The open dialog's clock, ticking every few seconds (never Date.now() in
+  // render: impure under concurrent replays). One tick drives BOTH the "ago"
+  // labels and the recent window, so quiet streams age out while you watch.
+  // Seeded in a LAYOUT effect: the clock stops while closed, so an open must
+  // re-read it before paint — a passive effect would paint one frame with a
+  // stale window (or, on first open, no list at all).
+  const [now, setNow] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) return;
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(interval);
+  }, [open]);
+  const recentSince = now - RECENT_WINDOW_MS;
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
 
@@ -154,7 +174,7 @@ export function StreamSwitcherDialog({
   // the browsable tree. Memoized — and empty while closed — so the standing
   // subscription's pushes don't run a filter+sort for an invisible dialog.
   const matches = useMemo(() => {
-    if (!open || streamsIndex.value === undefined) return [];
+    if (!open || now === 0 || streamsIndex.value === undefined) return [];
     const rows = Object.values(streamsIndex.value);
     return (
       touched
@@ -165,7 +185,7 @@ export function StreamSwitcherDialog({
     )
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
       .slice(0, 50);
-  }, [open, streamsIndex.value, touched, query, recentSince]);
+  }, [open, now, streamsIndex.value, touched, query, recentSince]);
   // Clamp the cursor to the current list (it shrinks as you type). -1 stays -1.
   const selected = selectedIndex < 0 ? -1 : Math.min(selectedIndex, matches.length - 1);
 
@@ -183,7 +203,6 @@ export function StreamSwitcherDialog({
     setDestination(destinationPrefill(currentPath));
     setTouched(false);
     setSelectedIndex(-1);
-    setRecentSince(Date.now() - RECENT_WINDOW_MS);
     const frame = requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
@@ -215,19 +234,29 @@ export function StreamSwitcherDialog({
               id="stream-switcher-listbox"
               className="flex flex-col gap-0.5"
               role="listbox"
-              aria-label={touched ? "Matching streams" : "Recently active streams"}
+              aria-label={
+                touched
+                  ? "Matching streams, most recently active first"
+                  : "Recently active streams, most recent first"
+              }
               data-testid="stream-switcher-matches"
             >
               <li
-                className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60"
+                className="flex items-baseline justify-between px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60"
                 role="presentation"
                 aria-hidden
               >
-                {touched ? "Matches" : "Recently active"}
+                <span>{touched ? "Matches" : "Recently active"}</span>
+                <span className="normal-case tracking-normal">newest first</span>
               </li>
               {matches.map((row, index) => (
                 <li key={row.path} role="presentation">
+                  {/* Keyed by activity: a touch remounts the button, replaying
+                      the one-shot stream-flash fade (see styles.css) — pure
+                      CSS, no flash bookkeeping. Rows also flash once on open,
+                      which reads as "this list is fresh". */}
                   <button
+                    key={row.lastActivityAt}
                     ref={index === selected ? selectedRef : undefined}
                     id={`stream-switcher-option-${index}`}
                     type="button"
@@ -236,14 +265,20 @@ export function StreamSwitcherDialog({
                     title={row.path}
                     aria-selected={index === selected}
                     data-selected={index === selected || undefined}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left animate-[stream-flash_1.2s_ease-out] ${
                       index === selected ? "bg-accent" : "hover:bg-accent/70"
                     }`}
                     onMouseMove={() => setSelectedIndex(index)}
                     onClick={() => openStream(row.path)}
                   >
                     <MatchedStreamPath path={row.path} query={touched ? query : ""} />
-                    <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                    <span
+                      className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
+                      data-testid="stream-switcher-last-active"
+                    >
+                      {formatTimeAgo(row.lastActivityAt, now)}
+                    </span>
+                    <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground/60">
                       {row.eventCount}
                     </span>
                   </button>

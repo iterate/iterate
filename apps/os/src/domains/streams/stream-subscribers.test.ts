@@ -18,6 +18,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
 } from "./rpc-types.ts";
+import { StreamReceiverUnavailableError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
@@ -1192,5 +1193,87 @@ describe("StreamSubscribers", () => {
     expect(h.pushes[1]!.events.map((event) => event.offset)).toEqual([3]);
     expect(h.row("k")?.ackedOffset).toBe(3);
     expect(h.storageReads()).toBeGreaterThan(readsBefore);
+  });
+
+  it("x. a receiver-unavailable rejection backs off whole under onPoison skip — no bisect, no skips (the bootstrap window)", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+
+    // The prd bootstrap incarnation: the project-worker feed dials before the
+    // config repo has seeded, so EVERY delivery rejects with the receiver's
+    // unavailability declaration — a statement about the receiver, never a
+    // verdict about any one event. (Thrown name-only, the way it actually
+    // arrives after crossing Workers RPC hops.)
+    let ready = false;
+    h.dialImpl.push = async () => {
+      if (!ready) {
+        throw Object.assign(new Error("project worker is not ready yet"), {
+          name: "StreamReceiverUnavailableError",
+        });
+      }
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    // First failure: the batch stays WHOLE (no bisect), nothing is skipped,
+    // the cursor holds — just a backoff row and an armed alarm.
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1, 2, 3]]);
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 1 });
+    expect(h.armedAlarms.length).toBeGreaterThan(0);
+
+    // Stay unavailable well past SKIP_CONFIRM_ATTEMPTS: before this routing,
+    // three fast retries were enough to "confirm" a healthy event as poison
+    // and step over it forever (offset 1 of every fresh project's root
+    // stream lost to the config-repo seed race).
+    for (let round = 0; round < SKIP_CONFIRM_ATTEMPTS + 1; round += 1) {
+      const next = h.store.minNextAttemptAt();
+      if (next === null) break;
+      h.advanceTo(Math.max(h.now(), next) + 1);
+      h.subscribers.onAlarm();
+      await h.settle();
+    }
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")?.ackedOffset).toBe(0);
+    expect(h.pushes.every((batch) => batch.events.length === 3)).toBe(true);
+
+    // The receiver comes up (seed landed, worker built): the next retry
+    // delivers the ORIGINAL batch intact and the failure state clears.
+    ready = true;
+    const next = h.store.minNextAttemptAt();
+    expect(next).not.toBeNull();
+    h.advanceTo(Math.max(h.now(), next!) + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes.at(-1)!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+  });
+
+  it("y. sustained receiver unavailability parks loudly instead of mass-skipping the backlog", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+    h.dialImpl.push = async () => {
+      throw new StreamReceiverUnavailableError("still not ready");
+    };
+
+    await driveUntilParked(h);
+
+    // The whole outage produced ZERO poison verdicts: no event was stepped
+    // over, the cursor never moved, and the park is the loud, resumable end
+    // state MAX_DELIVERY_ATTEMPTS exists for.
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    const parkedFacts = h.factsOfType(PARKED);
+    expect(parkedFacts).toHaveLength(1);
+    expect(parkedFacts[0].payload).toMatchObject({ subscriptionKey: "k", atOffset: 0 });
+    expect(h.row("k")?.ackedOffset).toBe(0);
+    expect(
+      h.pushes.every((batch) => batch.events.map((event) => event.offset).join(",") === "1,2,3"),
+    ).toBe(true);
+    expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
   });
 });
