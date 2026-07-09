@@ -78,14 +78,17 @@ import {
   use,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { ProcessorSnapshot } from "../domains/streams/rpc-types.ts";
+import type { LiveStateRpc, ProcessorSnapshot } from "../domains/streams/rpc-types.ts";
 import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
+import { applyPatch } from "../lib/live-state/diff.ts";
+import type { LiveUpdate } from "../lib/live-state/protocol.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project
@@ -725,4 +728,96 @@ export function useItxState<State>(
   );
 
   return { state: snapshot?.state, offset: snapshot?.offset, ...subscription };
+}
+
+/** A tiny per-mount store holding the reassembled live value. `useSyncExternalStore`
+ * over it is what makes `useLiveState` re-render only when the selected slice changes. */
+function createLiveStateStore<State>() {
+  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  return {
+    getState: () => held.state,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    reset: () => {
+      held = { revision: -1, state: undefined };
+      notify();
+    },
+    /** Fold one wire update into the held value; a revision gap means a missed patch — resync. */
+    apply: (update: LiveUpdate<State>, resync: () => void) => {
+      if (update.type === "snapshot") {
+        held = { revision: update.revision, state: update.state };
+      } else if (update.from !== held.revision) {
+        resync();
+        return;
+      } else {
+        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };
+      }
+      notify();
+    },
+  };
+}
+
+/**
+ * THE live-state primitive: subscribe to any `.live` node, render the slice you
+ * pick. The server pushes a snapshot then minimal diffs; this hook reassembles
+ * them and hands back `selector(state)`.
+ *
+ *   const streams = useLiveState((itx) => itx.live, (s) => s.streamsIndex);
+ *   // re-renders ONLY when streamsIndex changes — a change elsewhere in the
+ *   // project's live state does not re-render this component.
+ *
+ * The selector is the ergonomic point: subscribe to a big composite state, read
+ * one slice, and unrelated changes cost nothing (the diff preserves the identity
+ * of untouched branches — see lib/live-state). Return a STABLE slice
+ * (`s => s.rows`), not a fresh object (`s => Object.values(s.rows)`); map in a
+ * downstream `useMemo`. All reconnect/liveness recovery is {@link useItxSubscription}'s.
+ *
+ * `value` is `undefined` between mount and the first snapshot (one round trip);
+ * render a loading row for that window. `deps` re-point the hook at a different
+ * node — a change drops the held state so a stale slice never shows.
+ */
+export function useLiveState<State, Selected = State>(
+  live: (itx: ItxHandle) => LiveStateRpc<State>,
+  selector: (state: State) => Selected = (state) => state as unknown as Selected,
+  deps: unknown[] = [],
+): {
+  value: Selected | undefined;
+  status: ItxSubscriptionStatus;
+  error?: string;
+  refresh: () => void;
+} {
+  const store = useMemo(() => createLiveStateStore<State>(), []);
+  // deps change = a different node: drop the held state (its slice is meaningless now).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
+  useEffect(() => () => store.reset(), deps);
+
+  // The sink needs `refresh` to resync on a gap, but `refresh` comes from the
+  // subscription below — a ref bridges the cycle (the sink only fires later).
+  const refreshRef = useRef<() => void>(() => {});
+  const subscription = useItxSubscription(
+    (itx) => live(itx).subscribe((update) => store.apply(update, () => refreshRef.current())),
+    deps,
+  );
+  refreshRef.current = subscription.refresh;
+
+  // Selector memo cache keyed on STATE identity: returns the same `Selected` ref
+  // while the state is unchanged, so useSyncExternalStore bails out (and can never
+  // loop). An unstable selector costs a re-render, not a loop.
+  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({
+    state: undefined,
+    value: undefined,
+  });
+  const getSelected = () => {
+    const state = store.getState();
+    if (state === cache.current.state) return cache.current.value;
+    cache.current = { state, value: state === undefined ? undefined : selector(state) };
+    return cache.current.value;
+  };
+  const value = useSyncExternalStore(store.subscribe, getSelected, getSelected);
+
+  return { value, ...subscription };
 }
