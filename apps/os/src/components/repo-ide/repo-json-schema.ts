@@ -243,13 +243,17 @@ export function useRepoFileJsonSchema(input: {
   );
 
   if (url === null) return { status: "none", extensions: NO_EXTENSIONS };
-  // Mid-settle (url !== settledUrl) the previous schema keeps applying — the
-  // header note names what's actually validating the buffer.
+  // A failed fetch means no validation — check this BEFORE the active branch,
+  // because keepPreviousData keeps an earlier schema in `schemaQuery.data` even
+  // while the current URL's fetch is errored. Without this the stale schema
+  // would keep linting and the failure would read as "active", masking it.
+  if (schemaQuery.status === "error" && settledUrl !== null) {
+    return { status: "unavailable", url: settledUrl, extensions: NO_EXTENSIONS };
+  }
+  // Mid-settle (url !== settledUrl) or mid-refetch, keepPreviousData keeps the
+  // previous schema applying — the header note names what's actually validating.
   if (schema !== undefined && settledUrl !== null) {
     return { status: "active", url: settledUrl, extensions };
-  }
-  if (schemaQuery.status === "error" && settledUrl !== null) {
-    return { status: "unavailable", url: settledUrl, extensions };
   }
   return { status: "loading", url, extensions };
 }
