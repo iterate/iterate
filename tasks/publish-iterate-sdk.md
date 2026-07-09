@@ -9,9 +9,12 @@ pr: https://github.com/iterate/iterate/pull/1758
 
 ## Status summary
 
-Implementation complete, PR open, preview publish verified live. **CI is
-8/9 green; the one red lane (`Preview / deploy + e2e`) is a preview_9
-slot-state defect, not this PR's code** — see the 2026-07-09 note below.
+Implementation complete, PR open, preview publish verified live. **All seven
+merge-gating lanes are green** (`test`, `lint-typecheck`, `publish`, Bugbot,
+autofix, LOC, Continuous Releases); the PR is `MERGEABLE`/`UNSTABLE`. **The one
+red lane (`Preview / deploy + e2e`) is the recurring preview_9
+`ensureContainerClasses` DO-bootstrap infra defect, not this PR's code, and is
+NOT a required check** — see the 2026-07-09 note below. Ready to merge.
 
 The
 pkg.pr.new GitHub App turned out to already be installed on `iterate/iterate`:
@@ -51,6 +54,21 @@ carry the existing DO exports (a separate #1762-tooling fix). Retried the job
 twice (`v103tkfq4p`) — same 403. Awaiting Misha's call on how to unblock;
 did not run destructive preview-slot ops unprompted. Documented on the PR:
 issue-comment 4922272964.
+
+**2026-07-09 (later) re-merged main + blocker recurred, same root cause:** main
+diverged again (#1784 streams, #1789 processEventBatch, #1792). Re-resolved the
+merge (`3f251544c`): sdk.ts kept as our runtime shim, template snapshot
+regenerated (byte-identical), lock reconciled, and the itx-api PACKAGE copy
+resynced to main's contract (`SubscriptionKey`/`processEventBatch`) per the
+freshness guard. apps/os typecheck + template/sdk unit tests green locally; all
+seven gating CI lanes green. The `Preview / deploy + e2e` lane failed AGAIN with
+the identical `ensureContainerClasses` (do-reset.ts:339) bootstrap 403 — this
+time naming `StreamDurableObject` (the class main's #1784 just introduced),
+confirming the rotating-missing-class signature of the same shared-tooling bug.
+Non-blocking (UNSTABLE, not a required check). Still awaiting Misha's call on
+whether to (a) reset/hand-over preview_9, (b) move the lease, (c) merge past the
+non-required preview lane, or (d) have me fix `ensureContainerClasses` to carry
+existing DO exports as a separate #1762-tooling PR.
 
 ## Motivation
 
