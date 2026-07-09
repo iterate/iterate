@@ -52,6 +52,7 @@ function evt(offset: number, type: string, payload?: Record<string, unknown>): S
  */
 class FakeCursorStore implements SubscriptionCursorStore {
   readonly rows = new Map<string, SubscriptionCursorRow>();
+  #lastEpoch = 0;
 
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
     const row = this.rows.get(subscriptionKey);
@@ -64,22 +65,32 @@ class FakeCursorStore implements SubscriptionCursorStore {
 
   ensure(subscriptionKey: string, ackedOffset: number): void {
     if (this.rows.has(subscriptionKey)) return;
+    this.#lastEpoch += 1;
     this.rows.set(subscriptionKey, {
       subscriptionKey,
       ackedOffset,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
+      epoch: this.#lastEpoch,
     });
   }
 
-  ack(subscriptionKey: string, ackedOffset: number): void {
+  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;
+    if (epoch !== undefined && row.epoch !== epoch) return;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+  }
+
+  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined) return;
+    row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
+    row.nextAttemptAt = null;
   }
 
   nack(
@@ -96,10 +107,12 @@ class FakeCursorStore implements SubscriptionCursorStore {
   setCursor(subscriptionKey: string, ackedOffset: number): void {
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;
+    this.#lastEpoch += 1;
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    row.epoch = this.#lastEpoch;
   }
 
   delete(subscriptionKey: string): void {
@@ -206,6 +219,7 @@ function makeHarness() {
         }
       },
       now: () => now,
+      random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
       keepAlive: (promise) => kept.push(promise),
     },
@@ -970,5 +984,169 @@ describe("StreamSubscribers", () => {
     expect(h.webhooks.at(-1)!.delivery.event.offset).toBe(2);
     expect(h.row("k")?.ackedOffset).toBe(2);
     expect(h.factsOfType(PARKED)).toHaveLength(0);
+  });
+
+  it("r. a parked subscription stops driving the alarm (no post-park re-arms)", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.push = async () => {
+      throw new Error("receiver hard down");
+    };
+    await driveUntilParked(h);
+
+    // The park cleared the row's backoff: nothing pending, nothing to re-arm.
+    expect(h.row("k")?.nextAttemptAt).toBeNull();
+    expect(h.store.minNextAttemptAt()).toBeNull();
+
+    // The bug this pins: the parking attempt's own (past) next_attempt_at
+    // used to survive the park, and every onAlarm re-armed it — a permanent
+    // past-timestamp alarm hot loop per parked subscription.
+    const armsBefore = h.armedAlarms.length;
+    for (let round = 0; round < 5; round += 1) {
+      h.subscribers.onAlarm();
+      await h.settle();
+    }
+    expect(h.armedAlarms.length).toBe(armsBefore);
+  });
+
+  it("s. wake delivery failures back off, park after sustained failure, and reset on checkpoint progress", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+
+    let checkpoint = 0;
+    h.dialImpl.poke = async () => ({ checkpointOffset: checkpoint, sink: makeSink().sink });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pokes).toHaveLength(1);
+
+    // A post-poke sink delivery failure must run the failure machine: nack'd
+    // row, closed connection, and NO immediate re-poke — the bug this pins is
+    // the close→wake→re-poke hot loop that never backed off and never parked
+    // (each poke's ack used to reset the attempt counter too).
+    h.subscribers.onDurableDeliveryError("k", new Error("ingest rejects deterministically"));
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")?.attempt).toBe(1);
+    expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+    expect(h.pokes).toHaveLength(1); // no hot re-poke
+
+    // Alarm-driven retry: the poke succeeds (host reachable, checkpoint
+    // unchanged) but the streak SURVIVES the handshake.
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pokes).toHaveLength(2);
+    expect(h.row("k")?.attempt).toBe(1); // preserved, not reset by the poke
+
+    // Sustained deterministic failure parks at the shared threshold.
+    for (let round = 0; round < 400 && h.factsOfType(PARKED).length === 0; round += 1) {
+      h.subscribers.onDurableDeliveryError("k", new Error("still failing"));
+      await h.settle();
+      const next = h.store.minNextAttemptAt();
+      if (next === null) break;
+      h.advanceTo(next + 1);
+      h.subscribers.onAlarm();
+      await h.settle();
+    }
+    expect(h.factsOfType(PARKED)).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+
+    // Recovery: resume, and a poke whose checkpoint PROGRESSED clears the streak.
+    h.configured["k"]!.parkedAtOffset = undefined;
+    checkpoint = 1;
+    h.subscribers.onResumed("k");
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.row("k")?.attempt).toBe(0);
+  });
+
+  it("t. an in-flight push delivery cannot clobber a cursor seek (epoch fence)", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    for (let n = 1; n <= 5; n += 1) h.append(evt(n, "a"));
+
+    let releaseDelivery: (() => void) | undefined;
+    h.dialImpl.push = () =>
+      new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.pushes).toHaveLength(1); // batch [1..5] in flight
+
+    // The audited redrive lands while the delivery is awaited...
+    h.subscribers.onCursorSet("k", 2);
+    // The receiver comes back for the redelivery; only the FIRST batch blocks.
+    h.dialImpl.push = async () => {};
+    releaseDelivery!();
+    await h.settle();
+
+    // ...and the delivery's ack must NOT swallow it: the drain re-read the
+    // seeked cursor and redelivered from offset 3.
+    const redelivered = h.pushes.at(-1)!;
+    expect(redelivered.events[0]!.offset).toBe(3);
+    expect(h.row("k")?.ackedOffset).toBe(5);
+    expect(h.pushes.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("u. remove+recreate mid-delivery keeps the new subscription's promised history (epoch fence)", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    for (let n = 1; n <= 3; n += 1) h.append(evt(n, "a"));
+
+    let releaseDelivery: (() => void) | undefined;
+    h.dialImpl.push = () =>
+      new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.pushes).toHaveLength(1); // old receiver's [1..3] in flight
+
+    // Same key removed and immediately recreated with deliver:"all" — the
+    // new receiver is PROMISED the full history.
+    delete h.configured["k"];
+    h.subscribers.onSubscriptionRemoved("k");
+    h.configure(pushPayload(), 4);
+    h.subscribers.onSubscriptionConfigured(pushPayload(), 4);
+    h.dialImpl.push = async () => {};
+    releaseDelivery!();
+    await h.settle();
+
+    // The old delivery's ack(3) landed on a DELETED row's epoch: no-op. The
+    // recreated subscription drained from 0 — history redelivered.
+    const firstNewDelivery = h.pushes.find(
+      (batch, index) => index > 0 && batch.events[0]?.offset === 1,
+    );
+    expect(firstNewDelivery).toBeDefined();
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
+  it("v. selector-condition failures on error facts never append more error facts", async () => {
+    const h = makeHarness();
+    h.configure(
+      pushPayload({
+        // Condition-only selector that throws on any non-numeric payload.message.
+        selector: { condition: "$number(payload.message) = 42" },
+      }),
+      0,
+    );
+    h.append(evt(1, "user/event", { message: "not-a-number" }));
+    // The spine's own prior error fact sits in the log, exactly as it would
+    // after one bad iteration.
+    h.append(evt(2, ERROR_OCCURRED, { message: "prose, definitely not numeric" }));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    // One fact for the user event; NONE for the error fact — the self-feeding
+    // loop (each drain iteration appending one new fact per fact read, which
+    // the pause door cannot stop) is structurally closed.
+    const conditionFacts = h.factsOfType(ERROR_OCCURRED);
+    expect(conditionFacts).toHaveLength(1);
+    expect(conditionFacts[0]!.idempotencyKey).toBe("selector-condition-failed:k:1");
+    expect(h.row("k")?.ackedOffset).toBe(2);
   });
 });

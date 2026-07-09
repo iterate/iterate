@@ -22,11 +22,12 @@
 // `-resumed` events). The spine triggers on watermark lag — never on event
 // types — so facts stay data, not control flow.
 //
-// This module is transport-free and clock-free: everything it touches arrives
-// through `StreamSubscribersHooks` (storage, log reads, the dial, time, the
-// alarm), so the whole state machine runs in plain-node vitest against an
-// in-memory store and a scripted dial (stream-subscribers.test.ts). The only
-// streams file that knows RPC exists is subscriber-sinks.ts.
+// This module is transport-free, clock-free, and randomness-free: everything
+// it touches arrives through `StreamSubscribersHooks` (storage, log reads, the
+// dial, time, backoff jitter, the alarm), so the whole state machine runs in
+// plain-node vitest against an in-memory store and a scripted dial
+// (stream-subscribers.test.ts). The only streams file that knows RPC exists is
+// subscriber-sinks.ts.
 
 import type { ItxExpression } from "../../itx/expression.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
@@ -61,7 +62,7 @@ import {
   DELIVERY_BATCH_BYTE_LIMIT,
   DELIVERY_BATCH_LIMIT,
   halveBatchLimit,
-  initialCursor,
+  initialCursorFor,
   MAX_CONSECUTIVE_SKIPS,
   MAX_DELIVERY_ATTEMPTS,
   SKIP_CONFIRM_ATTEMPTS,
@@ -75,6 +76,11 @@ export type ConnectionRuntimeState = {
   batchesSent: number;
   eventsSent: number;
   lastDeliveredAt?: string;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
 };
 
 /** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
@@ -110,6 +116,8 @@ type Connection = {
   wake(): void;
   /** `true` until close() runs — backs the subscription handle's `ping()`. */
   isLive(): boolean;
+  /** `true` while a durable sink delivery is dispatched but unsettled. */
+  hasPendingDelivery(): boolean;
   /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
@@ -172,6 +180,8 @@ type StreamSubscribersHooks = {
   appendFact(event: StreamEventInput): void;
   /** Injected clock (epoch ms). */
   now(): number;
+  /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
+  random(): number;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
   /** Keep the Durable Object alive through background delivery work. */
@@ -290,13 +300,10 @@ export class StreamSubscribers {
       const config = entry.latestConfiguredEvent.payload;
       const configOffset = entry.latestConfiguredEvent.offset;
 
-      // Wake rows start at 0 — the watermark means "poked about offsets
-      // through N", and a never-poked subscriber has been poked about nothing.
-      // Push rows start where the deliver policy says.
-      this.#hooks.store.ensure(
-        subscriptionKey,
-        config.delivery.mode === "wake" ? 0 : initialCursor(config.deliver, configOffset),
-      );
+      // The per-mode initial-cursor policy lives in ONE place
+      // (subscriber-math.initialCursorFor) so this and the config side effect
+      // below can never drift.
+      this.#hooks.store.ensure(subscriptionKey, initialCursorFor(config, configOffset));
 
       if (entry.parkedAtOffset !== undefined) continue;
 
@@ -396,7 +403,18 @@ export class StreamSubscribers {
         // Observational watermark: the subscriber confirmed this checkpoint.
         // While the connection streams, the watermark deliberately goes stale;
         // its only job is deciding whether to poke when no connection exists.
-        this.#hooks.store.ack(subscriptionKey, response.checkpointOffset);
+        // A successful HANDSHAKE proves the host is reachable, not that
+        // deliveries succeed — so it must not clear the delivery-failure
+        // streak by itself (that reset let a deterministically failing
+        // subscriber re-poke forever without ever parking). PROGRESS clears
+        // it: a checkpoint past the last watermark means deliveries have been
+        // digested since the failure.
+        const watermarkRow = this.#hooks.store.get(subscriptionKey);
+        if (watermarkRow === undefined || response.checkpointOffset > watermarkRow.ackedOffset) {
+          this.#hooks.store.ack(subscriptionKey, response.checkpointOffset);
+        } else {
+          this.#hooks.store.advanceWatermark(subscriptionKey, response.checkpointOffset);
+        }
       } catch (error) {
         this.#onDeliveryFailure(subscriptionKey, error);
       } finally {
@@ -442,7 +460,7 @@ export class StreamSubscribers {
           if (matched.length === 0) {
             // Skip-not-defer: nothing here for this subscriber, but the cursor
             // must advance or the subscription re-reads these events forever.
-            this.#hooks.store.ack(subscriptionKey, lastOffset);
+            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
             continue;
           }
 
@@ -456,6 +474,7 @@ export class StreamSubscribers {
           };
 
           if (config.delivery.mode === "webhook") {
+            if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
             // Webhook delivery is per EVENT on the same cursor machinery: each
             // 2xx acks that single offset, so a failure mid-batch resumes at
             // the exact event that failed. The poison machinery sees the true
@@ -463,6 +482,18 @@ export class StreamSubscribers {
             // webhook "batch" is already its own poison isolate.
             const url = config.delivery.url;
             for (const event of matched) {
+              // Re-check the config per EVENT: the outer loop's staleness
+              // checks run per batch, and a removed/replaced webhook must not
+              // keep POSTing the rest of a 100-event batch to the old URL.
+              const currentEntry =
+                this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+              if (
+                currentEntry === undefined ||
+                currentEntry.parkedAtOffset !== undefined ||
+                currentEntry.latestConfiguredEvent.offset !== entry.latestConfiguredEvent.offset
+              ) {
+                return; // whatever changed it already re-reconciled
+              }
               const attempt = (this.#hooks.store.get(subscriptionKey)?.attempt ?? 0) + 1;
               try {
                 await withDeliveryTimeout(
@@ -489,11 +520,11 @@ export class StreamSubscribers {
                 }
                 return;
               }
-              this.#hooks.store.ack(subscriptionKey, event.offset);
+              this.#hooks.store.ack(subscriptionKey, event.offset, row.epoch);
               this.#consecutiveSkips.delete(subscriptionKey);
             }
             // Cover any trailing non-matching events the selector skipped.
-            this.#hooks.store.ack(subscriptionKey, lastOffset);
+            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
             continue;
           }
 
@@ -502,10 +533,6 @@ export class StreamSubscribers {
             path: state.path,
             events: matched,
             streamMaxOffset: state.maxOffset,
-            // Read in the same synchronous block as streamMaxOffset, so the
-            // two always correspond (state-at-streamMaxOffset, exactly like
-            // live subscription batches).
-            state,
             subscriptionKey,
             deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
             attempt: row.attempt + 1,
@@ -527,7 +554,12 @@ export class StreamSubscribers {
             }
             return;
           }
-          this.#hooks.store.ack(subscriptionKey, lastOffset);
+          // Fenced on the epoch read above: a seek (cursor-set, resume-with-
+          // offset, replacement deliver, remove+recreate) that landed while
+          // this delivery was in flight bumped the epoch, and this ack no-ops
+          // instead of clobbering it — the next iteration re-reads the row
+          // and drains from wherever the seek pointed.
+          this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
@@ -571,6 +603,13 @@ export class StreamSubscribers {
       try {
         if (selector.matches(event)) matched.push(event);
       } catch (error) {
+        // Never record a condition failure ABOUT an error fact: those facts
+        // land on this same stream, so a condition that throws on the
+        // error-occurred shape would otherwise read its own facts next
+        // iteration and append one more per fact read — unbounded log growth
+        // that even the pause door cannot stop (error-occurred is allowlisted
+        // through it). The event is still skipped, silently.
+        if (event.type === "events.iterate.com/stream/error-occurred") continue;
         conditionErrors.push({
           type: "events.iterate.com/stream/error-occurred",
           idempotencyKey: `selector-condition-failed:${subscriptionKey}:${event.offset}`,
@@ -654,7 +693,7 @@ export class StreamSubscribers {
   }
 
   #backoff(subscriptionKey: string, attempt: number, error: unknown): void {
-    const nextAttemptAt = this.#hooks.now() + computeBackoffMs(attempt, Math.random());
+    const nextAttemptAt = this.#hooks.now() + computeBackoffMs(attempt, this.#hooks.random());
     this.#hooks.store.nack(subscriptionKey, {
       attempt,
       nextAttemptAt,
@@ -691,12 +730,30 @@ export class StreamSubscribers {
         error: errorMessage(error),
       },
     });
+    // A parked row must not keep driving the alarm: the park was preceded by
+    // a nack whose (now past) next_attempt_at would otherwise be re-armed by
+    // every onAlarm forever — a permanent alarm hot loop per parked
+    // subscription. Clear the backoff, keep the cursor (the park fact carries
+    // the attempts + error for the audit trail).
+    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
   }
 
   #armAlarmFromStore(): void {
-    const next = this.#hooks.store.minNextAttemptAt();
+    // Not a bare MIN over the rows: parked rows keep their cursor but must
+    // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
+    // still carries its (past) due time until the attempt settles — re-arming
+    // from either spins the alarm at zero delay.
+    const state = this.#hooks.coreState();
+    let next: number | null = null;
+    for (const row of this.#hooks.store.list()) {
+      if (row.nextAttemptAt === null) continue;
+      const key = row.subscriptionKey;
+      if (state.configuredSubscribersByKey[key]?.parkedAtOffset !== undefined) continue;
+      if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
+      if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+    }
     if (next !== null) this.#hooks.armAlarm(next);
   }
 
@@ -710,14 +767,12 @@ export class StreamSubscribers {
     // A replaced config's live connection belongs to the old config; drop it
     // and let reconcile re-establish against the new one.
     this.#connections.get(key)?.close("replaced");
-    if (payload.delivery.mode === "wake") {
-      this.#hooks.store.ensure(key, 0);
-    } else {
-      const cursor = initialCursor(payload.deliver, eventOffset);
-      this.#hooks.store.ensure(key, cursor);
-      // An explicit deliver policy on a REPLACEMENT config is a seek; without
-      // one the existing cursor is kept (config update ≠ replay request).
-      if (payload.deliver !== undefined) this.#hooks.store.setCursor(key, cursor);
+    const cursor = initialCursorFor(payload, eventOffset);
+    this.#hooks.store.ensure(key, cursor);
+    // An explicit deliver policy on a REPLACEMENT config is a seek; without
+    // one the existing cursor is kept (config update ≠ replay request).
+    if (payload.delivery.mode !== "wake" && payload.deliver !== undefined) {
+      this.#hooks.store.setCursor(key, cursor);
     }
     // Fresh config clears any backoff so the new target gets an immediate try.
     const row = this.#hooks.store.get(key);
@@ -782,7 +837,10 @@ export class StreamSubscribers {
         while (open) {
           let events: StreamEvent[] = [];
           if (deliverEvents) {
-            const readEvents = this.#hooks.readEvents({ afterOffset: cursor, limit: 100 });
+            // Same byte-capped read as the push drain: 100 near-2MB events in
+            // one live batch would blow the RPC frame limit and turn into a
+            // delivery failure the subscriber can never get past.
+            const readEvents = this.#readBatch(cursor, 100);
             const lastOffset = readEvents.at(-1)?.offset;
             if (lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain
@@ -804,7 +862,7 @@ export class StreamSubscribers {
           initialBatchPending = false;
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
-          connection.lastDeliveredAt = new Date().toISOString();
+          connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           const currentState = this.#hooks.coreState();
           if (currentState.projectId === undefined || currentState.path === undefined) {
             throw new Error(
@@ -829,7 +887,7 @@ export class StreamSubscribers {
 
     const connection: Connection = {
       subscriptionType,
-      startedAt: new Date().toISOString(),
+      startedAt: new Date(this.#hooks.now()).toISOString(),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       get cursor() {
         return cursor;
@@ -838,6 +896,7 @@ export class StreamSubscribers {
       eventsSent: 0,
       wake: () => void pump(),
       isLive: () => open,
+      hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
       close: (reason) => {
         if (!open) return;
         open = false;
@@ -875,14 +934,23 @@ export class StreamSubscribers {
     return connection;
   }
 
-  /** Durable-sink delivery failures arrive here (see subscriber-sinks.ts): close → spine re-pokes. */
+  /**
+   * Durable-sink delivery failures arrive here (see subscriber-sinks.ts).
+   * Backoff FIRST, close second: the close's disconnect fact triggers a wake
+   * whose reconcile must already see the nack'd row — otherwise it re-pokes
+   * immediately and a deterministic subscriber failure becomes an RPC-rate
+   * poke→deliver→close hot loop that never parks. The shared failure machine
+   * counts the streak (the poke-success watermark deliberately preserves it;
+   * see #poke) and parks at the same threshold as every other lane.
+   */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    console.error("stream durable sink delivery failed; dropping connection for re-poke", {
+    console.error("stream durable sink delivery failed; backing off before re-poke", {
       subscriptionKey,
       error,
     });
+    this.#onDeliveryFailure(subscriptionKey, error);
     connection.close("delivery-failed");
   }
 
@@ -914,6 +982,7 @@ export class StreamSubscribers {
           batchesSent: connection.batchesSent,
           eventsSent: connection.eventsSent,
           lastDeliveredAt: connection.lastDeliveredAt,
+          hasPendingDelivery: connection.hasPendingDelivery(),
         },
       ]),
     );
@@ -970,20 +1039,32 @@ export class StreamSubscribers {
     // one synchronous DO turn, so nothing foreign can interleave — the only
     // events appended during it are our own subscriber-disconnected facts.
     const keys = this.#configuredConnectionKeys();
+    // "Delivered into the sink" is not "ingested": a sink whose last batch is
+    // still UNSETTLED belongs to a wedged subscriber, and advancing its
+    // watermark to maxOffset would defer redelivery until the next append —
+    // indefinitely on a quiet stream. Those keys skip the ack and get an
+    // immediate re-poke instead (the at-least-once replay path).
+    const wedgedKeys = new Set(
+      keys.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
+    );
     this.#tearingDown = true;
     try {
       for (const subscriptionKey of keys) this.close(subscriptionKey, "idle");
     } finally {
       this.#tearingDown = false;
     }
-    // Advance every torn-down watermark past the disconnect facts this loop
-    // just appended, so the next reconcile is a no-op instead of an immediate
-    // re-poke. Safe: the watermark is observational (the subscriber's own
-    // checkpoint is the truth), and after >= idleTeardownMs of append silence
-    // the pumps were long since drained, so maxOffset holds nothing the sink
-    // has not already seen except our own facts.
+    // Advance every cleanly-drained watermark past the disconnect facts this
+    // loop just appended, so the next reconcile is a no-op instead of an
+    // immediate re-poke. Safe: the watermark is observational (the
+    // subscriber's own checkpoint is the truth), and after >= idleTeardownMs
+    // of append silence the pumps were long since drained, so maxOffset holds
+    // nothing the sink has not already seen except our own facts.
     const maxOffset = this.#hooks.coreState().maxOffset;
-    for (const subscriptionKey of keys) this.#hooks.store.ack(subscriptionKey, maxOffset);
+    for (const subscriptionKey of keys) {
+      if (wedgedKeys.has(subscriptionKey)) continue;
+      this.#hooks.store.ack(subscriptionKey, maxOffset);
+    }
+    if (wedgedKeys.size > 0) queueMicrotask(() => this.wake());
   }
 
   #configuredConnectionKeys(): string[] {

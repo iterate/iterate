@@ -9,11 +9,11 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-  type StreamSubscriberWakeResponse,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
 import {

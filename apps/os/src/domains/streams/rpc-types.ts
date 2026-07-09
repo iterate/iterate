@@ -100,12 +100,21 @@ export type StreamEventBatch = {
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 /**
- * The batch a PUSH subscription's receiver is invoked with: the ordinary
- * {@link StreamEventBatch} envelope every other subscriber gets ("stream
- * processor" is one shape), plus the fields an at-least-once stateless
- * receiver needs to dedupe and self-configure.
+ * The batch a PUSH subscription's receiver is invoked with: the delivery
+ * coordinates and events, plus the fields an at-least-once stateless receiver
+ * needs to dedupe and self-configure. Deliberately NOT the live lanes'
+ * {@link StreamEventBatch}: push receivers include userspace project workers
+ * and sibling streams, and the folded core state — other subscriptions'
+ * delivery expressions, park errors, the presence roster — is internal to the
+ * deployment (the webhook envelope strips it for the same reason). Live sinks
+ * (ephemeral subscribers, wake-mode processors) still get state-carrying
+ * batches: they are the lanes that paint from state.
  */
-export type StreamPushEventBatch = StreamEventBatch & {
+export type StreamPushEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
   subscriptionKey: SubscriptionKey;
   /**
    * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
@@ -133,7 +142,8 @@ export type StreamPushEventBatch = StreamEventBatch & {
  * reduced state is internal and has no business leaving the deployment.
  */
 export type StreamWebhookDelivery = {
-  projectId: string | null;
+  /** Never null: webhooks require a project-scoped stream (egress attribution). */
+  projectId: string;
   path: string;
   event: StreamEvent;
   subscriptionKey: SubscriptionKey;

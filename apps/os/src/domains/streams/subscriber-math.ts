@@ -70,6 +70,20 @@ export function initialCursor(
  * Stable delivery id for one batch, unchanged across retries (the svix-id
  * lesson: receivers can dedupe redeliveries without per-event bookkeeping).
  */
+
+/**
+ * The one place the per-mode initial-cursor policy is spelled: wake rows
+ * start at 0 (the watermark means "poked about offsets through N", and a
+ * never-poked subscriber has been poked about nothing); stream-owned-cursor
+ * rows (push/webhook) start where the deliver policy says.
+ */
+export function initialCursorFor(
+  config: { delivery: { mode: string }; deliver?: DeliverPolicy },
+  configOffset: number,
+): number {
+  return config.delivery.mode === "wake" ? 0 : initialCursor(config.deliver, configOffset);
+}
+
 export function deliveryId(subscriptionKey: string, firstOffset: number, lastOffset: number) {
   return `${subscriptionKey}:${firstOffset}-${lastOffset}`;
 }
