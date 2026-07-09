@@ -21,22 +21,24 @@ A processor is two halves plus a comparison:
 - **Actual state** — the incarnation. Live executions, open sockets, armed
   timers. In-memory, dies with every eviction, **and that is fine** — it is
   never the source of truth.
-- **Reconciliation** — an end-of-`processEventBatch` pass compares the two
-  and acts: start attempts for desired work nobody is driving, settle work
-  whose driver died, and do it all through idempotent appends so replays
-  converge. Reconcile only an AT-HEAD fold (`checkpointOffset >=
-streamMaxOffset`): a mid-catch-up fold shows obligations whose outcomes sit
-  in the next page, and acting on it re-drives real vendor calls. The final
-  catch-up page qualifies by construction; wake-lane push batches are
-  consumes-filtered yet stamped with the raw head, so the host runs a
-  trailing unfiltered catch-up after any behind batch — recovery always gets
-  its pass.
+- **Reconciliation** — the `reconcile` hook compares the two and acts: start
+  attempts for desired work nobody is driving, settle work whose driver died,
+  and do it all through idempotent appends so replays converge. The base
+  class calls `reconcile` only for AT-HEAD batches (`checkpointOffset >=
+streamMaxOffset`), so overrides never need their own gate: a mid-catch-up
+  fold shows obligations whose outcomes sit in the next page, and acting on
+  it would re-drive real vendor calls. The final catch-up page qualifies by
+  construction; wake-lane push batches are consumes-filtered yet stamped with
+  the raw head, so the host runs a trailing unfiltered catch-up after any
+  behind batch — recovery always gets its pass. (Older processors spell the
+  same thing as a `processEventBatch` override with a hand-written at-head
+  gate; the gate semantics are identical, and they should migrate to
+  `reconcile` when touched.)
 
 The reference implementations, in reading order:
-`OpenAiWsProcessor.processEventBatch` (the canonical obligation reconciler),
-`CloudflareAiProcessor` (its verbatim sibling),
-`CapabilityHostProcessor` (scripts — same shape, different settle policy), and
-`AgentProcessor.#settleLlmRequestScheduling` (derived scheduling + a backstop).
+`AgentProcessor.reconcile` (the canonical obligation reconciler: drive/settle
+LLM obligations, then derive scheduling — plus a last-resort backstop) and
+`CapabilityHostProcessor` (scripts — same shape, different settle policy).
 
 ## Two primitives, two guarantees
 
@@ -237,17 +239,16 @@ processors over fake substrates: an in-memory journal, a fake
 ```ts
 const h = createProcessorHostHarness({
   build: (host, ctx) => ({
-    agent: host.add((deps) => new AgentProcessor({ ...deps, now: () => ctx.clock.now })),
-    openAiWs: host.add(
+    agent: host.add(
       (deps) =>
-        new OpenAiWsProcessor({
+        new AgentProcessor({
           ...deps,
           now: () => ctx.clock.now,
           // incarnation 1 hangs (the request the deploy kills); incarnation 2 answers
-          createResponsesWebSocketClient: async () =>
-            ctx.incarnation === 1 ? fakeResponsesWebSocket(() => []) : respondingSocket(),
-          readStreamEvents: () => ctx.stream.getEvents(),
-          apiKey: "sk-test",
+          ai: {
+            run: async () =>
+              ctx.incarnation === 1 ? new Promise(() => {}) : { response: "recovered!" },
+          },
         }),
     ),
   }),
