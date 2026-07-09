@@ -788,4 +788,49 @@ describe("agent-ui reducer", () => {
       outcome: "cancelled",
     });
   });
+
+  it("tallies token-usage reports and tracks the latest as context fullness", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/token-usage-reported",
+        payload: {
+          llmRequestId: 3,
+          provider: "openai-ws",
+          model: "gpt-5.5",
+          maxContextTokens: 272_000,
+          inputTokens: 1_000,
+          outputTokens: 50,
+          cachedInputTokens: 800,
+          reasoningOutputTokens: 10,
+        },
+      },
+      // A provider without the cache/reasoning breakdown still tallies.
+      {
+        type: "events.iterate.com/agent/token-usage-reported",
+        payload: {
+          llmRequestId: 7,
+          provider: "cloudflare-ai",
+          model: "@cf/moonshotai/kimi-k2.7-code",
+          maxContextTokens: 256_000,
+          inputTokens: 2_000,
+          outputTokens: 150,
+        },
+      },
+    ]);
+
+    expect(state.tokenUsage).toEqual({
+      totalInputTokens: 3_000,
+      totalOutputTokens: 200,
+      totalCachedInputTokens: 800,
+      totalReasoningOutputTokens: 10,
+      lastReport: {
+        model: "@cf/moonshotai/kimi-k2.7-code",
+        maxContextTokens: 256_000,
+        inputTokens: 2_000,
+        outputTokens: 150,
+      },
+    });
+    // Usage reports render in the strip, not as feed rows.
+    expect(state.items).toHaveLength(0);
+  });
 });
