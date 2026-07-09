@@ -217,9 +217,12 @@ import type {
 } from "./domains/streams/rpc-types.ts";
 import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
-import type { LiveStateSubscription } from "./lib/live-state/engine.ts";
+import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
-import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
+import type {
+  ProjectLiveState,
+  ProjectProcessorState,
+} from "./domains/projects/project-processor-contract.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
@@ -3857,13 +3860,24 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The project's live state — its reduced processor state (plus a streams index). See {@link LiveStateRpc}. */
-  get live(): LiveStateRpc<ProjectProcessorState> {
-    return new LiveStateRelayRpcTarget<ProjectProcessorState>(
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  get live(): LiveStateRpc<ProjectLiveState> {
+    return new LiveStateRelayRpcTarget<ProjectLiveState>(
       () =>
         this.durableObjectStub as unknown as {
-          live: PromiseLike<LiveStateRpc<ProjectProcessorState>>;
+          live: PromiseLike<LiveStateRpc<ProjectLiveState>>;
         },
+    );
+  }
+
+  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (DO-backed). */
+  get liveDemo(): LiveDemoRpcTarget {
+    return new LiveDemoRpcTarget(() =>
+      Promise.resolve(
+        (
+          this.durableObjectStub as unknown as { incrementLiveDemo(): Promise<void> }
+        ).incrementLiveDemo(),
+      ),
     );
   }
 
@@ -4887,6 +4901,74 @@ class LiveStateRelayRpcTarget<State>
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
     return await (await this.#stub().live).subscribe(onUpdate);
+  }
+}
+
+/** How often the stateless demo ticker advances. */
+const LIVE_DEMO_TICK_MS = 1000;
+
+/**
+ * Demo: the STATELESS live-state case. This RpcTarget runs in the request
+ * isolate (no Durable Object); `subscribe` drives a per-connection LiveState
+ * engine from a timer — exactly the shape of polling a third-party API and
+ * pushing what changed. The timer lives precisely as long as the subscription.
+ */
+class LiveDemoTickerRpcTarget
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<{ tick: number; startedAt: number }>
+{
+  readonly #startedAt = Date.now();
+
+  async getState(): Promise<{ tick: number; startedAt: number }> {
+    return { tick: 0, startedAt: this.#startedAt };
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<{ tick: number; startedAt: number }>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    const engine = new LiveState<{ tick: number; startedAt: number }>({
+      tick: 0,
+      startedAt: this.#startedAt,
+    });
+    const inner = engine.subscribe(onUpdate);
+    const interval = setInterval(
+      () => engine.assign({ tick: engine.getState().tick + 1 }),
+      LIVE_DEMO_TICK_MS,
+    );
+    const stop = () => {
+      clearInterval(interval);
+      inner.unsubscribe();
+    };
+    return new LiveStateSubscriptionRpcTarget({
+      ping: () => inner.ping(),
+      unsubscribe: stop,
+      [Symbol.dispose]: stop,
+    });
+  }
+}
+
+/**
+ * Demo capability (`itx.liveDemo`) — a corner of the tree that exists only to
+ * exercise both live-state cases: `ticker` (stateless, above) and `increment()`
+ * (mutates the project DO's shared counter, which every watcher of `itx.live`
+ * sees — the Durable-Object-backed case).
+ */
+class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
+  readonly #incrementCounter: () => Promise<void>;
+
+  constructor(incrementCounter: () => Promise<void>) {
+    super();
+    this.#incrementCounter = incrementCounter;
+  }
+
+  /** Stateless live state: a poll-driven ticker, no Durable Object. */
+  get ticker(): LiveStateRpc<{ tick: number; startedAt: number }> {
+    return new LiveDemoTickerRpcTarget();
+  }
+
+  /** Stateful live state: bump the project DO's counter (visible on `itx.live`). */
+  increment(): Promise<void> {
+    return this.#incrementCounter();
   }
 }
 

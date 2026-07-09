@@ -38,6 +38,11 @@ import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  // Demo (stateful live state): a counter every watcher of `itx.live` sees
+  // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
+  // shared-engine case — and dogfoods the `getLiveState` fold the streams index
+  // will use.
+  #liveDemo: { count: number; lastActor: string | null } = { count: 0, lastActor: null };
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -47,6 +52,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    // `itx.live` = the project's reduced state, plus demo/extra slices.
+    getLiveState: () => ({
+      ...(this.#projectProcessor.currentState as Record<string, unknown>),
+      liveDemo: this.#liveDemo,
+    }),
   });
   readonly #projectProcessor = this.#processorHost.add(
     (deps) =>
@@ -166,6 +176,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   /** The project's live state — the read/subscribe surface behind `itx.live`. */
   get live() {
     return new LiveStateRpcTarget(this.#processorHost);
+  }
+
+  /** Demo mutation: bump the shared counter and push it to every `itx.live` watcher. */
+  incrementLiveDemo(actor?: string): void {
+    this.#liveDemo = { count: this.#liveDemo.count + 1, lastActor: actor ?? null };
+    this.#processorHost.live.assign({ liveDemo: this.#liveDemo });
   }
 
   async fetch(request: Request): Promise<Response> {

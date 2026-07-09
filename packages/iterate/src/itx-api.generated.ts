@@ -100,8 +100,10 @@ export interface Project {
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
-  /** The project's live state — its reduced processor state (plus a streams index). See {@link LiveStateRpc}. */
-  live: LiveStateRpc<ProjectProcessorState>;
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  live: LiveStateRpc<ProjectLiveState>;
+  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (DO-backed). */
+  liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -255,6 +257,19 @@ export interface ProjectCollection {
 export interface LiveStateRpc<State = unknown> {
   getState(): Promise<State>;
   subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
+}
+
+/**
+ * Demo capability (`itx.liveDemo`) — a corner of the tree that exists only to
+ * exercise both live-state cases: `ticker` (stateless, above) and `increment()`
+ * (mutates the project DO's shared counter, which every watcher of `itx.live`
+ * sees — the Durable-Object-backed case).
+ */
+export interface LiveDemo {
+  /** Stateless live state: a poll-driven ticker, no Durable Object. */
+  ticker: LiveStateRpc<{ tick: number; startedAt: number }>;
+  /** Stateful live state: bump the project DO's counter (visible on `itx.live`). */
+  increment(): Promise<void>;
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
@@ -1352,6 +1367,17 @@ export type ProjectProcessorState = {
     createdAt: string;
     updatedAt: string;
   }[];
+};
+
+/**
+ * The project's LIVE state (`itx.live`) — its reduced processor state plus
+ * non-folded slices the Durable Object maintains outside the event fold: a demo
+ * counter today, a streams index next. A superset of {@link ProjectProcessorState}
+ * so a watcher can select either the folded fields or the extras.
+ */
+export type ProjectLiveState = ProjectProcessorState & {
+  /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`. */
+  liveDemo: { count: number; lastActor: string | null };
 };
 
 /** Capability recipe accepted by `provideCapability`. */
