@@ -116,6 +116,18 @@ describe("itx workspaces", () => {
     expect(await project.repo.readFile({ path: "notes/e2e.md" })).toBeNull();
     expect(await project.repo.readFile({ path: "worker.ts" })).not.toBeNull();
 
+    // Secondary repos are NOT the project repo: their reads must serve their
+    // own files, never the root workspace cache (which mirrors only "/").
+    using sideRepo = project.repos.get("/repos/e2e-side");
+    await sideRepo.create();
+    await sideRepo.commitFiles({
+      message: "seed a side-repo file",
+      changes: [{ path: "side.md", content: "side repo truth" }],
+    });
+    expect((await sideRepo.readFile({ path: "side.md" }))?.content).toBe("side repo truth");
+    expect((await sideRepo.listFiles()).paths).toContain("side.md");
+    expect(await project.repo.readFile({ path: "side.md" })).toBeNull();
+
     // An empty overlay has nothing to publish.
     using other = project.workspaces.get(`/workspaces/agents/e2e-${crypto.randomUUID()}`);
     expect(await other.readFile("/notes/e2e.md")).toBeNull();

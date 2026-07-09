@@ -31,7 +31,7 @@ import type {
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { diffFileMaps } from "./line-diff.ts";
-import { RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
+import { PROJECT_REPO_PATH, RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -384,9 +384,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
-  /** All committed file paths at HEAD (served from the root workspace cache). */
+  /** All committed file paths at HEAD (the project repo serves from the root workspace cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
-    if (this.#name.projectId !== null) {
+    if (this.#hasRootWorkspaceCache()) {
       try {
         const head = await this.getHead();
         const paths = await this.#rootWorkspaceStub().listAllFiles();
@@ -414,8 +414,8 @@ export class RepoDurableObject extends DurableObject<Env> {
    * before the content — a commit landing between the two can make the
    * content newer than its label, the inherent approximation of a HEAD read.
    *
-   * The cache is a CACHE: any failure (workspace DO unhappy, projectId-less
-   * legacy repo) falls back to the authoritative clone lane, loudly.
+   * The cache is a CACHE: any failure (workspace DO unhappy, uncacheable
+   * repo) falls back to the authoritative clone lane, loudly.
    */
   async #readHeadFromRootCache(
     path: string,
@@ -423,7 +423,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   ): Promise<
     { commitOid: string; content: string; path: string } | null | typeof CACHE_UNAVAILABLE
   > {
-    if (this.#name.projectId === null) return CACHE_UNAVAILABLE;
+    if (!this.#hasRootWorkspaceCache()) return CACHE_UNAVAILABLE;
     try {
       const head = await this.getHead();
       const root = this.#rootWorkspaceStub();
@@ -443,8 +443,14 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
   }
 
-  // Both callers guard projectId — a projectId-less legacy repo has no root
-  // workspace and stays on the clone lane.
+  // The root workspace mirrors exactly ONE repo: the project repo at "/".
+  // Every other repo (secondary /repos/**, per-example scratch repos,
+  // projectId-less legacy repos) stays on the clone lane — serving them from
+  // the project root's checkout returns the WRONG repo's files.
+  #hasRootWorkspaceCache(): boolean {
+    return this.#name.projectId !== null && this.#name.path === PROJECT_REPO_PATH;
+  }
+
   #rootWorkspaceStub() {
     return this.env.WORKSPACE.getByName(
       DurableObjectNameCodec.stringify({
