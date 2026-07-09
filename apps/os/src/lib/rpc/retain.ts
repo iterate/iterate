@@ -28,8 +28,14 @@ export function retainCallback<Arg>(callback: (arg: Arg) => unknown): RetainedCa
     };
   const retained = (retainable.dup?.() ?? retainable) as typeof retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
+  // Idempotent by contract: owners often dispose from several paths (engine
+  // drop + connection teardown), and a double release of the underlying dup
+  // would free someone else's reference.
+  let disposed = false;
   const wrapped = Object.assign((arg: Arg) => retained(arg), {
     [Symbol.dispose]() {
+      if (disposed) return;
+      disposed = true;
       dispose?.();
     },
   }) as RetainedCallback<Arg>;

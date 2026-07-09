@@ -93,4 +93,69 @@ describe("LiveState", () => {
     vi.advanceTimersByTime(100);
     expect(calls).toBe(1);
   });
+
+  // The retention lifecycle below is the trickiest RPC knowledge in the
+  // codebase (see lib/rpc/retain.ts); these cases were originally proven on
+  // the deleted processor onStateChange lane and MUST hold here too.
+
+  it("an async delivery rejection drops the subscriber (dead remotes self-prune)", async () => {
+    const engine = new LiveState({ n: 1 }, { debounceMs: 0 });
+    let calls = 0;
+    const handle = engine.subscribe(() => {
+      calls += 1;
+      // The initial snapshot succeeds; every later delivery rejects, the way a
+      // dead capnweb/Workers RPC stub rejects every call.
+      return calls === 1 ? undefined : Promise.reject(new Error("stub is broken"));
+    });
+    expect(handle.ping()).toBe(true);
+    engine.setState({ n: 2 });
+    vi.advanceTimersByTime(0);
+    await vi.waitFor(() => expect(handle.ping()).toBe(false)); // rejection observed async
+    engine.setState({ n: 3 });
+    vi.advanceTimersByTime(0);
+    await Promise.resolve();
+    expect(calls).toBe(2); // nothing delivered after the drop
+  });
+
+  it("a transport onRpcBroken signal drops the subscriber", () => {
+    const engine = new LiveState({ n: 1 }, { debounceMs: 100 });
+    let broken: ((error: unknown) => void) | undefined;
+    // A plain counter, NOT vi.fn(): the engine disposes a dropped sink, and a
+    // vitest mock's built-in Symbol.dispose wipes its call history.
+    let calls = 0;
+    const sink = Object.assign(
+      () => {
+        calls += 1;
+      },
+      {
+        onRpcBroken: (handler: (error: unknown) => void) => {
+          broken = handler;
+        },
+      },
+    );
+    const handle = engine.subscribe(sink);
+    expect(handle.ping()).toBe(true);
+    broken!(new Error("transport gone"));
+    expect(handle.ping()).toBe(false);
+    engine.setState({ n: 2 });
+    vi.advanceTimersByTime(100);
+    expect(calls).toBe(1); // only the initial snapshot
+  });
+
+  it("dup()s a retainable sink and disposes the duplicate exactly once on unsubscribe", () => {
+    const engine = new LiveState({ n: 1 }, { debounceMs: 100 });
+    const dispose = vi.fn();
+    const duplicate = Object.assign(vi.fn(), { [Symbol.dispose]: dispose });
+    const sink = Object.assign(vi.fn(), { dup: () => duplicate });
+
+    const handle = engine.subscribe(sink);
+    expect(duplicate).toHaveBeenCalledTimes(1); // deliveries go to the duplicate
+    expect(sink).not.toHaveBeenCalled();
+
+    handle.unsubscribe();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    handle.unsubscribe(); // idempotent: a second call must not double-dispose
+    handle[Symbol.dispose]();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
 });
