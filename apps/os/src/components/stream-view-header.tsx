@@ -169,6 +169,7 @@ export function StreamViewHeader({
                     // stick invisibly under Pretty; keep `q` for search continuity.
                     types: undefined,
                     components: undefined,
+                    raw: undefined,
                     from: undefined,
                     to: undefined,
                     preset: undefined,

@@ -437,6 +437,7 @@ export function ProjectStreamView({
                         mode: mode === defaultMode ? undefined : mode,
                         types: undefined,
                         components: undefined,
+                        raw: undefined,
                         from: undefined,
                         to: undefined,
                         preset: undefined,

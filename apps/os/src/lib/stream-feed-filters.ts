@@ -111,8 +111,10 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
   const mode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
   const hasQuery = (search.q ?? "") !== "";
+  // Pretty+raw with raw rail turned off is a deliberate filter state.
+  const rawHidden = mode === "pretty-raw" && search.raw === false;
 
-  if (!caps.rawFeed) {
+  if (!caps.rawFeed && !rawHidden) {
     return caps.search && hasQuery;
   }
 
@@ -121,6 +123,7 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
     presetsForStream(streamPath).find((preset) => preset.id === search.preset) ?? defaultPreset;
 
   return (
+    rawHidden ||
     (caps.search && hasQuery) ||
     activePreset.id !== defaultPreset.id ||
     (caps.rawEventTypes && (search.types?.length ?? 0) > 0) ||

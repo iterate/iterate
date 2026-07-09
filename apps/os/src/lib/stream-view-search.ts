@@ -41,6 +41,11 @@ export const StreamViewSearch = z.object({
    * as `group`, `stream.woken`, `stream.child-stream-created`.
    */
   components: z.array(z.string()).optional().catch(undefined),
+  /**
+   * Explicitly hide the raw feed rail in Pretty+raw (`raw=false`). Omitted =
+   * show raw (default for Pretty+raw / Raw). Pure Pretty never shows raw.
+   */
+  raw: z.boolean().optional().catch(undefined),
   /** Inclusive lower offset bound for feed_items. */
   from: z.number().optional().catch(undefined),
   /** Inclusive upper offset bound for feed_items. */
@@ -157,8 +162,20 @@ export function normalizeStreamViewMode(
   return mode;
 }
 
+/**
+ * Resolve the active mode for a stream. Unknown or unsupported modes
+ * (e.g. `pretty` on a secrets stream) fall back to the stream default so
+ * filter/body surfaces stay consistent with the header.
+ */
 export function streamViewMode(search: StreamViewSearch, streamPath: string): StreamViewMode {
-  return normalizeStreamViewMode(search.mode) ?? defaultModeForStream(streamPath);
+  const requested = normalizeStreamViewMode(search.mode);
+  if (requested == null) return defaultModeForStream(streamPath);
+  const offered = modesForStream(streamPath);
+  // Non-agent streams have no mode tabs — only `raw` is valid (implicit).
+  if (offered.length === 0) return "raw";
+  return offered.some((entry) => entry.id === requested)
+    ? requested
+    : defaultModeForStream(streamPath);
 }
 
 export function modeCapabilities(
@@ -166,9 +183,26 @@ export function modeCapabilities(
   streamPath: string,
 ): StreamModeCapabilities {
   const mode = streamViewMode(search, streamPath);
-  if (mode === "pretty") return PRETTY_CAPS;
-  if (mode === "pretty-raw") return PRETTY_RAW_CAPS;
-  return RAW_CAPS;
+  const base = mode === "pretty" ? PRETTY_CAPS : mode === "pretty-raw" ? PRETTY_RAW_CAPS : RAW_CAPS;
+  // Pretty+raw can turn the raw rail off via `raw=false` without leaving the mode.
+  if (mode === "pretty-raw" && search.raw === false) {
+    return {
+      ...base,
+      rawFeed: false,
+      eventInspector: false,
+      // Keep type-filter controls so the user can re-enable raw and pick types.
+      rawPresets: true,
+      rawEventTypes: true,
+      rawComponents: true,
+      rawOffsets: false,
+    };
+  }
+  return base;
+}
+
+/** Whether the raw feed rail should render (mode + optional `raw=false`). */
+export function rawFeedEnabled(search: StreamViewSearch, streamPath: string): boolean {
+  return modeCapabilities(search, streamPath).rawFeed;
 }
 
 export function activeModeDefinition(

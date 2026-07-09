@@ -142,6 +142,15 @@ describe("feedFiltersActive", () => {
       true,
     );
   });
+
+  it("treats raw=false on pretty-raw as an active filter", () => {
+    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(true);
+  });
+
+  it("does not treat pretty mode on non-agent paths as pretty (clamped to raw)", () => {
+    // Hand-edited ?mode=pretty on a secret stream must not hide raw filters.
+    expect(feedFiltersActive({ mode: "pretty", types: ["a"] }, secretPath)).toBe(true);
+  });
 });
 
 describe("shortEventType", () => {
