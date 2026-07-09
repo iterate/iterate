@@ -26,7 +26,9 @@ export const AGENT_UI_FEED_TABLE = "agent_feed_items";
 /** Bumped into the writer-lock name so a schema change lets a fresh tab take over. */
 // 8: both #1708 (slack bubbles) and #1713 (child-stream rows) shipped
 // reduction changes under 7 — mirrors built under either need a rebuild.
-export const AGENT_UI_SCHEMA_VERSION = 8;
+// 9: telegram bubbles (#1766) — webhook-received/send-requested now reduce to
+// chat rows, so mirrors built under 8 miss them.
+export const AGENT_UI_SCHEMA_VERSION = 9;
 
 // planAgentUiOps still types its events against packages/ui's shared Event
 // type; deriving the parameter type here keeps this file free of

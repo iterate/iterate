@@ -163,7 +163,7 @@ export interface Project {
   schedulers: SchedulerCollection;
   /** Secret catalog by path. */
   secrets: SecretCollection;
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for \`repos.get("/repos/config")\`. */
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
@@ -313,14 +313,16 @@ export interface Agent {
   /** THIS agent's subagents: ordinary agents nested at \`<path>/subagents/<name>\` (spawn/get/list). */
   subagents: SubagentCollection;
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like \`message\`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget.
    */
   ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
@@ -591,6 +593,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        connectTelegram: string;
         disconnect: string;
         getConnection: string;
         github: string;
@@ -599,6 +602,7 @@ export interface ProjectIntegrations {
         parallel: string;
         slack: string;
         startOAuthFlow: string;
+        telegram: string;
       };
       parent: string;
     }
@@ -608,10 +612,21 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * \`ok: false, error: "telegram_bot_already_claimed"\` arm so the caller can
+   * confirm and retry with \`steal: true\` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
+   */
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -623,7 +638,7 @@ export interface ProjectIntegrations {
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
@@ -836,16 +851,19 @@ export interface DynamicWorkerCollection {
 /**
  * Catalog of durable workspaces within one project.
  *
- * A workspace is addressed by its FULL path, which always lives under
- * \`/workspaces/\` — the same domain-prefix convention as \`/sandboxes/...\` and
- * \`/repos/...\`: an agent's workspace is the agent path under the prefix
- * (\`/workspaces/agents/...\`, exposed as \`itx.workspace\` in that agent's
- * scope), and standalone workspaces live under \`/workspaces/<anything>\`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * \`get("/")\` is the project's ROOT workspace: a read-only, always-fresh
+ * materialization of the config repo's main branch. Every other workspace is
+ * addressed by its FULL path under \`/workspaces/\` — the same domain-prefix
+ * convention as \`/sandboxes/...\` and \`/repos/...\`: an agent's workspace is
+ * the agent path under the prefix (\`/workspaces/agents/...\`, exposed as
+ * \`itx.workspace\` in that agent's scope), and standalone workspaces live
+ * under \`/workspaces/<anything>\`. Non-root workspaces are OVERLAYS over the
+ * root: writes stay local, missing reads fall through to latest main — no
+ * clone, usable instantly.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
   get(path: string): Workspace;
 }
 
@@ -960,13 +978,13 @@ export interface Stream {
    * appends the batch's events into THIS stream with provenance stamping,
    * structural loop protection, and source-derived idempotency keys. A source
    * stream cross-posts here by configuring
-   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }\`.
+   * \`{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }\`.
    */
-  ingest(batch: StreamPushEventBatch): Promise<void>;
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
   /**
    * "When events matching this land HERE, post them onto stream \`path\`" — the
    * cross-post verb. Pure sugar over appending a \`subscription-configured\`
-   * push subscription targeting the destination's \`ingest\` sink; the appended
+   * push subscription targeting the destination's \`acceptCrossPost\` sink; the appended
    * event (returned) is the real interface and shows in the log like any
    * other config. Same-\`key\` calls replace the previous cross-post; remove
    * with \`removeCrossPost\`. Copies carry the full provenance chain
@@ -1120,14 +1138,15 @@ export interface Secret {
 
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at \`/\` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. \`git\` publishes commits to the workspace's
- * own branch in the project repo (\`workspaces/<path>\`), never to main.
+ * Object (no container, always warm). The root workspace (\`"/"\`) is the
+ * read-only, always-fresh materialization of the config repo's main branch.
+ * Every other workspace is an OVERLAY over the root: reads see latest main
+ * until a local write shadows a path, writes and deletes stay private, and
+ * there is no clone — a new workspace is usable instantly. \`git\` publishes
+ * the overlay as snapshot commits on the workspace's own branch in the
+ * config repo (\`workspaces/<path>\`), never to main.
  *
- * Constraints: the \`.git\` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the \`git\` methods). Large files
+ * Constraints: the \`.git\` name is reserved (platform-managed). Large files
  * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
@@ -1143,11 +1162,21 @@ export interface Workspace {
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
   /**
-   * Wipe the checkout and re-clone the project repo on the next call — the
-   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
-   * commits survive on the workspace branch).
+   * Wipe the workspace back to pristine: the local layer and every deletion
+   * vanish, leaving a clean view of latest main (on the root, the next read
+   * re-materializes). Unpublished work is LOST (published snapshots survive
+   * on the workspace branch).
    */
   reset(): Promise<void>;
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void>;
+  /** Every file path in the merged view (local layer over latest main), sorted. */
+  listAllFiles(): Promise<string[]>;
   writeFile(path: string, content: string): Promise<void>;
   writeFileBytes(path: string, data: Uint8Array): Promise<void>;
   appendFile(path: string, content: string): Promise<void>;
@@ -1219,30 +1248,25 @@ export interface CfVideosCapability {
 }
 
 /**
- * Git operations over a workspace's checkout, mirroring \`@cloudflare/shell\`'s
- * git command names so upstream docs apply. The workflow is ordinary git:
- * \`add({ filepath: "." })\` stages everything, \`commit({ message })\` commits,
- * \`push()\` publishes to the workspace's own branch in the project repo.
- * Push credentials are injected inside the workspace Durable Object (from the
- * project repo's \`gitAccess()\`), so no token ever rides this surface.
+ * The publish surface of an overlay workspace. There is no staging area and
+ * no separate push: \`commit({ message })\` snapshots the whole merged view
+ * (latest main + the local layer, minus deletions and \`.gitignore\`d paths)
+ * as ONE commit force-pushed to the workspace's own branch in the project
+ * repo. Push credentials are injected inside the workspace Durable Object
+ * (from the config repo's \`gitAccess()\`), so no token ever rides this
+ * surface.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
-  /** Staging state of every changed file. */
-  status(): Promise<WorkspaceGitStatusEntry[]>;
-  /** Stage a file (\`filepath: "."\` stages everything). */
-  add(input: { filepath: string }): Promise<{ added: string }>;
-  /** Stage a file deletion. */
-  rm(input: { filepath: string }): Promise<{ removed: string }>;
+  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
+  status(): Promise<WorkspaceChange[]>;
+  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
-  }): Promise<{ message: string; oid: string }>;
-  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]>;
-  /** Changed files in the working tree relative to HEAD. */
-  diff(): Promise<{ filepath: string; status: string }[]>;
-  /** Push the workspace branch to the project repo. */
-  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }>;
+  }): Promise<WorkspacePublishResult>;
+  /** Published snapshots of this workspace, newest first. */
+  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -1614,7 +1638,14 @@ export type StreamEvent = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -1712,7 +1743,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1720,6 +1751,40 @@ export type IntegrationConnectionStatus = {
   externalId: string | null;
   metadata: Record<string, unknown>;
 };
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured \`ok: false\` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. \`steal: true\` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
+ */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with \`steal: true\` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
+/** The built-ins that connect via a redirect flow (OAuth code exchange or
+ * GitHub App installation) — the \`startOAuthFlow\`/\`completeConnect\` pair.
+ * Telegram is excluded: it connects by bot-token paste (\`connectTelegram\`),
+ * with no redirect and no signed state. */
+export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
@@ -1998,7 +2063,14 @@ export type StreamEventInput = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -2441,25 +2513,32 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** One file's staging state returned by \`WorkspaceGit.status\`. */
-export type WorkspaceGitStatusEntry = {
-  filepath: string;
-  /** HEAD status: 0=absent, 1=present. */
-  head: number;
-  /** Stage status: 0=absent, 1=identical, 2=modified, 3=added. */
-  stage: number;
-  /** Human-readable status (e.g. "modified", "added"). */
-  status: string;
-  /** Workdir status: 0=absent, 1=identical, 2=modified. */
-  workdir: number;
+/**
+ * One overlay change returned by \`WorkspaceGit.status\`: a local file that
+ * shadows a parent file ("modified"), one the parent does not have ("added"),
+ * or a parent file hidden by a local delete ("deleted"). "modified" means
+ * shadowed, not necessarily different — the overlay never diffs content.
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
 };
 
-/** One commit returned by \`WorkspaceGit.log\`. */
+/** Result of \`WorkspaceGit.commit\` — the published snapshot. */
+export type WorkspacePublishResult = {
+  branch: string;
+  /** Paths committed (after .gitignore filtering) plus deletions applied. */
+  changedPaths: string[];
+  commitOid: string;
+};
+
+/** One commit returned by \`WorkspaceGit.log\` (the workspace branch's history). */
 export type WorkspaceGitLogEntry = {
-  author: { email: string; name: string; timestamp: number };
+  author: { email: string; name: string };
   message: string;
   oid: string;
-  parent: string[];
+  /** Epoch milliseconds. */
+  timestamp: number;
 };
 
 export type CfImageTransformOptions = { [x: string]: unknown };

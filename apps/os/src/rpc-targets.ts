@@ -61,7 +61,7 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { defaultProjectWorkerRef, PROJECT_REPO_PATH } from "./domains/repos/utils.ts";
+import { CONFIG_REPO_PATH, defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -75,16 +75,22 @@ import {
 } from "./domains/sandboxes/utils.ts";
 import { SandboxProcessorContract } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
+import {
+  isRootWorkspacePath,
+  normalizeWorkspacePath,
+  workspaceBranchName,
+} from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeConnect,
+  connectTelegram,
   disconnectProvider,
   getConnectionStatus,
   listIntegrationConnections,
   startOAuthFlow,
+  type ConnectTelegramResult,
 } from "./domains/integrations/connect-flows.ts";
 import {
   BUILTIN_INTEGRATION_SLUGS,
@@ -103,6 +109,10 @@ import {
   normalizeSlackError,
   SLACK_CALL_GRAMMAR,
 } from "./domains/integrations/slack-api.ts";
+import {
+  callProjectTelegramBotApi,
+  TELEGRAM_CALL_GRAMMAR,
+} from "./domains/integrations/telegram-api.ts";
 import {
   deleteProjectFile,
   mintProjectFileUrl,
@@ -161,6 +171,7 @@ import type {
   GmailRequestInput,
   IntegrationConnectionStatus,
   IntegrationConnectionListEntry,
+  OAuthProviderSlug,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
@@ -210,9 +221,10 @@ import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-proc
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
+  WorkspaceChange,
   WorkspaceFileInfo,
   WorkspaceGitLogEntry,
-  WorkspaceGitStatusEntry,
+  WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
@@ -489,22 +501,23 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * appends the batch's events into THIS stream with provenance stamping,
    * structural loop protection, and source-derived idempotency keys. A source
    * stream cross-posts here by configuring
-   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
    */
-  ingest(batch: StreamPushEventBatch): Promise<void> {
-    // Only the platform's own delivery spine dials ingest: it arrives through
-    // a push expression evaluated against the project's trusted itx root. A
-    // session principal appending copies would bypass provenance stamping.
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void> {
+    // Only the platform's own delivery spine dials acceptCrossPost: it arrives
+    // through a push expression evaluated against the project's trusted itx
+    // root. A session principal appending copies would bypass provenance
+    // stamping.
     if (this.props.auth.principal !== "trusted-internal") {
-      throw new Error("ingest is dialed by stream push subscriptions, not sessions");
+      throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
-    return Promise.resolve(this.durableObjectStub.ingest(batch));
+    return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
   }
 
   /**
    * "When events matching this land HERE, post them onto stream `path`" — the
    * cross-post verb. Pure sugar over appending a `subscription-configured`
-   * push subscription targeting the destination's `ingest` sink; the appended
+   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
    * event (returned) is the real interface and shows in the log like any
    * other config. Same-`key` calls replace the previous cross-post; remove
    * with `removeCrossPost`. Copies carry the full provenance chain
@@ -541,7 +554,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: args.key ?? `cross-post:${destination}`,
-        delivery: { mode: "push", expression: ["streams", ["get", destination], "ingest"] },
+        delivery: {
+          mode: "push",
+          expression: ["streams", ["get", destination], "acceptCrossPost"],
+        },
         ...(Object.keys(selector).length === 0 ? {} : { selector }),
         ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
         ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
@@ -793,7 +809,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
-      parent: "repos.get(path); the project repo is itx.repo",
+      parent: "repos.get(path); the project's config repo (/repos/config) is itx.repo",
     });
   }
 
@@ -1068,6 +1084,11 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
         `relative agent path ${JSON.stringify(path)} needs an agent scope to resolve against — use an absolute "/agents/..." path`,
       );
     }
+    // normalizePath never collapses dot/empty segments, and messaging a path
+    // births an agent — a ".." typo must error, not mint a junk stream.
+    if (path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+      throw new Error(`invalid relative agent path ${JSON.stringify(path)}`);
+    }
     return normalizeAgentPath(`${source}/${path}`);
   }
 
@@ -1293,19 +1314,24 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 /**
  * Catalog of durable workspaces within one project.
  *
- * A workspace is addressed by its FULL path, which always lives under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
+ * materialization of the config repo's main branch. Every other workspace is
+ * addressed by its FULL path under `/workspaces/` — the same domain-prefix
+ * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
+ * the agent path under the prefix (`/workspaces/agents/...`, exposed as
+ * `itx.workspace` in that agent's scope), and standalone workspaces live
+ * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
+ * root: writes stay local, missing reads fall through to latest main — no
+ * clone, usable instantly.
  */
 class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the project repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
-      children: { get: "The workspace at a path (clones the project repo on first use)." },
+        "Durable workspace filesystems (Durable-Object-hosted, no container, always warm). get(\"/\") is the project's read-only ROOT workspace — always the latest main of the config repo. Other paths live under /workspaces/ and are instant copy-on-write overlays over the root: an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+      children: {
+        get: 'The workspace at a path — "/" for the read-only root (latest main), /workspaces/<name> for a private overlay.',
+      },
       parent: "a project itx (itx.workspaces)",
     });
   }
@@ -1315,7 +1341,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
   get(path: string): WorkspaceRpcTarget {
     return new WorkspaceRpcTarget({
       auth: this.props.auth,
@@ -1327,39 +1353,45 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
 
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at `/` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. `git` publishes commits to the workspace's
- * own branch in the project repo (`workspaces/<path>`), never to main.
+ * Object (no container, always warm). The root workspace (`"/"`) is the
+ * read-only, always-fresh materialization of the config repo's main branch.
+ * Every other workspace is an OVERLAY over the root: reads see latest main
+ * until a local write shadows a path, writes and deletes stay private, and
+ * there is no clone — a new workspace is usable instantly. `git` publishes
+ * the overlay as snapshot commits on the workspace's own branch in the
+ * config repo (`workspaces/<path>`), never to main.
  *
- * Constraints: the `.git` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the `git` methods). Large files
+ * Constraints: the `.git` name is reserved (platform-managed). Large files
  * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
  * branches are for durability and handoff, not worker builds: point worker
  * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
+    const isRoot = isRootWorkspacePath(this.props.path);
     return describeNode({
-      instructions:
-        `A durable workspace at "${this.props.path}": a private checkout of the project repo in a Durable Object filesystem (cloned on first use; every call waits for that clone, so a successful read proves the checkout is ready). Paths are absolute with "/" as the repo root. Read/write/edit freely — nothing is shared until pushed; ` +
-        `workspace.git publishes commits to the project repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
+      instructions: isRoot
+        ? "The project's ROOT workspace (\"/\"): a read-only, always-fresh checkout of the config repo's main branch — reads always see the latest commit on main. Writes are rejected (write in your own workspace, or commit to main via itx.repo). Every other workspace overlays this one."
+        : `A durable workspace at "${this.props.path}": an instant copy-on-write overlay over the config repo's latest main (no clone — reads fall through to main until a local write shadows a path; writes and deletes stay private). Paths are absolute with "/" as the repo root. ` +
+          `workspace.git.commit({ message }) publishes the overlay as a snapshot commit on the config repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
       children: {
-        appendFile: "Append to a file.",
+        appendFile: "Append to a file (copies a fallen-through file up first).",
         cp: "Copy a file or directory ({ recursive } for trees).",
         deleteFile: "Delete one file (false when it did not exist).",
-        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Working-tree only — commit via git.",
+        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Private until published via git.",
         exists: "Whether a path exists.",
-        git: "Git over this checkout: status/add/rm/commit/log/diff/push — push goes to this workspace's own branch.",
+        git: "Publish surface: status (changes vs main), commit (snapshot to this workspace's own branch), log.",
         glob: "Files matching a glob pattern.",
         kill: "Abort this Workspace Durable Object incarnation; the next request boots it again.",
+        listAllFiles: "Every file path in the merged view (sorted).",
         mkdir: "Create a directory ({ recursive } for parents).",
         mv: "Move/rename a file or directory.",
         readDir: "List a directory (defaults to the root).",
         readFile: "One file's contents ({ path }); null when missing.",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
-        reset: "Wipe the checkout; the next call re-clones. Unpushed work is LOST.",
+        reset:
+          "Wipe the local layer and deletions — back to a pristine view of main. Unpublished work is LOST.",
+        revert: "Un-pin ONE path: drop the local copy/deletion so it follows latest main again.",
         rm: "Remove a path ({ recursive, force }).",
         stat: "Metadata for one path; null when missing.",
         whoami: "Workspace identity string (debug).",
@@ -1406,12 +1438,28 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   /**
-   * Wipe the checkout and re-clone the project repo on the next call — the
-   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
-   * commits survive on the workspace branch).
+   * Wipe the workspace back to pristine: the local layer and every deletion
+   * vanish, leaving a clean view of latest main (on the root, the next read
+   * re-materializes). Unpublished work is LOST (published snapshots survive
+   * on the workspace branch).
    */
   reset(): Promise<void> {
     return this.durableObjectStub.reset();
+  }
+
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void> {
+    return this.durableObjectStub.revert(path);
+  }
+
+  /** Every file path in the merged view (local layer over latest main), sorted. */
+  listAllFiles(): Promise<string[]> {
+    return this.durableObjectStub.listAllFiles();
   }
 
   writeFile(path: string, content: string): Promise<void> {
@@ -1479,27 +1527,24 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 }
 
 /**
- * Git operations over a workspace's checkout, mirroring `@cloudflare/shell`'s
- * git command names so upstream docs apply. The workflow is ordinary git:
- * `add({ filepath: "." })` stages everything, `commit({ message })` commits,
- * `push()` publishes to the workspace's own branch in the project repo.
- * Push credentials are injected inside the workspace Durable Object (from the
- * project repo's `gitAccess()`), so no token ever rides this surface.
+ * The publish surface of an overlay workspace. There is no staging area and
+ * no separate push: `commit({ message })` snapshots the whole merged view
+ * (latest main + the local layer, minus deletions and `.gitignore`d paths)
+ * as ONE commit force-pushed to the workspace's own branch in the project
+ * repo. Push credentials are injected inside the workspace Durable Object
+ * (from the config repo's `gitAccess()`), so no token ever rides this
+ * surface.
  */
 class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        `Git over the workspace checkout at "${this.props.path}". Ordinary flow: add({ filepath: "." }) → commit({ message }) → push(). ` +
-        `push() publishes to the project repo branch "${workspaceBranchName(this.props.path)}" (this workspace's own branch — never main); credentials are automatic.`,
+        `Publish surface of the workspace at "${this.props.path}". commit({ message }) snapshots the merged view (main + this workspace's changes) to the config repo branch "${workspaceBranchName(this.props.path)}" — this workspace's own branch, never main; credentials are automatic. ` +
+        "No add/push needed: every local file not .gitignored is included, deletions apply, and each commit is a fresh snapshot on the current main.",
       children: {
-        add: 'Stage a file ("." for everything).',
-        commit: "Commit staged changes ({ message, author? }).",
-        diff: "Changed files relative to HEAD.",
-        log: "Commit history ({ depth? }).",
-        push: "Push the workspace branch to the project repo ({ force? }).",
-        rm: "Stage a file deletion.",
-        status: "Staging state of every changed file.",
+        commit: "Publish the workspace as one snapshot commit ({ message, author? }).",
+        log: "Published snapshots, newest first ({ limit? }; [] before the first commit).",
+        status: "Changes vs latest main: added / modified (shadowed) / deleted paths.",
       },
       parent: "a workspace (workspace.git)",
     });
@@ -1520,40 +1565,22 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     );
   }
 
-  /** Staging state of every changed file. */
-  status(): Promise<WorkspaceGitStatusEntry[]> {
+  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
+  status(): Promise<WorkspaceChange[]> {
     return this.durableObjectStub.gitStatus();
   }
 
-  /** Stage a file (`filepath: "."` stages everything). */
-  add(input: { filepath: string }): Promise<{ added: string }> {
-    return this.durableObjectStub.gitAdd(input);
-  }
-
-  /** Stage a file deletion. */
-  rm(input: { filepath: string }): Promise<{ removed: string }> {
-    return this.durableObjectStub.gitRm(input);
-  }
-
+  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
-  }): Promise<{ message: string; oid: string }> {
+  }): Promise<WorkspacePublishResult> {
     return this.durableObjectStub.gitCommit(input);
   }
 
-  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]> {
+  /** Published snapshots of this workspace, newest first. */
+  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
     return this.durableObjectStub.gitLog(input);
-  }
-
-  /** Changed files in the working tree relative to HEAD. */
-  diff(): Promise<{ filepath: string; status: string }[]> {
-    return this.durableObjectStub.gitDiff();
-  }
-
-  /** Push the workspace branch to the project repo. */
-  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }> {
-    return this.durableObjectStub.gitPush(input);
   }
 }
 
@@ -2120,6 +2147,48 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       }
     }
 
+    if (slug === "telegram") {
+      if (!connection || method.length === 0) {
+        throw new Error(TELEGRAM_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.telegram[${JSON.stringify(connection)}].sendMessage({ chat_id, text })`,
+          grammar: TELEGRAM_CALL_GRAMMAR,
+          sdk: "the Telegram Bot API (https://core.telegram.org/bots/api): any method name as ONE dotted segment (sendMessage, sendPhoto, getMe, …) with ONE params object; the bot token is substituted at the egress door",
+          slug: "telegram",
+        });
+      }
+      // The connection's router processor: the project-class host Durable
+      // Object at this connection's stream path — same relay shape as Slack's.
+      // It is what the connect flow's wake subscription persists
+      // (["integrations", "telegram", <connection>, "processor", ...]).
+      if (method[0] === "processor") {
+        const relay = new ProcessorRelayRpcTarget({
+          auth: this.props.auth,
+          host: () =>
+            env.PROJECT.getByName(
+              DurableObjectNameCodec.stringify({
+                path: `/integrations/telegram/${connection}`,
+                projectId: this.props.projectId,
+              }),
+            ) as unknown as ProcessorHostStub,
+        });
+        if (method.length === 1) return relay;
+        return await replayPathCall(relay, { args, path: method.slice(1) });
+      }
+      // The Bot API is flat — a deeper path means the caller invented a
+      // namespace (telegram["bot"].chat.sendMessage): answer with the grammar.
+      if (method.length !== 1) throw new Error(TELEGRAM_CALL_GRAMMAR);
+      return await callProjectTelegramBotApi({
+        body: (args[0] ?? {}) as Record<string, unknown>,
+        connection,
+        method: method[0]!,
+        projectId: this.props.projectId,
+      });
+    }
+
     if (slug === "parallel") {
       const [, ...operationPath] = path;
       return await (
@@ -2177,6 +2246,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
         'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
+        'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
@@ -2212,6 +2282,12 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
         "}",
+        '// itx.integrations.telegram["<connection>"] is the Telegram Bot API:',
+        "// flat method names (ONE segment), one params object, JSON result.",
+        "interface TelegramConnection {",
+        "  sendMessage(params: { chat_id: number | string; text: string } & Record<string, unknown>): Promise<Record<string, unknown>>;",
+        "  // ...every other Bot API method, same flat shape (sendPhoto, getMe, ...)",
+        "}",
         "// itx.integrations.parallel exposes a flat OpenAPI RPC target:",
         "type Parallel = OpenApiRpc;",
       ].join("\n"),
@@ -2219,6 +2295,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        connectTelegram:
+          "Connect a Telegram bot by BotFather token: { botToken } — no OAuth, no redirect.",
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
@@ -2230,6 +2308,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         slack:
           'Per-connection wrapped Slack WebClient: slack["<connection>"].chat.postMessage({ channel, text }) — any Web API method, one body object.',
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
+        telegram:
+          'Per-connection Telegram Bot API: telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method, one params object.',
       },
       parent: "a project itx (itx.integrations)",
     });
@@ -2247,10 +2327,29 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * `ok: false, error: "telegram_bot_already_claimed"` arm so the caller can
+   * confirm and retry with `steal: true` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
+   */
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult> {
+    return connectTelegram({
+      botToken: input.botToken,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      steal: input.steal,
+    });
+  }
+
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -2271,7 +2370,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult> {
@@ -2950,23 +3049,26 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like `message`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget.
    */
   async ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
   }): Promise<StreamEvent> {
+    const from = this.#messageFrom();
     const [sent] = await this.stream.append({
       type: "events.iterate.com/agents/message-received",
       payload: {
         content: input.message,
-        from: { kind: "user", origin: input.origin ?? "web" },
+        from: from.kind === "user" ? { kind: "user", origin: input.origin ?? "web" } : from,
       },
     });
     return await this.stream.waitForEvent({
@@ -3106,7 +3208,10 @@ class SubagentCollectionRpcTarget extends IterateRpcTarget<"SubagentCollection">
         `subagent paths are relative to "${this.props.agentPath}/${SUBAGENTS_PATH_SEGMENT}/" — got absolute path ${JSON.stringify(relativePath)} (use itx.agents.get for absolute paths)`,
       );
     }
-    if (relativePath.trim() === "" || relativePath.split("/").some((s) => s === "" || s === "..")) {
+    if (
+      relativePath.trim() === "" ||
+      relativePath.split("/").some((s) => s === "" || s === "." || s === "..")
+    ) {
       throw new Error(`invalid relative subagent path ${JSON.stringify(relativePath)}`);
     }
     return normalizeAgentPath(`${this.props.agentPath}/${SUBAGENTS_PATH_SEGMENT}/${relativePath}`);
@@ -3432,6 +3537,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       projectId: args.projectId,
     });
 
+    // The config repo (its processor subscription, its cross-post rule onto
+    // `/`, and its create request) is armed by the project processor's
+    // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
     const appendRootEvents = () =>
       stream.append(
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
@@ -3441,14 +3549,6 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           }),
           processor: ["processor"],
           processorSlug: ProjectProcessorContract.slug,
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: PROJECT_REPO_PATH,
-          }),
-          processor: ["repos", ["get", PROJECT_REPO_PATH], "processor"],
-          processorSlug: RepoProcessorContract.slug,
         }),
         {
           type: "events.iterate.com/project/create-requested",
@@ -3494,7 +3594,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               },
             )
             .then(() => undefined);
-    const [[, , createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
+    const [[, createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
       Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether
@@ -3864,7 +3964,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
-  repo: "The project repo at /repos/project.",
+  repo: "The project's config repo at /repos/config.",
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
@@ -3877,7 +3977,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the project repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
+    'Durable workspace filesystems by path: get("/") is the read-only root (always latest main of the project repo); get("/workspaces/<name>") is an instant private overlay over it (read/write/edit + git publish). An agent\'s own workspace is itx.workspace.',
 };
 
 // The shortcut methods are children (callable members) but not capability
@@ -4200,11 +4300,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for `repos.get("/repos/config")`. */
   get repo(): RepoRpcTarget {
     return new RepoRpcTarget({
       auth: this.#props.auth,
-      path: PROJECT_REPO_PATH,
+      path: CONFIG_REPO_PATH,
       projectId: this.#props.projectId,
     });
   }

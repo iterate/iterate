@@ -164,6 +164,8 @@ describe("attempt bookkeeping under stream failures", () => {
     let dials = 0;
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => {
         dials += 1;
@@ -210,6 +212,8 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     const stream = new MemoryStream();
     const openAiWs = new OpenAiWsProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => {
         throw new Error("must not dial for expired intent");
@@ -251,6 +255,8 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     });
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       readState: () => ({ offset: 2, state: stuck }),
       now: () => now,
     });

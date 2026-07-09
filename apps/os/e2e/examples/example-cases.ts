@@ -256,18 +256,20 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // Unique workspace per example × runtime: the path is durable identity
     // (one Durable Object, one branch), so sharing one across the matrix
     // would make the second runtime's edit() fail (oldString already
-    // replaced) and pushes race. Each run pays its own clone — seconds, not
-    // the sandbox's container boot — but the budget still covers a cold
-    // Artifacts clone with the 503-retry tail.
+    // replaced) and publishes race. Overlays clone nothing, but the publish
+    // still clones main — the budget covers a cold Artifacts clone with the
+    // 503-retry tail.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
     assert: (result, ctx, expect) => {
       expect(result).toMatchObject({
         readmePresent: true,
         edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
-        pushedBranch: `workspaces/examples/edit-${ctx.marker}`,
+        publishedBranch: `workspaces/examples/edit-${ctx.marker}`,
       });
-      expect((result as { commitOid: string }).commitOid).toMatch(/^[0-9a-f]{40}$/);
+      const typed = result as { changes: { path: string }[]; commitOid: string };
+      expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
+      expect(typed.changes.map((change) => change.path)).toContain("/notes/workspace-example.md");
     },
   },
   "workspace-files-transfer": {

@@ -57,7 +57,7 @@ export class PrAgentProcessor extends StreamProcessor<PrAgentProcessorContract> 
         blockProcessorWhile(async () => {
           await append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `github-pr-agent:route-context:${routeKey}`,
+            idempotencyKey: this.idempotencyKey(`route-context:${routeKey}`),
             payload: {
               content: [
                 `You are the agent for pull request #${event.payload.number} of ${event.payload.owner}/${event.payload.repo}.`,
@@ -87,15 +87,13 @@ export class PrAgentProcessor extends StreamProcessor<PrAgentProcessorContract> 
         // Durable obligation: the message is the webhook's only path to the
         // LLM, so a failed append must hold the checkpoint and replay. It is
         // the unified inbound message event — a PR webhook is a message FROM
-        // its GitHub sender. The idempotency key format predates the
-        // unification on purpose: streams already holding the old input-added
-        // under this key dedupe a refold's re-append.
+        // its GitHub sender.
         const senderLogin = sender === null ? null : readString(sender.login);
         const senderType = sender === null ? null : readString(sender.type);
         blockProcessorWhile(async () => {
           await append({
             type: "events.iterate.com/agents/message-received",
-            idempotencyKey: `github-pr-agent:webhook-to-agent-input:${event.offset}`,
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: pullRequestWebhookAgentInput(event.payload, body, state),
               from: {

@@ -108,14 +108,12 @@ export class EmailAgentProcessor extends StreamProcessor<
         }
       }
       // The unified inbound message event: an email is a message FROM its
-      // sender, `from` carries the address facts. The idempotency key format
-      // predates the unification on purpose — streams already holding the
-      // old input-added under this key dedupe a refold's re-append.
+      // sender, `from` carries the address facts.
       const fromAddress = event.payload.message.from.address ?? event.payload.envelope.from;
       const fromName = event.payload.message.from.name;
       await append({
         type: "events.iterate.com/agents/message-received",
-        idempotencyKey: `email-agent:received-to-agent-input:${event.offset}`,
+        idempotencyKey: this.idempotencyKey("received-to-agent-input", event),
         payload: {
           content: inboundEmailAgentInput(event.payload),
           from: {

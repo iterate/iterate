@@ -169,10 +169,16 @@ const network = vi.hoisted(() => {
   };
 });
 
-// connect-flows imports slack-api (disconnect's auth.revoke), which drags the
-// worker-only egress entrypoint into the module graph; sever that edge — these
-// tests never touch slack. Same seam as github-connect.test.ts.
+// connect-flows imports slack-api (disconnect's auth.revoke) and telegram-api
+// (disconnect's deleteWebhook), which drag the worker-only egress entrypoint
+// into the module graph; sever those edges — these tests never touch either.
+// Same seam as github-connect.test.ts.
 vi.mock("../integrations/slack-api.ts", () => ({ callProjectSlackWebApi: vi.fn() }));
+vi.mock("../integrations/telegram-api.ts", () => ({
+  callProjectTelegramBotApi: vi.fn(),
+  telegramApiBaseUrl: (config: { integrations: { telegram: { apiBaseUrl: string } } }) =>
+    config.integrations.telegram.apiBaseUrl.replace(/\/$/, ""),
+}));
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {
@@ -237,7 +243,7 @@ describe("linkRepoToGithub", () => {
 
     // The cross-post push subscription on the connection stream: GitHub
     // webhooks about exactly this repository copy onto the repo's own stream
-    // via its `ingest` sink.
+    // via its `acceptCrossPost` sink.
     const subscription = network.streams
       .get(CONNECTION_STREAM)
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-configured");
@@ -249,7 +255,7 @@ describe("linkRepoToGithub", () => {
       },
       delivery: {
         mode: "push",
-        expression: ["streams", ["get", "/repos/project"], "ingest"],
+        expression: ["streams", ["get", "/repos/project"], "acceptCrossPost"],
       },
       deliver: "new",
     });

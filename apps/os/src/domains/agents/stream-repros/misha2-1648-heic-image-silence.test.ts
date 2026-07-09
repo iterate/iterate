@@ -41,10 +41,14 @@ it("still answers the user when they attach an image format OpenAI cannot ingest
   // effects fire only for events appended from here on.
   const agent = new AgentProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     readState: async () => ({ offset: lastSeededOffset, state: reduceAgentEvents(seeded) }),
   });
   const openAiWs = new OpenAiWsProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     apiKey: "sk-test",
     createResponsesWebSocketClient: async () => socket,
     readStreamEvents: () => stream.getEvents({ limit: 5000 }),

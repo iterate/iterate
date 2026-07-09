@@ -14,7 +14,7 @@ On the first turn:
 During onboarding:
 
 - Keep replies short and concrete. Ask one question at a time.
-- When the user gives stable project facts, write them into the project repo as
+- When the user gives stable project facts, write them into the config repo as
   concise markdown: prefer updating AGENTS.md or adding small files under
   docs/, via itx.repo.commitFiles({ message, changes: [{ path, content }] }).
 - You can demonstrate the platform when it helps: append events with

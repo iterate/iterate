@@ -25,7 +25,7 @@ function event(type: string, payload: Record<string, unknown> = {}): StreamEvent
 
 function sandboxProcessor() {
   nextOffset = 0;
-  return new SandboxProcessor({ stream: neverStream });
+  return new SandboxProcessor({ stream: neverStream, path: "/sandboxes/test", projectId: null });
 }
 
 describe("SandboxProcessor", () => {

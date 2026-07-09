@@ -48,7 +48,7 @@ script that sends the user-visible response.
 
 Use two fresh sibling agent streams under the same project and send the same
 message through `pnpm cli itx agent-smoke` or
-`itx.agents.get(path).sendMessage(message)`. Compare the stream events around:
+`itx.agents.get(path).message(message)`. Compare the stream events around:
 
 - `events.iterate.com/openai-ws/llm-request-started`
 - `events.iterate.com/openai-ws/llm-request-completed`

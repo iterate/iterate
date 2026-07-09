@@ -301,7 +301,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
     let committedOffset: number;
     try {
-      const [committed] = await this.stream.append({
+      const [committed] = await this.append({
         type: "events.iterate.com/capability-host/capability-provided",
         payload: record,
       });
@@ -332,7 +332,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
-    const [committed] = await this.stream.append({
+    const [committed] = await this.append({
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
@@ -438,7 +438,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async runScript(code: string): Promise<RunScriptResult> {
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
-    await this.stream.append({
+    await this.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code, executionId },
     });
@@ -473,9 +473,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       // completion may be appended — the obligation stays `requested`, the
       // rethrow marks the keepalive window failed, and a later reconciliation
       // retries the whole attempt. (Same shape as the LLM providers.)
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/capability-host/script-execution-started",
-        idempotencyKey: `capability-host/script-execution-started@${input.executionId}`,
+        idempotencyKey: this.idempotencyKey(`script-execution-started@${input.executionId}`),
         payload: { executionId: input.executionId },
       });
       try {
@@ -496,7 +496,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * path and the normal run share the idempotency key, so races collapse to
    * one completion at the append dedup layer. */
   #appendCompletion(input: { executionId: string; error?: string; result?: unknown }) {
-    const payload: JsonValue =
+    const payload =
       input.error !== undefined
         ? { error: input.error, executionId: input.executionId }
         : {
@@ -507,9 +507,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             // ends the loop.
             ...(input.result === undefined ? {} : { result: json(input.result) }),
           };
-    return this.stream.append({
+    return this.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      idempotencyKey: `capability-host/script-execution-completed@${input.executionId}`,
+      idempotencyKey: this.idempotencyKey(`script-execution-completed@${input.executionId}`),
       payload,
     });
   }

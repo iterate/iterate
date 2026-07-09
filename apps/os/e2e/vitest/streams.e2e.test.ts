@@ -3,7 +3,7 @@
 // These deliberately cover only deployment-style ITX/WebSocket behavior: project
 // stream access, append/read, replay/live subscriptions, unsubscribe,
 // state-only subscription pushes, and cross-posting (durable push subscriptions
-// targeting another stream's ingest sink, via the crossPostTo sugar). Unit and
+// targeting another stream's acceptCrossPost sink, via the crossPostTo sugar). Unit and
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
@@ -427,7 +427,7 @@ test("cross-posts do not recursively copy events that are already cross-posted",
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
-  // Loop protection is structural: ingest never appends an event whose
+  // Loop protection is structural: acceptCrossPost never appends an event whose
   // provenance chain already contains the receiving stream, so wiring two
   // streams at each other is safe.
   await Promise.all([
@@ -482,7 +482,7 @@ test("global cross-posts stay in the global namespace — a project stream is un
   // A delivery expression evaluates against the source stream's OWN authority
   // root. For a global (projectId: null) stream that is the deployment root,
   // whose `streams` collection is the deployment-wide (projectId: null)
-  // namespace — so `["streams", ["get", path], "ingest"]` from a global source
+  // namespace — so `["streams", ["get", path], "acceptCrossPost"]` from a global source
   // can only ever name another GLOBAL stream. A project stream at the same
   // path is a different coordinate entirely: smuggling events across the
   // project boundary is unexpressible, not checked.

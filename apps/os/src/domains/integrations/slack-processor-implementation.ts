@@ -5,7 +5,6 @@
 
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEventInput } from "../streams/schemas.ts";
 import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
 
@@ -57,6 +56,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
 
   protected override processEvent({
     append,
+    appendTo,
     blockProcessorWhile,
     event,
     runInBackground,
@@ -100,9 +100,9 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
       });
     }
 
-    const forwardedWebhookEvent: StreamEventInput = {
-      type: "events.iterate.com/slack/webhook-received",
-      idempotencyKey: `slack:forward-webhook:${event.offset}`,
+    const forwardedWebhookEvent = {
+      type: "events.iterate.com/slack/webhook-received" as const,
+      idempotencyKey: this.idempotencyKey("forward-webhook", event),
       payload: event.payload,
     };
 
@@ -131,7 +131,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
       // double-forwarding.
       blockProcessorWhile(async () => {
         await append(routeEvent);
-        await this.stream.at(streamPath).append(routeEvent, forwardedWebhookEvent);
+        await appendTo(streamPath, routeEvent, forwardedWebhookEvent);
       });
       return;
     }
@@ -145,7 +145,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
      */
     // Durable obligation — same reasoning as the route-creation forward above.
     blockProcessorWhile(async () => {
-      await this.stream.at(streamPath).append(forwardedWebhookEvent);
+      await appendTo(streamPath, forwardedWebhookEvent);
     });
   }
 }

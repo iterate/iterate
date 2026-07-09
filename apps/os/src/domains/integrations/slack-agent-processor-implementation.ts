@@ -104,9 +104,6 @@ export class SlackAgentProcessor extends StreamProcessor<
       case "events.iterate.com/slack/webhook-received": {
         // The webhook transcribes into the unified inbound message event —
         // Slack messages are messages FROM a user, `from` carries the facts.
-        // The idempotency key format predates the unification on purpose:
-        // streams already holding the old input-added under this key dedupe
-        // a refold's re-append instead of double-recording the message.
         const appendAgentMessage = async (
           input: {
             files?: AgentFileAttachment[];
@@ -116,7 +113,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         ) => {
           await append({
             type: "events.iterate.com/agents/message-received",
-            idempotencyKey: `slack-agent:webhook-to-agent-input:${event.offset}`,
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: slackWebhookAgentInput(event.payload),
               from: { kind: "slack", ...(input.userId == null ? {} : { userId: input.userId }) },
@@ -176,7 +173,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           blockProcessorWhile(async () => {
             await append({
               type: "events.iterate.com/capability-host/script-execution-requested",
-              idempotencyKey: `slack-agent:bang-command:${event.offset}`,
+              idempotencyKey: this.idempotencyKey("bang-command", event),
               payload: {
                 code: bangCommand.code,
                 executionId: `slack-bang-command-${event.offset}`,
