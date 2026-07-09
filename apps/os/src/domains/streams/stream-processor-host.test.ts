@@ -133,6 +133,84 @@ describe("revival", () => {
   });
 });
 
+describe("lost-alarm self-healing", () => {
+  it("a fresh incarnation re-issues a persisted-but-lost alarm desire on boot", async () => {
+    // The unrecoverable-wedge shape from review round 1: the record says
+    // armed, but the platform alarm is GONE (a setAlarm that failed, or an
+    // eviction between the fire and the re-arm landing). The next dial of the
+    // DO must re-issue the desire — otherwise the record lies forever and the
+    // zero-lag wedge is back, one storage failure deep.
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
+    });
+    await h.stream.append({ type: PING, payload: {} });
+    await h.deliverAll();
+    expect(h.store.alarm.at).not.toBeNull();
+
+    h.store.alarm.at = null; // the platform alarm is lost
+    h.crash(); // and the DO is dialed again in a fresh incarnation
+    await vitestSettle();
+    // Boot re-issued the persisted desire; it is in the past, so it fires
+    // immediately and the revival pass runs.
+    expect(h.store.alarm.at).not.toBeNull();
+    await h.advance(15_000);
+    expect(h.stream.events.some((event) => event.type === PROCESSOR_HOST_REVIVED_EVENT_TYPE)).toBe(
+      true,
+    );
+  });
+
+  it("a due slice is dropped at its own fire instead of re-arming the alarm in the past", async () => {
+    // The scheduler-shaped refire loop from review round 1: the slice that
+    // caused the fire must not survive into the post-fire reconcile, or the
+    // just-consumed alarm gets re-armed at a PAST time and refires
+    // concurrently with the handler body still running.
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
+    });
+    void h.host.setAlarmSlice("scheduler", h.clock.now + 30_000);
+    await vitestSettle();
+    expect(h.store.alarm.at).toBe(h.clock.now + 30_000);
+
+    await h.advance(30_000); // the scheduler slice fires
+    await vitestSettle();
+    // Its owner did not re-arm (this test has no scheduler body); the desire
+    // is gone rather than re-armed in the past.
+    expect(h.host.getAlarmSlice("scheduler")).toBeNull();
+    expect(h.store.alarm.at).toBeNull();
+  });
+});
+
+describe("catch-up head reporting", () => {
+  it("non-final pages carry a streamMaxOffset past their tail; only the head batch is at-head", async () => {
+    // Reconcilers gate side effects on checkpointOffset >= streamMaxOffset —
+    // which only works if a behind batch can SEE it is behind. Three pings
+    // through a page size of 2: page one must NOT report itself at head.
+    const atHead: boolean[] = [];
+    class GateRecorder extends Recorder {
+      protected override async processEventBatch(
+        args: Parameters<Recorder["processEventBatch"]>[0],
+      ): Promise<void> {
+        atHead.push(args.checkpointOffset >= args.streamMaxOffset);
+        await super.processEventBatch(args);
+      }
+    }
+    const h = createProcessorHostHarness({
+      catchUpPageSize: 2,
+      build: (host) => ({ a: host.add((deps) => new GateRecorder(RecorderA, deps)) }),
+    });
+    await h.stream.append(
+      { type: PING, payload: {} },
+      { type: PING, payload: {} },
+      {
+        type: PING,
+        payload: {},
+      },
+    );
+    await h.deliverAll();
+    expect(atHead).toEqual([false, true]);
+  });
+});
+
 describe("the shared alarm", () => {
   it("arms the earliest slice and keeps other desires when one clears", async () => {
     const h = createProcessorHostHarness({

@@ -67,6 +67,7 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
+    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/cloudflare-ai/llm-request-started",
     "events.iterate.com/cloudflare-ai/llm-request-completed",
   ],

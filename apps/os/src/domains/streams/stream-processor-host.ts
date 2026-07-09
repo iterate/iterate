@@ -150,9 +150,12 @@ export type StreamProcessorHost = {
    * time (or null for none) and the host arms the earliest across all slices
    * plus the keepalive's. A slice owner must tolerate early fires (another
    * slice's) and re-arm itself during its handler — in-memory desires do not
-   * survive eviction; the durable alarm plus each subsystem's re-derivation do.
+   * survive eviction; the durable alarm plus each subsystem's re-derivation
+   * do. The returned promise settles when the platform alarm durably reflects
+   * the change; await it (and rethrow) where durability is load-bearing
+   * (error-path fallbacks), ignore it everywhere else.
    */
-  setAlarmSlice(name: string, atMs: number | null): void;
+  setAlarmSlice(name: string, atMs: number | null): Promise<void>;
   /** The slice's own current desire (NOT the merged alarm time). */
   getAlarmSlice(name: string): number | null;
 };
@@ -166,6 +169,8 @@ export function createStreamProcessorHost(
     version?: string;
     /** Injected clock for the node test harness; production uses Date.now. */
     now?: () => number;
+    /** Catch-up read page size; tests shrink it to exercise paging. */
+    catchUpPageSize?: number;
   },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
@@ -194,7 +199,15 @@ export function createStreamProcessorHost(
   let platformAlarmAtMs: number | null | undefined;
   /** Serializes alarm storage ops so read-adopt and writes cannot interleave. */
   let alarmChain: Promise<void> = Promise.resolve();
-  function reconcileAlarm(): void {
+  /**
+   * Returns the settled write for callers whose correctness depends on the
+   * alarm being DURABLY armed (the alarm handler, the scheduler's error-path
+   * fallback) — a rejected step means the platform alarm may not exist, and
+   * such callers must rethrow so the platform retries them. Fire-and-forget
+   * callers may ignore the result: the chain observes the rejection either
+   * way, and the next reconcile re-reads and re-issues.
+   */
+  function reconcileAlarm(): Promise<void> {
     const step = alarmChain.then(async () => {
       if (platformAlarmAtMs === undefined) {
         const existing = await ctx.storage.getAlarm();
@@ -215,15 +228,17 @@ export function createStreamProcessorHost(
       console.error("stream processor host alarm arming failed", error);
     });
     ctx.waitUntil(alarmChain);
+    return step;
   }
-  function setAlarmSlice(name: string, atMs: number | null): void {
+  function setAlarmSlice(name: string, atMs: number | null): Promise<void> {
     if (atMs === null) alarmSlices.delete(name);
     else alarmSlices.set(name, atMs);
-    reconcileAlarm();
+    return reconcileAlarm();
   }
 
+  const now = options.now ?? (() => Date.now());
   const keepalive = new ProcessorKeepalive({
-    now: options.now ?? (() => Date.now()),
+    now,
     readRecord: () => ctx.storage.kv.get<KeepaliveRecord>(KEEPALIVE_RECORD_KEY) ?? undefined,
     writeRecord: (record) => void ctx.storage.kv.put(KEEPALIVE_RECORD_KEY, record),
     armAlarm: (atMs) => setAlarmSlice("keepalive", atMs),
@@ -255,9 +270,17 @@ export function createStreamProcessorHost(
     },
     version: options.version ?? "unversioned",
   });
-  // A fresh incarnation restores the keepalive's persisted desire, so another
-  // slice re-arming cannot clobber a pending revival alarm.
-  if (keepalive.armedAtMs !== null) alarmSlices.set("keepalive", keepalive.armedAtMs);
+  // A fresh incarnation restores the keepalive's persisted desire — and
+  // RE-ISSUES it. The desire surviving only in the slice map would leave a
+  // lost platform alarm (a setAlarm that failed or an eviction in the
+  // fire→re-arm window) permanently unrecoverable even though the DO is being
+  // dialed right now; the reconcile makes every dial self-healing. Healthy
+  // path: the read-adopt sees the identical armed alarm and the write is
+  // skipped as unchanged.
+  if (keepalive.armedAtMs !== null) {
+    alarmSlices.set("keepalive", keepalive.armedAtMs);
+    void reconcileAlarm();
+  }
 
   function requireEntry(name: string): HostedEntry {
     const entry = entries.get(name);
@@ -282,18 +305,27 @@ export function createStreamProcessorHost(
 
   async function catchUpInternal(name: string, opts: { rethrow: boolean }): Promise<void> {
     const entry = requireEntry(name);
+    const pageSize = options.catchUpPageSize ?? 500;
     try {
       const { offset } = await entry.processor.snapshot();
-      using pager = options.stream.readEvents({ afterOffset: offset, limit: 500 });
-      for (;;) {
-        const events = await pager.next();
-        if (events.length === 0) return;
+      using pager = options.stream.readEvents({ afterOffset: offset, limit: pageSize });
+      // One page of lookahead, so every non-final batch carries a
+      // streamMaxOffset PAST its own tail. Reconcilers defer side effects
+      // until checkpointOffset >= streamMaxOffset — acting on a mid-catch-up
+      // fold would re-drive attempts whose completions sit in the next page —
+      // and that gate only works if a behind batch can SEE it is behind. The
+      // final page reports its own tail (the head as of this read), exactly
+      // like a live push batch, so its reconciliation runs.
+      let events = await pager.next();
+      while (events.length > 0) {
+        const lookahead = await pager.next();
         // Non-consumed event types reduce to no-ops but still advance the
         // checkpoint, mirroring what a filtered delivery's cursor does.
         await entry.processor.ingest({
           events,
-          streamMaxOffset: events.at(-1)!.offset,
+          streamMaxOffset: (lookahead.at(-1) ?? events.at(-1))!.offset,
         });
+        events = lookahead;
       }
     } catch (error) {
       if (opts.rethrow) throw error;
@@ -343,15 +375,27 @@ export function createStreamProcessorHost(
 
     async handleAlarm() {
       // Entering alarm() means the platform consumed the durable alarm:
-      // whatever we believed was armed no longer is, every reconcile from here
-      // must re-issue rather than skip as "unchanged", and any inherited
-      // desire has served its purpose — the subsystems re-derive this turn.
+      // whatever we believed was armed no longer is, and every reconcile from
+      // here must re-issue rather than skip as "unchanged".
       platformAlarmAtMs = null;
-      alarmSlices.delete(INHERITED_ALARM_SLICE);
+      // Every DUE desire is dropped, not just the inherited one: the slice
+      // that caused this fire is delivered — its owner re-derives and re-arms
+      // during this very turn (the keepalive synchronously in onAlarm; the
+      // scheduler at the end of its body). Keeping a due desire would re-arm
+      // the just-consumed alarm IN THE PAST and refire it concurrently with
+      // the handler body still running.
+      const firedAt = now();
+      for (const [name, atMs] of alarmSlices) {
+        if (atMs <= firedAt) alarmSlices.delete(name);
+      }
       try {
         await keepalive.onAlarm();
       } finally {
-        reconcileAlarm();
+        // Awaited AND rethrown: the platform only retries an alarm whose
+        // handler THREW. Resolving with the re-arm still queued (or silently
+        // failed) would consume the alarm for good — an eviction in that
+        // window loses the only thing that revives this DO.
+        await reconcileAlarm();
       }
     },
 

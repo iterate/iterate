@@ -107,6 +107,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   #itx: Project;
   #path: string;
   #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
+  /** Injected clock (expiry decisions); production defaults to Date.now. */
+  #now: (() => number) | undefined;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -116,6 +118,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       path: string;
       /** Runs run-script workers in this scope. */
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
+      /** Injected clock (expiry decisions); production defaults to Date.now. */
+      now?: () => number;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -126,6 +130,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
+    this.#now = args.now;
     this.#parent = args.parent;
   }
 
@@ -219,7 +224,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
-    const now = Date.now();
+    // At-head gate — see OpenAiWsProcessor.processEventBatch.
+    if (args.checkpointOffset < args.streamMaxOffset) return;
+    const now = (this.#now ?? Date.now)();
     const settle: { executionId: string; error: string }[] = [];
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
       if (this.#liveExecutions.has(executionId)) continue;

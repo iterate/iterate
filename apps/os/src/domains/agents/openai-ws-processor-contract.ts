@@ -72,6 +72,7 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
+    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/openai-ws/llm-request-started",
     "events.iterate.com/openai-ws/llm-request-completed",
   ],

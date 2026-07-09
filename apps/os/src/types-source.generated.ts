@@ -1497,7 +1497,12 @@ export type AgentProcessorState = {
   llmProviderConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number; requestedAt?: number | undefined }
+    | {
+        phase: "requested";
+        llmRequestId: number;
+        requestedAt?: number | undefined;
+        provider?: "cloudflare-ai" | "openai-ws" | undefined;
+      }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;

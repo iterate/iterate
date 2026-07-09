@@ -115,9 +115,18 @@ describe("eviction recovery, end to end", () => {
     });
     expect(types.indexOf(T.output)).toBeGreaterThan(types.indexOf(T.revived));
 
-    // The dead incarnation's hung vendor call can never write: the fence
-    // proved it by construction (its late appends threw against incarnation 2).
-    expect(started.offset).toBeLessThan(h.stream.events.length + 1);
+    // Exactly one reply and one success: the dead incarnation's attempt
+    // produced nothing (its vendor hung; any late write would have hit the
+    // incarnation fence), and the recovered attempt ran exactly once.
+    expect(types.filter((type) => type === T.output)).toHaveLength(1);
+    expect(
+      h.stream.events.filter(
+        (event) =>
+          event.type === T.completed &&
+          (event.payload as { result: { status: string } }).result.status === "success",
+      ),
+    ).toHaveLength(1);
+    expect(started).toBeDefined();
   });
 
   it("recovers a lost debounce timer: revival re-derives the requested event from the fold", async () => {
@@ -138,6 +147,61 @@ describe("eviction recovery, end to end", () => {
 
     const output = await h.stream.waitForEvent({ eventTypes: [T.output], timeoutMs: 5_000 });
     expect(output.payload).toMatchObject({ content: "recovered!" });
+  });
+});
+
+describe("attempt bookkeeping under stream failures", () => {
+  it("a failed started-append leaves the obligation requested and releases the live-set (no leak, retried later)", async () => {
+    const stream = new MemoryStream();
+    let failStartedAppends = true;
+    const realAppend = stream.append.bind(stream);
+    stream.append = async (...inputs) => {
+      if (failStartedAppends && inputs.some((input) => input.type === T.started)) {
+        throw new Error("stream hiccup");
+      }
+      return realAppend(...inputs);
+    };
+    let dials = 0;
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => {
+        dials += 1;
+        return fakeResponsesWebSocket(() => [
+          { type: "response.output_text.delta", delta: "late but fine" },
+          { type: "response.completed", response: { id: "resp-1" } },
+        ]);
+      },
+      readStreamEvents: () => stream.getEvents(),
+      now: () => Date.now(),
+    });
+    const [requested] = await realAppend({
+      type: T.requested,
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:gen-1" },
+    });
+    await openAiWs.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The attempt died before dialing; nothing was settled, nothing leaked.
+    expect(dials).toBe(0);
+    expect(stream.events.some((event) => event.type === T.completed)).toBe(false);
+    expect(openAiWs.state.requests[String(requested!.offset)]).toMatchObject({
+      status: "requested",
+    });
+
+    // The stream recovers; the next batch's reconciliation retries the whole
+    // attempt — a leaked live-set entry would make it skip this id forever.
+    failStartedAppends = false;
+    const [nudge] = await realAppend({ type: "events.iterate.com/test/nudge", payload: {} });
+    await openAiWs.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
+    await vi.waitFor(() => {
+      const completion = stream.events.find(
+        (event) =>
+          event.type === T.completed &&
+          (event.payload as { llmRequestId: number }).llmRequestId === requested!.offset,
+      );
+      expect(completion?.payload).toMatchObject({ result: { status: "success" } });
+    });
+    expect(dials).toBe(1);
   });
 });
 

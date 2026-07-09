@@ -11,7 +11,7 @@ doctrine document takes for granted: side effects, recovery, staleness, and
 how to test all of it in plain node
 (`apps/os/src/domains/streams/test-helpers.ts`).
 
-## The model: processEvent is a reconciler
+## The model: a processor is a reconciler
 
 A processor is two halves plus a comparison:
 
@@ -21,9 +21,14 @@ A processor is two halves plus a comparison:
 - **Actual state** — the incarnation. Live executions, open sockets, armed
   timers. In-memory, dies with every eviction, **and that is fine** — it is
   never the source of truth.
-- **Reconciliation** — `processEvent`/`processEventBatch` compare the two and
-  act: start attempts for desired work nobody is driving, settle work whose
-  driver died, and do it all through idempotent appends so replays converge.
+- **Reconciliation** — an end-of-`processEventBatch` pass compares the two
+  and acts: start attempts for desired work nobody is driving, settle work
+  whose driver died, and do it all through idempotent appends so replays
+  converge. Reconcile only an AT-HEAD fold (`checkpointOffset >=
+streamMaxOffset`): a mid-catch-up fold shows obligations whose outcomes sit
+  in the next page, and acting on it re-drives real vendor calls. The final
+  catch-up page and every live batch qualify, so recovery always gets its
+  pass.
 
 The reference implementations, in reading order:
 `OpenAiWsProcessor.processEventBatch` (the canonical obligation reconciler),

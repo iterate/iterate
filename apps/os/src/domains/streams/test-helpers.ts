@@ -237,6 +237,8 @@ export function createProcessorHostHarness<
   build: (host: StreamProcessorHost, ctx: HarnessBuildContext) => Processors;
   path?: string;
   version?: string | (() => string);
+  /** Shrink the catch-up page size to exercise mid-catch-up batches. */
+  catchUpPageSize?: number;
 }): ProcessorHostHarness<Processors> {
   const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
   const stream = new MemoryStream(options.path ?? "/agents/test");
@@ -269,6 +271,7 @@ export function createProcessorHostHarness<
       stream: fencedStream,
       version: typeof options.version === "function" ? options.version() : options.version,
       now: () => clock.now,
+      catchUpPageSize: options.catchUpPageSize,
     });
     processors = options.build(host, { incarnation: mine, clock, stream: fencedStream });
   };

@@ -86,9 +86,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     } catch (error) {
       // Cloudflare retries a throwing alarm handler only a bounded number of
       // times; a prolonged Stream DO outage must not end with due schedules
-      // and no armed alarm. Arm a coarse fallback, then rethrow for the
-      // platform's own retry/observability.
-      this.#processorHost.setAlarmSlice("scheduler", Date.now() + 60_000);
+      // and no armed alarm. Arm a coarse fallback — AWAITED, so the alarm is
+      // durably armed before the rethrow surrenders to the platform's bounded
+      // retry/observability.
+      await this.#processorHost.setAlarmSlice("scheduler", Date.now() + 60_000);
       throw error;
     }
   }

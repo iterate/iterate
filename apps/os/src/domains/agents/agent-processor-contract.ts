@@ -204,6 +204,10 @@ export const AgentProcessorContract = defineProcessorContract({
            * the reconciler's backstop deadline. Optional: raw appends and
            * pre-backstop checkpoints lack it, and the backstop then skips. */
           requestedAt: z.number().int().positive().optional(),
+          /** The provider the request was addressed to, so a backstop
+           * settlement attributes the failure honestly even if the agent's
+           * configured provider changed while the request sat unanswered. */
+          provider: AgentLlmProvider.optional(),
         }),
       ])
       .nullable()

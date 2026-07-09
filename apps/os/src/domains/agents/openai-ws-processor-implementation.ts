@@ -128,11 +128,21 @@ export class OpenAiWsProcessor extends StreamProcessor<
       // reconciliation has nothing to say about it and the map stays small.
       // Replays converge because events fold in order (a refold re-creates
       // the entry at `requested` and deletes it again at its completion).
+      // agent/llm-request-completed is terminal too, whoever appended it —
+      // the agent's backstop settles requests this provider never answered,
+      // and the obligation must not linger to self-settle as junk later.
       case "events.iterate.com/openai-ws/llm-request-completed":
-        return { ...state, requests: withoutKey(state.requests, event.payload.llmRequestId) };
-      case "events.iterate.com/agent/llm-request-cancelled":
+      case "events.iterate.com/agent/llm-request-completed": {
+        const requests = { ...state.requests };
+        delete requests[String(event.payload.llmRequestId)];
+        return { ...state, requests };
+      }
+      case "events.iterate.com/agent/llm-request-cancelled": {
         if (event.payload.phase !== "requested") return state;
-        return { ...state, requests: withoutKey(state.requests, event.payload.llmRequestId) };
+        const requests = { ...state.requests };
+        delete requests[String(event.payload.llmRequestId)];
+        return { ...state, requests };
+      }
       default:
         return state;
     }
@@ -165,6 +175,13 @@ export class OpenAiWsProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
+    // Only reconcile an AT-HEAD fold. A mid-catch-up fold can show an
+    // obligation whose outcome sits in the next page; starting from it would
+    // re-drive a real, paid vendor call (append-level dedup keeps the journal
+    // clean but cannot un-call an API), and settling from it would journal a
+    // false failure. The final catch-up page and every live push batch report
+    // themselves at head, so recovery always gets its reconciliation.
+    if (args.checkpointOffset < args.streamMaxOffset) return;
     const now = (this.deps.now ?? Date.now)();
     const settle: { llmRequestId: number; message: string }[] = [];
     for (const [id, request] of Object.entries(args.state.requests)) {
@@ -205,76 +222,83 @@ export class OpenAiWsProcessor extends StreamProcessor<
   async #executeRequest(input: { llmRequestId: number; model: string }): Promise<void> {
     const { llmRequestId, model } = input;
     const startedAt = Date.now();
-    await this.stream.append({
-      type: "events.iterate.com/openai-ws/llm-request-started",
-      idempotencyKey: `openai-ws/llm-request-started@${llmRequestId}`,
-      payload: { llmRequestId, model },
-    });
-
     try {
-      if (this.deps.apiKey === null || this.deps.apiKey.trim() === "") {
-        throw new Error(
-          "OpenAI API key is not configured on this deployment (AppConfig openAiApiKey).",
-        );
-      }
-      // Request-by-reference: the requested event carries no body; rebuild the
-      // chat request from committed history up to the request's own offset.
-      const body = buildAgentLlmRequestBody({
-        events: await this.deps.readStreamEvents(),
-        llmRequestId,
+      // Started-evidence, deliberately OUTSIDE the inner try: if this append
+      // fails the vendor was never dialed, so no completion may be appended —
+      // the obligation stays `requested` and a later reconciliation retries
+      // the whole attempt. The outer finally still releases the live-set
+      // entry either way (a leaked entry would make the reconciler skip this
+      // id for the rest of the incarnation).
+      await this.stream.append({
+        type: "events.iterate.com/openai-ws/llm-request-started",
+        idempotencyKey: `openai-ws/llm-request-started@${llmRequestId}`,
+        payload: { llmRequestId, model },
       });
-      const attemptedPreviousResponseId = this.#previousResponseId;
-      let completion;
       try {
-        completion = await this.#withRequestDeadline(
-          this.#createAndConsumeResponse({
-            llmRequestId,
-            messages: body.messages,
-            model,
-            previousResponseId: attemptedPreviousResponseId,
-          }),
-        );
-      } catch (error) {
-        if (attemptedPreviousResponseId === null || !isPreviousResponseNotFoundError(error)) {
-          throw error;
+        if (this.deps.apiKey === null || this.deps.apiKey.trim() === "") {
+          throw new Error(
+            "OpenAI API key is not configured on this deployment (AppConfig openAiApiKey).",
+          );
         }
-        this.#previousResponseId = null;
-        completion = await this.#withRequestDeadline(
-          this.#createAndConsumeResponse({
-            idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
-            llmRequestId,
-            messages: body.messages,
-            model,
-            previousResponseId: null,
-          }),
-        );
-      }
-      const durationMs = Date.now() - startedAt;
-      const providerResult = {
-        status: "success" as const,
-        rawResponse: completion.rawResponse,
-        ...(completion.usage === undefined ? {} : { usage: completion.usage }),
-      };
-
-      if (await this.#isRequestStillCurrent({ llmRequestId })) {
-        await this.stream.append({
-          type: "events.iterate.com/agent/output-added",
-          idempotencyKey: `openai-ws/agent-output-added@${llmRequestId}`,
-          payload: { content: completion.text, llmRequestId },
+        // Request-by-reference: the requested event carries no body; rebuild the
+        // chat request from committed history up to the request's own offset.
+        const body = buildAgentLlmRequestBody({
+          events: await this.deps.readStreamEvents(),
+          llmRequestId,
         });
-        if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
-      }
+        const attemptedPreviousResponseId = this.#previousResponseId;
+        let completion;
+        try {
+          completion = await this.#withRequestDeadline(
+            this.#createAndConsumeResponse({
+              llmRequestId,
+              messages: body.messages,
+              model,
+              previousResponseId: attemptedPreviousResponseId,
+            }),
+          );
+        } catch (error) {
+          if (attemptedPreviousResponseId === null || !isPreviousResponseNotFoundError(error)) {
+            throw error;
+          }
+          this.#previousResponseId = null;
+          completion = await this.#withRequestDeadline(
+            this.#createAndConsumeResponse({
+              idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
+              llmRequestId,
+              messages: body.messages,
+              model,
+              previousResponseId: null,
+            }),
+          );
+        }
+        const durationMs = Date.now() - startedAt;
+        const providerResult = {
+          status: "success" as const,
+          rawResponse: completion.rawResponse,
+          ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+        };
 
-      await this.#appendCompletion({ durationMs, llmRequestId, result: providerResult });
-    } catch (error) {
-      await this.#appendCompletion({
-        durationMs: Date.now() - startedAt,
-        llmRequestId,
-        result: {
-          status: "failure" as const,
-          error: { message: stringifyError(error) },
-        },
-      });
+        if (await this.#isRequestStillCurrent({ llmRequestId })) {
+          await this.stream.append({
+            type: "events.iterate.com/agent/output-added",
+            idempotencyKey: `openai-ws/agent-output-added@${llmRequestId}`,
+            payload: { content: completion.text, llmRequestId },
+          });
+          if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
+        }
+
+        await this.#appendCompletion({ durationMs, llmRequestId, result: providerResult });
+      } catch (error) {
+        await this.#appendCompletion({
+          durationMs: Date.now() - startedAt,
+          llmRequestId,
+          result: {
+            status: "failure" as const,
+            error: { message: stringifyError(error) },
+          },
+        });
+      }
     } finally {
       this.#liveExecutions.delete(llmRequestId);
     }
@@ -459,17 +483,6 @@ export class OpenAiWsProcessor extends StreamProcessor<
       state.currentRequest.llmRequestId === input.llmRequestId
     );
   }
-}
-
-/** Remove one llmRequestId's entry from the obligations map (terminal events). */
-function withoutKey(
-  requests: Record<string, unknown>,
-  llmRequestId: number,
-): Record<string, never> {
-  const key = String(llmRequestId);
-  if (!(key in requests)) return requests as Record<string, never>;
-  const { [key]: _settled, ...rest } = requests;
-  return rest as Record<string, never>;
 }
 
 /**

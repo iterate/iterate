@@ -363,13 +363,13 @@ describe("minimal web-chat agent processors", () => {
       },
     );
 
-    // First chunk delivers only input one; its batch appends the scheduled
-    // event at offset 3. The second chunk delivers only input two — a batch
-    // that predates the scheduled event, so state still shows no current
-    // request. The generation-keyed idempotency collapses the re-derived
-    // schedule into the event already on the stream.
+    // The first chunk is BEHIND the head (input two exists past it), so the
+    // at-head gate defers scheduling entirely; the second chunk reaches the
+    // head and derives exactly one scheduled event for both inputs. The
+    // generation-keyed idempotency remains the second line of defense for
+    // batches that raced to the same derivation.
     await agent.ingest({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
-    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 3 });
+    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 2 });
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",

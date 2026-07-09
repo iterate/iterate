@@ -680,7 +680,24 @@ export abstract class StreamProcessor<
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
         return;
       }
-      this.#state = this.contract.stateSchema.parse(snapshot.state) as ProcessorState<Contract>;
+      // The checkpoint is a disposable CACHE of the fold (see
+      // docs/domain-objects-and-stream-processors.md); the journal is the
+      // authority. A snapshot that fails the current schema — the normal
+      // aftermath of deploying a state-shape change — is a cache miss, not an
+      // error: discard it and refold from offset 0. Wedging here would turn
+      // every schema evolution into a permanently unresponsive processor
+      // (snapshot() and ingest() rethrowing forever), with the recovery
+      // machinery itself crash-looping on the parse.
+      const parsed = this.contract.stateSchema.safeParse(snapshot.state);
+      if (!parsed.success) {
+        console.error(
+          `stream processor "${this.contract.slug}" checkpoint no longer fits its state schema; discarding the cache and refolding from the journal`,
+          parsed.error,
+        );
+        this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        return;
+      }
+      this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
     })().catch((error: unknown) => {
       // Clear the memoized load so a later batch retries the snapshot read

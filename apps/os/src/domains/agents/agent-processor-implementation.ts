@@ -205,6 +205,11 @@ export class AgentProcessor extends StreamProcessor<
   async #settleLlmRequestScheduling(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
+    // At-head gate (see OpenAiWsProcessor.processEventBatch): scheduling
+    // decisions and the backstop must never fire from a mid-catch-up fold —
+    // a long-settled request transiently looks `requested` mid-refold, and
+    // backstopping it would journal a false failure.
+    if (args.checkpointOffset < args.streamMaxOffset) return;
     const { state } = args;
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
@@ -250,7 +255,7 @@ export class AgentProcessor extends StreamProcessor<
         payload: {
           durationMs: this.#now() - requestedAt,
           llmRequestId,
-          provider: state.llmProvider,
+          provider: state.currentRequest.provider ?? state.llmProvider,
           result: {
             status: "failure",
             error: {
@@ -421,6 +426,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           phase: "requested",
           llmRequestId: event.offset,
           requestedAt: Date.parse(event.createdAt),
+          provider: event.payload.provider,
         },
         pendingTriggerOffset: null,
       };

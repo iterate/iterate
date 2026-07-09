@@ -137,17 +137,19 @@ export class ProcessorKeepalive {
   #reviving = false;
   /** Consecutive busy fires without any settlement (wedged-work detector). */
   #busyRefires = 0;
-  /** In-memory mirror of record.armedAtMs; the record is the truth on boot. */
-  #armedAtMs: number | null;
 
   constructor(hooks: ProcessorKeepaliveHooks) {
     this.#hooks = hooks;
-    this.#armedAtMs = hooks.readRecord()?.armedAtMs ?? null;
   }
 
-  /** The keepalive's current alarm desire, for the host's slice merge. */
+  /**
+   * The keepalive's current alarm desire, for the host's slice merge. Read
+   * straight from the durable record (synchronous DO KV) — a separate
+   * in-memory mirror would be one more thing to drift after an eviction, and
+   * stale-mirror drift is exactly the failure class this module hunts.
+   */
   get armedAtMs(): number | null {
-    return this.#armedAtMs;
+    return this.#hooks.readRecord()?.armedAtMs ?? null;
   }
 
   /**
@@ -181,18 +183,27 @@ export class ProcessorKeepalive {
    */
   async onAlarm(): Promise<void> {
     const now = this.#hooks.now();
-    const armedAt = this.#armedAtMs ?? this.#hooks.readRecord()?.armedAtMs ?? null;
+    const armedAt = this.armedAtMs;
     if (armedAt === null || now < armedAt) return;
 
-    // Still working: push the alarm ahead of the work again — unless NOTHING
-    // has settled for so many consecutive fires that the work is wedged (a
-    // hung promise no deadline owns). A wedge falls through to the revival
-    // lane so its alarm cadence decays along the backoff instead of firing at
-    // the lead interval forever.
-    if (this.#inFlight > 0) {
+    // Still working (or a revival pass is still running — its safety net owns
+    // the cadence, and a SECOND pass must never start underneath it): push
+    // the alarm ahead again — unless NOTHING has settled for so many
+    // consecutive fires that the work is wedged (a hung promise no deadline
+    // owns). A wedge falls through to the revival lane so its alarm cadence
+    // decays along the backoff instead of firing at the lead interval forever.
+    if (this.#inFlight > 0 || this.#reviving) {
       this.#busyRefires += 1;
       if (this.#busyRefires < MAX_CONSECUTIVE_BUSY_REFIRES) {
         this.#arm(now + KEEPALIVE_ALARM_LEAD_MS);
+        return;
+      }
+      if (this.#reviving) {
+        // The revival pass itself is hung. Starting another would lift the
+        // arm-suppression under the running one; park at the plateau instead
+        // — the impossibility guarantee holds (~4 wakes/day) and any real
+        // settlement resets the counter.
+        this.#arm(now + REVIVAL_BACKOFF_PLATEAU_MS);
         return;
       }
     }
@@ -230,7 +241,6 @@ export class ProcessorKeepalive {
     // NOT "the pass resolved": a pass that resolves but whose follow-on work
     // crashes the DO would otherwise reset the budget every round.
     this.#hooks.writeRecord(record);
-    this.#armedAtMs = record.armedAtMs;
     this.#hooks.armAlarm(record.armedAtMs);
 
     if (record.revivals === CRASH_LOOP_EVIDENCE_THRESHOLD) {
@@ -277,12 +287,12 @@ export class ProcessorKeepalive {
   #ensureArmedForWork(): void {
     if (this.#reviving) return;
     const atMs = this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS;
-    if (this.#armedAtMs !== null && this.#armedAtMs <= atMs) return;
+    const armedAt = this.armedAtMs;
+    if (armedAt !== null && armedAt <= atMs) return;
     this.#arm(atMs);
   }
 
   #arm(atMs: number): void {
-    this.#armedAtMs = atMs;
     const record = this.#hooks.readRecord();
     this.#hooks.writeRecord({
       ...(record?.version === this.#hooks.version
@@ -294,7 +304,6 @@ export class ProcessorKeepalive {
   }
 
   #disarmAndReset(): void {
-    this.#armedAtMs = null;
     const record = this.#hooks.readRecord();
     if (record !== undefined && (record.revivals !== 0 || record.armedAtMs !== null)) {
       this.#hooks.writeRecord({ ...FRESH_RECORD, version: this.#hooks.version });
