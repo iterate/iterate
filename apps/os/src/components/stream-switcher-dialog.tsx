@@ -9,7 +9,6 @@ import {
 } from "@iterate-com/ui/components/dialog";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
-import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
@@ -41,15 +40,59 @@ function normalizeDestination(raw: string): string | null {
   return STREAM_PATH_PATTERN.test(candidate) ? candidate : null;
 }
 
+// How many characters of the pre-match "head" to keep when it's too long to fit
+// whole. We keep the END of the head (the segment nearest the match) and drop the
+// front behind an ellipsis, so the match never scrolls off the left edge.
+const HEAD_KEEP = 20;
+
 /**
- * The ⌘K stream dialog, deliberately simple: the current stream with a form
- * to create/open a stream by path, and the stream tree (expanded along the
- * current path) to click around. Streams are lazily created — navigating IS
- * creating. The path field prefills with the current stream's parent, so the
- * default is a sibling; edit the path to nest deeper or jump elsewhere.
+ * A stream path in a result row, truncated the way editors truncate file paths —
+ * and, when searching, with the matched text highlighted and guaranteed visible:
  *
- * The dialog takes a FIXED two-thirds of the viewport; the tree scrolls
- * inside it, so expanding nodes never resizes or re-centers the dialog.
+ *   - no query → keep the LEAF whole (the informative part), let the parent
+ *     directory ellipsize: `/agents/web/really/lo…/thread-abc` → `…/thread-abc`.
+ *   - with a query → the matched span is a non-shrinking, highlighted island; the
+ *     head before it ellipsizes from the FAR end (nearest text kept) and the tail
+ *     after it ellipsizes on the right. So the match is never hidden in an ellipsis.
+ */
+function MatchedStreamPath({ path, query }: { path: string; query: string }) {
+  const at = query === "" ? -1 : path.toLowerCase().indexOf(query.toLowerCase());
+  if (at < 0) {
+    const leaf = path.split("/").at(-1) ?? path;
+    const parent = path.slice(0, path.length - leaf.length);
+    return (
+      <span className="flex min-w-0 items-center overflow-hidden font-mono">
+        <span className="truncate text-muted-foreground">{parent}</span>
+        <span className="shrink-0 whitespace-nowrap">{leaf}</span>
+      </span>
+    );
+  }
+  const head = path.slice(0, at);
+  const match = path.slice(at, at + query.length);
+  const tail = path.slice(at + query.length);
+  const shownHead = head.length > HEAD_KEEP ? `…${head.slice(head.length - HEAD_KEEP)}` : head;
+  return (
+    <span className="flex min-w-0 items-center overflow-hidden font-mono">
+      <span className="shrink-0 whitespace-nowrap text-muted-foreground">{shownHead}</span>
+      <mark className="shrink-0 whitespace-nowrap rounded-sm bg-yellow-200/80 px-0.5 text-foreground dark:bg-yellow-500/30">
+        {match}
+      </mark>
+      <span className="truncate text-muted-foreground">{tail}</span>
+    </span>
+  );
+}
+
+/**
+ * The ⌘K stream dialog: the recently-active streams by default, a live substring
+ * search over the whole project index as you type (arrow keys move the selection,
+ * Enter opens it), and a form to create/open a stream by path. Streams are lazily
+ * created — navigating IS creating. The path field prefills with the current
+ * stream's parent, so the default is a sibling; edit the path to nest deeper or
+ * jump elsewhere. A quiet project (nothing to list) falls back to the browsable
+ * tree, expanded along the current path.
+ *
+ * The dialog takes a FIXED two-thirds of the viewport; the list/tree scrolls
+ * inside it, so navigating never resizes or re-centers the dialog.
  */
 export function StreamSwitcherDialog({
   open,
@@ -69,7 +112,11 @@ export function StreamSwitcherDialog({
   // list is the recently-active default; the first keystroke flips it to search.
   // (The field still prefills the parent so "type a leaf, Enter" creates a sibling.)
   const [touched, setTouched] = useState(false);
+  // The keyboard cursor into the result list. -1 = nothing highlighted (fresh open,
+  // before you arrow or type), so Enter falls through to "create the typed path".
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectedRef = useRef<HTMLButtonElement>(null);
 
   // The whole streams index, live, in ONE subscription — so typing filters it in
   // memory (most-recently-active first) instead of waking a Durable Object per
@@ -103,6 +150,13 @@ export function StreamSwitcherDialog({
   )
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
     .slice(0, 50);
+  // Clamp the cursor to the current list (it shrinks as you type). -1 stays -1.
+  const selected = selectedIndex < 0 ? -1 : Math.min(selectedIndex, matches.length - 1);
+
+  // Keep the highlighted row in view as the cursor moves past the fold.
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
 
   // Opening seeds the path field for a sibling with the cursor placed after
   // the trailing slash, ready for the leaf. (The tree seeds its own expansion
@@ -112,6 +166,7 @@ export function StreamSwitcherDialog({
     if (!open) return;
     setDestination(destinationPrefill(currentPath));
     setTouched(false);
+    setSelectedIndex(-1);
     requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
@@ -138,25 +193,35 @@ export function StreamSwitcherDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {matches.length > 0 ? (
-            <ul className="flex flex-col gap-0.5" data-testid="stream-switcher-matches">
+            <ul
+              className="flex flex-col gap-0.5"
+              role="listbox"
+              aria-label={touched ? "Matching streams" : "Recently active streams"}
+              data-testid="stream-switcher-matches"
+            >
               <li
                 className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60"
+                role="presentation"
                 aria-hidden
               >
                 {touched ? "Matches" : "Recently active"}
               </li>
-              {matches.map((row) => (
-                <li key={row.path}>
+              {matches.map((row, index) => (
+                <li key={row.path} role="presentation">
                   <button
+                    ref={index === selected ? selectedRef : undefined}
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/70"
+                    role="option"
+                    title={row.path}
+                    aria-selected={index === selected}
+                    data-selected={index === selected || undefined}
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${
+                      index === selected ? "bg-accent" : "hover:bg-accent/70"
+                    }`}
+                    onMouseMove={() => setSelectedIndex(index)}
                     onClick={() => openStream(row.path)}
                   >
-                    <EventsStreamPathLabel
-                      path={row.path}
-                      label={row.path.split("/").at(-1) ?? row.path}
-                      className="min-w-0"
-                    />
+                    <MatchedStreamPath path={row.path} query={touched ? query : ""} />
                     <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
                       {row.eventCount}
                     </span>
@@ -195,6 +260,21 @@ export function StreamSwitcherDialog({
                 onChange={(event) => {
                   setDestination(event.target.value);
                   setTouched(true);
+                  setSelectedIndex(0); // each keystroke reshapes the list → highlight its top
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSelectedIndex((i) => Math.min(i + 1, matches.length - 1));
+                  } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSelectedIndex((i) => Math.max(i - 1, matches.length > 0 ? 0 : -1));
+                  } else if (event.key === "Enter" && selected >= 0 && matches[selected]) {
+                    // A highlighted result wins; otherwise Enter falls through to the
+                    // form submit below, which creates/opens the typed path.
+                    event.preventDefault();
+                    openStream(matches[selected].path);
+                  }
                 }}
                 placeholder="/agents/web/new-stream"
                 className="h-8 font-mono text-xs"
