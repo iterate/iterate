@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
@@ -136,8 +136,11 @@ export function StreamSwitcherDialog({
   // The open dialog's clock, ticking every few seconds (never Date.now() in
   // render: impure under concurrent replays). One tick drives BOTH the "ago"
   // labels and the recent window, so quiet streams age out while you watch.
+  // Seeded in a LAYOUT effect: the clock stops while closed, so an open must
+  // re-read it before paint — a passive effect would paint one frame with a
+  // stale window (or, on first open, no list at all).
   const [now, setNow] = useState(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     setNow(Date.now());
     const interval = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
