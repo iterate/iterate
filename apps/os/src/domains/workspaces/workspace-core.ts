@@ -53,7 +53,7 @@ export class UnboundedWorkspace extends Workspace {
  * coordinates, and branch history. Satisfied by the project Repo Durable
  * Object's stub.
  */
-export interface RepoAccess {
+interface RepoAccess {
   getHead(): Promise<{ commitOid: string }>;
   gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }>;
   log(input: { branch?: string; limit?: number }): Promise<{
@@ -71,7 +71,7 @@ export interface RepoAccess {
  * the root workspace's Durable Object stub (whose methods are themselves
  * backed by a root-mode {@link WorkspaceCore}).
  */
-export interface ParentReads {
+interface ParentReads {
   readFile(path: string): Promise<string | null>;
   readFileBytes(path: string): Promise<Uint8Array | null>;
   stat(path: string): Promise<WorkspaceFileInfo | null>;
@@ -82,7 +82,7 @@ export interface ParentReads {
 }
 
 /** The slice of a Durable Object's synchronous kv the core keeps its bookkeeping in. */
-export interface WorkspaceKv {
+interface WorkspaceKv {
   get<T = unknown>(key: string): T | undefined;
   put(key: string, value: unknown): void;
   delete(key: string): void;
