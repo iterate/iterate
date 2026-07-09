@@ -48,25 +48,6 @@ type LocalFileInfo = {
   size: number;
 };
 
-type MachineCapability = {
-  exec(
-    command: string,
-    cwd?: string,
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-  /** utf8 file contents, or `null` when the file does not exist (like `itx.workspace.readFile`). */
-  readFile(path: string): Promise<string | null>;
-  writeFile(path: string, content: string): Promise<void>;
-  edit(input: {
-    path: string;
-    oldString: string;
-    newString: string;
-    replaceAll?: boolean;
-  }): Promise<{ path: string; occurrenceCount: number }>;
-  readDir(dir?: string): Promise<LocalFileInfo[]>;
-  glob(pattern: string, cwd?: string): Promise<LocalFileInfo[]>;
-  notify(message: string): Promise<void>;
-};
-
 /** `instructions` shown to the agent through `__describe()`. */
 export const MACHINE_CAPABILITY_INSTRUCTIONS =
   "The human's own machine — the one running their `iterate chat` session — shared live over the " +
@@ -97,6 +78,25 @@ export function truncate(text: string, max: number): string {
   const omitted = text.length - max;
   return `${text.slice(0, max)}\n…[${omitted} more chars truncated]`;
 }
+
+type MachineCapability = {
+  exec(
+    command: string,
+    cwd?: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** utf8 file contents, or `null` when the file does not exist (like `itx.workspace.readFile`). */
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, content: string): Promise<void>;
+  edit(input: {
+    path: string;
+    oldString: string;
+    newString: string;
+    replaceAll?: boolean;
+  }): Promise<{ path: string; occurrenceCount: number }>;
+  readDir(dir?: string): Promise<LocalFileInfo[]>;
+  glob(pattern: string, cwd?: string): Promise<LocalFileInfo[]>;
+  notify(message: string): Promise<void>;
+};
 
 /**
  * Build the live capability. `onInvocation` fires before each method runs so the
