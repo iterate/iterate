@@ -147,10 +147,12 @@ export async function resetWorkerDurableObjects(input: {
   // container-class bootstrap (ensureContainerClasses) can still legacy-
   // create missing container classes container-enabled. A worker already on
   // exports rejects the legacy upload with API 100403 — fall back to
-  // `exports` tombstones (kept container classes then need live entries and
-  // stub code exports; legacy mode needs neither, untouched classes just
-  // persist). From a temp dir so the generated config never dirties the
-  // repo tree.
+  // `exports` tombstones (kept container classes then also need live config
+  // entries). BOTH modes must stub-export the kept classes from the module:
+  // Cloudflare rejects an upload that stops exporting a class whose objects
+  // still exist (API 10064), and kept container classes hold live objects on
+  // any slot whose sandboxes were used. From a temp dir so the generated
+  // config never dirties the repo tree.
   const parkedDir = mkdtempSync(join(tmpdir(), "do-reset-"));
   try {
     const shared = {
@@ -162,8 +164,12 @@ export async function resetWorkerDurableObjects(input: {
       workers_dev: false,
     };
     const parkedModule = readFileSync(PARKED_WORKER_MODULE, "utf8");
+    const stubExports = kept
+      .map((className) => `export class ${className} { constructor() {} }`)
+      .join("\n");
+    const parkedModuleWithKeptClasses = `${parkedModule}\n${stubExports}\n`;
 
-    writeFileSync(join(parkedDir, "worker.js"), parkedModule);
+    writeFileSync(join(parkedDir, "worker.js"), parkedModuleWithKeptClasses);
     writeFileSync(
       join(parkedDir, "wrangler.json"),
       JSON.stringify({
@@ -188,10 +194,7 @@ export async function resetWorkerDurableObjects(input: {
       console.log(
         `DO reset: ${input.workerName} is on the declarative exports flow (API 100403) — parking via exports tombstones instead`,
       );
-      const stubExports = kept
-        .map((className) => `export class ${className} { constructor() {} }`)
-        .join("\n");
-      writeFileSync(join(parkedDir, "worker.js"), `${parkedModule}\n${stubExports}\n`);
+      writeFileSync(join(parkedDir, "worker.js"), parkedModuleWithKeptClasses);
       writeFileSync(
         join(parkedDir, "wrangler.json"),
         JSON.stringify({
