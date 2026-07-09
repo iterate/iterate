@@ -25,8 +25,8 @@ import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
 import { presenceLabel, sparklinePoints, type RttMetrics } from "~/lib/stream-presence.ts";
 import {
-  activeModeDefinition,
   defaultModeForStream,
+  modeCapabilities,
   modesForStream,
   streamViewMode,
   useStreamViewPanels,
@@ -76,9 +76,9 @@ export function StreamViewHeader({
   const { focusedProcessorKey, focusProcessor, openProcessorsOverview } = useStreamViewPanels();
   const modes = modesForStream(streamPath);
   const activeMode = streamViewMode(search, streamPath);
-  const modeDef = activeModeDefinition(search, streamPath);
+  const caps = modeCapabilities(search, streamPath);
   const toolsOpen = search.filter === true;
-  const showFilterToggle = eventsToggle == null && (modeDef?.filters ?? true);
+  const showFilterToggle = eventsToggle == null && caps.filters;
   const filtersActive = feedFiltersActive(search, streamPath);
 
   return (
@@ -168,6 +168,7 @@ export function StreamViewHeader({
                     // Mode switch clears feed-items-only filters so they don't
                     // stick invisibly under Pretty; keep `q` for search continuity.
                     types: undefined,
+                    components: undefined,
                     from: undefined,
                     to: undefined,
                     preset: undefined,

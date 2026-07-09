@@ -2,22 +2,22 @@ import { useCallback } from "react";
 import { SearchIcon } from "lucide-react";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { FeedEventTypesFilter } from "~/components/feed-items-view.tsx";
-import type { StreamFeedPreset } from "~/lib/stream-feed-filters.ts";
+import { FeedComponentsFilter, FeedEventTypesFilter } from "~/components/feed-items-view.tsx";
+import { defaultPresetForMode, type StreamFeedPreset } from "~/lib/stream-feed-filters.ts";
 import {
+  modeCapabilities,
   streamViewMode,
   useStreamViewSearch,
   type StreamViewMode,
 } from "~/lib/stream-view-search.ts";
 
 /**
- * Mode-owned filter row. Pretty modes: search only. Raw / non-agent: feed-items
- * presets (when offered), search, event types, offset bounds. All state is
- * URL-backed (stream-view-search.ts).
+ * Mode-owned filter row. Capabilities come from the active mode preset:
+ * Pretty = search only; Pretty+raw / Raw = presets, components, event types,
+ * offsets. All state is URL-backed (stream-view-search.ts).
  */
 export function StreamFeedFilterRow({
   activePreset,
-  defaultPresetId,
   eventCount,
   connectionStatus,
   feedDatabase,
@@ -25,7 +25,6 @@ export function StreamFeedFilterRow({
   streamPath,
 }: {
   activePreset: StreamFeedPreset;
-  defaultPresetId: string;
   eventCount: number;
   connectionStatus: string;
   feedDatabase: StreamBrowserDatabase;
@@ -34,12 +33,13 @@ export function StreamFeedFilterRow({
 }) {
   const { search, setSearch } = useStreamViewSearch();
   const mode = streamViewMode(search, streamPath);
-  const prettyMode = mode === "pretty" || mode === "pretty-debug";
+  const caps = modeCapabilities(search, streamPath);
+  const defaultPreset = defaultPresetForMode(streamPath, mode);
   const focusOnMount = useCallback((element: HTMLInputElement | null) => element?.focus(), []);
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1.5 pt-1">
-      {prettyMode ? null : presets.length > 1 ? (
+      {caps.rawPresets && presets.length > 1 ? (
         <div
           className="flex flex-wrap items-center gap-1.5"
           role="radiogroup"
@@ -56,8 +56,9 @@ export function StreamFeedFilterRow({
                 aria-checked={active}
                 onClick={() =>
                   setSearch({
-                    preset: preset.id === defaultPresetId ? undefined : preset.id,
+                    preset: preset.id === defaultPreset.id ? undefined : preset.id,
                     types: undefined,
+                    components: undefined,
                     from: undefined,
                     to: undefined,
                   })
@@ -75,52 +76,61 @@ export function StreamFeedFilterRow({
           })}
         </div>
       ) : null}
-      <div className="flex h-8 min-w-0 max-w-xs flex-1 items-center gap-2 rounded-full bg-muted px-3">
-        <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <input
-          ref={focusOnMount}
-          value={search.q ?? ""}
-          onChange={(event) => setSearch({ q: event.target.value || undefined })}
-          placeholder={prettyMode ? "Search chat…" : "Search feed…"}
-          aria-label={prettyMode ? "Search chat" : "Search feed"}
-          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-        />
-      </div>
-      {prettyMode ? null : (
-        <>
-          <FeedEventTypesFilter
-            database={feedDatabase}
-            eventTypePrefix={activePreset.eventTypePrefix ?? null}
-            value={search.types ?? null}
-            onChange={(types) => setSearch({ types: types ?? undefined })}
+      {caps.search ? (
+        <div className="flex h-8 min-w-0 max-w-xs flex-1 items-center gap-2 rounded-full bg-muted px-3">
+          <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={focusOnMount}
+            value={search.q ?? ""}
+            onChange={(event) => setSearch({ q: event.target.value || undefined })}
+            placeholder={caps.agentFeed && !caps.rawFeed ? "Search chat…" : "Search feed…"}
+            aria-label={caps.agentFeed && !caps.rawFeed ? "Search chat" : "Search feed"}
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
-          <div
-            className="flex items-center gap-1 font-mono text-xs text-muted-foreground"
-            title="Raw event offset range"
-          >
-            <span>from</span>
-            <OffsetInput
-              value={search.from}
-              placeholder="#"
-              onChange={(from) => setSearch({ from })}
-            />
-            <span>to</span>
-            <OffsetInput value={search.to} placeholder="#" onChange={(to) => setSearch({ to })} />
-          </div>
-        </>
-      )}
+        </div>
+      ) : null}
+      {caps.rawComponents ? (
+        <FeedComponentsFilter
+          database={feedDatabase}
+          value={search.components ?? null}
+          onChange={(components) => setSearch({ components: components ?? undefined })}
+        />
+      ) : null}
+      {caps.rawEventTypes ? (
+        <FeedEventTypesFilter
+          database={feedDatabase}
+          eventTypePrefix={activePreset.eventTypePrefix ?? null}
+          value={search.types ?? null}
+          onChange={(types) => setSearch({ types: types ?? undefined })}
+        />
+      ) : null}
+      {caps.rawOffsets ? (
+        <div
+          className="flex items-center gap-1 font-mono text-xs text-muted-foreground"
+          title="Raw event offset range"
+        >
+          <span>from</span>
+          <OffsetInput
+            value={search.from}
+            placeholder="#"
+            onChange={(from) => setSearch({ from })}
+          />
+          <span>to</span>
+          <OffsetInput value={search.to} placeholder="#" onChange={(to) => setSearch({ to })} />
+        </div>
+      ) : null}
       <span className="shrink-0 font-mono text-xs text-muted-foreground">
         {eventCount.toLocaleString()} events · {connectionStatus}
-        {prettyModeLabel(mode)}
+        {modeLabel(mode)}
       </span>
     </div>
   );
 }
 
-function prettyModeLabel(mode: StreamViewMode): string {
+function modeLabel(mode: StreamViewMode): string {
   if (mode === "pretty") return " · pretty";
-  if (mode === "pretty-debug") return " · pretty+debug";
-  return "";
+  if (mode === "pretty-raw") return " · pretty+raw";
+  return " · raw";
 }
 
 function OffsetInput({

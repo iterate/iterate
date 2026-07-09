@@ -8,34 +8,42 @@ import { z } from "zod";
  * `.extend()` — so the component reads/writes mode, filter, and processor-
  * sidebar state through the URL and every view is shareable.
  *
- * Every field is optional and omitted from the URL at its default. `.catch(undefined)`
- * keeps a hand-edited or stale param from bailing the whole route to its error
- * boundary — a bad value just reverts to the default.
- *
- * Modes (Pretty / Pretty+debug / Raw) are React view modes, not pure filters.
- * Agent streams offer all three; other domains default to the raw feed mode.
- * See modesForStream().
+ * Modes (Pretty / Pretty+raw / Raw) are React view modes. Agent streams offer
+ * all three; other domains default to raw. Pretty+raw = pretty agent feed +
+ * raw feed_items (with the event inspector). Filters encode both feed-item
+ * *components* and contained raw *event types* (see stream-feed-filters.ts).
  */
-export const StreamViewMode = z.enum(["pretty", "pretty-debug", "raw"]);
-export type StreamViewMode = z.infer<typeof StreamViewMode>;
+const StreamViewModeRaw = z.enum(["pretty", "pretty-raw", "raw", "pretty-debug"]);
+export type StreamViewMode = "pretty" | "pretty-raw" | "raw";
 
 export const StreamViewSearch = z.object({
-  /** Active view mode; omitted on the stream's default (pretty for agents, raw otherwise). */
-  mode: StreamViewMode.optional().catch(undefined),
+  /**
+   * Active view mode; omitted on the stream's default (pretty for agents, raw
+   * otherwise). `pretty-debug` is accepted as a legacy alias of `pretty-raw`.
+   */
+  mode: StreamViewModeRaw.optional().catch(undefined),
   /**
    * Legacy Feed/State tab. Accepted so old links don't break; State is ignored
    * (use panel/processor). Prefer `mode`.
    */
   tab: z.enum(["feed", "state"]).optional().catch(undefined),
-  /** Feed-items preset id for non-agent / Raw domain filters; omitted on default. */
+  /** Feed-items domain preset id; omitted on default. */
   preset: z.string().optional().catch(undefined),
-  /** Feed text search query. */
+  /** Text query (agent feed and/or feed_items, depending on mode). */
   q: z.string().optional().catch(undefined),
-  /** Exact event-type filters (any-of) for the feed-items (Raw) mode. */
+  /**
+   * Event-type filter (any-of) for feed_items rows — matches the primary event
+   * type of a group or singleton (see FEED_TYPE_EXPRESSION).
+   */
   types: z.array(z.string()).optional().catch(undefined),
-  /** Inclusive lower offset bound for feed-items mode. */
+  /**
+   * Feed-item *component* filter (any-of) — `feed_items.component` values such
+   * as `group`, `stream.woken`, `stream.child-stream-created`.
+   */
+  components: z.array(z.string()).optional().catch(undefined),
+  /** Inclusive lower offset bound for feed_items. */
   from: z.number().optional().catch(undefined),
-  /** Inclusive upper offset bound for feed-items mode. */
+  /** Inclusive upper offset bound for feed_items. */
   to: z.number().optional().catch(undefined),
   /** Offset of the raw event open in the inspector side panel. */
   event: z.number().optional().catch(undefined),
@@ -51,24 +59,86 @@ export const StreamViewSearch = z.object({
 
 export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
 
+/** What filter / body surfaces a mode exposes. Modes encode this as the preset. */
+export type StreamModeCapabilities = {
+  /** Agent chat collection (agent_feed_items). */
+  agentFeed: boolean;
+  /** Include agent-ui debug kinds (wakes, etc.) in the agent feed. */
+  agentShowDebug: boolean;
+  /** Grouped raw feed_items collection. */
+  rawFeed: boolean;
+  /** Raw event inspector (`?event=`) is meaningful. */
+  eventInspector: boolean;
+  /** Shell filter icon. */
+  filters: boolean;
+  /** Search box in the filter row. */
+  search: boolean;
+  /** Domain feed-items preset pills. */
+  rawPresets: boolean;
+  /** Event-type multi-select (types inside feed items). */
+  rawEventTypes: boolean;
+  /** Component multi-select (feed_items.component). */
+  rawComponents: boolean;
+  /** Offset from/to bounds. */
+  rawOffsets: boolean;
+};
+
 /** One header mode tab offered by a stream path. */
 export type StreamModeDefinition = {
   id: StreamViewMode;
   label: string;
-  /** Shell shows the filter icon only when true. */
-  filters: boolean;
+  capabilities: StreamModeCapabilities;
+};
+
+const PRETTY_CAPS: StreamModeCapabilities = {
+  agentFeed: true,
+  agentShowDebug: false,
+  rawFeed: false,
+  eventInspector: false,
+  filters: true,
+  search: true,
+  rawPresets: false,
+  rawEventTypes: false,
+  rawComponents: false,
+  rawOffsets: false,
+};
+
+const PRETTY_RAW_CAPS: StreamModeCapabilities = {
+  agentFeed: true,
+  agentShowDebug: true,
+  rawFeed: true,
+  eventInspector: true,
+  filters: true,
+  search: true,
+  rawPresets: true,
+  rawEventTypes: true,
+  rawComponents: true,
+  rawOffsets: true,
+};
+
+const RAW_CAPS: StreamModeCapabilities = {
+  agentFeed: false,
+  agentShowDebug: false,
+  rawFeed: true,
+  eventInspector: true,
+  filters: true,
+  search: true,
+  rawPresets: true,
+  rawEventTypes: true,
+  rawComponents: true,
+  rawOffsets: true,
 };
 
 /**
- * Modes available on a stream. Agents get Pretty / Pretty+debug / Raw; every
+ * Modes available on a stream. Agents get Pretty / Pretty+raw / Raw; every
  * other domain is a single implicit Raw feed (no mode tabs).
  */
 export function modesForStream(streamPath: string): StreamModeDefinition[] {
   if (streamPath.startsWith("/agents/")) {
     return [
-      { id: "pretty", label: "Pretty", filters: true },
-      { id: "pretty-debug", label: "Pretty + debug", filters: true },
-      { id: "raw", label: "Raw", filters: true },
+      { id: "pretty", label: "Pretty", capabilities: PRETTY_CAPS },
+      { id: "pretty-raw", label: "Pretty + raw", capabilities: PRETTY_RAW_CAPS },
+      { id: "raw", label: "Raw", capabilities: RAW_CAPS },
     ];
   }
   return [];
@@ -78,10 +148,27 @@ export function defaultModeForStream(streamPath: string): StreamViewMode {
   return streamPath.startsWith("/agents/") ? "pretty" : "raw";
 }
 
+/** Normalize legacy `pretty-debug` → `pretty-raw`. */
+export function normalizeStreamViewMode(
+  mode: z.infer<typeof StreamViewModeRaw> | undefined,
+): StreamViewMode | undefined {
+  if (mode == null) return undefined;
+  if (mode === "pretty-debug") return "pretty-raw";
+  return mode;
+}
+
 export function streamViewMode(search: StreamViewSearch, streamPath: string): StreamViewMode {
-  if (search.mode != null) return search.mode;
-  // Stale `tab=state` links no longer open a State tab; fall through to default.
-  return defaultModeForStream(streamPath);
+  return normalizeStreamViewMode(search.mode) ?? defaultModeForStream(streamPath);
+}
+
+export function modeCapabilities(
+  search: StreamViewSearch,
+  streamPath: string,
+): StreamModeCapabilities {
+  const mode = streamViewMode(search, streamPath);
+  if (mode === "pretty") return PRETTY_CAPS;
+  if (mode === "pretty-raw") return PRETTY_RAW_CAPS;
+  return RAW_CAPS;
 }
 
 export function activeModeDefinition(
@@ -91,7 +178,7 @@ export function activeModeDefinition(
   const modes = modesForStream(streamPath);
   if (modes.length === 0) return null;
   const id = streamViewMode(search, streamPath);
-  return modes.find((mode) => mode.id === id) ?? modes[0]!;
+  return modes.find((entry) => entry.id === id) ?? modes[0]!;
 }
 
 /**
@@ -108,11 +195,6 @@ export function useStreamViewSearch(): {
   const setSearch = useCallback(
     (patch: Partial<StreamViewSearch>) => {
       void navigate({
-        // `useNavigate()` isn't scoped to one route (this hook serves every
-        // stream-view route), so without a `to`/`from` the search reducer's
-        // inferred type collapses to `never`. The reducer below is written
-        // type-safely against our schema; we only erase its type at this
-        // un-narrowable assignment boundary.
         search: ((previous: StreamViewSearch) => ({ ...previous, ...patch })) as unknown as never,
         replace: true,
       });
@@ -129,14 +211,11 @@ export function useStreamViewSearch(): {
  * both, the inspector wins.
  */
 export function useStreamViewPanels(): {
-  /** Offset open in the raw-event inspector; null = closed. */
   inspectedOffset: number | null;
-  /** Subscription key of the processor focused in the sheet; null = overview. */
   focusedProcessorKey: string | null;
   processorsPanelOpen: boolean;
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
-  /** Focusing a processor implies the sheet is open. */
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;

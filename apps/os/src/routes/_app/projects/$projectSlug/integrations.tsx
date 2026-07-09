@@ -93,6 +93,7 @@ const Search = StreamViewSearch.extend({
 });
 
 const STREAM_VIEW_SEARCH_RESET = {
+  components: undefined,
   event: undefined,
   filter: undefined,
   from: undefined,

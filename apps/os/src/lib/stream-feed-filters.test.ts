@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFeedItemsFilter,
+  defaultPresetForMode,
   feedFiltersActive,
+  feedItemsFilterFromSearch,
   presetsForStream,
   shortEventType,
 } from "./stream-feed-filters.ts";
@@ -23,11 +25,22 @@ describe("presetsForStream", () => {
   });
 });
 
+describe("defaultPresetForMode", () => {
+  it("uses Everything for pretty-raw so the raw rail is unscoped", () => {
+    expect(defaultPresetForMode("/agents/x", "pretty-raw").id).toBe("everything");
+  });
+
+  it("uses the domain family for raw", () => {
+    expect(defaultPresetForMode("/agents/x", "raw").id).toBe("agent-events");
+  });
+});
+
 describe("buildFeedItemsFilter", () => {
   it("returns null when nothing narrows the feed", () => {
     expect(
       buildFeedItemsFilter({
         eventTypes: null,
+        components: null,
         eventTypePrefix: null,
         searchQuery: null,
         offsetFrom: null,
@@ -36,21 +49,24 @@ describe("buildFeedItemsFilter", () => {
     ).toBeNull();
   });
 
-  it("composes prefix, any-of types, search, and offset bounds into one WHERE", () => {
+  it("composes prefix, event types, components, search, and offset bounds", () => {
     const filter = buildFeedItemsFilter({
       eventTypes: ["events.iterate.com/agent/input-added", "events.iterate.com/agent/turn-ended"],
+      components: ["group", "stream.woken"],
       eventTypePrefix: "events.iterate.com/agent/",
       searchQuery: "hello",
       offsetFrom: 10,
       offsetTo: 99,
     });
     expect(filter?.whereSql).toMatchInlineSnapshot(
-      `"COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ? AND COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
+      `"COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ? AND COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) IN (?, ?) AND component IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
     );
     expect(filter?.params).toEqual([
       "events.iterate.com/agent/%",
       "events.iterate.com/agent/input-added",
       "events.iterate.com/agent/turn-ended",
+      "group",
+      "stream.woken",
       "%hello%",
       10,
       99,
@@ -60,12 +76,36 @@ describe("buildFeedItemsFilter", () => {
   it("matches groups that only OVERLAP the offset bounds", () => {
     const filter = buildFeedItemsFilter({
       eventTypes: null,
+      components: null,
       eventTypePrefix: null,
       searchQuery: null,
       offsetFrom: 10,
       offsetTo: null,
     });
     expect(filter?.whereSql).toBe("last_offset >= ?");
+  });
+});
+
+describe("feedItemsFilterFromSearch", () => {
+  it("encodes pretty-raw defaults as unscoped everything", () => {
+    expect(feedItemsFilterFromSearch({ mode: "pretty-raw" }, "/agents/x")).toMatchObject({
+      eventTypePrefix: null,
+      eventTypes: null,
+      components: null,
+    });
+  });
+
+  it("honors components + types from the URL", () => {
+    expect(
+      feedItemsFilterFromSearch(
+        { mode: "raw", components: ["stream.woken"], types: ["events.iterate.com/stream/woken"] },
+        "/agents/x",
+      ),
+    ).toMatchObject({
+      components: ["stream.woken"],
+      eventTypes: ["events.iterate.com/stream/woken"],
+      eventTypePrefix: "events.iterate.com/agent/",
+    });
   });
 });
 
@@ -76,29 +116,31 @@ describe("feedFiltersActive", () => {
   it("is inactive on the stream's defaults", () => {
     expect(feedFiltersActive({}, agentPath)).toBe(false);
     expect(feedFiltersActive({ mode: "pretty" }, agentPath)).toBe(false);
+    expect(feedFiltersActive({ mode: "pretty-raw" }, agentPath)).toBe(false);
     expect(feedFiltersActive({}, secretPath)).toBe(false);
   });
 
   it("signals search on pretty modes", () => {
     expect(feedFiltersActive({ q: "boom" }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ mode: "pretty-debug", q: "x" }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ mode: "pretty-raw", q: "x" }, agentPath)).toBe(true);
   });
 
-  it("ignores feed-items-only filters while in pretty mode", () => {
+  it("ignores feed-items-only filters while in pure pretty mode", () => {
     expect(feedFiltersActive({ types: ["a"], from: 1, to: 9 }, agentPath)).toBe(false);
   });
 
-  it("signals raw/feed-items filter deviations", () => {
+  it("signals raw filter deviations including components", () => {
     expect(feedFiltersActive({ mode: "raw", preset: "everything" }, agentPath)).toBe(true);
     expect(feedFiltersActive({ mode: "raw", q: "boom" }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ mode: "pretty-raw", components: ["group"] }, agentPath)).toBe(true);
     expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
     expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
-    expect(feedFiltersActive({ to: 9 }, secretPath)).toBe(true);
   });
 
-  it("judges what the feed renders, not the raw URL", () => {
-    expect(feedFiltersActive({ preset: "no-such-preset" }, secretPath)).toBe(false);
-    expect(feedFiltersActive({ types: [] }, secretPath)).toBe(false);
+  it("accepts legacy pretty-debug as pretty-raw for filter activity", () => {
+    expect(feedFiltersActive({ mode: "pretty-debug", components: ["group"] }, agentPath)).toBe(
+      true,
+    );
   });
 });
 

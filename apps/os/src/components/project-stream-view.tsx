@@ -45,12 +45,17 @@ import {
   type StreamMessageComposer,
 } from "~/components/stream-view-composer.tsx";
 import { StreamViewHeader } from "~/components/stream-view-header.tsx";
-import { presetsForStream } from "~/lib/stream-feed-filters.ts";
+import {
+  defaultPresetForMode,
+  feedItemsFilterFromSearch,
+  presetsForStream,
+} from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   defaultModeForStream,
+  modeCapabilities,
   modesForStream,
   streamViewMode,
   useStreamViewPanels,
@@ -62,7 +67,7 @@ type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 /**
  * The stream view: every domain page's main pane. Renders mode-owned feed
- * surfaces under the shared header (Pretty / Pretty+debug / Raw on agents),
+ * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
  * with the composer below and right-edge overlays (raw-event inspector,
  * processors sheet) on top.
  *
@@ -168,15 +173,13 @@ export function ProjectStreamView({
   const { search, setSearch } = useStreamViewSearch();
   const panels = useStreamViewPanels();
   const activeMode = streamViewMode(search, streamPath);
-  // Pretty modes only exist on agent streams (agent_feed_items projection).
-  const isPrettyMode =
-    streamPath.startsWith("/agents/") && (activeMode === "pretty" || activeMode === "pretty-debug");
-  // Feed-items presets apply in Raw mode (and non-agent streams). Stale ids
-  // fall back to the domain default (first preset).
+  const caps = modeCapabilities(search, streamPath);
+  // Feed-items presets apply whenever the mode shows raw feed_items.
   const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
-  const defaultPreset = presets[0]!;
+  const defaultPreset = defaultPresetForMode(streamPath, activeMode);
   const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
   const feedSearch = search.q ?? "";
+  const rawFilter = feedItemsFilterFromSearch(search, streamPath);
 
   // The server is about to append: verify deliveries actually arrive and
   // reconnect within seconds if a subscription died silently — instead of
@@ -281,7 +284,6 @@ export function ProjectStreamView({
     search.filter !== true ? null : (
       <StreamFeedFilterRow
         activePreset={activePreset}
-        defaultPresetId={defaultPreset.id}
         eventCount={eventCount}
         connectionStatus={snapshot.connectionStatus}
         feedDatabase={feedStore.streamDatabase}
@@ -290,49 +292,64 @@ export function ProjectStreamView({
       />
     );
 
+  const agentFeed = caps.agentFeed ? (
+    <AgentFeedView
+      {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
+        ? { onInterruptQueuedMessages: interrupt.run }
+        : {})}
+      // Fresh virtualizer state per stream mirror + mode (see AgentFeedView docs).
+      key={`${store.streamDatabase.databasePath}:${activeMode}:agent`}
+      database={store.streamDatabase}
+      liveState={agentUiState}
+      search={feedSearch}
+      showDebug={caps.agentShowDebug}
+      emptyLabel={connectionLabel}
+      isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
+      projectSlug={projectSlug}
+      isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
+    />
+  ) : null;
+
+  const rawFeed = caps.rawFeed ? (
+    <FeedItemsView
+      key={`${feedStore.streamDatabase.databasePath}:${activeMode}:raw`}
+      database={feedStore.streamDatabase}
+      emptyLabel={connectionLabel}
+      filter={rawFilter}
+      onInspectEvent={panels.inspectEvent}
+    />
+  ) : null;
+
+  // Mode body: Pretty = agent only; Raw = feed_items only; Pretty+raw = both
+  // stacked (chat + full raw rail with click-to-inspect).
+  const modeBody =
+    caps.agentFeed && caps.rawFeed ? (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="relative min-h-0 flex-[3] overflow-hidden border-b">{agentFeed}</div>
+        <div className="relative flex min-h-0 flex-[2] flex-col overflow-hidden">
+          <div className="flex h-7 shrink-0 items-center border-b bg-muted/30 px-4">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Raw events
+            </span>
+            <span className="ml-2 font-mono text-[10px] text-muted-foreground/70">
+              click a row to inspect · arrow keys page
+            </span>
+          </div>
+          <div className="relative min-h-0 flex-1 overflow-hidden">{rawFeed}</div>
+        </div>
+      </div>
+    ) : (
+      (agentFeed ?? rawFeed)
+    );
+
   // The feed column — mode body with overlays on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
   // thing.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {isPrettyMode ? (
-          <AgentFeedView
-            {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
-              ? { onInterruptQueuedMessages: interrupt.run }
-              : {})}
-            // Fresh virtualizer state per stream mirror + mode (see AgentFeedView docs).
-            key={`${store.streamDatabase.databasePath}:${activeMode}`}
-            database={store.streamDatabase}
-            liveState={agentUiState}
-            search={feedSearch}
-            showDebug={activeMode === "pretty-debug"}
-            emptyLabel={connectionLabel}
-            isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
-            projectSlug={projectSlug}
-            // The reduced-state row only exists once the processor has
-            // checkpointed; an already-subscribed empty stream is "nothing
-            // here yet", not "connecting".
-            isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
-          />
-        ) : (
-          <FeedItemsView
-            // Fresh virtualizer state per stream mirror (see FeedItemsView
-            // docs); filter changes are handled inside without remounting.
-            key={feedStore.streamDatabase.databasePath}
-            database={feedStore.streamDatabase}
-            emptyLabel={connectionLabel}
-            filter={{
-              eventTypes: search.types ?? null,
-              eventTypePrefix: activePreset.eventTypePrefix ?? null,
-              searchQuery: feedSearch === "" ? null : feedSearch,
-              offsetFrom: search.from ?? null,
-              offsetTo: search.to ?? null,
-            }}
-            onInspectEvent={panels.inspectEvent}
-          />
-        )}
-        {panels.inspectedOffset != null ? (
+        {modeBody}
+        {caps.eventInspector && panels.inspectedOffset != null ? (
           <RawEventInspectorPanel
             database={store.streamDatabase}
             offset={panels.inspectedOffset}
@@ -346,7 +363,7 @@ export function ProjectStreamView({
         <StreamViewComposer
           autoFocusMessage={autoFocusMessageComposer}
           {...(defaultComposerMode == null
-            ? isPrettyMode
+            ? caps.agentFeed
               ? { defaultMode: "message" as const }
               : { defaultMode: "raw" as const }
             : { defaultMode: defaultComposerMode })}
@@ -419,6 +436,7 @@ export function ProjectStreamView({
                       setSearch({
                         mode: mode === defaultMode ? undefined : mode,
                         types: undefined,
+                        components: undefined,
                         from: undefined,
                         to: undefined,
                         preset: undefined,

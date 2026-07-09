@@ -18,6 +18,7 @@ import type { FeedItemData } from "~/domains/streams/client-libraries/processors
 import {
   buildFeedItemsFilter,
   FEED_TYPE_EXPRESSION,
+  shortComponent,
   shortEventType,
   type FeedItemsFilterInput,
 } from "~/lib/stream-feed-filters.ts";
@@ -275,11 +276,46 @@ function parseFeedItemData(raw: string): FeedItemData | null {
 }
 
 /**
- * Any-of event-type filter for the feed-items presets: a roomy two-column grid
- * of checkboxes, one per distinct primary event type currently in the local
- * mirror (scoped to the active preset's prefix so the offered types can
- * actually match), sorted alphabetically by display name and annotated with
- * per-type event counts.
+ * Any-of filter for feed_items.component (group, stream.woken, …) — the
+ * "feed item type" half of the dual filter model.
+ */
+export function FeedComponentsFilter({
+  database,
+  onChange,
+  value,
+}: {
+  database: StreamBrowserDatabase;
+  onChange: (components: string[] | null) => void;
+  value: readonly string[] | null;
+}) {
+  const result = useStreamQuery(
+    database,
+    `SELECT component, COUNT(*) AS total FROM feed_items GROUP BY component ORDER BY component`,
+    [],
+  );
+  const options = result.data.flatMap((row) =>
+    typeof row.component === "string"
+      ? [{ count: Number(row.total ?? 0), type: row.component }]
+      : [],
+  );
+  return (
+    <MultiCheckFilter
+      dataTestId="stream-feed-component"
+      emptyLabel="All components"
+      labelSingular="component"
+      labelPlural="components"
+      options={options}
+      shortLabel={shortComponent}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
+/**
+ * Any-of event-type filter for feed items: primary event type of a group or
+ * singleton (the "event types inside raw feed items" half of the dual model).
+ * Scoped to the active preset's prefix so offered types can actually match.
  */
 export function FeedEventTypesFilter({
   database,
@@ -295,6 +331,7 @@ export function FeedEventTypesFilter({
   const filter = buildFeedItemsFilter({
     eventTypePrefix,
     eventTypes: null,
+    components: null,
     searchQuery: null,
     offsetFrom: null,
     offsetTo: null,
@@ -311,14 +348,44 @@ export function FeedEventTypesFilter({
       ? [{ count: Number(row.total ?? 0), type: row.event_type }]
       : [],
   );
+  return (
+    <MultiCheckFilter
+      dataTestId="stream-feed-event-type"
+      emptyLabel="All event types"
+      labelSingular="event type"
+      labelPlural="event types"
+      options={types}
+      shortLabel={shortEventType}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
+function MultiCheckFilter({
+  dataTestId,
+  emptyLabel,
+  labelSingular,
+  labelPlural,
+  options,
+  shortLabel,
+  value,
+  onChange,
+}: {
+  dataTestId: string;
+  emptyLabel: string;
+  labelSingular: string;
+  labelPlural: string;
+  options: readonly { count: number; type: string }[];
+  shortLabel: (type: string) => string;
+  value: readonly string[] | null;
+  onChange: (next: string[] | null) => void;
+}) {
   const selected = value ?? [];
-  // Stale URL values (hand-edited, or events not mirrored yet) must still
-  // render as selections so they can be unchecked. Sort the merged set by the
-  // displayed short name so the two-column grid reads alphabetically (the SQL's
-  // ORDER BY is on the full type; the stale entries are appended out of band).
-  const staleSelections = selected.filter((type) => !types.some((entry) => entry.type === type));
-  const options = [...staleSelections.map((type) => ({ count: 0, type })), ...types].sort((a, b) =>
-    shortEventType(a.type).localeCompare(shortEventType(b.type)),
+  // Stale URL values must still render as selections so they can be unchecked.
+  const staleSelections = selected.filter((type) => !options.some((entry) => entry.type === type));
+  const merged = [...staleSelections.map((type) => ({ count: 0, type })), ...options].sort((a, b) =>
+    shortLabel(a.type).localeCompare(shortLabel(b.type)),
   );
 
   function toggle(type: string, checked: boolean) {
@@ -334,27 +401,27 @@ export function FeedEventTypesFilter({
             variant="outline"
             size="sm"
             className="max-w-56 font-mono text-xs font-normal"
-            data-testid="stream-feed-event-type"
+            data-testid={dataTestId}
           />
         }
       >
         <span className="truncate">
           {selected.length === 0
-            ? "All event types"
+            ? emptyLabel
             : selected.length === 1
-              ? shortEventType(selected[0]!)
-              : `${selected.length} event types`}
+              ? shortLabel(selected[0]!)
+              : `${selected.length} ${labelPlural}`}
         </span>
         <ChevronDownIcon className="size-3 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[min(90vw,34rem)] max-w-[calc(100vw-2rem)]">
         <div className="grid max-h-96 grid-cols-2 gap-x-1 overflow-y-auto">
-          {options.length === 0 ? (
+          {merged.length === 0 ? (
             <p className="col-span-2 px-2 py-1.5 text-xs text-muted-foreground">
-              No event types in the mirror yet.
+              No {labelPlural} in the mirror yet.
             </p>
           ) : (
-            options.map((entry) => (
+            merged.map((entry) => (
               <DropdownMenuCheckboxItem
                 key={entry.type}
                 checked={selected.includes(entry.type)}
@@ -362,8 +429,8 @@ export function FeedEventTypesFilter({
                 onCheckedChange={(checked) => toggle(entry.type, checked)}
                 className="min-w-0 font-mono text-xs"
               >
-                <span className="min-w-0 flex-1 truncate" title={shortEventType(entry.type)}>
-                  {shortEventType(entry.type)}
+                <span className="min-w-0 flex-1 truncate" title={shortLabel(entry.type)}>
+                  {shortLabel(entry.type)}
                 </span>
                 <span className="shrink-0 text-muted-foreground">
                   {entry.count.toLocaleString()}
@@ -376,7 +443,7 @@ export function FeedEventTypesFilter({
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-xs" onClick={() => onChange(null)}>
-              Clear selection
+              Clear {labelSingular} filter
             </DropdownMenuItem>
           </>
         ) : null}
