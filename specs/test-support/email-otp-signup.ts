@@ -7,8 +7,8 @@ import { spinnerWaiter } from "middlewright";
  * (apps/auth/src/server/auth-plugins.ts), so this drives the exact flow a
  * human sees: OS login → auth login (email OTP) → org/project onboarding
  * → back to OS signed in. Nustom test users auto-join the shared Iterate
- * organization, so they land back in OS and create their requested first
- * project there.
+ * organization, so auth may show project-only access setup instead of the
+ * first-organization form.
  *
  * The lane only exists where the auth deployment enables it
  * (APP_CONFIG_EMAIL_OTP_ENABLED, default on for dev stages; OS mirrors it as
@@ -52,17 +52,52 @@ export async function signUpWithEmailOtp(
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     const organizationNameInput = page.getByLabel("Organization name");
+    const projectSlugInput = page.getByLabel("Project slug");
     const destination = await Promise.race([
-      organizationNameInput.waitFor({ timeout: 30_000 }).then(() => "auth-onboarding" as const),
-      page.waitForURL("**/projects", { timeout: 30_000 }).then(() => "os-projects" as const),
+      page
+        .getByRole("heading", { name: "Create your organization" })
+        .waitFor({ timeout: 30_000 })
+        .then(() => "auth-create-organization" as const),
+      page
+        .getByRole("heading", { name: "Create a project" })
+        .waitFor({ timeout: 30_000 })
+        .then(() => "auth-create-project" as const),
+      page
+        .getByRole("heading", { name: "Choose project access" })
+        .waitFor({ timeout: 30_000 })
+        .then(() => "auth-choose-project-access" as const),
+      waitForOsProjects(page, 30_000).then(() => "os-projects" as const),
     ]);
 
-    if (destination === "auth-onboarding") {
+    if (destination === "auth-create-organization") {
       // A brand-new user with no organization parks on auth's first-run
       // onboarding: organization name and first project slug in one form.
       await organizationNameInput.fill(`Playwright ${input.email.split("@")[0]}`);
-      await page.getByLabel("Project slug").fill(input.projectSlug, { timeout: 15_000 });
+      await projectSlugInput.fill(input.projectSlug, { timeout: 15_000 });
       await page.getByRole("button", { name: "Get started" }).click({ timeout: 15_000 });
+      await continueOAuthProjectSelectionIfNeeded(page);
+      return;
+    }
+
+    if (destination === "auth-create-project") {
+      // Auto-joined users already have an organization, so auth asks only for
+      // the first project before it can finish the OAuth project selection.
+      await projectSlugInput.fill(input.projectSlug, { timeout: 15_000 });
+      await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
+      await continueOAuthProjectSelectionIfNeeded(page);
+      return;
+    }
+
+    if (destination === "auth-choose-project-access") {
+      // The shared organization may already have projects. Create the requested
+      // one and select it for this OAuth grant instead of continuing with an
+      // unrelated existing project.
+      await page.getByRole("button", { name: "New project" }).click({ timeout: 15_000 });
+      const dialog = page.getByRole("dialog");
+      await dialog.getByLabel("Project slug").fill(input.projectSlug, { timeout: 15_000 });
+      await dialog.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
+      await dialog.waitFor({ state: "hidden", timeout: 30_000 });
+      await continueOAuthProjectSelectionIfNeeded(page);
       return;
     }
 
@@ -72,4 +107,25 @@ export async function signUpWithEmailOtp(
     await page.getByLabel("Slug").fill(input.projectSlug, { timeout: 15_000 });
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
   });
+}
+
+async function continueOAuthProjectSelectionIfNeeded(page: Page) {
+  const destination = await Promise.race([
+    waitForOsProjects(page, 60_000).then(() => "os" as const),
+    page
+      .getByRole("button", { name: "Continue" })
+      .waitFor({ timeout: 60_000 })
+      .then(() => "auth-project-selection" as const),
+  ]);
+
+  if (destination === "auth-project-selection") {
+    await page.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+  }
+}
+
+async function waitForOsProjects(page: Page, timeout: number) {
+  await page.waitForURL(
+    (url) => url.pathname === "/projects" || url.pathname.startsWith("/projects/"),
+    { timeout },
+  );
 }
