@@ -172,9 +172,11 @@ class CompactionProcessor extends StreamProcessor<
 > {
   readonly contract = CompactionProcessorContract;
 
-  /** One compaction per delivery instance: a batch carrying several
-   * over-threshold reports triggers on the first, not once per report. */
-  #compacting = false;
+  /** Serializes compaction runs on this delivery instance. Each run re-checks
+   * its durable guards when its turn comes, so a batch carrying several
+   * over-threshold reports converges to at most one fresh compaction — the
+   * later runs see the first one's history-reset and skip as stale. */
+  #executionChain: Promise<unknown> = Promise.resolve();
 
   protected override processEvent({
     append,
@@ -189,11 +191,9 @@ class CompactionProcessor extends StreamProcessor<
     const thresholdTokens = Math.floor(usage.maxContextTokens * COMPACTION_TRIGGER_FRACTION);
     if (contextTokens < thresholdTokens) return;
     if (streamMaxOffset - event.offset > COMPACTION_MAX_TRIGGER_LAG_EVENTS) return;
-    if (this.#compacting) return;
-    this.#compacting = true;
     const triggeringEventOffset = event.offset;
 
-    runInBackground(async () => {
+    const run = this.#executionChain.then(async () => {
       // At-least-once redelivery guard: appends dedupe on their idempotency
       // keys either way, but the summary itself is an expensive AI call — if
       // this trigger already produced its completion, skip the whole run.
@@ -201,6 +201,15 @@ class CompactionProcessor extends StreamProcessor<
         idempotencyKey: `compaction/completed@${triggeringEventOffset}`,
       });
       if (alreadyCompleted !== undefined) return;
+      // A history-reset newer than this trigger means its fullness reading is
+      // stale — an earlier trigger in this batch (or a prior delivery)
+      // already compacted past it.
+      const newerReset = await this.stream.getEvents({
+        afterOffset: triggeringEventOffset,
+        eventTypes: ["events.iterate.com/agent/history-reset"],
+        limit: 1,
+      });
+      if (newerReset.length > 0) return;
       const startedAt = Date.now();
       await append({
         type: "events.iterate.com/compaction/compaction-started",
@@ -291,6 +300,8 @@ class CompactionProcessor extends StreamProcessor<
         });
       }
     });
+    this.#executionChain = run.catch(() => undefined);
+    runInBackground(() => run);
   }
 }
 
