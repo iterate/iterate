@@ -3140,7 +3140,13 @@ function isNoSlotAvailableError(error: unknown) {
 // Contention is expected with many PRs in flight: instead of failing (or
 // worse, stealing a slot), the deploy waits its turn and logs who holds what
 // while it waits. Override with PREVIEW_SLOT_WAIT_MS=0 to fail fast.
-const defaultSlotWaitTotalMs = 20 * 60 * 1000;
+// Bounded so a slotless (or broken-slot) run fails LOUDLY inside the job's
+// own timeout instead of sitting silent: 2026-07-09's unerasable-slot loop
+// burned this entire budget per attempt, and external retries stacked those
+// into 15-30 minute walls. 10 minutes still rides out a normal handover
+// (cleanup of a closing PR takes ~2m); a genuinely full fleet should surface
+// as a failed check with the holder table, not as a 20-minute spinner.
+const defaultSlotWaitTotalMs = 10 * 60 * 1000;
 // Semaphore caps a single acquire long-poll at 5 minutes; loop to go longer.
 const slotWaitPerAttemptMs = 5 * 60 * 1000;
 
