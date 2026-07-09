@@ -585,6 +585,10 @@ function coreState(value: unknown): CoreStreamState {
   return state as CoreStreamState;
 }
 
-function waitFor(predicate: () => boolean, describe: () => string, timeoutMs = 10_000) {
+function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  describe: () => string,
+  timeoutMs = 10_000,
+) {
   return waitForCondition(predicate, { description: describe, intervalMs: 100, timeoutMs });
 }

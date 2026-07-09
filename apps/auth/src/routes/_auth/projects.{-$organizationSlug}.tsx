@@ -1,20 +1,26 @@
 import { createFileRoute, Navigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod/v4";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { orpcClient } from "../../utils/query.tsx";
+import { useSession } from "../../utils/auth-client.ts";
+import {
+  inventoryQueryOptions,
+  organizationManagementSections,
+  type InventoryOrganization,
+  type OrganizationManagementSection,
+  type Project,
+} from "./-projects-data.ts";
 import {
   DeleteOrganizationDialog,
   DeleteProjectDialog,
-  inventoryQueryOptions,
   NameDialog,
   OrganizationDetail,
   OrganizationRail,
   ProjectDialog,
-  type InventoryOrganization,
-  type Project,
 } from "./-projects-shared.tsx";
 
 // Organization & project management. The organization being managed lives in
@@ -22,12 +28,17 @@ import {
 // `/projects/<slug>` share this one route/component:
 // https://tanstack.com/router/latest/docs/framework/react/guide/path-params
 export const Route = createFileRoute("/_auth/projects/{-$organizationSlug}")({
+  validateSearch: z.object({
+    section: z.enum(organizationManagementSections).optional().catch(undefined),
+  }),
   component: ProjectsPage,
 });
 
 function ProjectsPage() {
   const { organizationSlug } = Route.useParams();
+  const { section } = Route.useSearch();
   const navigate = Route.useNavigate();
+  const session = useSession();
   const queryClient = useQueryClient();
   const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
   const [projectDialog, setProjectDialog] = useState<{ organizationSlug: string } | null>(null);
@@ -38,12 +49,28 @@ function ProjectsPage() {
   const organizations = inventoryQuery.data ?? [];
   const selectedOrganization =
     organizations.find((organization) => organization.slug === organizationSlug) ?? null;
+  const selectedOrganizationCanManage = selectedOrganization
+    ? canManageOrganizationMembers({
+        organizationRole: selectedOrganization.role,
+        platformRole: session.user.role,
+      })
+    : false;
+  const activeSection = getActiveSection({
+    requestedSection: section,
+    canManageInvitations: selectedOrganizationCanManage,
+  });
 
   const refreshInventory = () =>
     queryClient.invalidateQueries({ queryKey: inventoryQueryOptions().queryKey });
 
   const goToOrganization = (slug: string) =>
     navigate({ to: "/projects/{-$organizationSlug}", params: { organizationSlug: slug } });
+
+  useEffect(() => {
+    if (!selectedOrganization) return;
+    if (activeSection === "projects") return;
+    document.getElementById(`organization-${activeSection}`)?.scrollIntoView({ block: "start" });
+  }, [activeSection, selectedOrganization]);
 
   const createOrganization = useMutation({
     mutationFn: (input: { name: string }) => orpcClient.organization.create(input),
@@ -151,12 +178,16 @@ function ProjectsPage() {
             <OrganizationRail
               organizations={organizations}
               selectedOrganizationSlug={selectedOrganization.slug}
+              selectedSection={activeSection}
             />
             <OrganizationDetail
               organization={selectedOrganization}
-              canManage={
-                selectedOrganization.role === "owner" || selectedOrganization.role === "admin"
+              canManage={selectedOrganizationCanManage}
+              canManageOwnerRoles={
+                isPlatformAdminRole(session.user.role) || selectedOrganization.role === "owner"
               }
+              currentUserId={session.user.id}
+              activeSection={activeSection}
               onCreateProject={() =>
                 setProjectDialog({ organizationSlug: selectedOrganization.slug })
               }
@@ -194,6 +225,7 @@ function ProjectsPage() {
       </section>
 
       <NameDialog
+        key={organizationDialogOpen ? "create-organization-open" : "create-organization-closed"}
         open={organizationDialogOpen}
         title="Create organization"
         description="Use the name people recognize."
@@ -232,4 +264,27 @@ function ProjectsPage() {
       />
     </main>
   );
+}
+
+function canManageOrganizationMembers(input: {
+  organizationRole: InventoryOrganization["role"];
+  platformRole?: string | null;
+}) {
+  return (
+    isPlatformAdminRole(input.platformRole) ||
+    input.organizationRole === "owner" ||
+    input.organizationRole === "admin"
+  );
+}
+
+function isPlatformAdminRole(role: string | null | undefined) {
+  return role === "admin";
+}
+
+function getActiveSection(input: {
+  requestedSection: OrganizationManagementSection | undefined;
+  canManageInvitations: boolean;
+}): OrganizationManagementSection {
+  if (input.requestedSection === "invitations" && !input.canManageInvitations) return "members";
+  return input.requestedSection ?? "projects";
 }
