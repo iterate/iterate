@@ -16,6 +16,7 @@ import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -35,6 +36,10 @@ import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
+
+// Sentinel for "the root workspace cache could not answer — use the clone
+// lane". Distinct from null, which is an authoritative "not at HEAD".
+const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
@@ -350,7 +355,9 @@ export class RepoDurableObject extends DurableObject<Env> {
    * Committed file contents at HEAD — or, with `commitOid`, pinned to that
    * commit — null when the path does not exist there. `encoding: "base64"`
    * reads the raw bytes (images, PDFs — anything a utf8 decode would corrupt)
-   * and returns them base64-encoded.
+   * and returns them base64-encoded. HEAD reads serve from the root workspace
+   * cache (no clone); pinned reads keep the clone lane (the cache only ever
+   * holds the head).
    */
   async readFile(input: {
     path: string;
@@ -359,6 +366,10 @@ export class RepoDurableObject extends DurableObject<Env> {
   }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
+    if (input.commitOid === undefined) {
+      const cached = await this.#readHeadFromRootCache(path, input.encoding);
+      if (cached !== CACHE_UNAVAILABLE) return cached;
+    }
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
       const absolutePath = `${REPO_DIR}/${path}`;
@@ -373,10 +384,74 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
-  /** All committed file paths at HEAD. */
+  /** All committed file paths at HEAD (served from the root workspace cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
+    if (this.#name.projectId !== null) {
+      try {
+        const head = await this.getHead();
+        const paths = await this.#rootWorkspaceStub().listAllFiles();
+        return { commitOid: head.commitOid, paths: paths.map((p) => p.slice(1)).sort() };
+      } catch (error) {
+        console.warn(
+          `repo listFiles via the root workspace cache failed; falling back to a clone: ${String(error)}`,
+        );
+      }
+    }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
+  }
+
+  /**
+   * A HEAD file read served from the project's root workspace — the durable
+   * cache of main this repo already keeps fresh through its head cursor —
+   * instead of a full clone per read.
+   *
+   * Call order matters: `getHead()` FIRST warms this DO's durable head cursor
+   * (the one-time cold miss clones), so when the root workspace's freshness
+   * check dials back into this DO re-entrantly (we are awaiting its read at
+   * that moment; the input gate is open at RPC awaits), that nested
+   * `getHead()` is a synchronous kv hit. The returned oid is the cursor read
+   * before the content — a commit landing between the two can make the
+   * content newer than its label, the inherent approximation of a HEAD read.
+   *
+   * The cache is a CACHE: any failure (workspace DO unhappy, projectId-less
+   * legacy repo) falls back to the authoritative clone lane, loudly.
+   */
+  async #readHeadFromRootCache(
+    path: string,
+    encoding: "utf8" | "base64" | undefined,
+  ): Promise<
+    { commitOid: string; content: string; path: string } | null | typeof CACHE_UNAVAILABLE
+  > {
+    if (this.#name.projectId === null) return CACHE_UNAVAILABLE;
+    try {
+      const head = await this.getHead();
+      const root = this.#rootWorkspaceStub();
+      if (encoding === "base64") {
+        const bytes = await root.readFileBytes(`/${path}`);
+        return bytes === null
+          ? null
+          : { commitOid: head.commitOid, content: bytesToBase64(bytes), path };
+      }
+      const content = await root.readFile(`/${path}`);
+      return content === null ? null : { commitOid: head.commitOid, content, path };
+    } catch (error) {
+      console.warn(
+        `repo head read via the root workspace cache failed; falling back to a clone: ${String(error)}`,
+      );
+      return CACHE_UNAVAILABLE;
+    }
+  }
+
+  // Both callers guard projectId — a projectId-less legacy repo has no root
+  // workspace and stays on the clone lane.
+  #rootWorkspaceStub() {
+    return this.env.WORKSPACE.getByName(
+      DurableObjectNameCodec.stringify({
+        path: ROOT_WORKSPACE_PATH,
+        projectId: this.#name.projectId!,
+      }),
+    );
   }
 
   /**
