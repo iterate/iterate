@@ -713,10 +713,24 @@ export interface Repo {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   /**
-   * Committed file contents at HEAD; null when the path does not exist.
-   * `encoding: "base64"` reads raw bytes (images, PDFs) base64-encoded.
+   * Commit history of a branch, newest first — oid, message, author,
+   * timestamp (epoch ms), parent oids. Deliberately without per-commit file
+   * stats (those cost tree checkouts per commit); fetch them lazily per
+   * commit through `commitDetails`.
    */
-  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
+  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (the whole tree for the root commit), with `git diff --numstat`-shaped
+   * +/- line counts; binary files are flagged instead of counted.
+   */
+  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;
+  /**
+   * Committed file contents at HEAD — or, with `commitOid`, pinned to that
+   * commit — null when the path does not exist there. `encoding: "base64"`
+   * reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -1633,6 +1647,20 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   path: string;
 };
 
+/** What `repo.log` returns: newest-first commits on one branch. */
+export type RepoLogResult = {
+  branch: string;
+  commits: RepoLogCommit[];
+};
+
+/** What `repo.commitDetails` returns: one commit's metadata plus the files it
+ * changed versus its first parent (versus an empty tree for the root commit). */
+export type RepoCommitDetails = RepoLogCommit & {
+  /** First parent oid — the diff baseline; null for the root commit. */
+  parentOid: string | null;
+  files: RepoCommitFileChange[];
+};
+
 /** What `repo.linkGithub` returns: the recorded link, whether the GitHub
  * repository was created by this call, and the initial mirror push's outcome
  * (a failed initial push does not fail the link — it is journaled on the repo
@@ -1909,6 +1937,30 @@ export type RepoFileChange =
       path: string;
       delete: true;
     };
+
+/** One commit in a repo's history, as returned by `repo.log`. */
+export type RepoLogCommit = {
+  oid: string;
+  /** Full commit message, trailing newline trimmed. */
+  message: string;
+  author: { email: string; name: string };
+  /** Author timestamp in epoch milliseconds. */
+  timestamp: number;
+  /** Parent commit oids — empty for the root commit, 2+ for merges. */
+  parents: string[];
+};
+
+/** One changed file in a commit — `git diff --numstat`-shaped counts. */
+export type RepoCommitFileChange = {
+  path: string;
+  status: "added" | "deleted" | "modified";
+  /** Lines added; 0 for binary files. */
+  additions: number;
+  /** Lines removed; 0 for binary files. */
+  deletions: number;
+  /** True when either side of the diff sniffs binary (NUL byte). */
+  binary: boolean;
+};
 
 /**
  * The GitHub repository a repo is linked to: the named GitHub connection (an
