@@ -12,6 +12,7 @@ import { changedLinesGutter } from "./change-gutter.ts";
 import { HtmlPreview } from "./html-preview.tsx";
 import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
 import { useRepoFileJsonSchema } from "./repo-json-schema.ts";
+import { useRepoTypeScriptExtensions } from "./repo-typescript.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -83,12 +84,24 @@ export function RepoEditorPane({
   // snapshot when one exists, else HEAD.
   const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
 
+  // TypeScript language service (diagnostics, hover, autocomplete) for
+  // ts/tsx/js/jsx working-tree buffers — empty for everything else, and for
+  // the readonly Index view (an inspection surface, not a live buffer).
+  const typeScriptExtensions = useRepoTypeScriptExtensions({
+    projectId,
+    repoPath,
+    commitOid: headCommitOid,
+    path,
+    enabled: kind.kind === "text" && !stagedView,
+  });
+
   // json-schema diagnostics/hover/completion for JSON and YAML buffers: an
   // explicit $schema (prop or yaml modeline) wins, else the well-known
   // filename map (package.json, tsconfig, …). Resolved against the live
   // buffer so adding a $schema line applies before any commit; the schema
   // itself is fetched from schemastore/wherever by the browser and failure
-  // just means no squigglies.
+  // just means no squigglies. (TS and json/yaml are disjoint kinds, so the two
+  // extension sets never both apply to one buffer.)
   const schemaLanguage =
     kind.kind === "text" &&
     (kind.language === "json" || kind.language === "jsonc" || kind.language === "yaml")
@@ -115,9 +128,13 @@ export function RepoEditorPane({
   // listener below writes that doc back as the staged snapshot. Memoized so
   // the editor view survives re-renders.
   const editorExtensions = useMemo(() => {
-    if (kind.kind !== "text" || textBaseline === undefined) return [];
-    if (!diffOpen) return [changedLinesGutter(textBaseline)];
+    if (kind.kind !== "text") return [];
+    // A never-committed file has no baseline to diff against, but the
+    // language service still applies.
+    if (textBaseline === undefined) return typeScriptExtensions;
+    if (!diffOpen) return [...typeScriptExtensions, changedLinesGutter(textBaseline)];
     return [
+      ...typeScriptExtensions,
       unifiedMergeView({
         original: textBaseline,
         allowInlineDiffs: true,
@@ -149,7 +166,7 @@ export function RepoEditorPane({
       }),
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks are stable store methods; content inputs drive recreation
-  }, [kind.kind, textBaseline, headContent, diffOpen]);
+  }, [kind.kind, textBaseline, headContent, diffOpen, typeScriptExtensions]);
 
   // The readonly staged view diffs HEAD against the staged snapshot with no
   // chunk controls — inspection only.

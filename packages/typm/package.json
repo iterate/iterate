@@ -1,0 +1,20 @@
+{
+  "name": "@iterate-com/typm",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Like pnpm, but just for types: recursively acquires the .d.ts surface of a package.json's npm dependencies over jsdelivr, for feeding an in-browser TypeScript language service.",
+  "exports": {
+    ".": "./src/typm.ts",
+    "./cached-fetch": "./src/cached-fetch.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --environment node src"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.5"
+  }
+}
