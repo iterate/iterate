@@ -2,7 +2,7 @@ import type { ProjectProcessorState } from "./project-processor-contract.ts";
 import type { StreamIndexRow } from "./stream-database.ts";
 
 /**
- * The project's LIVE state — what `itx.live` exposes and the dashboard renders.
+ * The project's LIVE state — what `itx.liveState` exposes and the dashboard renders.
  *
  * This is PROJECT state, NOT stream-processor state. The project Durable Object
  * assembles it from independent sources, each a peer slice:

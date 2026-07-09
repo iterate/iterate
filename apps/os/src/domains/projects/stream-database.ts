@@ -1,3 +1,14 @@
+/** What `touch` records about a delivered batch — named fields because three of them are strings. */
+export type TouchInput = {
+  path: string;
+  /** When the batch's latest event happened (`createdAt` of its last event). */
+  at: string;
+  /** Type of the batch's latest event. */
+  type: string;
+  /** The stream's max offset as stamped on the batch — monotonic, redelivery-safe. */
+  maxOffset: number;
+};
+
 /** One row of the streams index: a stream and its activity, for the ⌘K list and recency sort. */
 export type StreamIndexRow = {
   path: string;
@@ -19,10 +30,16 @@ export type StreamIndexRow = {
  * seeds streams that predate the index.
  *
  * SQLite is the durable truth; an in-memory immutable `{ [path]: row }`
- * projection mirrors it and is what feeds `itx.live`. Updates are COPY-ON-WRITE
- * — a touch swaps exactly one row's reference — so the live-state diff stays
- * O(changed): one active stream yields one row-patch, every other row keeps its
- * identity (and the ⌘K list doesn't re-render).
+ * projection mirrors it and is what feeds `itx.liveState`. Updates are
+ * COPY-ON-WRITE — a touch swaps exactly one row's reference — so the live-state
+ * diff stays O(changed): one active stream yields one row-patch, every other
+ * row keeps its identity (and the ⌘K list doesn't re-render).
+ *
+ * ONE merge, in JS: the DO is single-threaded and the projection is loaded from
+ * SQLite at construction, so between writes the projection IS the current row
+ * set. Every write computes the merged row here and stores it with a dumb
+ * REPLACE — there is no second merge in SQL to keep in step (an earlier
+ * `ON CONFLICT` twin of this logic diverged once already, on `lastType`).
  */
 export class StreamDatabase {
   readonly #sql: SqlStorage;
@@ -49,43 +66,27 @@ export class StreamDatabase {
 
   /**
    * Record activity on a stream from a delivered batch. FULLY idempotent:
-   * `maxOffset` is the stream's highest offset (monotonic, 1-based), and it
-   * drives BOTH `lastActivityAt` and `eventCount` through SQLite `max` — so a
-   * redelivered or retried batch can neither move recency backwards nor inflate
-   * the count. (Offsets are sequential, so the max offset IS the event count.)
+   * `maxOffset` is the stream's highest offset (monotonic, 1-based) and drives
+   * `eventCount` through max, recency only ever advances, and a batch that
+   * advances neither is a pure no-op — no write, same projection identity. So a
+   * redelivered or retried batch can neither move recency backwards, clobber
+   * `lastType` with an older event's type, nor inflate the count. (Offsets are
+   * sequential, so the max offset IS the event count.)
    */
-  touch(path: string, at: string, type: string, maxOffset: number): void {
-    this.#sql.exec(
-      `INSERT INTO streams (path, created_at, last_activity_at, last_type, event_count)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(path) DO UPDATE SET
-         last_activity_at = max(excluded.last_activity_at, streams.last_activity_at),
-         -- last_type describes the LATEST activity, so only adopt the incoming type
-         -- when this batch actually advances recency; a redelivery of older events
-         -- (recency unchanged) must not clobber it.
-         last_type = CASE
-           WHEN excluded.last_activity_at > streams.last_activity_at THEN excluded.last_type
-           ELSE streams.last_type
-         END,
-         event_count = max(excluded.event_count, streams.event_count)`,
-      path,
-      at,
-      at,
-      type,
-      maxOffset,
-    );
+  touch({ path, at, type, maxOffset }: TouchInput): void {
     const prev = this.#projection[path];
     const advancesRecency = prev === undefined || at > prev.lastActivityAt;
-    this.#projection = {
-      ...this.#projection,
-      [path]: {
-        path,
-        createdAt: prev?.createdAt ?? at,
-        lastActivityAt: advancesRecency ? at : prev.lastActivityAt,
-        lastType: advancesRecency ? type : prev.lastType,
-        eventCount: Math.max(prev?.eventCount ?? 0, maxOffset),
-      },
+    const eventCount = Math.max(prev?.eventCount ?? 0, maxOffset);
+    if (prev !== undefined && !advancesRecency && eventCount === prev.eventCount) return;
+    const row: StreamIndexRow = {
+      path,
+      createdAt: prev?.createdAt ?? at,
+      lastActivityAt: advancesRecency ? at : prev.lastActivityAt,
+      lastType: advancesRecency ? type : prev.lastType,
+      eventCount,
     };
+    this.#store(row);
+    this.#projection = { ...this.#projection, [path]: row };
   }
 
   /**
@@ -103,24 +104,31 @@ export class StreamDatabase {
     let next = this.#projection;
     for (const stream of catalog) {
       if (next[stream.path] !== undefined) continue;
-      this.#sql.exec(
-        `INSERT INTO streams (path, created_at, last_activity_at, last_type, event_count)
-         VALUES (?, ?, ?, 'events.iterate.com/stream/created', 0)
-         ON CONFLICT(path) DO NOTHING`,
-        stream.path,
-        stream.createdAt,
-        stream.createdAt,
-      );
-      if (next === this.#projection) next = { ...this.#projection }; // fork once, on first insert
-      next[stream.path] = {
+      const row: StreamIndexRow = {
         path: stream.path,
         createdAt: stream.createdAt,
         lastActivityAt: stream.createdAt,
         lastType: "events.iterate.com/stream/created",
         eventCount: 0,
       };
+      this.#store(row);
+      if (next === this.#projection) next = { ...this.#projection }; // fork once, on first insert
+      next[stream.path] = row;
     }
     this.#projection = next;
+  }
+
+  /** Persist one merged row — REPLACE, because the merge already happened in JS. */
+  #store(row: StreamIndexRow): void {
+    this.#sql.exec(
+      `INSERT OR REPLACE INTO streams (path, created_at, last_activity_at, last_type, event_count)
+       VALUES (?, ?, ?, ?, ?)`,
+      row.path,
+      row.createdAt,
+      row.lastActivityAt,
+      row.lastType,
+      row.eventCount,
+    );
   }
 
   #load(): Record<string, StreamIndexRow> {

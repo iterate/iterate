@@ -220,6 +220,7 @@ import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.t
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
+import type { TouchInput } from "./domains/projects/stream-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
@@ -3255,9 +3256,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * `waitUntilCreated: false` to resolve as soon as the project EXISTS
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live processor state (`itx.processor.onStateChange` — `state.created`
-   * flips when bootstrap lands). The dashboard uses the fast path to redirect
-   * into the project instantly and play creation progress from pushes.
+   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap
+   * lands). The dashboard uses the fast path to redirect into the project
+   * instantly and play creation progress from pushes.
    */
   async create(args: {
     organizationSlug?: string;
@@ -3781,7 +3782,7 @@ type ProjectRpcTargetProps = {
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
-  touchStreamActivity(path: string, at: string, type: string, maxOffset: number): Promise<void>;
+  touchStreamActivity(input: TouchInput): Promise<void>;
 };
 
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
@@ -4127,8 +4128,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /**
    * Platform step: record the batch's stream in the project's streams index (a
-   * peer slice of `itx.live` — see StreamDatabase). Idempotent (`touch` only
-   * advances recency) and MUST NOT throw — a fire-and-forget dial into the
+   * peer slice of `itx.liveState` — see StreamDatabase). Idempotent (`touch`
+   * only advances recency) and MUST NOT throw — a fire-and-forget dial into the
    * project DO whose failure the next batch self-heals. Only the worker
    * delegation above may reject into the spine's retry.
    */
@@ -4136,13 +4137,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
     void Promise.resolve(
-      // streamMaxOffset (not events.length) so a redelivered batch is idempotent.
-      this.#projectDo.touchStreamActivity(
-        batch.path,
-        last.createdAt,
-        last.type,
-        batch.streamMaxOffset,
-      ),
+      this.#projectDo.touchStreamActivity({
+        path: batch.path,
+        at: last.createdAt,
+        type: last.type,
+        // streamMaxOffset (not events.length) so a redelivered batch is idempotent.
+        maxOffset: batch.streamMaxOffset,
+      }),
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
     });
@@ -4617,10 +4618,11 @@ export class StreamProcessorRpcTarget<
        */
       catchUpBeforeSnapshot?: () => Promise<void>;
       /**
-       * Projection applied to EVERY state that leaves this facade — snapshots,
-       * runtime state, and `onStateChange` pushes. This is where a domain
-       * redacts internals from its public live state (secrets project away the
-       * ciphertext, exposing `hasMaterial` instead). Omitted = identity.
+       * Projection applied to EVERY state that leaves this facade — snapshots
+       * and runtime state. This is where a domain redacts internals from its
+       * public state (secrets project away the ciphertext, exposing
+       * `hasMaterial` instead); the node's `.liveState` applies the SAME
+       * redaction through the host's `getLiveState`. Omitted = identity.
        */
       publicState?: (state: ProcessorState<Contract>) => PublicState;
     } = {},
@@ -4886,10 +4888,17 @@ class LiveDemoTickerRpcTarget
       startedAt: this.#startedAt,
     });
     const inner = engine.subscribe(onUpdate);
-    const interval = setInterval(
-      () => engine.assign({ tick: engine.getState().tick + 1 }),
-      LIVE_DEMO_TICK_MS,
-    );
+    // The engine drops a subscriber itself when a delivery rejects (dead
+    // client), and it exposes no drop hook to the owner — so a driving loop
+    // like this one must check `ping()` and stop itself, or the timer outlives
+    // the subscription. This IS the template for the poll-an-API pattern.
+    const interval = setInterval(() => {
+      if (!inner.ping()) {
+        stop();
+        return;
+      }
+      engine.assign({ tick: engine.getState().tick + 1 });
+    }, LIVE_DEMO_TICK_MS);
     const stop = () => {
       clearInterval(interval);
       inner.unsubscribe();
@@ -4905,7 +4914,7 @@ class LiveDemoTickerRpcTarget
 /**
  * Demo capability (`itx.liveDemo`) — a corner of the tree that exists only to
  * exercise both live-state cases: `ticker` (stateless, above) and `increment()`
- * (mutates the project DO's shared counter, which every watcher of `itx.live`
+ * (mutates the project DO's shared counter, which every watcher of `itx.liveState`
  * sees — the Durable-Object-backed case).
  */
 class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
@@ -4921,7 +4930,7 @@ class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
     return new LiveDemoTickerRpcTarget();
   }
 
-  /** Stateful live state: bump the project DO's counter (visible on `itx.live`). */
+  /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
   increment(): Promise<void> {
     return this.#incrementCounter();
   }

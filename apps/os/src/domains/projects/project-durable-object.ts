@@ -33,13 +33,13 @@ import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
-import { StreamDatabase } from "./stream-database.ts";
+import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
-  // Demo (stateful live state): a counter every watcher of `itx.live` sees
+  // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
   // shared-engine case — and dogfoods the `getLiveState` fold the streams index
   // will use.
@@ -56,7 +56,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
-    // `itx.live` = the project's composite live state (see ProjectLiveState):
+    // `itx.liveState` = the project's composite live state (see ProjectLiveState):
     // the processor's fold is ONE peer slice, alongside the streams index the DO
     // keeps in SQLite and the demo counter.
     getLiveState: () => {
@@ -194,13 +194,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Record stream activity in the index and push it to `itx.live`. Called from
-   * the project's `processEventBatch` fan-in (every project-scoped stream's
-   * events flow through it). Idempotent — `StreamDatabase.touch` only advances
-   * recency — so a redelivered batch is harmless.
+   * Record stream activity in the index and push it to `itx.liveState`. Called
+   * from the project's `processEventBatch` fan-in (every project-scoped
+   * stream's events flow through it). Idempotent — `StreamDatabase.touch` only
+   * advances recency — so a redelivered batch is harmless.
    */
-  touchStreamActivity(path: string, at: string, type: string, maxOffset: number): void {
-    this.#streamDatabase.touch(path, at, type, maxOffset);
+  touchStreamActivity(input: TouchInput): void {
+    this.#streamDatabase.touch(input);
     this.#processorHost.refreshLive();
   }
 

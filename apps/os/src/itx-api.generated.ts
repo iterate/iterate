@@ -206,9 +206,9 @@ export interface ProjectCollection {
    * `waitUntilCreated: false` to resolve as soon as the project EXISTS
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live processor state (`itx.processor.onStateChange` — `state.created`
-   * flips when bootstrap lands). The dashboard uses the fast path to redirect
-   * into the project instantly and play creation progress from pushes.
+   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap
+   * lands). The dashboard uses the fast path to redirect into the project
+   * instantly and play creation progress from pushes.
    */
   create(args: {
     organizationSlug?: string;
@@ -251,13 +251,13 @@ export interface LiveStateRpc<State = unknown> {
 /**
  * Demo capability (`itx.liveDemo`) — a corner of the tree that exists only to
  * exercise both live-state cases: `ticker` (stateless, above) and `increment()`
- * (mutates the project DO's shared counter, which every watcher of `itx.live`
+ * (mutates the project DO's shared counter, which every watcher of `itx.liveState`
  * sees — the Durable-Object-backed case).
  */
 export interface LiveDemo {
   /** Stateless live state: a poll-driven ticker, no Durable Object. */
   ticker: LiveStateRpc<{ tick: number; startedAt: number }>;
-  /** Stateful live state: bump the project DO's counter (visible on `itx.live`). */
+  /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
   increment(): Promise<void>;
 }
 
@@ -1353,7 +1353,7 @@ export type ProjectProcessorState = {
 };
 
 /**
- * The project's LIVE state — what `itx.live` exposes and the dashboard renders.
+ * The project's LIVE state — what `itx.liveState` exposes and the dashboard renders.
  *
  * This is PROJECT state, NOT stream-processor state. The project Durable Object
  * assembles it from independent sources, each a peer slice:
