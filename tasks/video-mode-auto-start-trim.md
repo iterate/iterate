@@ -24,8 +24,13 @@ default video start. Specs that want a different anchor keep calling
 Net effect: demo videos open on real content instead of a blank screen, with
 zero per-spec changes.
 
-**Status:** implemented in the test fixture; before/after demo videos captured
-from PR #1768's `repo-ide-markdown-preview.spec.ts` and attached to the PR.
+**Status:** done. Final design lives in **middlewright** (iterate/middlewright#3)
+as an opt-in `videoMode({ autoStart })`; iterate just turns it on. The detector
+finds where the blank lead-in ends from the recorded pixels (first frame that
+differs from the opening frame), so it needs no app hydration contract. An
+earlier iterate-side `page.goto`-patch version (waiting for `[data-hydrated]`)
+was replaced by this general mechanism. Real inline before/after **video**
+attached to the PR.
 
 ## The concrete repro
 
@@ -49,14 +54,23 @@ rather than sprinkling `setStartTime()` across specs:
 - Detection never throws into the test: if the marker never appears it just
   leaves the start untrimmed.
 
-### Why not do it in middlewright itself?
+### Where it ended up: middlewright (the general fix)
 
-The truly-general home for this is `middlewright`'s video-mode plugin — e.g. a
-pixel-based "first non-blank frame" default computed from the raw webm at render
-time (works for any app, no hydration contract needed). That's a bigger change
-to a separately-versioned dependency (`~/src/middlewright`, shipped here via a
-pnpm patch). This task does the self-contained iterate-side version first; the
-middlewright default can follow as a proper upstream change.
+We brought middlewright into scope. `videoMode` now has an opt-in `autoStart`
+(iterate/middlewright#3):
+
+- **pixel fallback** (default of `autoStart: true`): decode a coarse greyscale
+  strip of the opening seconds, find the first frame that _differs_ from the
+  opening frame — the end of the static blank lead-in — and start there when the
+  lead-in is >= `minLeadInMs`. Keying on change-from-first (not "busyness") is
+  robust to Playwright's letterbox bars and dark loading shells.
+- **`selector`**: start when a known "ready" element first becomes visible (live).
+- explicit `setStartTime()` still wins over both.
+
+Off by default in middlewright (it shifts the timeline of frame-asserting
+videos); iterate opts in. That PR also upstreams the spinner-waiter multi-match
+fix, so `patches/middlewright@0.1.1.patch` is deleted here. iterate consumes the
+build via a `pkg.pr.new` override until it's published.
 
 ## Checklist
 
