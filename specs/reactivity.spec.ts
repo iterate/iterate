@@ -90,16 +90,18 @@ test("reactivity page processor panel goes live and repaints from a server push"
   await using projectFixture = await helpers.createFixture("reactivity-processor");
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
-  // The processor panel must actually be LIVE (an onStateChange push
+  // The processor panel must actually be LIVE (a live-state push
   // subscription), not silently erroring behind a loader fallback.
   await page.getByTestId("reactivity-status").getByText("live").waitFor();
   await page.getByTestId("reactivity-phase").getByText("ready").waitFor();
 
-  const offsetBefore = await metricNumber(page, "reactivity-processor-offset");
+  // #1810 removed the processor-offset metric; "State updates" is its
+  // live-state analogue (how many times the folded slice pushed).
+  const pushesBefore = await metricNumber(page, "reactivity-state-push-count");
 
   // Birth a brand-new child stream SERVER-SIDE (no page interaction at all):
-  // that changes project processor state (streams[]), and the server must
-  // push the new checkpoint into the open page.
+  // that changes the project's folded state (streams[]), and the server must
+  // push the new fold into the open page.
   using adminSession = await connectAdminItx(baseURL!);
   using adminProject = adminSession.projects.get(projectFixture.project.id);
   using stream = adminProject.streams.get(`/spec-processor-push/${Date.now().toString(36)}`);
@@ -109,8 +111,8 @@ test("reactivity page processor panel goes live and repaints from a server push"
   });
 
   await expect
-    .poll(() => metricNumber(page, "reactivity-processor-offset"))
-    .toBeGreaterThan(offsetBefore);
+    .poll(() => metricNumber(page, "reactivity-state-push-count"))
+    .toBeGreaterThan(pushesBefore);
 });
 
 async function metricNumber(page: Page, testId: string) {

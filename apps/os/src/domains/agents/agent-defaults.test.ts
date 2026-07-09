@@ -52,7 +52,7 @@ describe("agentDefaultsForPath", () => {
   it("bakes overrides into the returned events", () => {
     const custom = defaultsFor("/agents/demo", {
       systemPrompt: "Answer only in pirate speak.",
-      model: "@cf/moonshotai/kimi-k2.7-code",
+      model: "openai/gpt-5.5",
     });
     expect(custom.systemPrompt).toBe("Answer only in pirate speak.");
     const config = custom.events.find(
@@ -62,7 +62,7 @@ describe("agentDefaultsForPath", () => {
     const provider = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );
-    expect(provider?.payload).toMatchObject({ model: "@cf/moonshotai/kimi-k2.7-code" });
+    expect(provider?.payload).toMatchObject({ model: "openai/gpt-5.5" });
   });
 
   it("keys every event on (projectId, agentPath) so re-appends dedupe", () => {

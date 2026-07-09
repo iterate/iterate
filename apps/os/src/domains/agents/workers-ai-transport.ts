@@ -45,7 +45,11 @@ export async function runWorkersAiAttempt(input: {
   });
   try {
     const raw = await deadline.race(
-      input.ai.run(input.model, { messages: input.messages, stream: true }),
+      input.ai.run(input.model, {
+        messages: input.messages,
+        stream: true,
+        ...openAiReasoningExtras(input.model),
+      }),
     );
     if (raw instanceof ReadableStream) {
       return await drainSseResponse({ body: raw, deadline, onChunk: input.onChunk });
@@ -58,6 +62,19 @@ export async function runWorkersAiAttempt(input: {
   } finally {
     deadline.clear();
   }
+}
+
+/**
+ * Extra chat-completions params for OpenAI reasoning models served through
+ * Workers AI (`openai/gpt-5.5`, o-series, codex): pin reasoning effort to
+ * medium (the pre-#1808 openai-ws posture) and ask streamed responses to
+ * carry usage in their final chunk. Gated by model family — non-OpenAI
+ * models reject unknown params with a whole-request failure, the same reason
+ * the old processor gated its `reasoning` options.
+ */
+function openAiReasoningExtras(model: string): Record<string, unknown> {
+  if (!/(^|\/)(gpt-5|o[1-9]|codex)/.test(model)) return {};
+  return { reasoning_effort: "medium", stream_options: { include_usage: true } };
 }
 
 /** One armed timer raced against every phase of an attempt, so dial + drain

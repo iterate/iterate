@@ -60,7 +60,12 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { CONFIG_REPO_PATH, defaultProjectWorkerRef } from "./domains/repos/utils.ts";
+import {
+  CONFIG_REPO_PATH,
+  defaultProjectWorkerRef,
+  isRepoNotSeededError,
+} from "./domains/repos/utils.ts";
+import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -214,6 +219,7 @@ import type {
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
+import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
 import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
@@ -4121,9 +4127,27 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Same trust model as `worker.processEventBatch` itself: any project
    * principal may call it.
    */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
-    return this.worker.processEventBatch(batch);
+    try {
+      return await this.worker.processEventBatch(batch);
+    } catch (error) {
+      // The bootstrap window: the worker cannot be MATERIALIZED yet (config
+      // repo unseeded, or its first build still in flight). That is this
+      // receiver being unavailable, not the batch being poison — say so in
+      // the delivery contract's vocabulary so the spine backs off and
+      // redelivers instead of skip-confirming real events. (A skipped
+      // `child-stream-created` is an agent the worker never applies policy
+      // to; this exact race skipped offset 1 of every fresh project's root
+      // stream against the config-repo seed.)
+      if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+        throw new StreamReceiverUnavailableError(
+          `project worker is not ready yet: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   /**

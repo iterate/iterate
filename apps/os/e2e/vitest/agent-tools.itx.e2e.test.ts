@@ -75,7 +75,7 @@ test(
       type: "events.iterate.com/agent/llm-provider-selected",
       // The contract requires a model; a model-less
       // append is schema-invalid and wedges the agent processor's ingest.
-      payload: { model: "@cf/moonshotai/kimi-k2.7-code" },
+      payload: { model: "openai/gpt-5.5" },
     });
 
     const response = await agent.ask({
