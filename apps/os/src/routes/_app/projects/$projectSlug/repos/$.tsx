@@ -10,13 +10,15 @@ import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 
 /** The stream-view params plus the IDE's own view state (open file, diff,
- * source-control / GitHub sidebar). */
+ * source-control / GitHub sidebar, history sidebar + expanded commit). */
 const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
   diff: z.boolean().optional().catch(undefined),
   scm: z.boolean().optional().catch(undefined),
   gh: z.boolean().optional().catch(undefined),
   staged: z.boolean().optional().catch(undefined),
+  history: z.boolean().optional().catch(undefined),
+  commit: z.string().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
