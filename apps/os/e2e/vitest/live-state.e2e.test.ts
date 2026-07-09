@@ -1,8 +1,9 @@
-// The live-state channel over the real deployment transport. `.live.subscribe`
-// pushes a full snapshot then minimal diffs; this exercises both cases the
-// primitive supports — a Durable-Object-backed node (`itx.live`, whose demo
-// counter is shared across watchers) and a stateless one (`itx.liveDemo.ticker`,
-// driven by a timer in the request isolate with no DO).
+// The live-state channel over the real deployment transport.
+// `.liveState.subscribe` pushes a full snapshot then minimal diffs; this
+// exercises both cases the primitive supports — a Durable-Object-backed node
+// (`itx.liveState`, whose demo counter is shared across watchers) and a
+// stateless one (`itx.liveDemo.ticker`, driven by a timer in the request
+// isolate with no DO).
 import { expect, test } from "vitest";
 import { applyPatch } from "../../src/lib/live-state/diff.ts";
 import type { LiveUpdate } from "../../src/lib/live-state/protocol.ts";
@@ -33,7 +34,7 @@ function trackLiveState<State>(): {
   };
 }
 
-test("itx.live pushes a snapshot then a minimal diff; the DO-backed counter is shared", async () => {
+test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter is shared", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -60,8 +61,21 @@ test("itx.live pushes a snapshot then a minimal diff; the DO-backed counter is s
   expect(track.patchCount()).toBeGreaterThan(0);
   expect(track.state()!.liveDemo.count).toBe(before + 1);
 
-  // ping() reports liveness — the lever the dashboard watchdog uses.
+  // ping() reports liveness — the lever the dashboard watchdog uses — and it
+  // flips false ONCE UNSUBSCRIBED, over the real wire: a ping that kept
+  // answering true for a closed subscription would leave every watchdog
+  // believing a dead channel was live. (This assertion carried over from the
+  // deleted processor-reactivity e2e.)
   expect(await subscription.ping()).toBe(true);
+  await subscription.unsubscribe();
+  expect(await subscription.ping()).toBe(false);
+
+  // …and a closed subscription no longer delivers: the counter moves, the
+  // tracked state does not.
+  const closedAt = track.state()!.liveDemo.count;
+  await project.liveDemo.increment();
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  expect(track.state()!.liveDemo.count).toBe(closedAt);
 });
 
 test("itx.liveDemo.ticker (stateless, no Durable Object) advances over time", async () => {
@@ -82,7 +96,7 @@ test("itx.liveDemo.ticker (stateless, no Durable Object) advances over time", as
   expect(await subscription.ping()).toBe(true);
 });
 
-test("itx.live indexes stream activity as a peer slice", async () => {
+test("itx.liveState indexes stream activity as a peer slice", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -96,7 +110,7 @@ test("itx.live indexes stream activity as a peer slice", async () => {
   });
 
   // Appending to a new stream flows through processEventBatch → the streams
-  // index (a peer slice of itx.live, nothing to do with the processor fold).
+  // index (a peer slice of itx.liveState, nothing to do with the processor fold).
   const streamPath = `/e2e/live-index/${marker}`;
   await project.streams.get(streamPath).append({
     type: "events.iterate.test/live-index",

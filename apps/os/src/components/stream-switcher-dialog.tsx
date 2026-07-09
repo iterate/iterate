@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
@@ -100,12 +100,20 @@ export function StreamSwitcherDialog({
   currentPath,
   navigator,
   scope,
+  liveIndex = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentPath: string;
   navigator: StreamNavigator;
   scope: string;
+  /**
+   * Whether to hold the live streams-index subscription. The admin explorer
+   * turns it off: its lane dials through the global admin session, and the
+   * `__null__` deployment namespace has no project DO to subscribe to at all —
+   * it browses the tree instead.
+   */
+  liveIndex?: boolean;
 }) {
   const [destination, setDestination] = useState("");
   // Whether the path field has been edited THIS open. Fresh open = untouched → the
@@ -115,40 +123,49 @@ export function StreamSwitcherDialog({
   // The keyboard cursor into the result list. -1 = nothing highlighted (fresh open,
   // before you arrow or type), so Enter falls through to "create the typed path".
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  // The "recently active" cutoff, snapshotted per open (never Date.now() in
+  // render: impure under concurrent replays, and the window would only drift
+  // when something else happened to re-render).
+  const [recentSince, setRecentSince] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
 
   // The whole streams index, live, in ONE subscription — so typing filters it in
   // memory (most-recently-active first) instead of waking a Durable Object per
   // node. That is the "⌘K, type, see" path; an empty query falls back to the
-  // browsable tree.
+  // browsable tree. Held while the dialog is closed ON PURPOSE: ⌘K must paint
+  // instantly, and one warm per-tab subscription is the accepted price.
   //
   // `scope` is the project id. ⌘K opens from the global palette — the app shell,
   // OUTSIDE the project's `<ItxProvider>` — so we subscribe through the project's
-  // own connection via `address`, which dials LAZILY (never suspends the shell)
-  // rather than the ambient global socket, which has no `liveState`.
+  // own connection via `address`, which resolves inside the effect (never
+  // suspends the shell) rather than the ambient global socket, which has no
+  // `liveState`.
   const streamsIndex = useLiveState(
     (itx) => itx.liveState,
     (state) => state.streamsIndex,
     [scope],
-    { address: { projectId: scope } },
+    { address: { projectId: scope }, enabled: liveIndex },
   );
   const query = destination.trim().replace(/^\/+/, "").toLowerCase();
-  const rows = streamsIndex.value === undefined ? [] : Object.values(streamsIndex.value);
   // Default view (untouched): streams active in the last few minutes — ⌘K, glance,
   // jump. Start typing and it becomes a substring search over the whole index.
   // Either way the list is most-recent-first, and an empty result falls through to
-  // the browsable tree.
-  const recentSince = Date.now() - RECENT_WINDOW_MS;
-  const matches = (
-    touched
-      ? query === ""
-        ? []
-        : rows.filter((row) => row.path.toLowerCase().includes(query))
-      : rows.filter((row) => new Date(row.lastActivityAt).getTime() >= recentSince)
-  )
-    .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
-    .slice(0, 50);
+  // the browsable tree. Memoized — and empty while closed — so the standing
+  // subscription's pushes don't run a filter+sort for an invisible dialog.
+  const matches = useMemo(() => {
+    if (!open || streamsIndex.value === undefined) return [];
+    const rows = Object.values(streamsIndex.value);
+    return (
+      touched
+        ? query === ""
+          ? []
+          : rows.filter((row) => row.path.toLowerCase().includes(query))
+        : rows.filter((row) => new Date(row.lastActivityAt).getTime() >= recentSince)
+    )
+      .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
+      .slice(0, 50);
+  }, [open, streamsIndex.value, touched, query, recentSince]);
   // Clamp the cursor to the current list (it shrinks as you type). -1 stays -1.
   const selected = selectedIndex < 0 ? -1 : Math.min(selectedIndex, matches.length - 1);
 
@@ -166,12 +183,14 @@ export function StreamSwitcherDialog({
     setDestination(destinationPrefill(currentPath));
     setTouched(false);
     setSelectedIndex(-1);
-    requestAnimationFrame(() => {
+    setRecentSince(Date.now() - RECENT_WINDOW_MS);
+    const frame = requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     });
+    return () => cancelAnimationFrame(frame);
   }, [open, currentPath]);
 
   function openStream(path: string) {
@@ -193,6 +212,7 @@ export function StreamSwitcherDialog({
         <div className="min-h-0 flex-1 overflow-y-auto">
           {matches.length > 0 ? (
             <ul
+              id="stream-switcher-listbox"
               className="flex flex-col gap-0.5"
               role="listbox"
               aria-label={touched ? "Matching streams" : "Recently active streams"}
@@ -209,8 +229,10 @@ export function StreamSwitcherDialog({
                 <li key={row.path} role="presentation">
                   <button
                     ref={index === selected ? selectedRef : undefined}
+                    id={`stream-switcher-option-${index}`}
                     type="button"
                     role="option"
+                    tabIndex={-1}
                     title={row.path}
                     aria-selected={index === selected}
                     data-selected={index === selected || undefined}
@@ -256,6 +278,16 @@ export function StreamSwitcherDialog({
                 id="stream-switcher-destination"
                 ref={inputRef}
                 value={destination}
+                // Focus stays in the input while arrows move the visual cursor —
+                // the WAI-ARIA combobox pattern: aria-activedescendant is how a
+                // screen reader follows a highlight it can't see.
+                role="combobox"
+                aria-expanded={matches.length > 0}
+                aria-controls="stream-switcher-listbox"
+                aria-autocomplete="list"
+                aria-activedescendant={
+                  selected >= 0 ? `stream-switcher-option-${selected}` : undefined
+                }
                 onChange={(event) => {
                   setDestination(event.target.value);
                   setTouched(true);
@@ -267,7 +299,10 @@ export function StreamSwitcherDialog({
                     setSelectedIndex((i) => Math.min(i + 1, matches.length - 1));
                   } else if (event.key === "ArrowUp") {
                     event.preventDefault();
-                    setSelectedIndex((i) => Math.max(i - 1, matches.length > 0 ? 0 : -1));
+                    // Past the top = back to -1, the create-the-typed-path mode:
+                    // without it, Enter could NEVER create a path that substring-
+                    // matches an existing stream once you'd typed anything.
+                    setSelectedIndex((i) => Math.max(i - 1, -1));
                   } else if (event.key === "Enter" && selected >= 0 && matches[selected]) {
                     // A highlighted result wins; otherwise Enter falls through to the
                     // form submit below, which creates/opens the typed path.

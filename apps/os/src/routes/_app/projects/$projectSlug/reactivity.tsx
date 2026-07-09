@@ -236,7 +236,7 @@ function ProjectReactivityContent() {
           <MetricPanel
             label="State updates"
             value={String(pushCount)}
-            testId="reactivity-processor-offset"
+            testId="reactivity-state-push-count"
           />
         </div>
 
