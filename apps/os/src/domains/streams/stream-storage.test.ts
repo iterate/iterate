@@ -159,6 +159,45 @@ describe("reconcileSubscriptionCursorRows", () => {
   });
 });
 
+describe("SqliteSubscriptionCursorStore schema migration", () => {
+  it("adds the epoch column to a pre-epoch subscriptions table without losing rows", () => {
+    // A live DO that created the table under #1784 (no epoch column) and then
+    // received #1792 code: construction must upgrade the table in place
+    // instead of leaving every subsequent select throwing "no such column".
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      create table subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        updated_at text not null
+      )
+    `);
+    db.prepare(
+      "insert into subscriptions (subscription_key, acked_offset, updated_at) values (?, ?, ?)",
+    ).run("pre-existing", 7, new Date(0).toISOString());
+
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+
+    // The old row reads back with the fence value fresh #1784 rows had.
+    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
+    expect(store.list()).toHaveLength(1);
+    // Post-migration writes behave like any other row.
+    store.ensure("fresh", 0);
+    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
+  });
+
+  it("is idempotent on an already-current table", () => {
+    const db = new DatabaseSync(":memory:");
+    const first = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    first.ensure("k", 3);
+    const again = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    expect(again.get("k")).toMatchObject({ ackedOffset: 3 });
+  });
+});
+
 describe("SqliteSubscriptionCursorStore epoch fencing", () => {
   function makeStore() {
     return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
