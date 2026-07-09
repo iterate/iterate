@@ -297,8 +297,8 @@ calling methods on them.
 
 ## Agents
 
-An agent is a stream (`/agents/<name>`) plus processors. `agent.sendMessage()`
-appends `events.iterate.com/agents/user-message-received`; the agent core
+An agent is a stream (`/agents/<name>`) plus processors. `agent.message()`
+appends `events.iterate.com/agents/message-received`; the agent core
 processor renders inputs into history, applies the input policy, debounces,
 and appends `events.iterate.com/agent/llm-request-requested` — **by
 reference**: no prompt body, the offset is the `llmRequestId`. A subscribed

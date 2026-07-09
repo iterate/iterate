@@ -705,7 +705,7 @@ const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 
 // The returned value is the committed stream event — the durable record the
 // agent loop reduces into its history.
-const sent = await agent.sendMessage(vars.message ?? "Hello from the examples catalogue");
+const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
 return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
@@ -1374,7 +1374,7 @@ const view = await itx.scheduler.set({
     // A fixed path = one long-lived agent accumulating context. For a fresh
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
-    await itx.agents.get("/agents/checkin").sendMessage(
+    await itx.agents.get("/agents/checkin").message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );
   }\`,

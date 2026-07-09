@@ -33,13 +33,13 @@ describe("event docs catalog", () => {
   });
 
   it("keeps events whose public path does not start with the processor slug under the processor", () => {
-    const event = getEventDocByPath("agents/user-message-received");
+    const event = getEventDocByPath("agents/message-received");
 
     expect(event?.processor.slug).toBe("agent");
-    expect(event?.href).toBe("/docs/streams/processors/agent/events/agents/user-message-received");
+    expect(event?.href).toBe("/docs/streams/processors/agent/events/agents/message-received");
     expect(event?.routeParams).toEqual({
       processorSlug: "agent",
-      _splat: "agents/user-message-received",
+      _splat: "agents/message-received",
     });
   });
 
@@ -47,7 +47,7 @@ describe("event docs catalog", () => {
     expect(
       getEventDocByProcessorRoute({
         processorSlug: "stream",
-        eventPath: "agents/user-message-received",
+        eventPath: "agents/message-received",
       }),
     ).toBeUndefined();
   });

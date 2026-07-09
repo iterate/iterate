@@ -72,10 +72,10 @@ export type AgentUiFileAttachment = {
   url: string;
 };
 
-/** Marks a message that arrived through an external chat integration. */
+/** Marks a message that arrived through an external chat integration, or from another agent. */
 export type AgentUiMessageVia = {
-  service: "slack";
-  /** Best-effort sender label: slack user id for humans, bot name for bots. */
+  service: "slack" | "agent" | "email" | "github";
+  /** Best-effort sender label: slack user id, email address, github login, or agent path. */
   sender?: string;
 };
 
@@ -219,13 +219,48 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
   const timestampMs = Date.parse(event.createdAt);
 
   switch (event.type) {
-    case "events.iterate.com/agents/user-message-received": {
+    // THE inbound message event, every source: `from.kind` picks the
+    // treatment. Users and agents render as chat bubbles (agents with a via
+    // label naming the sender path). Transcribed domain messages (slack,
+    // email, github) carry a model-facing YAML transcription as content —
+    // the human-facing copy renders from the raw domain event instead (e.g.
+    // the slack webhook bubble), so only their stored attachments surface.
+    case "events.iterate.com/agents/message-received": {
       const text = readString(event, "content");
       if (text == null) return state;
+      const from = readRecord(event, "from");
+      const kind = typeof from?.kind === "string" ? from.kind : "user";
+      const files = readFileAttachments(event);
+      if (kind === "agent") {
+        const sender = typeof from?.path === "string" ? from.path : undefined;
+        return emitUserMessageItem(state, ops, {
+          kind: "user",
+          id: `user-${event.offset}`,
+          text,
+          ...(files.length === 0 ? {} : { files }),
+          timestampMs,
+          via: { service: "agent", ...(sender === undefined ? {} : { sender }) },
+        });
+      }
+      if (kind === "slack" || kind === "email" || kind === "github") {
+        if (files.length === 0) return state;
+        const senderValue =
+          kind === "slack" ? from?.userId : kind === "email" ? from?.address : from?.login;
+        const sender = typeof senderValue === "string" ? senderValue : undefined;
+        return emitUserMessageItem(state, ops, {
+          kind: "user",
+          id: `user-${event.offset}`,
+          text: "",
+          files,
+          timestampMs,
+          via: { service: kind, ...(sender === undefined ? {} : { sender }) },
+        });
+      }
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-${event.offset}`,
         text,
+        ...(files.length === 0 ? {} : { files }),
         timestampMs,
       });
     }
@@ -240,17 +275,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // web-message-sent event already rendered as an assistant bubble —
       // they exist for the model's eyes, not the user's.
       if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
-      // Slack messages already render as a bubble from the webhook event
-      // itself; the slack-agent's yaml-dump input exists for the model's
-      // eyes. Only the stored file attachments are worth surfacing.
-      const isSlackInput = event.idempotencyKey?.startsWith("slack-agent:webhook-to-agent-input:");
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-file-${event.offset}`,
-        text: isSlackInput ? "" : text,
+        text,
         files,
         timestampMs,
-        ...(isSlackInput ? { via: { service: "slack" as const } } : {}),
       });
     }
 

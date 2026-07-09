@@ -16,6 +16,7 @@
 
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
+import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { isEmailAgentPath } from "../email/utils.ts";
@@ -140,10 +141,30 @@ const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
+/**
+ * A subagent's reply door is its PARENT: nobody watches its web chat, and it
+ * must not inherit a thread agent's reply door either. The suffix rides AFTER
+ * whatever base prompt the subagent gets — including a caller-supplied
+ * override — so a custom persona still keeps the subagent contract.
+ */
+function subagentSystemPromptSuffix(parentAgentPath: string): string {
+  return [
+    `YOU ARE A SUBAGENT. Your parent agent lives at ${parentAgentPath}; it delegated work to you, and its messages arrive as your inputs ("Message from agent ${parentAgentPath}: ...").`,
+    "Nobody is watching your web chat — do NOT use itx.chat.sendMessage. Report to your parent with await itx.agent.parent.message(text).",
+    "Work across as many script turns as you need, then report ONCE with a complete, self-contained result. No acknowledgements, no progress chatter — your parent's messages need no reply unless they ask for one.",
+    "You may delegate further: const sub = await itx.agent.subagents.spawn({ path }) births a subagent under your own path (path is relative, e.g. 'researcher'); sub.message(task) sends it work, and its reports arrive as your inputs.",
+  ].join("\n");
+}
+
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
  * agents reply via their connection's Slack Web API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string): string {
+  // Subagents FIRST: the thread-agent predicates below are shape-loose
+  // (Slack matches any >=6-segment path under its connection, email matches
+  // by prefix), so a subagent nested under a thread agent would otherwise
+  // inherit the parent's transcriber prompt and reply door.
+  if (subagentParentPath(agentPath) !== null) return DEFAULT_AGENT_SYSTEM_PROMPT;
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   const slackConnection = slackConnectionFromAgentPath(agentPath);
   if (slackConnection !== null) {
@@ -200,7 +221,12 @@ export function agentDefaultsForPath(input: {
   const { agentPath, projectId } = input;
   const provider = input.overrides?.provider ?? input.deploymentLlmProvider;
   const model = input.overrides?.model ?? DEFAULT_MODEL_BY_LLM_PROVIDER[provider];
-  const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
+  const parentAgentPath = subagentParentPath(agentPath);
+  const basePrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
+  const systemPrompt =
+    parentAgentPath === null
+      ? basePrompt
+      : `${basePrompt}\n\n${subagentSystemPromptSuffix(parentAgentPath)}`;
 
   const events: AgentPolicyEventInput[] = [
     {
@@ -245,6 +271,7 @@ export function agentDefaultsForPath(input: {
           '- The project repo is at repo path "/" — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus userland capability getters: an itx.worker.slack.* Slack SDK surface and itx.worker.waitrose.*), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time; platform capability types come from its `iterate` devDependency — import type { ... } from "iterate/sdk"), sdk.ts (the seeded IterateProjectWorker base class, re-exporting those types), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
+          "- Message another agent with await itx.agents.get(path).message(text) — sent from your agent scope it arrives as that agent's input labeled with your path, and replies land in your inputs; paths without a leading / resolve relative to your own path. To delegate work, spawn a SUBAGENT: const sub = await itx.agent.subagents.spawn({ path: 'researcher' }) births an ordinary agent at <your path>/subagents/researcher that knows you are its parent; sub.message(task) sends it work and itx.agent.subagents.list() shows yours.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',
           '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',

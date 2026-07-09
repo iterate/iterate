@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
@@ -63,18 +64,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         );
         return;
       }
-      case "events.iterate.com/agents/user-message-received":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-web-message@${event.offset}`,
-            payload: {
-              content: event.payload.content,
-              llmRequestPolicy: { behaviour: "after-current-request" },
-            },
-          }),
-        );
+      case "events.iterate.com/agents/message-received": {
+        // The reducer folds the message straight into history (no input-added
+        // reflection hop); the only per-event side effect is honoring an
+        // interrupt policy, exactly like input-added below.
+        if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
+        const interruptedRequest = previousState.currentRequest;
+        if (interruptedRequest === null) return;
+        blockProcessorWhile(() => append(cancelEventForCurrentRequest(interruptedRequest)));
         return;
+      }
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
         // so the model SEES what it sent (vision) on later turns.
@@ -383,6 +382,39 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
+    case "events.iterate.com/agents/message-received": {
+      // Inbound messages fold straight into history. The trigger source keys
+      // on WHO sent it: humans (web, MCP, Slack, email, GitHub) refill the
+      // autonomous turn budget; another AGENT's mail counts against it — the
+      // same breaker that stops script self-loops bounds parent↔subagent
+      // reply ping-pong, because neither side's messages reset the other.
+      const from = event.payload.from;
+      const files = event.payload.files;
+      const triggerSource =
+        event.payload.llmRequestPolicy.behaviour === "dont-trigger-request"
+          ? null
+          : from.kind === "agent"
+            ? ("agent-loop" as const)
+            : ("user" as const);
+      const content =
+        from.kind === "agent"
+          ? `Message from agent ${from.path}:\n${event.payload.content}`
+          : event.payload.content;
+      return {
+        ...state,
+        history: [
+          ...state.history,
+          {
+            role: "user",
+            content,
+            ...(files === undefined || files.length === 0 ? {} : { files }),
+          },
+        ],
+        pendingTriggerOffset: triggerSource === null ? state.pendingTriggerOffset : event.offset,
+        pendingTriggerSource: triggerSource === null ? state.pendingTriggerSource : triggerSource,
+        autonomousTurnCount: triggerSource === "user" ? 0 : state.autonomousTurnCount,
+      };
+    }
     case "events.iterate.com/agent/input-added": {
       const triggerSource = agentInputTriggerSource(event);
       const files = event.payload.files;
@@ -502,6 +534,18 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         ),
         scriptExecutionsCompleted: [...state.scriptExecutionsCompleted, event.payload.executionId],
       };
+    case "events.iterate.com/stream/child-stream-created": {
+      // Every descendant stream announces its FULL path to every ancestor;
+      // this agent's subagents are the announcements whose parent-agent path
+      // is exactly this stream (event.path), so grandchildren stay out.
+      const childPath = event.payload.childPath;
+      if (subagentParentPath(childPath) !== event.path) return state;
+      if (state.subagents.some((subagent) => subagent.path === childPath)) return state;
+      return {
+        ...state,
+        subagents: [...state.subagents, { path: childPath, spawnedAt: event.createdAt }],
+      };
+    }
     default:
       return state;
   }

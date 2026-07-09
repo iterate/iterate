@@ -21,7 +21,7 @@ import {
 import { fakeResponsesWebSocket } from "./test-helpers.ts";
 
 const T = {
-  userMessage: "events.iterate.com/agents/user-message-received",
+  userMessage: "events.iterate.com/agents/message-received",
   scheduled: "events.iterate.com/agent/llm-request-scheduled",
   requested: "events.iterate.com/agent/llm-request-requested",
   started: "events.iterate.com/openai-ws/llm-request-started",
@@ -78,7 +78,7 @@ describe("eviction recovery, end to end", () => {
   it("recovers a deploy mid-LLM-call: alarm → revival fact → orphan settled → agent retries → reply", async () => {
     await h.stream.append({
       type: T.userMessage,
-      payload: { origin: "web", content: "hello?" },
+      payload: { content: "hello?", from: { kind: "user", origin: "web" } },
     });
 
     // Incarnation 1 accepts the request and hangs on the vendor socket.
@@ -132,7 +132,7 @@ describe("eviction recovery, end to end", () => {
   it("recovers a lost debounce timer: revival re-derives the requested event from the fold", async () => {
     await h.stream.append({
       type: T.userMessage,
-      payload: { origin: "web", content: "are you there?" },
+      payload: { content: "are you there?", from: { kind: "user", origin: "web" } },
     });
     const scheduled = await h.stream.waitForEvent({ eventTypes: [T.scheduled], timeoutMs: 5_000 });
 
@@ -265,7 +265,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     );
     const [nudge] = await stream.append({
       type: T.userMessage,
-      payload: { origin: "web", content: "hello? anyone?" },
+      payload: { content: "hello? anyone?", from: { kind: "user", origin: "web" } },
     });
     await agent.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
 

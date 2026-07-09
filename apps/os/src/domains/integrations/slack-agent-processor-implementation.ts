@@ -102,17 +102,24 @@ export class SlackAgentProcessor extends StreamProcessor<
         // Route context (channel/thread_ts/streamPath) is captured in reduce().
         return;
       case "events.iterate.com/slack/webhook-received": {
-        const appendAgentInput = async (
+        // The webhook transcribes into the unified inbound message event —
+        // Slack messages are messages FROM a user, `from` carries the facts.
+        // The idempotency key format predates the unification on purpose:
+        // streams already holding the old input-added under this key dedupe
+        // a refold's re-append instead of double-recording the message.
+        const appendAgentMessage = async (
           input: {
             files?: AgentFileAttachment[];
             llmRequestPolicy?: { behaviour: "dont-trigger-request" };
+            userId?: string;
           } = {},
         ) => {
           await append({
-            type: "events.iterate.com/agent/input-added",
+            type: "events.iterate.com/agents/message-received",
             idempotencyKey: `slack-agent:webhook-to-agent-input:${event.offset}`,
             payload: {
               content: slackWebhookAgentInput(event.payload),
+              from: { kind: "slack", ...(input.userId == null ? {} : { userId: input.userId }) },
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
                 ? {}
@@ -129,7 +136,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           .loose()
           .safeParse(event.payload.body);
         if (!parsed.success) {
-          blockProcessorWhile(appendAgentInput);
+          blockProcessorWhile(appendAgentMessage);
           return;
         }
 
@@ -141,7 +148,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (isBotAction(slackEvent, botUserId)) return;
         if (readStringField(slackEvent, "type") !== "message") {
           blockProcessorWhile(async () => {
-            await appendAgentInput({
+            await appendAgentMessage({
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             });
             await this.#addEyesReactionForMessageTarget(target, event);
@@ -202,7 +209,11 @@ export class SlackAgentProcessor extends StreamProcessor<
               });
             }
           }
-          await appendAgentInput(files == null ? {} : { files });
+          const userId = readStringField(slackEvent, "user");
+          await appendAgentMessage({
+            ...(files == null ? {} : { files }),
+            ...(userId == null ? {} : { userId }),
+          });
           await this.#addEyesReactionForMessageTarget(target, event);
         });
         return;

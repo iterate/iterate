@@ -283,8 +283,30 @@ export interface Agent {
   stream: Stream;
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  sendMessage(message: string): Promise<StreamEvent>;
+  /**
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's `from` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent>;
+  /** The parent agent's control surface, when THIS agent is a subagent (throws otherwise). */
+  parent: Agent;
+  /** THIS agent's subagents: ordinary agents nested at `<path>/subagents/<name>` (spawn/get/list). */
+  subagents: SubagentCollection;
   /**
    * Send-and-wait convenience: appends a user message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -418,7 +440,7 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (`"/agents/<name>"`). */
+  /** The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope). */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
@@ -982,6 +1004,44 @@ export interface StreamProcessorRpc<State = unknown> {
 }
 
 /**
+ * The `agent.subagents` door. Subagents are ORDINARY agents whose streams
+ * nest under the parent agent's path (`<agentPath>/subagents/<path>`) —
+ * being a subagent is purely a property of where the stream sits (see
+ * lib/subagent-paths.ts). There are no names, only paths: this collection
+ * addresses them by path RELATIVE to `<agentPath>/subagents/`, multi-segment
+ * welcome. Everything follows from the path: birth mechanics (project
+ * processor), default policy including the "you are a subagent" prompt
+ * suffix (agents/agent-defaults.ts), a private workspace, and capability
+ * inheritance from the parent scope (capability resolution chains up path
+ * prefixes). There is no lifecycle beyond that of any agent stream: parent
+ * and subagent talk via `message`, and `spawn` only pre-applies policy — a
+ * plain `message` to a never-seen subagent path births one on stock
+ * defaults just the same.
+ */
+export interface SubagentCollection {
+  __describe(): Promise<Description>;
+  /**
+   * Birth a subagent and return its agent surface: appends the default agent
+   * policy for `<agentPath>/subagents/<path>` — with the caller's overrides
+   * baked in — as one idempotency-keyed batch, so the subagent never answers
+   * its first message on stock defaults. Idempotent: re-spawning an existing
+   * path is a no-op at the stream's append-dedup layer. Pipeline follow-ups
+   * straight through the returned surface: `spawn({ path }).message(task)`,
+   * or `provideCapability(...)` first to hand it tools before any turn runs.
+   */
+  spawn(
+    input: {
+      /** Path relative to `<agentPath>/subagents/` (e.g. `"researcher"`). */
+      path: string;
+    } & AgentDefaultsOverrides,
+  ): Promise<Agent>;
+  /** One subagent's full agent control surface, by path relative to `<agentPath>/subagents/`. */
+  get(relativePath: string): Agent;
+  /** This agent's subagents, from its reduced processor state. */
+  list(): Promise<Array<{ path: string; spawnedAt: string }>>;
+}
+
+/**
  * The `itx.agents.defaults` built-in: default agent POLICY as data. The
  * project worker owns applying it — the seeded template reacts to
  * `stream/child-stream-created` for `/agents/**` by appending
@@ -1532,7 +1592,16 @@ export type AgentProcessorState = {
     startedAt: string;
   }[];
   scriptExecutionsCompleted: string[];
+  subagents: { path: string; spawnedAt: string }[];
 };
+
+/**
+ * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
+ * base64 (optionally a full `data:` URL) — that is what Workers AI image
+ * models return, and the whole point of accepting strings is piping
+ * `itx.ai.run` output straight into storage.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
 export type StreamEvent = {
   type: string;
@@ -1558,14 +1627,6 @@ export type StreamEvent = {
   createdAt: string;
   path: string;
 };
-
-/**
- * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
- * base64 (optionally a full `data:` URL) — that is what Workers AI image
- * models return, and the whole point of accepting strings is piping
- * `itx.ai.run` output straight into storage.
- */
-export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
 export type AgentFileAttachment = {
   contentType: string;
@@ -2053,6 +2114,13 @@ export type CfMarkdownConversionOptions = {
   };
 };
 
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  provider?: AgentLlmProvider;
+  model?: string;
+};
+
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
@@ -2062,13 +2130,6 @@ export type FlattenedCapabilityInvocation = {
 
 /** One step of an {@link ItxExpression}: a property read, or a `[method, ...args]` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-
-/** Caller-supplied policy overrides, baked into the returned events. */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  provider?: AgentLlmProvider;
-  model?: string;
-};
 
 /** The default policy for one agent path: the named pieces plus the exact
  * event batch that applies them (idempotency-keyed, safe to re-append). */

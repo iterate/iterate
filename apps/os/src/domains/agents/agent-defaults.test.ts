@@ -72,4 +72,23 @@ describe("agentDefaultsForPath", () => {
       expect(event.idempotencyKey).toContain(PROJECT_ID);
     }
   });
+
+  it("subagents get the default prompt plus the subagent suffix — never a thread transcriber prompt", () => {
+    const nested = defaultsFor("/agents/slack/main/C123/ts-99/subagents/helper");
+    expect(nested.systemPrompt).toContain("YOU ARE A SUBAGENT");
+    expect(nested.systemPrompt).toContain("/agents/slack/main/C123/ts-99");
+    // The shape-loose Slack predicate must not classify the nested path.
+    expect(nested.systemPrompt).not.toContain("inside a Slack thread");
+    const plain = defaultsFor("/agents/main");
+    expect(plain.systemPrompt).not.toContain("YOU ARE A SUBAGENT");
+  });
+
+  it("a systemPrompt override keeps the subagent suffix appended", () => {
+    const custom = defaultsFor("/agents/main/subagents/pirate", {
+      systemPrompt: "Answer only in pirate speak.",
+    });
+    expect(custom.systemPrompt.startsWith("Answer only in pirate speak.")).toBe(true);
+    expect(custom.systemPrompt).toContain("YOU ARE A SUBAGENT");
+    expect(custom.systemPrompt).toContain("/agents/main");
+  });
 });

@@ -483,7 +483,13 @@ describe("PrAgentProcessor (transcriber)", () => {
   };
 
   function agentInputs(stream: MemoryStream) {
-    return stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added");
+    // Route context is a plain input; webhook transcriptions are inbound
+    // messages — the tests treat both as "what reached the model".
+    return stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" ||
+        event.type === "events.iterate.com/agents/message-received",
+    );
   }
 
   it("transcribes the route fact into silent context naming the reply door", async () => {

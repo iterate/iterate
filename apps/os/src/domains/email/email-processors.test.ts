@@ -489,7 +489,7 @@ describe("EmailAgentProcessor", () => {
       ],
     ]);
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({ files: [resolved] });
@@ -510,7 +510,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
@@ -536,7 +536,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -564,7 +564,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -603,7 +603,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(1);
     // Our own looped-back mail never becomes the thread counterpart — the
     // human sender stays the reply target.
@@ -633,7 +633,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(processor.state.counterpart).toBeUndefined();
   });

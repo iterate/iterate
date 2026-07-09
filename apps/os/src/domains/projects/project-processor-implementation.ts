@@ -3,6 +3,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
+import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -193,14 +194,19 @@ export class ProjectProcessor extends StreamProcessor<
             // project-repo-template/worker.ts and agents/agent-defaults.ts).
             // Slack-agent wiring requires the full thread shape — the
             // connection segment is what replies authenticate with.
-            const isSlack = slackConnectionFromAgentPath(childPath) !== null;
+            // Subagents are checked FIRST: the thread predicates are
+            // shape-loose (Slack matches any >=6-segment path under its
+            // connection, email matches by prefix), and a subagent nested
+            // under a thread agent must not inherit its transcriber.
+            const isSubagent = subagentParentPath(childPath) !== null;
+            const isSlack = !isSubagent && slackConnectionFromAgentPath(childPath) !== null;
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding
               // subscriptions, so whichever lane runs second dedupes cleanly.
               ...agentSubscriptionEvents({
                 childPath,
-                email: isEmailAgentPath(childPath),
-                githubPr: isPrAgentPath(childPath),
+                email: !isSubagent && isEmailAgentPath(childPath),
+                githubPr: !isSubagent && isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
               }),

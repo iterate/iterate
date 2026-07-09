@@ -357,8 +357,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     }),
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
-        payload: { content: `hello ${marker}`, origin: "web" },
-        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: `hello ${marker}`, from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/message-received",
       });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },

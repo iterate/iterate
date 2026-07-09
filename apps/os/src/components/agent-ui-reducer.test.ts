@@ -32,8 +32,8 @@ describe("agent-ui reducer", () => {
   it("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "count the inputs", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -85,8 +85,8 @@ describe("agent-ui reducer", () => {
   it("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "hi", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "hi", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -225,8 +225,8 @@ describe("agent-ui reducer", () => {
     // showed only a bare spinner because the reducer ignored these frames.
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "count the inputs", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -472,8 +472,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "also, one more thing", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
       },
     ]);
 
@@ -496,8 +496,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "also, one more thing", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
@@ -542,8 +542,8 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "oh this is taking too long", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "oh this is taking too long", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",
@@ -736,10 +736,10 @@ describe("agent-ui reducer", () => {
     expect(state.queuedUserMessages).toMatchObject([{ kind: "user", text: "one more" }]);
   });
 
-  it("shows only the attachments from the slack-agent's yaml input event", () => {
+  it("shows only the attachments from the slack-agent's transcribed message", () => {
     // The slack message itself already rendered from the webhook event; the
-    // slack-agent processor's agent/input-added yaml dump exists for the
-    // model, not the user — but its stored file attachments are the only
+    // slack-agent processor's message-received yaml transcription exists for
+    // the model, not the user — but its stored file attachments are the only
     // browser-renderable copy of shared files.
     const file = {
       contentType: "image/png",
@@ -750,14 +750,38 @@ describe("agent-ui reducer", () => {
     };
     const state = reduceAll([
       {
-        type: "events.iterate.com/agent/input-added",
+        type: "events.iterate.com/agents/message-received",
         idempotencyKey: "slack-agent:webhook-to-agent-input:41",
-        payload: { content: "```yaml\nbody: ...\n```", files: [file] },
+        payload: {
+          content: "```yaml\nbody: ...\n```",
+          from: { kind: "slack", userId: "U1" },
+          files: [file],
+        },
       },
     ]);
 
     expect(state.items).toMatchObject([
-      { kind: "user", text: "", files: [file], via: { service: "slack" } },
+      { kind: "user", text: "", files: [file], via: { service: "slack", sender: "U1" } },
+    ]);
+  });
+
+  it("renders inter-agent mail as a labeled user bubble", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/message-received",
+        payload: {
+          content: "Done. Findings attached below.",
+          from: { kind: "agent", path: "/agents/main/subagents/researcher" },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: "Done. Findings attached below.",
+        via: { service: "agent", sender: "/agents/main/subagents/researcher" },
+      },
     ]);
   });
 

@@ -50,6 +50,7 @@ import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
+import { subagentParentPath, SUBAGENTS_PATH_SEGMENT } from "./lib/subagent-paths.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -1011,9 +1012,9 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface; list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface (paths without a leading "/" resolve relative to YOUR scope, e.g. get("subagents/researcher") from an agent script); list() the known agent streams.',
       children: {
-        get: "One agent by path.",
+        get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
         defaults: "The platform's default agent policy, as data (forPath).",
       },
@@ -1021,24 +1022,53 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      /**
+       * The scope path of the itx this collection was reached through — the
+       * "current actor". Relative `get()` paths resolve against it, and
+       * `message()` on the returned agents stamps it as the sender when it
+       * is an agent path. Captured at itx mint time (itxForScope), so it is
+       * a property of the tree, not of per-call auth.
+       */
+      sourceScopePath?: string;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The agent control surface at a path (`"/agents/<name>"`). */
+  /** The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope). */
   get(path: string): AgentRpcTarget {
+    const resolved = this.#resolvePath(path);
     return new AgentRpcTarget({
       auth: this.props.auth,
       capabilityHost: new CapabilityHostRpcTarget({
         auth: this.props.auth,
         ctx: this.props.ctx,
-        path: normalizeAgentPath(path),
+        path: resolved,
         projectId: this.props.projectId,
       }),
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      ...(this.props.sourceScopePath === undefined
+        ? {}
+        : { sourceScopePath: this.props.sourceScopePath }),
     });
+  }
+
+  #resolvePath(path: string): string {
+    if (path.startsWith("/")) return normalizeAgentPath(path);
+    const source = this.props.sourceScopePath;
+    if (source === undefined || !source.startsWith("/agents/")) {
+      throw new Error(
+        `relative agent path ${JSON.stringify(path)} needs an agent scope to resolve against — use an absolute "/agents/..." path`,
+      );
+    }
+    return normalizeAgentPath(`${source}/${path}`);
   }
 
   /** Known agents, read from the project processor's reduced state. */
@@ -2752,6 +2782,8 @@ type AgentRpcTargetProps = {
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
   projectId: string;
+  /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
+  sourceScopePath?: string;
 };
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
@@ -2823,13 +2855,98 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  async sendMessage(message: string): Promise<StreamEvent> {
+  /**
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's `from` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  async message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent> {
+    const { message, files: fileInputs } =
+      typeof input === "string"
+        ? { message: input, files: undefined }
+        : { message: input.message, files: input.files };
+    const from = this.#messageFrom();
+    const files =
+      fileInputs === undefined || fileInputs.length === 0
+        ? undefined
+        : await storeAgentFileAttachments({
+            agentPath: from.kind === "agent" ? from.path : this.#path,
+            config: parseConfig(env),
+            files: fileInputs,
+            projectId: this.#props.projectId,
+          });
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: message, origin: "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: message,
+        from,
+        ...(files === undefined ? {} : { files }),
+      },
     });
     return event;
+  }
+
+  /** WHO a message() through this handle is from: the calling scope when it is an agent, else a user. */
+  #messageFrom(): { kind: "agent"; path: string } | { kind: "user"; origin: "web" } {
+    const source = this.#props.sourceScopePath;
+    return source !== undefined && source.startsWith("/agents/")
+      ? { kind: "agent", path: source }
+      : { kind: "user", origin: "web" };
+  }
+
+  #parentPath(): string {
+    const parentPath = subagentParentPath(this.#path);
+    if (parentPath === null) {
+      throw new Error(
+        `agent at "${this.#path}" is not a subagent (subagents live at <parentAgentPath>/subagents/<name>)`,
+      );
+    }
+    return parentPath;
+  }
+
+  /** The parent agent's control surface, when THIS agent is a subagent (throws otherwise). */
+  get parent(): AgentRpcTarget {
+    return new AgentRpcTarget({
+      auth: this.#props.auth,
+      capabilityHost: new CapabilityHostRpcTarget({
+        auth: this.#props.auth,
+        ctx: this.#props.ctx,
+        path: this.#parentPath(),
+        projectId: this.#props.projectId,
+      }),
+      ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
+      ...(this.#props.sourceScopePath === undefined
+        ? {}
+        : { sourceScopePath: this.#props.sourceScopePath }),
+    });
+  }
+
+  /** THIS agent's subagents: ordinary agents nested at `<path>/subagents/<name>` (spawn/get/list). */
+  get subagents(): SubagentCollectionRpcTarget {
+    return new SubagentCollectionRpcTarget({
+      agentPath: this.#path,
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
+      ...(this.#props.sourceScopePath === undefined
+        ? {}
+        : { sourceScopePath: this.#props.sourceScopePath }),
+    });
   }
 
   /**
@@ -2846,8 +2963,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     timeoutMs?: number;
   }): Promise<StreamEvent> {
     const [sent] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: input.message, origin: input.origin ?? "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: input.message,
+        from: { kind: "user", origin: input.origin ?? "web" },
+      },
     });
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
@@ -2910,11 +3030,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         capabilityHost: "This agent scope's durable capability table.",
         chat: "The agent's web-chat door (sendMessage).",
         kill: "Abort this Agent Durable Object incarnation; the next request boots it again.",
+        message:
+          "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
+        parent: "The parent agent's control surface (subagents only).",
         processor: "The agent stream processor (snapshot/state).",
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
-        sendMessage: "Append a user message to the agent stream.",
         stream: "The agent's own event stream.",
+        subagents: "This agent's subagents (spawn/get/list), nested at <path>/subagents/<name>.",
       },
       parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
       agentPath: this.#path,
@@ -2926,6 +3049,133 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /** Abort this Agent Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void> {
     return Promise.resolve(this.durableObjectStub.kill());
+  }
+}
+
+/**
+ * The `agent.subagents` door. Subagents are ORDINARY agents whose streams
+ * nest under the parent agent's path (`<agentPath>/subagents/<path>`) —
+ * being a subagent is purely a property of where the stream sits (see
+ * lib/subagent-paths.ts). There are no names, only paths: this collection
+ * addresses them by path RELATIVE to `<agentPath>/subagents/`, multi-segment
+ * welcome. Everything follows from the path: birth mechanics (project
+ * processor), default policy including the "you are a subagent" prompt
+ * suffix (agents/agent-defaults.ts), a private workspace, and capability
+ * inheritance from the parent scope (capability resolution chains up path
+ * prefixes). There is no lifecycle beyond that of any agent stream: parent
+ * and subagent talk via `message`, and `spawn` only pre-applies policy — a
+ * plain `message` to a never-seen subagent path births one on stock
+ * defaults just the same.
+ */
+class SubagentCollectionRpcTarget extends IterateRpcTarget<"SubagentCollection"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        `Subagents of the agent at "${this.props.agentPath}": ordinary agents nested at <agentPath>/subagents/<path>, addressed by path relative to that folder. ` +
+        "spawn({ path, systemPrompt?, provider?, model? }) births one with default policy (plus your overrides) applied atomically and returns its agent surface — " +
+        "pipeline straight into it: spawn({ path }).message(task), or provideCapability first to hand it tools. Reports come back as your inputs.",
+      children: {
+        get: "One subagent's full agent control surface, by relative path.",
+        list: "This agent's subagents, from its reduced processor state.",
+        spawn:
+          "Birth a subagent at a relative path (policy lands in one batch) and return its agent surface.",
+      },
+      parent: `the agent at "${this.props.agentPath}" (agent.subagents)`,
+    });
+  }
+
+  constructor(
+    readonly props: {
+      agentPath: string;
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
+      sourceScopePath?: string;
+    },
+  ) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    normalizeAgentPath(props.agentPath);
+  }
+
+  /** The absolute stream path for a path relative to `<agentPath>/subagents/`. */
+  #pathFor(relativePath: string): string {
+    if (relativePath.startsWith("/")) {
+      throw new Error(
+        `subagent paths are relative to "${this.props.agentPath}/${SUBAGENTS_PATH_SEGMENT}/" — got absolute path ${JSON.stringify(relativePath)} (use itx.agents.get for absolute paths)`,
+      );
+    }
+    if (relativePath.trim() === "" || relativePath.split("/").some((s) => s === "" || s === "..")) {
+      throw new Error(`invalid relative subagent path ${JSON.stringify(relativePath)}`);
+    }
+    return normalizeAgentPath(`${this.props.agentPath}/${SUBAGENTS_PATH_SEGMENT}/${relativePath}`);
+  }
+
+  /**
+   * Birth a subagent and return its agent surface: appends the default agent
+   * policy for `<agentPath>/subagents/<path>` — with the caller's overrides
+   * baked in — as one idempotency-keyed batch, so the subagent never answers
+   * its first message on stock defaults. Idempotent: re-spawning an existing
+   * path is a no-op at the stream's append-dedup layer. Pipeline follow-ups
+   * straight through the returned surface: `spawn({ path }).message(task)`,
+   * or `provideCapability(...)` first to hand it tools before any turn runs.
+   */
+  async spawn(
+    input: {
+      /** Path relative to `<agentPath>/subagents/` (e.g. `"researcher"`). */
+      path: string;
+    } & AgentDefaultsOverrides,
+  ): Promise<AgentRpcTarget> {
+    const { path: relativePath, ...overrides } = input;
+    const path = this.#pathFor(relativePath);
+    const defaults = agentDefaultsForPath({
+      agentPath: path,
+      deploymentLlmProvider: deploymentDefaultLlmProvider(env),
+      projectId: this.props.projectId,
+      overrides,
+    });
+    await new StreamRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+      path,
+    }).append(...defaults.events);
+    return this.get(relativePath);
+  }
+
+  /** One subagent's full agent control surface, by path relative to `<agentPath>/subagents/`. */
+  get(relativePath: string): AgentRpcTarget {
+    const path = this.#pathFor(relativePath);
+    return new AgentRpcTarget({
+      auth: this.props.auth,
+      capabilityHost: new CapabilityHostRpcTarget({
+        auth: this.props.auth,
+        ctx: this.props.ctx,
+        path,
+        projectId: this.props.projectId,
+      }),
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+      ...(this.props.sourceScopePath === undefined
+        ? {}
+        : { sourceScopePath: this.props.sourceScopePath }),
+    });
+  }
+
+  /** This agent's subagents, from its reduced processor state. */
+  async list(): Promise<Array<{ path: string; spawnedAt: string }>> {
+    const processor = new ProcessorRelayRpcTarget<AgentProcessorState>({
+      auth: this.props.auth,
+      host: () =>
+        env.AGENT.getByName(
+          DurableObjectNameCodec.stringify({
+            projectId: this.props.projectId,
+            path: this.props.agentPath,
+          }),
+        ) as unknown as ProcessorHostStub,
+    });
+    const { state } = await processor.snapshot();
+    return state.subagents;
   }
 }
 
@@ -3842,6 +4092,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#props.projectId,
+      // The "current actor": this itx's own scope path. Relative agent paths
+      // resolve against it, and message() stamps it as the sender when the
+      // scope is an agent — how a subagent's report knows who it is from.
+      sourceScopePath: this.#props.capabilityHost.path,
     });
   }
 

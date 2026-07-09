@@ -36,7 +36,7 @@ function NewAgentPage() {
       // the project processor on the first stream append, so sending the first
       // message IS the creation.
       const itx = await connectItxBrowser({ projectId: project.id });
-      await itx.agents.get(agentPath).sendMessage(content);
+      await itx.agents.get(agentPath).message(content);
       return agentPath;
     },
     onSuccess: (agentPath) => {

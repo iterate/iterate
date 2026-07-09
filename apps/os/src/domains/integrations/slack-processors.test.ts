@@ -560,7 +560,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -619,7 +619,7 @@ describe("SlackAgentProcessor", () => {
     expect(stored[0]!.storageKey).toMatch(/^slack-\d+$/);
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({ files: [attachment] });
@@ -640,7 +640,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
@@ -657,7 +657,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(slackCalls).toHaveLength(0);
   });
@@ -683,7 +683,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -707,7 +707,7 @@ describe("SlackAgentProcessor", () => {
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(slackCalls).toContainEqual({
       method: "reactions.add",
@@ -869,7 +869,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(1);
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
@@ -983,7 +983,7 @@ describe("SlackAgentProcessor", () => {
     expect(code).toContain('thread_ts: "111.222"');
     expect(code).toContain("text: `Debug info:\\n${debug}`");
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(slackCalls).toContainEqual({
       method: "reactions.add",
@@ -1017,7 +1017,10 @@ describe("SlackAgentProcessor", () => {
     const cursors = new Map<object, number>();
     await deliverNewEvents({ cursors, processor, stream });
 
-    expect(calls).toEqual(["append:events.iterate.com/agent/input-added", "slack:reactions.add"]);
+    expect(calls).toEqual([
+      "append:events.iterate.com/agents/message-received",
+      "slack:reactions.add",
+    ]);
   });
 
   it("turns raw Slack interactivity payloads into triggering agent input", async () => {
@@ -1039,7 +1042,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).toMatchObject({ idempotencyKey: "slack-agent:webhook-to-agent-input:1" });
@@ -1072,7 +1075,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(slackCalls).toHaveLength(0);
   });
@@ -1093,7 +1096,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/agent/input-added";
+        return streamEvent.type === "events.iterate.com/agents/message-received";
       }),
     ).toHaveLength(1);
     // Bot-authored messages never get the eyes reaction, even when forwarded.
@@ -1162,7 +1165,7 @@ describe("SlackAgentProcessor", () => {
     ).toHaveLength(0);
     expect(
       stream.events.filter(
-        (streamEvent) => streamEvent.type === "events.iterate.com/agent/input-added",
+        (streamEvent) => streamEvent.type === "events.iterate.com/agents/message-received",
       ),
     ).toHaveLength(0);
     expect(slackCalls).toHaveLength(0);
@@ -1192,7 +1195,7 @@ describe("SlackAgentProcessor", () => {
     ).toHaveLength(0);
     expect(
       stream.events.filter(
-        (streamEvent) => streamEvent.type === "events.iterate.com/agent/input-added",
+        (streamEvent) => streamEvent.type === "events.iterate.com/agents/message-received",
       ),
     ).toHaveLength(0);
     expect(slackCalls).toHaveLength(0);
