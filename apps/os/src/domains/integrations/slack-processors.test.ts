@@ -805,6 +805,54 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("carries a behind-batch lifecycle fact to the at-head repaint", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The completion lands in a batch stamped BEHIND the head (a render/input
+    // event already followed it — the wake-lane shape), and the trailing
+    // catch-up batch that reaches head contains no lifecycle facts at all.
+    // The repaint must not lose the completion: without the carry, Slack
+    // keeps "is thinking..." and the eyes reaction forever.
+    const [completed, render] = await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 10,
+          llmRequestId: 1,
+          provider: "openai-ws",
+          result: { status: "success" },
+        },
+      },
+      {
+        // Not consumed by slack-agent: stands in for the renders/inputs that
+        // typically trail a completion.
+        type: "events.iterate.com/agent/input-added",
+        payload: { content: "render" },
+      },
+    );
+    await processor.ingest({ events: [completed!], streamMaxOffset: render!.offset });
+    expect(slackCalls).toEqual([]); // behind the head: deferred, not painted
+
+    await processor.ingest({ events: [render!], streamMaxOffset: render!.offset });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+      },
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
   it("skips the stale 👀 ack on a late wake but still lands the agent input", async () => {
     const { clock, cursors, processor, slackCalls, stream } = setup();
 

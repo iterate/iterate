@@ -215,26 +215,45 @@ export class SlackAgentProcessor extends StreamProcessor<
   }
 
   /**
+   * The latest status-relevant lifecycle fact this incarnation has seen but
+   * not yet painted. Behind-the-head batches defer painting to the at-head
+   * pass, but that pass's own batch may contain no lifecycle facts — a
+   * wake-lane batch stamped behind the head is followed by a trailing
+   * unfiltered catch-up that is often renders and inputs only, and a
+   * multi-page catch-up may fold the facts pages before the final one. The
+   * carry hands the deferred fact to whichever batch finally reaches head.
+   * In-memory on purpose: the status is a cosmetic lane, and a carry lost to
+   * an eviction is repaired by the next lifecycle fact (a revival's orphan
+   * settle IS a fresh `llm-request-completed`).
+   */
+  #unpaintedLifecycleFact: { createdAt: string; type: string } | undefined;
+
+  /**
    * The Slack assistant status is a REPAINT of current truth, not a per-event
-   * effect: the latest lifecycle fact in the batch wins and one setStatus
-   * paints it. Three gates make the lane refold-safe (and un-race per-event
+   * effect: the latest lifecycle fact wins and one setStatus paints it. Three
+   * gates make the lane refold-safe (and un-race per-event
    * `blockProcessorWhile` closures, which run concurrently within a batch):
-   * only an at-head fold paints (a mid-catch-up batch's "current" is stale by
-   * construction), only a fresh fact paints (a refold's historical lifecycle
-   * facts must not touch months-old threads), and it paints at most once per
-   * batch. A crashed run's orphan settles via the provider reconcilers as a
-   * FRESH `llm-request-completed`, so a stuck "is thinking…" still clears.
+   * only an at-head pass paints (a behind batch defers via the carry above),
+   * only a fresh fact paints (a refold's historical lifecycle facts must not
+   * touch months-old threads), and it paints at most once per batch. Unlike
+   * the repo reconciler this lane reads batch facts, not the fold — folding a
+   * cosmetic status into state isn't worth a schema change — which is exactly
+   * why behind batches need the carry where fold-based reconcilers don't.
    */
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
-    if (args.checkpointOffset < args.streamMaxOffset) return;
-    const latest = args.reducedEvents.findLast(
-      ({ event }) => slackAgentStatusForEvent(event) != null,
-    );
-    if (latest == null || !webhookAckIsFresh(latest.event, (this.deps.now ?? Date.now)())) return;
-    const update = slackAgentStatusForEvent(latest.event)!;
+    const latest =
+      args.reducedEvents.findLast(({ event }) => slackAgentStatusForEvent(event) != null)?.event ??
+      this.#unpaintedLifecycleFact;
+    if (args.checkpointOffset < args.streamMaxOffset) {
+      this.#unpaintedLifecycleFact = latest;
+      return;
+    }
+    this.#unpaintedLifecycleFact = undefined;
+    if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
+    const update = slackAgentStatusForEvent(latest)!;
     const { channel, latestMessageTs, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
     args.blockProcessorWhile(async () => {
