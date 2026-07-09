@@ -462,7 +462,7 @@ test("cross-posts do not recursively copy events that are already cross-posted",
   expect(sourceCopies).toEqual([]);
 });
 
-test("global streams reject cross-post push subscriptions before they commit", async () => {
+test("global cross-posts stay in the global namespace — a project stream is unreachable", async () => {
   const marker = crypto.randomUUID();
   const globalPath = `/e2e/os-port/cross-post-global/source/${marker}`;
   const targetPath = `/e2e/os-port/cross-post-global/target/${marker}`;
@@ -476,29 +476,40 @@ test("global streams reject cross-post push subscriptions before they commit", a
     slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
   });
   using globalSource = itx.streams.get(globalPath);
-  using target = project.streams.get(targetPath);
+  using globalTarget = itx.streams.get(targetPath);
+  using projectTarget = project.streams.get(targetPath);
 
-  // A cross-post is a push subscription whose expression evaluates against the
-  // source stream's own project itx root — which is also why a project stream
-  // can never smuggle events into another project or a global stream: the
-  // expression cannot NAME anything outside its own project. A global
-  // (projectId: null) stream has no project to derive that authority from, so
-  // the subscription-configured append must be rejected before it commits.
-  await expect(
-    globalSource.crossPostTo({
-      path: targetPath,
-      key: `global-to-project-${marker}`,
-      eventTypes: [CROSS_POST_EVENT_TYPE],
-    }),
-  ).rejects.toThrow(/push subscriptions require a project-scoped stream/);
-
-  // Because the subscription never committed, appending a matching event
-  // cross-posts nothing.
+  // A delivery expression evaluates against the source stream's OWN authority
+  // root. For a global (projectId: null) stream that is the deployment root,
+  // whose `streams` collection is the deployment-wide (projectId: null)
+  // namespace — so `["streams", ["get", path], "ingest"]` from a global source
+  // can only ever name another GLOBAL stream. A project stream at the same
+  // path is a different coordinate entirely: smuggling events across the
+  // project boundary is unexpressible, not checked.
+  await globalSource.crossPostTo({
+    path: targetPath,
+    key: `global-to-global-${marker}`,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+  });
   await globalSource.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
-  await new Promise((resolve) => setTimeout(resolve, 750));
 
-  const targetEvents = await target.getEvents({ afterOffset: 0 });
-  expect(targetEvents.some((event) => event.type === CROSS_POST_EVENT_TYPE)).toBe(false);
+  // The copy lands on the GLOBAL stream at the target path, provenance intact...
+  await expect
+    .poll(
+      async () => {
+        const events = await globalTarget.getEvents({ afterOffset: 0 });
+        return events.some(
+          (event) =>
+            event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPostedFrom !== undefined,
+        );
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+
+  // ...and the PROJECT stream at the same path never sees anything.
+  const projectEvents = await projectTarget.getEvents({ afterOffset: 0 });
+  expect(projectEvents.some((event) => event.type === CROSS_POST_EVENT_TYPE)).toBe(false);
 });
 
 test("crossPostTo transform reshapes the copied event and keeps the provenance chain intact", async () => {
