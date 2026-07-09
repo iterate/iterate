@@ -589,7 +589,15 @@ function spillNotice(input: { path: string; totalChars: number }): string {
 }
 
 function extractAsyncJsSnippet(content: string): string | null {
-  const fenced = content.match(/```(?:js|javascript|ts|typescript)?\s*([\s\S]*?)```/i);
+  // Fences count only at line starts: scripts legitimately carry ``` inside
+  // string literals (chat messages formatted as markdown), and in valid JS
+  // those always sit mid-line — a raw newline cannot appear in a string
+  // literal, and an unescaped ``` would terminate a template literal. A fence
+  // match anywhere used to cut the script at the first embedded ``` and
+  // execute an unparseable prefix (unclosed string literal).
+  const fenced = content.match(
+    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
+  );
   const code = (fenced?.[1] ?? content).trim();
   return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
 }
