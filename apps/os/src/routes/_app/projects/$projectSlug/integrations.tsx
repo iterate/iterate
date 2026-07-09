@@ -4,6 +4,16 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@iterate-com/ui/components/alert-dialog";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Item,
@@ -269,8 +279,10 @@ function ProjectIntegrationsContent() {
   const connectTelegram = useMutation({
     // No OAuth: Telegram's BotFather token IS the credential. The verb
     // validates it with getMe and points the bot's webhook at this deployment.
-    mutationFn: async (botToken: string) => await itx.integrations.connectTelegram({ botToken }),
+    mutationFn: async (input: { botToken: string; steal?: boolean }) =>
+      await itx.integrations.connectTelegram(input),
     onSuccess: async (result) => {
+      if (!result.ok) return; // already claimed — the steal dialog derives from .data
       setTelegramSheetOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success(
@@ -1025,10 +1037,20 @@ function TelegramConnectSheet({
   onOpenChange,
   open,
 }: {
-  connect: { isPending: boolean; mutate: (botToken: string) => void };
+  /** The connectTelegram mutation: `data`/`variables` drive the steal-confirm
+   * dialog (an `ok: false` result means the bot is claimed by another
+   * project), so no extra dialog state exists. */
+  connect: {
+    data: Awaited<ReturnType<Project["integrations"]["connectTelegram"]>> | undefined;
+    isPending: boolean;
+    mutate: (input: { botToken: string; steal?: boolean }) => void;
+    reset: () => void;
+    variables: { botToken: string; steal?: boolean } | undefined;
+  };
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
+  const stealPrompt = connect.data !== undefined && !connect.data.ok ? connect.data : null;
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetTrigger render={<Button type="button" size="sm" />}>
@@ -1041,7 +1063,7 @@ function TelegramConnectSheet({
           onSubmit={(event) => {
             event.preventDefault();
             const botToken = String(new FormData(event.currentTarget).get("botToken") || "");
-            connect.mutate(botToken);
+            connect.mutate({ botToken });
           }}
         >
           <SheetHeader>
@@ -1077,6 +1099,40 @@ function TelegramConnectSheet({
           </SheetFooter>
         </form>
       </SheetContent>
+      {/* A bot has exactly one webhook, so connecting it here would take it
+          from wherever it lives now. Possession of the token is the
+          authorization; this confirm is the foot-gun gate. */}
+      <AlertDialog
+        open={stealPrompt !== null}
+        onOpenChange={(dialogOpen) => {
+          if (!dialogOpen) connect.reset();
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Steal {stealPrompt?.botUsername ? `@${stealPrompt.botUsername}` : "this bot"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This bot is already connected to another project. Steal it? The other project will
+              lose the connection.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => connect.reset()}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={connect.isPending}
+              onClick={() => {
+                if (connect.variables !== undefined) {
+                  connect.mutate({ botToken: connect.variables.botToken, steal: true });
+                }
+              }}
+            >
+              Steal it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sheet>
   );
 }

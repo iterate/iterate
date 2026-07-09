@@ -85,6 +85,7 @@ import {
   getConnectionStatus,
   listIntegrationConnections,
   startOAuthFlow,
+  type ConnectTelegramResult,
 } from "./domains/integrations/connect-flows.ts";
 import {
   BUILTIN_INTEGRATION_SLUGS,
@@ -2250,15 +2251,18 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
    * validates the token, setWebhook points the bot at this deployment (with a
    * derived secret token), and the token lands in a write-only connection
-   * secret. Throws with a human-readable message on failure.
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * `ok: false, error: "telegram_bot_already_claimed"` arm so the caller can
+   * confirm and retry with `steal: true` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
    */
-  connectTelegram(input: {
-    botToken: string;
-  }): Promise<{ botId: string; botUsername: string | null; connection: string; ok: true }> {
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult> {
     return connectTelegram({
       botToken: input.botToken,
       config: parseConfig(env),
       projectId: this.props.projectId,
+      steal: input.steal,
     });
   }
 

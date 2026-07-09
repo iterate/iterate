@@ -220,16 +220,114 @@ describe("connectTelegram", () => {
     expect(api.requests.map((request) => request.path)).toEqual(["/bot12345:WRONG/getMe"]);
   });
 
-  test("a bot already claimed by another project is refused before setWebhook", async () => {
+  test("a bot claimed by another project answers the structured already-claimed arm (no steal, no leak)", async () => {
     await using api = await startFakeTelegramApi();
     await seedDirectoryClaim({ connection: "their-bot", projectId: "prj_other" });
 
-    await expect(
-      connectTelegram({ botToken: BOT_TOKEN, config: config(api.baseUrl), projectId: PROJECT_ID }),
-    ).rejects.toThrow(/already connected to another project/);
-    // getMe ran (we need the bot id to check the claim); setWebhook never did.
+    const result = await connectTelegram({
+      botToken: BOT_TOKEN,
+      config: config(api.baseUrl),
+      projectId: PROJECT_ID,
+    });
+    // Structured — not thrown — so the dashboard can offer the steal. The
+    // holding project is never named (the caller may be a different org).
+    expect(result).toEqual({
+      botUsername: "MishasHelperBot",
+      error: "telegram_bot_already_claimed",
+      ok: false,
+    });
+    // getMe ran (we need the bot id to check the claim); setWebhook never did,
+    // and nothing was stored or dispossessed.
     expect(api.requests.map((request) => request.path)).toEqual([`/bot${BOT_TOKEN}/getMe`]);
     expect(network.secrets.size).toBe(0);
+    const claims = network.streams.get(
+      DurableObjectNameCodec.stringify(
+        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { allowNullProjectId: true },
+      ),
+    );
+    expect(claims).toHaveLength(1); // the other project's claim stands
+  });
+
+  test("steal: true dispossesses the old project, then claims for the caller", async () => {
+    await using api = await startFakeTelegramApi();
+    // The old project holds the bot: directory claim + a live-looking secret.
+    await seedDirectoryClaim({ connection: "their-bot", projectId: "prj_other" });
+    const oldSecretName = DurableObjectNameCodec.stringify({
+      projectId: "prj_other",
+      path: telegramBotTokenSecretPath("their-bot"),
+    });
+    await network.SECRET.getByName(oldSecretName).update({
+      egress: { urls: ["https://api.telegram.org"] },
+      material: BOT_TOKEN,
+    });
+
+    const result = await connectTelegram({
+      botToken: BOT_TOKEN,
+      config: config(api.baseUrl),
+      projectId: PROJECT_ID,
+      steal: true,
+    });
+    expect(result).toEqual({
+      botId: BOT_ID,
+      botUsername: "MishasHelperBot",
+      connection: "mishashelperbot", // fresh name — the old one belonged to the old project
+      ok: true,
+    });
+
+    // The old project's stored token is unusable (egress emptied)…
+    expect(network.secrets.get(oldSecretName)).toMatchObject({ egress: { urls: [] } });
+    // …its journal shows the disconnect (without naming the taker)…
+    const oldJournal = network.streams.get(
+      DurableObjectNameCodec.stringify({
+        projectId: "prj_other",
+        path: integrationConnectionStreamPath("telegram", "their-bot"),
+      }),
+    );
+    expect(oldJournal?.at(-1)).toMatchObject({
+      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      payload: {
+        connection: "their-bot",
+        projectId: "prj_other",
+        reason: "stolen-by-another-project",
+      },
+    });
+    // …and no deleteWebhook was sent on the old side (the webhook is
+    // re-registered for the same bot moments later).
+    expect(callProjectTelegramBotApi).not.toHaveBeenCalled();
+    expect(api.requests.map((request) => request.path)).toEqual([
+      `/bot${BOT_TOKEN}/getMe`,
+      `/bot${BOT_TOKEN}/setWebhook`,
+      `/bot${BOT_TOKEN}/setMyCommands`,
+    ]);
+
+    // The directory fold now answers the CALLER's claim.
+    const directory = network.streams.get(
+      DurableObjectNameCodec.stringify(
+        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { allowNullProjectId: true },
+      ),
+    );
+    expect(directory?.map((event) => event.type)).toEqual([
+      CONNECTION_CLAIMED_EVENT_TYPE,
+      CONNECTION_UNCLAIMED_EVENT_TYPE,
+      CONNECTION_CLAIMED_EVENT_TYPE,
+    ]);
+    expect(directory?.at(-1)).toMatchObject({
+      payload: { connection: "mishashelperbot", externalId: BOT_ID, projectId: PROJECT_ID },
+    });
+
+    // The caller got the full connect: secret + connected fact.
+    const newJournal = network.streams.get(
+      DurableObjectNameCodec.stringify({
+        projectId: PROJECT_ID,
+        path: integrationConnectionStreamPath("telegram", "mishashelperbot"),
+      }),
+    );
+    expect(newJournal?.at(-1)).toMatchObject({
+      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      payload: { connection: "mishashelperbot", projectId: PROJECT_ID },
+    });
   });
 
   test("reconnecting the same project reuses the claiming connection's name (the Slack rule)", async () => {

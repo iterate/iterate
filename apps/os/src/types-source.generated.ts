@@ -586,11 +586,13 @@ export interface ProjectIntegrations {
    * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
    * validates the token, setWebhook points the bot at this deployment (with a
    * derived secret token), and the token lands in a write-only connection
-   * secret. Throws with a human-readable message on failure.
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * \`ok: false, error: "telegram_bot_already_claimed"\` arm so the caller can
+   * confirm and retry with \`steal: true\` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
    */
-  connectTelegram(input: {
-    botToken: string;
-  }): Promise<{ botId: string; botUsername: string | null; connection: string; ok: true }>;
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult>;
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
@@ -1644,6 +1646,34 @@ export type IntegrationConnectionStatus = {
   externalId: string | null;
   metadata: Record<string, unknown>;
 };
+
+/**
+ * Telegram has no OAuth: the user pastes a BotFather token, and connecting is
+ * getMe (validate the token + learn the bot identity) → claim check →
+ * setWebhook (pointing the bot at this deployment, authenticated by a secret
+ * token DERIVED from SECRET_ENCRYPTION_KEY — see telegramWebhookSecretToken)
+ * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
+ * the startOAuthFlow/completeConnect state machinery: there is no redirect,
+ * no callback, and no signed state to verify. Failures throw — the caller is
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured \`ok: false\` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. \`steal: true\` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
+ */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with \`steal: true\` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
 
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the \`startOAuthFlow\`/\`completeConnect\` pair.

@@ -213,6 +213,15 @@ Part 2 (threading) addendum:
    check the answer to the first: it should quote (reply to) the message it
    answers; answers to the latest message should NOT quote.
 
+Part 3 (steal) addendum:
+
+10. In a SECOND project, Integrations → Telegram → paste the SAME bot's token
+    → Connect. Expect the "already connected to another project" confirm
+    dialog (not a dead-end error).
+11. Confirm the steal. Expect the new project's card to show the bot
+    connected, and the FIRST project's card to show it disconnected; messages
+    to the bot now reach the new project's agents.
+
 ## Risks / open questions
 
 - URL secret substitution is the one change outside the integrations domain —
@@ -385,19 +394,32 @@ gate, not authz.
 
 ### Part 3 touch points
 
-- [ ] `connect-flows.ts`: `connectTelegram` gains `steal?: boolean` + the
+- [x] `connect-flows.ts`: `connectTelegram` gains `steal?: boolean` + the
       structured `already-claimed` result arm; steal path dispossesses the old
       project via `recordDisconnection` (no deleteWebhook), then runs the
-      normal connect
-- [ ] `rpc-targets.ts`: verb signature + result type updated; itx-api
-      regenerated
-- [ ] Dashboard Telegram card: already-claimed → confirm dialog → retry with
-      `steal: true`
-- [ ] Tests: already-claimed signal without steal; steal flips the directory
+      normal connect — _`ConnectTelegramResult` union
+      (`ok: true` | `ok: false, error: "telegram_bot_already_claimed"` with
+      only the bot username, never the holding project); the old project's
+      disconnected fact carries `reason: "stolen-by-another-project"`; steals
+      derive a FRESH connection name (the old one belonged to the old
+      project)_
+- [x] `rpc-targets.ts`: verb signature + result type updated; itx-api
+      regenerated — _done_
+- [x] Dashboard Telegram card: already-claimed → confirm dialog → retry with
+      `steal: true` — _house AlertDialog inside TelegramConnectSheet; dialog
+      open-state and pending token DERIVE from the mutation's data/variables
+      (no extra useState); cancel resets the mutation and returns to the
+      sheet_
+- [x] Tests: already-claimed signal without steal; steal flips the directory
       claim, empties the old secret's egress, appends old-side disconnected +
-      new-side connected facts; same-project reconnect still silent
-- [ ] Manual test plan: connect the same bot from a second project → confirm
+      new-side connected facts; same-project reconnect still silent —
+      _telegram-connect.test.ts (7 tests): the structured-arm test also pins
+      "setWebhook never ran, the other project's claim stands"; the steal test
+      pins the full dispossess-then-claim sequence including no old-side
+      deleteWebhook_
+- [x] Manual test plan: connect the same bot from a second project → confirm
       steal → old project's card shows disconnected, new project gets the bot
+      — _appended to the manual test plan_
 
 ## Implementation log
 
@@ -489,6 +511,13 @@ gate, not authz.
     the same snippet with the other stream's path.
   - The two new event-type constants live on the contracts, not utils.ts
     (contract catalogs need literal keys; knip flagged the unused mirrors).
+- 2026-07-09: Part 3 (steal-with-confirm) landed, straight after Misha hit
+  the dead end live. connectTelegram answers a ConnectTelegramResult union;
+  the dashboard's steal dialog derives entirely from the mutation's
+  data/variables (tanstack-style, no extra state); the dispossession reuses
+  recordDisconnection against the OLD project (it already takes projectId) —
+  no new storage machinery. Two more origin/main merges along the way (the
+  recurring generated-file conflict; regenerate, don't hand-merge).
 - 2026-07-09: main moved again mid-implementation (the PR silently flipped to
   CONFLICTING — CI runs with an empty merge sha are the tell). Merged
   origin/main: #1784's one-subscription-concept means connectTelegram's wake

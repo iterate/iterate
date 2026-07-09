@@ -630,13 +630,32 @@ async function completeGoogleConnect(input: {
  * → the shared {@link recordConnection}. A dedicated verb, not a contortion of
  * the startOAuthFlow/completeConnect state machinery: there is no redirect,
  * no callback, and no signed state to verify. Failures throw — the caller is
- * a direct RPC (the dashboard's connect dialog), not a redirect chain.
+ * a direct RPC (the dashboard's connect dialog), not a redirect chain — with
+ * ONE exception: a bot already claimed by another project answers a
+ * structured `ok: false` arm so the dashboard can offer the steal.
+ *
+ * A Telegram bot has exactly one webhook, so one bot serves one project at a
+ * time. `steal: true` MOVES it: possession of the token IS the authorization
+ * (only the bot's owner has it — the confirmation is a foot-gun gate, not
+ * authz), so after getMe re-validates the token, the old project is
+ * dispossessed via the shared {@link recordDisconnection} (its stored token
+ * becomes unusable, its dashboard shows disconnected, its directory claim is
+ * cleared) and the normal connect proceeds for the caller. deleteWebhook is
+ * deliberately skipped on the old side — the webhook is re-registered for
+ * this same bot moments later.
  */
+export type ConnectTelegramResult =
+  | { botId: string; botUsername: string | null; connection: string; ok: true }
+  /** The bot is claimed by another project (never named — the caller may be a
+   * different org). Retry with `steal: true` to move it. */
+  | { botUsername: string | null; error: "telegram_bot_already_claimed"; ok: false };
+
 export async function connectTelegram(input: {
   botToken: string;
   config: AppConfig;
   projectId: string;
-}): Promise<{ botId: string; botUsername: string | null; connection: string; ok: true }> {
+  steal?: boolean;
+}): Promise<ConnectTelegramResult> {
   const botToken = input.botToken.trim();
   if (!botToken) throw new Error("A Telegram bot token is required (get one from @BotFather).");
   const apiBaseUrl = telegramApiBaseUrl(input.config);
@@ -645,16 +664,43 @@ export async function connectTelegram(input: {
   const bot = await telegramGetMe({ apiBaseUrl, botToken });
 
   const existingClaim = await lookupConnectionClaim("telegram", bot.id);
-  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
-    throw new Error(
-      `Telegram bot ${bot.username ?? bot.id} is already connected to another project.`,
-    );
+  const foreignClaim =
+    existingClaim !== null && existingClaim.projectId !== input.projectId ? existingClaim : null;
+  if (foreignClaim !== null && input.steal !== true) {
+    return { botUsername: bot.username ?? null, error: "telegram_bot_already_claimed", ok: false };
+  }
+  if (foreignClaim !== null) {
+    // Dispossess BEFORE claiming: the old project's stored token becomes
+    // unusable (egress emptied), its dashboard shows disconnected, and its
+    // directory claim clears so the new claim below is the only live one.
+    await recordDisconnection({
+      connection: foreignClaim.connection,
+      disconnectedEvent: {
+        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        payload: {
+          botId: bot.id,
+          botUsername: bot.username,
+          connection: foreignClaim.connection,
+          externalId: bot.id,
+          projectId: foreignClaim.projectId,
+          // Breadcrumb for the old project's journal; deliberately does NOT
+          // name the project that took the bot.
+          reason: "stolen-by-another-project",
+        },
+      },
+      projectId: foreignClaim.projectId,
+      secretPath: telegramBotTokenSecretPath(foreignClaim.connection),
+      slug: "telegram",
+      unclaimExternalId: bot.id,
+    });
   }
 
-  // Reconnects reuse the claiming connection's name; fresh connects derive it
-  // from the bot username (or the bot id when the username sanitizes away).
+  // Same-project reconnects reuse the claiming connection's name; fresh
+  // connects (steals included — the old name belonged to the old project)
+  // derive it from the bot username (or the bot id when the username
+  // sanitizes away).
   const connection =
-    existingClaim?.connection ??
+    (foreignClaim === null ? existingClaim?.connection : undefined) ??
     (sanitizeConnectionName(bot.username ?? "") || `bot-${sanitizeConnectionName(bot.id)}`);
 
   // Point the bot at this deployment BEFORE recording anything: a failed
