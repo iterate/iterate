@@ -45,6 +45,20 @@ describe("diff", () => {
     expect(patch).toEqual({ fields: { a: { set: 2 } } });
   });
 
+  it("treats class instances (Date/Map/Set) as opaque leaves, not keyed maps", () => {
+    // Descending would diff own enumerable keys — a Date has NONE, so two
+    // different Dates would read as "unchanged" and the subscriber would stay
+    // stale forever. They must replace wholesale instead.
+    const d1 = new Date("2026-01-01T00:00:00Z");
+    const d2 = new Date("2026-02-02T00:00:00Z");
+    expect(diff(d1, d2)).toEqual({ set: d2 });
+    expect(diff({ at: d1 }, { at: d2 })).toEqual({ fields: { at: { set: d2 } } });
+    expect(diff(new Map([["a", 1]]), new Map([["a", 2]]))).toEqual({ set: new Map([["a", 2]]) });
+    expect(diff(new Set([1]), new Set([2]))).toEqual({ set: new Set([2]) });
+    // Identical references still short-circuit.
+    expect(diff({ at: d1 }, { at: d1 })).toBeUndefined();
+  });
+
   it("produces a minimal patch for one changed row of a keyed map", () => {
     const prevRow = { path: "/a", at: 1 };
     const prev = { rows: { "/a": prevRow, "/b": { path: "/b", at: 1 } } };
@@ -71,10 +85,46 @@ describe("applyPatch", () => {
         { rows: { "/a": { at: 1 }, "/b": { at: 1 } } },
         { rows: { "/a": { at: 1 }, "/b": { at: 2 } } },
       ],
+      // Class instances replace wholesale — the round-trip must land the NEW
+      // instance, not silently keep the stale one.
+      [{ at: new Date("2026-01-01T00:00:00Z") }, { at: new Date("2026-02-02T00:00:00Z") }],
+      [{ m: new Map([["a", 1]]) }, { m: new Map([["a", 2]]) }],
+      [{ s: new Set([1]) }, { s: new Set([1, 2]) }],
     ];
     for (const [prev, next] of cases) {
       expect(roundTrip(prev, next)).toEqual(next);
     }
+  });
+
+  it('handles "__proto__" as a data key — no prototype injection, no dropped field', () => {
+    // `next[key] =` would SET THE PROTOTYPE for this key; applyPatch must
+    // define an own property instead. Both directions matter: the field
+    // round-trips like any other key, and a hostile patch cannot pollute
+    // Object.prototype or the result's prototype chain.
+    const withProtoKey = (value: unknown) =>
+      Object.defineProperty({}, "__proto__", {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      }) as Record<string, unknown>;
+
+    const prev = withProtoKey({ admin: false });
+    const next = withProtoKey({ admin: true });
+    const patch = diff(prev, next)!;
+    const applied = applyPatch(prev, patch) as Record<string, unknown>;
+    expect(Object.hasOwn(applied, "__proto__")).toBe(true);
+    expect(applied).toEqual(next);
+    // The prototype chain stayed clean — nothing was injected.
+    expect(Object.getPrototypeOf(applied)).toBe(Object.prototype);
+    expect(({} as { admin?: boolean }).admin).toBeUndefined();
+
+    // A hostile patch against a state that never had the key: still no pollution.
+    const polluted = applyPatch({} as Record<string, unknown>, {
+      fields: { ["__proto__"]: { set: { admin: true } } },
+    });
+    expect(Object.getPrototypeOf(polluted)).toBe(Object.prototype);
+    expect(({} as { admin?: boolean }).admin).toBeUndefined();
   });
 
   it("preserves the identity of branches the patch did not touch", () => {

@@ -10,15 +10,25 @@ import type { LiveStatePatch } from "./protocol.ts";
  * discipline is the whole performance story: a single touched row in a
  * thousand-entry index yields one tiny patch instead of a full rescan.
  *
- * Plain objects are treated as keyed maps and diffed per key. Everything else —
- * primitives, `null`, and arrays — is a leaf, replaced wholesale. (Model
- * collections that need fine-grained diffing as keyed objects, not arrays.)
+ * PLAIN objects (prototype `Object.prototype` or `null`) are treated as keyed
+ * maps and diffed per key. Everything else — primitives, `null`, arrays, and
+ * non-plain instances like `Date`/`Map`/`Set` — is a leaf, replaced wholesale.
+ * Descending into an instance would diff its own enumerable keys, which for a
+ * `Date` is NONE — two different Dates would read as "unchanged" and the
+ * subscriber would stay stale forever. (Model collections that need
+ * fine-grained diffing as keyed objects, not arrays.)
  */
 export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
   if (Object.is(prev, next)) return undefined;
   if (!isPlainObject(prev) || !isPlainObject(next)) return { set: next };
 
-  const fields: Record<string, LiveStatePatch> = {};
+  // Null-prototype bag: with a plain `{}`, `fields["__proto__"] = childPatch`
+  // would SET ITS PROTOTYPE instead of recording the field — the change would
+  // silently vanish from the patch. (applyPatch has the mirror-image guard.)
+  const fields: Record<string, LiveStatePatch> = Object.create(null) as Record<
+    string,
+    LiveStatePatch
+  >;
   const drop: string[] = [];
   for (const key of Object.keys(next)) {
     if (next[key] === undefined) {
@@ -55,7 +65,17 @@ export function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
   const next: Record<string, unknown> = { ...base };
   if (patch.fields) {
     for (const [key, childPatch] of Object.entries(patch.fields)) {
-      next[key] = applyPatch(base[key], childPatch);
+      // Define, don't assign: `next[key] =` with key "__proto__" would SET THE
+      // PROTOTYPE instead of creating an own property — dropping the field and
+      // letting a hostile patch inject one. (The spread above is already safe:
+      // spread uses define semantics.) `Object.hasOwn` guards the read the same
+      // way — a bare `base["__proto__"]` reads the prototype, not a field.
+      Object.defineProperty(next, key, {
+        value: applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
   }
   if (patch.drop) {
@@ -64,7 +84,15 @@ export function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
   return next as State;
 }
 
-/** A JSON object (not an array, not `null`) — the only thing `diff` descends into. */
+/**
+ * A PLAIN object — prototype `Object.prototype` or `null` — the only thing
+ * `diff` descends into and `applyPatch` merges over. Arrays and class instances
+ * (`Date`, `Map`, `Set`, …) fail this on purpose: they carry state outside
+ * their own enumerable keys, so per-key diffing would misread them (see the
+ * `diff` docstring) — they are leaves, replaced wholesale.
+ */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }

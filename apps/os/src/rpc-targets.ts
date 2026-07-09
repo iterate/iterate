@@ -203,7 +203,6 @@ import type {
   GetProcessorRuntimeState,
   LiveStateRpc,
   LiveStateSubscriptionHandle,
-  WritableLiveStateRpc,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -980,8 +979,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     });
   }
 
-  /** The repo's live state — its reduced processor state. See {@link WritableLiveStateRpc}. */
-  get liveState(): WritableLiveStateRpc<RepoProcessorState> {
+  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
+  get liveState(): LiveStateRpc<RepoProcessorState> {
     return new LiveStateRelayRpcTarget<RepoProcessorState>(
       () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<RepoProcessorState>,
     );
@@ -1653,8 +1652,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     });
   }
 
-  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link WritableLiveStateRpc}. */
-  get liveState(): WritableLiveStateRpc<SecretDescription> {
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
+  get liveState(): LiveStateRpc<SecretDescription> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
       () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
@@ -3782,7 +3781,7 @@ type ProjectRpcTargetProps = {
  * instead of re-declaring each signature at every `durableObjectStub` cast.
  */
 type ProjectDurableObjectRpc = {
-  liveState: PromiseLike<WritableLiveStateRpc<ProjectLiveState>>;
+  liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(path: string, at: string, type: string, maxOffset: number): Promise<void>;
 };
@@ -3887,8 +3886,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
   }
 
-  /** The project's live state — reduced processor state plus non-folded slices. See {@link WritableLiveStateRpc}. */
-  get liveState(): WritableLiveStateRpc<ProjectLiveState> {
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  get liveState(): LiveStateRpc<ProjectLiveState> {
     return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
   }
 
@@ -4777,15 +4776,14 @@ class ProcessorRelayRpcTarget<State>
 
 /**
  * DO-side RpcTarget over a host's live-state engine — the surface a `.liveState`
- * node exposes: `get()`/`subscribe()` read, `set()`/`assign()` write. Because the
- * DO reassembles its state from its fold (see `getLiveState`), a client write is
- * transient — it sticks until the next server update (see WritableLiveStateRpc).
- * `get`/`subscribe` first seed the engine from committed state so the first paint
- * is never stale after a DO restart.
+ * node exposes: `get()`/`subscribe()` — read-only over the wire (see
+ * LiveStateRpc: the DO derives this state from its fold, so writes go through
+ * the node's own verbs). `get`/`subscribe` first seed the engine from committed
+ * state so the first paint is never stale after a DO restart.
  */
 export class LiveStateRpcTarget<State = unknown>
-  extends IterateRpcRelay<"WritableLiveStateRpc">
-  implements WritableLiveStateRpc<State>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
 {
   readonly #host: Pick<StreamProcessorHost, "live" | "refreshLiveState">;
 
@@ -4797,14 +4795,6 @@ export class LiveStateRpcTarget<State = unknown>
   async get(): Promise<State> {
     await this.#host.refreshLiveState();
     return this.#host.live.getState() as State;
-  }
-
-  async set(next: State): Promise<void> {
-    this.#host.live.setState(next as Record<string, unknown>);
-  }
-
-  async assign(partial: Partial<State>): Promise<void> {
-    this.#host.live.assign(partial as Partial<Record<string, unknown>>);
   }
 
   async subscribe(
@@ -4842,7 +4832,7 @@ class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscript
 }
 
 /** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
-type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<WritableLiveStateRpc<State>> };
+type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
 
 /**
  * Isolate-side relay for a DO-hosted `.liveState` node — awaits the DO stub's
@@ -4850,8 +4840,8 @@ type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<WritableLiveSt
  * then forwards. Mirrors {@link ProcessorRelayRpcTarget}.
  */
 class LiveStateRelayRpcTarget<State>
-  extends IterateRpcRelay<"WritableLiveStateRpc">
-  implements WritableLiveStateRpc<State>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
 {
   readonly #stub: () => LiveStateDurableObjectStub<State>;
 
@@ -4862,14 +4852,6 @@ class LiveStateRelayRpcTarget<State>
 
   async get(): Promise<State> {
     return await (await this.#stub().liveState).get();
-  }
-
-  async set(next: State): Promise<void> {
-    return await (await this.#stub().liveState).set(next);
-  }
-
-  async assign(partial: Partial<State>): Promise<void> {
-    return await (await this.#stub().liveState).assign(partial);
   }
 
   async subscribe(

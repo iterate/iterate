@@ -88,8 +88,8 @@ export interface Project {
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; \`state.created\` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
-  /** The project's live state — reduced processor state plus non-folded slices. See {@link WritableLiveStateRpc}. */
-  liveState: WritableLiveStateRpc<ProjectLiveState>;
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<ProjectLiveState>;
   /** Demo capability for the live-state playground — \`ticker\` (stateless) + \`increment()\` (DO-backed). */
   liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
@@ -235,15 +235,22 @@ export interface ProjectCollection {
 }
 
 /**
- * A writable live-state node — {@link LiveStateRpc} plus \`set\`/\`assign\`. NOTE: on
- * a node whose server RE-DERIVES its state (a Durable Object reassembling from
- * its fold), a client write only sticks until the next server update; \`set\`/
- * \`assign\` are authoritative for client-owned or free-form nodes. Read-only
- * nodes (e.g. a computed ticker) expose the base \`LiveStateRpc\` instead.
+ * A node's live state — a source-agnostic reactive value. \`get()\` reads it once;
+ * \`subscribe()\` opens a channel that pushes a full snapshot then minimal diffs
+ * (see \`lib/live-state\`), which the React \`useLiveState\` hook reassembles so
+ * components pick only the slice they render. ANY RpcTarget can expose one: a
+ * Durable Object over its folded state, or a stateless worker over state it
+ * computes or fetches.
+ *
+ * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
+ * reassembles it from its fold), so writes go through the node's own verbs —
+ * events appended, mutations called — never a generic \`set\`. A wire-level
+ * \`set\`/\`assign\` would let any principal that can reach the node broadcast
+ * fabricated state to every subscriber.
  */
-export interface WritableLiveStateRpc<State = unknown> extends LiveStateRpc<State> {
-  set(next: State): Promise<void>;
-  assign(partial: Partial<State>): Promise<void>;
+export interface LiveStateRpc<State = unknown> {
+  get(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
 }
 
 /**
@@ -819,8 +826,8 @@ export interface Repo {
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<RepoProcessorState>;
-  /** The repo's live state — its reduced processor state. See {@link WritableLiveStateRpc}. */
-  liveState: WritableLiveStateRpc<RepoProcessorState>;
+  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<RepoProcessorState>;
 }
 
 /**
@@ -1007,20 +1014,6 @@ export interface StreamProcessorRpc<State = unknown> {
 }
 
 /**
- * A node's live state — a source-agnostic reactive value. \`get()\` reads it once;
- * \`subscribe()\` opens a channel that pushes a full snapshot then minimal diffs
- * (see \`lib/live-state\`), which the React \`useLiveState\` hook reassembles so
- * components pick only the slice they render. ANY RpcTarget can expose one: a
- * Durable Object over its folded state, or a stateless worker over state it
- * computes or fetches. This is the READ surface; {@link WritableLiveStateRpc}
- * adds writes.
- */
-export interface LiveStateRpc<State = unknown> {
-  get(): Promise<State>;
-  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
-}
-
-/**
  * The \`itx.agents.defaults\` built-in: default agent POLICY as data. The
  * project worker owns applying it — the seeded template reacts to
  * \`stream/child-stream-created\` for \`/agents/**\` by appending
@@ -1090,8 +1083,8 @@ export interface Secret {
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: WakeableStreamProcessorRpc<SecretDescription>;
-  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link WritableLiveStateRpc}. */
-  liveState: WritableLiveStateRpc<SecretDescription>;
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<SecretDescription>;
 }
 
 /**
@@ -1529,6 +1522,29 @@ export type StreamSubscriberWakeResponse = {
   subscriber?: unknown;
   /** Live runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
+};
+
+/**
+ * One message pushed down a live-state subscription. The first is always a
+ * \`snapshot\` (a resync sends a fresh one); every message after carries only the
+ * diff from revision \`from\` to \`to\`. Revisions are monotonic for the life of one
+ * subscription, so a gap (\`from\` ≠ the client's revision) means a message was
+ * missed and the client should resubscribe.
+ *
+ * \`State\` is asserted by the caller of \`useLiveState\` — the wire itself is
+ * structure-agnostic.
+ */
+export type LiveUpdate<State = unknown> =
+  | { type: "snapshot"; revision: number; state: State }
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+
+/**
+ * Live handle for one live-state subscription. \`ping()\` reports liveness (and
+ * the call rejects when the hosting incarnation is gone); \`unsubscribe()\` closes it.
+ */
+export type LiveStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
 };
 
 /** One row of the streams index: a stream and its activity, for the ⌘K list and recency sort. */
@@ -2148,27 +2164,18 @@ export type ProcessorSnapshot<State> = {
 };
 
 /**
- * One message pushed down a live-state subscription. The first is always a
- * \`snapshot\` (a resync sends a fresh one); every message after carries only the
- * diff from revision \`from\` to \`to\`. Revisions are monotonic for the life of one
- * subscription, so a gap (\`from\` ≠ the client's revision) means a message was
- * missed and the client should resubscribe.
- *
- * \`State\` is asserted by the caller of \`useLiveState\` — the wire itself is
- * structure-agnostic.
+ * A structural patch turning a previous JSON value into the next one. Two
+ * shapes, discriminated by whether the \`set\` key is present:
+ * - \`{ set }\` — replace this position wholesale. Used for primitives, arrays
+ *   (treated as opaque leaves, never diffed positionally), \`null\`, type changes,
+ *   and newly-added object keys.
+ * - \`{ fields?, drop? }\` — descend into a plain object: \`fields\` maps each
+ *   changed key to its own patch; \`drop\` lists keys that disappeared. At least
+ *   one is present (an empty descend never gets emitted).
  */
-export type LiveUpdate<State = unknown> =
-  | { type: "snapshot"; revision: number; state: State }
-  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
-
-/**
- * Live handle for one live-state subscription. \`ping()\` reports liveness (and
- * the call rejects when the hosting incarnation is gone); \`unsubscribe()\` closes it.
- */
-export type LiveStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
+export type LiveStatePatch =
+  | { set: unknown }
+  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
@@ -2420,20 +2427,6 @@ export type StreamEventBatch = {
   streamMaxOffset: number;
   state: unknown;
 };
-
-/**
- * A structural patch turning a previous JSON value into the next one. Two
- * shapes, discriminated by whether the \`set\` key is present:
- * - \`{ set }\` — replace this position wholesale. Used for primitives, arrays
- *   (treated as opaque leaves, never diffed positionally), \`null\`, type changes,
- *   and newly-added object keys.
- * - \`{ fields?, drop? }\` — descend into a plain object: \`fields\` maps each
- *   changed key to its own patch; \`drop\` lists keys that disappeared. At least
- *   one is present (an empty descend never gets emitted).
- */
-export type LiveStatePatch =
-  | { set: unknown }
-  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
 

@@ -67,24 +67,17 @@ export type LiveStateSubscriptionHandle = Disposable & {
  * (see `lib/live-state`), which the React `useLiveState` hook reassembles so
  * components pick only the slice they render. ANY RpcTarget can expose one: a
  * Durable Object over its folded state, or a stateless worker over state it
- * computes or fetches. This is the READ surface; {@link WritableLiveStateRpc}
- * adds writes.
+ * computes or fetches.
+ *
+ * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
+ * reassembles it from its fold), so writes go through the node's own verbs —
+ * events appended, mutations called — never a generic `set`. A wire-level
+ * `set`/`assign` would let any principal that can reach the node broadcast
+ * fabricated state to every subscriber.
  */
 export interface LiveStateRpc<State = unknown> {
   get(): Promise<State>;
   subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
-}
-
-/**
- * A writable live-state node — {@link LiveStateRpc} plus `set`/`assign`. NOTE: on
- * a node whose server RE-DERIVES its state (a Durable Object reassembling from
- * its fold), a client write only sticks until the next server update; `set`/
- * `assign` are authoritative for client-owned or free-form nodes. Read-only
- * nodes (e.g. a computed ticker) expose the base `LiveStateRpc` instead.
- */
-export interface WritableLiveStateRpc<State = unknown> extends LiveStateRpc<State> {
-  set(next: State): Promise<void>;
-  assign(partial: Partial<State>): Promise<void>;
 }
 
 /**
