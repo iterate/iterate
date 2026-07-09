@@ -41,8 +41,6 @@ import type {
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 
-export type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
-
 /**
  * Base deps the host provides to each processor it owns. Spread them into the
  * processor constructor along with processor-specific deps:
@@ -114,12 +112,6 @@ export function createStreamProcessorHost(
   options: { stream: Stream },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
-
-  // One id per host DO instance. It rides on each poke response's subscriber
-  // descriptor: a connected presence fact with a new incarnationId tells every
-  // reconciling processor that this host's non-serializable runtime state
-  // (timers, in-flight requests, sockets) was reset.
-  const hostIncarnationId = crypto.randomUUID();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
 
@@ -225,7 +217,6 @@ export function createStreamProcessorHost(
         checkpointOffset: snapshot.offset,
         sink,
         subscriber: {
-          incarnationId: hostIncarnationId,
           processor: { announcement: announceContract(entry.processor.contract) },
         },
         getRuntimeState: () => entry.processor.getRuntimeState(),

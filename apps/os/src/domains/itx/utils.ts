@@ -101,14 +101,6 @@ export function scopeFromItxEntrypointProps(
 }
 
 /**
- * Builds the Worker Loader cache key component for an ITX scope.
- *
- * The same module bytes can be loaded under different project/agent scopes, and
- * those scopes must not share Worker Loader instances because `env.ITX` would
- * point at the wrong capability tree.
- */
-
-/**
  * Narrow structural view of the `ItxEntrypoint` loopback export on
  * `ctx.exports`. `ctx.exports` is typed globally (src/lib/worker-env.d.ts);
  * this module keeps its own structural view so it never depends on the
@@ -182,7 +174,6 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
   });
 }
 
-/**
 /**
  * Guards `provideCapability` against shadowing the itx surface: a capability
  * path's root segment may not be a reserved RPC segment nor an existing member

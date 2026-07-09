@@ -209,6 +209,44 @@ test("global streams reject webhook subscriptions before commit", async () => {
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
 
+test("subscription and subscribe inputs are validated at the door", async () => {
+  // Three cheap gates, one project: a NaN replay cursor (NaN binds as SQL
+  // NULL downstream — a live-looking subscription that delivers nothing), and
+  // cursor-policy knobs on a wake config (silently-ignored config must not
+  // commit).
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-input-gates-${marker}` });
+  using stream = project.streams.get(`/lifecycle-input-gates-${marker}`);
+
+  await expect(
+    stream.subscribe({
+      processEventBatch: () => undefined,
+      replayAfterOffset: Number.NaN,
+    }),
+  ).rejects.toThrow(/non-negative integer/);
+
+  const subscriptionKey = `wake-with-deliver-${marker}`;
+  await expect(
+    stream.append(
+      subscriptionConfiguredEvent({
+        subscriptionKey,
+        delivery: {
+          mode: "wake",
+          expression: ["agents", ["get", "/agents/x"], "processor", "wakeStreamSubscriber"],
+        },
+        deliver: "all",
+      }),
+    ),
+  ).rejects.toThrow(/only applies to push\/webhook/);
+  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
 test("wake expressions traverse dynamic dispatch surfaces (the slack router shape)", async () => {
   // Every other wake expression walks real getters (agents.get(p).processor,
   // repos.get(p).processor, ...). The slack router's walks the integrations
@@ -610,6 +648,7 @@ function asStreamRuntimeState(value: unknown): StreamRuntimeState {
 
 function subscriptionConfiguredEvent(input: {
   delivery: Record<string, unknown>;
+  deliver?: string;
   subscriptionKey: string;
 }): StreamEventInput {
   // These tests hand-author the public event instead of using the bootstrap
@@ -622,6 +661,7 @@ function subscriptionConfiguredEvent(input: {
     payload: {
       subscriptionKey: input.subscriptionKey,
       delivery: input.delivery,
+      ...(input.deliver === undefined ? {} : { deliver: input.deliver }),
     },
   };
 }
