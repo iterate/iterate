@@ -24,12 +24,6 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
           deadAirThreshold: 300,
           finalHold: 1,
           highlight: { mode: "pointer", duration: 1000 },
-          // Demo recordings open at browser-context creation, so they'd start on
-          // a few seconds of about:blank + loading shell before the app paints.
-          // autoStart trims that lead-in — the pixel detector finds where the
-          // static blank frames end (an explicit setStartTime() still wins). See
-          // middlewright's videoMode autoStart.
-          autoStart: true,
         }),
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],

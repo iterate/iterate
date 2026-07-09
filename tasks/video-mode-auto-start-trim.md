@@ -24,12 +24,14 @@ default video start. Specs that want a different anchor keep calling
 Net effect: demo videos open on real content instead of a blank screen, with
 zero per-spec changes.
 
-**Status:** done. Final design lives in **middlewright** (iterate/middlewright#3)
-as an opt-in `videoMode({ autoStart })`; iterate just turns it on. The detector
-finds where the blank lead-in ends from the recorded pixels (first frame that
-differs from the opening frame), so it needs no app hydration contract. An
-earlier iterate-side `page.goto`-patch version (waiting for `[data-hydrated]`)
-was replaced by this general mechanism. Real inline before/after **video**
+**Status:** done. Final design lives in **middlewright** (iterate/middlewright#3):
+`videoMode` gains `trimStart: "auto" | "detect-blank" | "never" | ["selector", css]`,
+defaulting to `"auto"`. So iterate gets lead-in trimming **just by bumping the
+lib** — `specs/test-support/test.ts` is unchanged (zero diff). The detector finds
+where the blank lead-in ends from the recorded pixels (first frame that differs
+from the opening frame), so it needs no app hydration contract. Two earlier
+iterations (an iterate-side `page.goto` patch, then an opt-in `autoStart`) were
+replaced by this default-on `trimStart`. Real inline before/after **video**
 attached to the PR.
 
 ## The concrete repro
@@ -56,21 +58,24 @@ rather than sprinkling `setStartTime()` across specs:
 
 ### Where it ended up: middlewright (the general fix)
 
-We brought middlewright into scope. `videoMode` now has an opt-in `autoStart`
+We brought middlewright into scope. `videoMode` gains `trimStart`
 (iterate/middlewright#3):
 
-- **pixel fallback** (default of `autoStart: true`): decode a coarse greyscale
-  strip of the opening seconds, find the first frame that _differs_ from the
-  opening frame — the end of the static blank lead-in — and start there when the
-  lead-in is >= `minLeadInMs`. Keying on change-from-first (not "busyness") is
-  robust to Playwright's letterbox bars and dark loading shells.
-- **`selector`**: start when a known "ready" element first becomes visible (live).
-- explicit `setStartTime()` still wins over both.
+- **`"auto"`** (default) / **`"detect-blank"`**: decode a coarse greyscale strip
+  of the opening seconds, find the first frame that _differs_ from the opening
+  frame — the end of the static blank lead-in — and start there when the lead-in
+  is long enough. Keying on change-from-first (not "busyness") is robust to
+  Playwright's letterbox bars and dark loading shells.
+- **`["selector", css]`**: start when that element first becomes visible (live),
+  with blank-detect fallback.
+- **`"never"`**: pin the start (for videos whose exact frames you assert on).
+- explicit `setStartTime()` still wins.
 
-Off by default in middlewright (it shifts the timeline of frame-asserting
-videos); iterate opts in. That PR also upstreams the spinner-waiter multi-match
-fix, so `patches/middlewright@0.1.1.patch` is deleted here. iterate consumes the
-build via a `pkg.pr.new` override until it's published.
+Default `"auto"` means consumers get trimming by upgrading with no config change
+— iterate's `test.ts` is untouched. middlewright's own frame-precise specs pin
+`trimStart: "never"`. That PR also upstreams the spinner-waiter multi-match fix,
+so `patches/middlewright@0.1.1.patch` is deleted here. iterate consumes the build
+via a `pkg.pr.new` override until it's published.
 
 ## Checklist
 
