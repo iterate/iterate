@@ -317,8 +317,8 @@ export const AgentProcessorContract = defineProcessorContract({
      * `<this path>/subagents/<path>` (see lib/subagent-paths.ts). Derived
      * entirely from the `stream/child-stream-created` announcements every
      * descendant stream posts to its ancestors — a subagent someone births by
-     * raw stream append shows up exactly like one born via
-     * `agent.subagents.spawn`.
+     * raw stream append shows up exactly like one born by messaging
+     * `itx.agents.get("subagents/<name>")`.
      */
     subagents: z
       .array(

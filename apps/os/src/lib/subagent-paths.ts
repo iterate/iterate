@@ -5,7 +5,7 @@
 // It lives in lib/ (not domains/agents/utils.ts) so client routes can import
 // it without pulling server config into the browser bundle.
 
-export const SUBAGENTS_PATH_SEGMENT = "subagents";
+const SUBAGENTS_PATH_SEGMENT = "subagents";
 
 /**
  * The parent agent path of a subagent path, or null when the path is not a

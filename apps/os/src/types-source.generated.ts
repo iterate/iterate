@@ -327,10 +327,17 @@ export interface Agent {
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent>;
-  /** The parent agent's control surface, when THIS agent is a subagent (throws otherwise). */
-  parent: Agent;
-  /** THIS agent's subagents: ordinary agents nested at \`<path>/subagents/<name>\` (spawn/get/list). */
-  subagents: SubagentCollection;
+  /**
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * that already ran (a plain last-write-wins update) AND on a path that has
+   * never existed — the append births the agent with the full default policy
+   * plus these overrides, and the batch claims the same idempotency keys the
+   * project worker's defaults lane uses, so whichever lane runs second
+   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
+   * keeps the subagent contract: the "you are a subagent" suffix is appended
+   * after it (agents/agent-defaults.ts).
+   */
+  configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -338,7 +345,7 @@ export interface Agent {
    * exactly like two people typing into the same chat. Like \`message\`, the
    * sender derives from the calling scope, so an agent asking another agent
    * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report via \`parent.message\` (their
+   * SUBAGENTS: they are prompted to report by messaging their parent (its
    * inputs), never web chat, so an ask() at a subagent times out — use
    * \`message()\` and read the report from your own inputs.
    */
@@ -469,7 +476,7 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (\`"/agents/<name>"\`, or relative to the calling scope). */
+  /** The agent control surface at a path (\`"/agents/<name>"\`, or relative to the calling scope — \`".."\` climbs). */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
@@ -1038,44 +1045,6 @@ export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
-}
-
-/**
- * The \`agent.subagents\` door. Subagents are ORDINARY agents whose streams
- * nest under the parent agent's path (\`<agentPath>/subagents/<path>\`) —
- * being a subagent is purely a property of where the stream sits (see
- * lib/subagent-paths.ts). There are no names, only paths: this collection
- * addresses them by path RELATIVE to \`<agentPath>/subagents/\`, multi-segment
- * welcome. Everything follows from the path: birth mechanics (project
- * processor), default policy including the "you are a subagent" prompt
- * suffix (agents/agent-defaults.ts), a private workspace, and capability
- * inheritance from the parent scope (capability resolution chains up path
- * prefixes). There is no lifecycle beyond that of any agent stream: parent
- * and subagent talk via \`message\`, and \`spawn\` only pre-applies policy — a
- * plain \`message\` to a never-seen subagent path births one on stock
- * defaults just the same.
- */
-export interface SubagentCollection {
-  __describe(): Promise<Description>;
-  /**
-   * Birth a subagent and return its agent surface: appends the default agent
-   * policy for \`<agentPath>/subagents/<path>\` — with the caller's overrides
-   * baked in — as one idempotency-keyed batch, so the subagent never answers
-   * its first message on stock defaults. Idempotent: re-spawning an existing
-   * path is a no-op at the stream's append-dedup layer. Pipeline follow-ups
-   * straight through the returned surface: \`spawn({ path }).message(task)\`,
-   * or \`provideCapability(...)\` first to hand it tools before any turn runs.
-   */
-  spawn(
-    input: {
-      /** Path relative to \`<agentPath>/subagents/\` (e.g. \`"researcher"\`). */
-      path: string;
-    } & AgentDefaultsOverrides,
-  ): Promise<Agent>;
-  /** One subagent's full agent control surface, by path relative to \`<agentPath>/subagents/\`. */
-  get(relativePath: string): Agent;
-  /** This agent's subagents, from its reduced processor state. */
-  list(): Promise<Array<{ path: string; spawnedAt: string }>>;
 }
 
 /**
@@ -1728,6 +1697,12 @@ export type StreamEvent = {
   path: string;
 };
 
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
+};
+
 export type AgentFileAttachment = {
   contentType: string;
   filename: string;
@@ -2251,12 +2226,6 @@ export type CfMarkdownConversionOptions = {
       excludeMetadata?: boolean;
     };
   };
-};
-
-/** Caller-supplied policy overrides, baked into the returned events. */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
