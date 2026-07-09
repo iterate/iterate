@@ -76,8 +76,9 @@ export function isBinaryRepoPath(path: string): boolean {
 }
 
 /** Only real html documents get the html Preview (sandboxed iframe) — .svg
- * also opens as html-highlighted text but is an image format, not a page. */
-export function isHtmlPreviewPath(path: string): boolean {
+ * also opens as html-highlighted text but is an image format, not a page.
+ * Module-internal: `isPreviewablePath` is the exported predicate. */
+function isHtmlPreviewPath(path: string): boolean {
   return /\.html?$/i.test(path);
 }
 
