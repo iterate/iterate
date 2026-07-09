@@ -179,7 +179,7 @@ export interface Project {
    * Same trust model as `worker.processEventBatch` itself: any project
    * principal may call it.
    */
-  processEventBatch(batch: StreamEventBatch): Promise<void>;
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
@@ -844,7 +844,7 @@ export interface ProjectWorker {
    * stream only advances its checkpoint when this resolves; throwing means
    * the whole batch is redelivered later.
    */
-  processEventBatch(batch: StreamEventBatch): Promise<void>;
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
@@ -923,6 +923,8 @@ export interface Stream {
     selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
+    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */
+    getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle>;
   /**
    * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
@@ -931,17 +933,7 @@ export interface Stream {
    * stream cross-posts here by configuring
    * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
    */
-  ingest(batch: {
-    projectId: string | null;
-    path: string;
-    events: StreamEvent[];
-    streamMaxOffset: number;
-    state: unknown;
-    subscriptionKey: string;
-    deliveryId: string;
-    attempt: number;
-    configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
-  }): Promise<void>;
+  ingest(batch: StreamPushEventBatch): Promise<void>;
   /**
    * "When events matching this land HERE, post them onto stream `path`" — the
    * cross-post verb. Pure sugar over appending a `subscription-configured`
@@ -1360,17 +1352,38 @@ export type RevokeCapabilityInput = {
 export type OpenApiRpc = object;
 
 /**
- * Batch delivered to stream processors and live subscribers.
- *
- * Kept named because callback retention, processor hosts, and tests all depend
- * on the same cross-RPC batch envelope.
+ * The batch a PUSH subscription's receiver is invoked with: the delivery
+ * coordinates and events, plus the fields an at-least-once stateless receiver
+ * needs to dedupe and self-configure. Deliberately NOT the live lanes'
+ * {@link StreamEventBatch}: push receivers include userspace project workers
+ * and sibling streams, and the folded core state — other subscriptions'
+ * delivery expressions, park errors, the presence roster — is internal to the
+ * deployment (the webhook envelope strips it for the same reason). Live sinks
+ * (ephemeral subscribers, wake-mode processors) still get state-carrying
+ * batches: they are the lanes that paint from state.
  */
-export type StreamEventBatch = {
+export type StreamPushEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
   streamMaxOffset: number;
-  state: unknown;
+  subscriptionKey: SubscriptionKey;
+  /**
+   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * so receivers can dedupe redeliveries even without per-event bookkeeping.
+   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
+   */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this batch. */
+  attempt: number;
+  /**
+   * The committed `subscription-configured` event this delivery serves — so a
+   * receiver can configure itself from committed stream state without a
+   * side-channel registry (which stream, which selector, whose params).
+   * Narrowed to the fields the fold stores; an honest shape instead of a
+   * `StreamEvent` cast that pretends metadata/source survived.
+   */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
@@ -1896,6 +1909,9 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
+
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1943,6 +1959,14 @@ export type ProcessorRuntimeState<State = unknown> = {
  * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/**
+ * Optional runtime-state callback exposed by a hosted processor.
+ *
+ * It accepts sync or async implementations because local processors can return
+ * immediately, while RPC-backed processors may need an async round trip.
+ */
+export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 /**
  * Live subscription handle returned by `Stream.subscribe`.
@@ -1993,17 +2017,6 @@ export type ProcessorStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
 };
-
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
-
-/**
- * Optional runtime-state callback exposed by a hosted processor.
- *
- * It accepts sync or async implementations because local processors can return
- * immediately, while RPC-backed processors may need an async round trip.
- */
-export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
@@ -2240,6 +2253,20 @@ export type WorkspaceFileInfo = {
   target?: string;
   type: "directory" | "file" | "symlink";
   updatedAt: number;
+};
+
+/**
+ * Batch delivered to stream processors and live subscribers.
+ *
+ * Kept named because callback retention, processor hosts, and tests all depend
+ * on the same cross-RPC batch envelope.
+ */
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
 };
 
 export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";

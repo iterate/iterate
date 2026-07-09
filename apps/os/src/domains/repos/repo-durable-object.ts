@@ -1,11 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-  type StreamSubscriberWakeResponse,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";

@@ -11,7 +11,6 @@
 
 import { z } from "zod";
 import { ItxExpression } from "../../itx/expression.ts";
-import type { GetProcessorRuntimeState } from "./rpc-types.ts";
 import { EventSelector } from "./event-selector.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 
@@ -48,7 +47,10 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 //      ["get", path], "processor", "wakeStreamSubscriber"]`) instead of a
 //      typed Durable Object address, and `webhook` joins as the third mode
 //      (per-EVENT HTTP POST on the push spine's cursor machinery).
-export const CORE_STATE_VERSION = 11;
+// - 12: dead derived state deleted — `processorsBySlug` (written on every
+//      connect fold, read by nothing; announcements live on presence facts)
+//      and `metadata` + its `metadata-updated` event (no appender, no reader).
+export const CORE_STATE_VERSION = 12;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -151,24 +153,41 @@ const OnPoisonPolicy = z.enum(["park", "skip"]);
 // Payloads shared between the event catalog below and the reduced-state
 // records that store the latest committed configuration event, so the two can
 // never drift apart.
-const SubscriptionConfiguredPayload = z.object({
-  subscriptionKey: z.string().trim().min(1),
-  delivery: SubscriptionDelivery,
-  /** Which events this subscription receives. Absent = everything. */
-  selector: EventSelector.optional(),
-  /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
-  deliver: DeliverPolicy.optional(),
-  /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
-  onPoison: OnPoisonPolicy.optional(),
-  /**
-   * Receiver-owned configuration, passed through VERBATIM on every delivery
-   * (the frame carries the configured event). The platform never interprets
-   * this bag — the generic spine filters and dials, nothing more; a NAMED
-   * receiver documents and applies its own params (selectors filter, receivers
-   * transform). `Stream.ingest` reads `params.transform` here, for example.
-   */
-  params: z.record(z.string(), z.unknown()).optional(),
-});
+const SubscriptionConfiguredPayload = z
+  .object({
+    subscriptionKey: z.string().trim().min(1),
+    delivery: SubscriptionDelivery,
+    /** Which events this subscription receives. Absent = everything. */
+    selector: EventSelector.optional(),
+    /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
+    deliver: DeliverPolicy.optional(),
+    /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
+    onPoison: OnPoisonPolicy.optional(),
+    /**
+     * Receiver-owned configuration, passed through VERBATIM on every delivery
+     * (the frame carries the configured event). The platform never interprets
+     * this bag — the generic spine filters and dials, nothing more; a NAMED
+     * receiver documents and applies its own params (selectors filter, receivers
+     * transform). `Stream.ingest` reads `params.transform` here, for example.
+     */
+    params: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((payload, ctx) => {
+    // Honesty at append time: these knobs are cursor policy for the
+    // stream-owned-cursor modes. Accepting them on a wake config (where the
+    // subscriber owns its checkpoint) would commit config that silently does
+    // nothing.
+    if (payload.delivery.mode !== "wake") return;
+    for (const field of ["deliver", "onPoison"] as const) {
+      if (payload[field] !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [field],
+          message: `"${field}" only applies to push/webhook subscriptions (wake subscribers own their checkpoint)`,
+        });
+      }
+    }
+  });
 
 export type SubscriptionConfiguredPayload = z.infer<typeof SubscriptionConfiguredPayload>;
 
@@ -199,8 +218,9 @@ const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodT
 
 /**
  * A processor contract announcement carried on the connect event when the
- * subscriber is a hosted stream processor. This is what feeds the stream's
- * `processorsBySlug` documentation registry.
+ * subscriber is a hosted stream processor. It rides the presence facts
+ * (`connectionsByKey[..].subscriber.processor.announcement`), which is where
+ * UIs and tooling read it.
  */
 export const ProcessorContractAnnouncement = z.object({
   slug: z.string().trim().min(1),
@@ -224,12 +244,6 @@ export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnno
  * processor hosts pass their incarnation id plus a processor announcement.
  */
 export const StreamSubscriberDescriptor = z.object({
-  /**
-   * Stable for one instance of the subscriber's runtime (e.g. one Durable
-   * Object incarnation). A connected event with a new incarnationId means the
-   * subscriber's non-serializable runtime state was reset.
-   */
-  incarnationId: z.string().trim().min(1).optional(),
   /** Human-readable label, e.g. "browser" or "orpc-bridge". */
   description: z.string().optional(),
   /** Present when the subscriber is a stream processor. */
@@ -242,20 +256,6 @@ export const StreamSubscriberDescriptor = z.object({
 });
 
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
-
-/**
- * The runtime (non-serializable) view of a subscriber descriptor. Same shape as
- * the persisted `StreamSubscriberDescriptor`, but the processor entry may carry
- * a live `getRuntimeState` capability retained for the subscription lifetime. It
- * is not persisted into presence facts; the stream calls it on demand from
- * `getProcessorRuntimeState({ subscriptionKey })`.
- */
-export type LiveStreamSubscriberDescriptor = Omit<StreamSubscriberDescriptor, "processor"> & {
-  processor?: {
-    announcement: ProcessorContractAnnouncement;
-    getRuntimeState?: GetProcessorRuntimeState;
-  };
-};
 
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */
@@ -288,7 +288,6 @@ export const CoreProcessorContract = defineProcessorContract({
     path: z.string().trim().min(1).optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
-    metadata: z.record(z.string(), z.unknown()).default({}),
     eventCount: z.number().int().min(0).default(0),
     maxOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),
@@ -313,15 +312,6 @@ export const CoreProcessorContract = defineProcessorContract({
         refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
         trippedAtOffset: null,
       }),
-    processorsBySlug: z
-      .record(
-        z.string(),
-        z.object({
-          announcedAtOffset: z.number().int().min(0),
-          announcement: ProcessorContractAnnouncement,
-        }),
-      )
-      .default({}),
     configuredSubscribersByKey: z
       .record(
         z.string(),
@@ -371,12 +361,6 @@ export const CoreProcessorContract = defineProcessorContract({
       description: "Records that a Durable Object incarnation has started running this stream.",
       payloadSchema: z.object({
         incarnationId: z.string().trim().min(1),
-      }),
-    },
-    "events.iterate.com/stream/metadata-updated": {
-      description: "Replaces stream metadata kept in core reduced state.",
-      payloadSchema: z.object({
-        metadata: z.record(z.string(), z.unknown()),
       }),
     },
     "events.iterate.com/stream/configured": {
@@ -430,7 +414,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscriber-connected": {
       description:
-        "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. Reconciling processors treat this as 'someone's runtime state was reset'; it is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
+        "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. It is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
         subscriptionType: StreamSubscriptionType,
@@ -477,7 +461,6 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/woken",
     "events.iterate.com/stream/configured",
-    "events.iterate.com/stream/metadata-updated",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",

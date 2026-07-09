@@ -7,6 +7,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 type RuntimeConnection = {
   subscriptionType?: "configured" | "ephemeral";
   startedAt?: string;
+  hasPendingDelivery?: boolean;
 };
 
 type ReducedConnection = {
@@ -209,6 +210,44 @@ test("global streams reject webhook subscriptions before commit", async () => {
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
 
+test("subscription and subscribe inputs are validated at the door", async () => {
+  // Three cheap gates, one project: a NaN replay cursor (NaN binds as SQL
+  // NULL downstream — a live-looking subscription that delivers nothing), and
+  // cursor-policy knobs on a wake config (silently-ignored config must not
+  // commit).
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-input-gates-${marker}` });
+  using stream = project.streams.get(`/lifecycle-input-gates-${marker}`);
+
+  await expect(
+    stream.subscribe({
+      processEventBatch: () => undefined,
+      replayAfterOffset: Number.NaN,
+    }),
+  ).rejects.toThrow(/non-negative integer/);
+
+  const subscriptionKey = `wake-with-deliver-${marker}`;
+  await expect(
+    stream.append(
+      subscriptionConfiguredEvent({
+        subscriptionKey,
+        delivery: {
+          mode: "wake",
+          expression: ["agents", ["get", "/agents/x"], "processor", "wakeStreamSubscriber"],
+        },
+        deliver: "all",
+      }),
+    ),
+  ).rejects.toThrow(/only applies to push\/webhook/);
+  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
 test("wake expressions traverse dynamic dispatch surfaces (the slack router shape)", async () => {
   // Every other wake expression walks real getters (agents.get(p).processor,
   // repos.get(p).processor, ...). The slack router's walks the integrations
@@ -338,7 +377,7 @@ test("stream idle teardown severs configured processor subscriptions", async () 
   using project = itx.projects.create({ slug: `lifecycle-idle-${marker}` });
   using stream = project.streams.get("/");
 
-  const { keys } = await waitForConfiguredProcessorConnections(stream);
+  const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
 
   await forceStreamIdleTeardown(stream);
 
@@ -384,7 +423,7 @@ test("append after idle teardown re-wakes configured subscriber from its checkpo
   using project = itx.projects.create({ slug: `lifecycle-redial-${marker}` });
   using stream = project.streams.get("/");
 
-  const { keys } = await waitForConfiguredProcessorConnections(stream);
+  const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
 
   await forceStreamIdleTeardown(stream);
 
@@ -522,7 +561,7 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
 
 async function waitForConfiguredProcessorConnections(
   stream: Stream,
-  opts: { expectedKeys?: readonly string[] } = {},
+  opts: { expectedKeys?: readonly string[]; settled?: boolean } = {},
 ): Promise<{ keys: string[]; state: StreamRuntimeState }> {
   let latest: StreamRuntimeState | undefined;
   await waitForCondition(
@@ -535,11 +574,28 @@ async function waitForConfiguredProcessorConnections(
         keys.every(
           (key) =>
             latest!.runtime.connections[key] !== undefined &&
-            latest!.coreProcessorState.connectionsByKey?.[key] !== undefined,
+            latest!.coreProcessorState.connectionsByKey?.[key] !== undefined &&
+            // `settled` waits for the last delivery into each sink to settle,
+            // not just for the connection to exist: a sink whose replay batch
+            // is still unsettled reads as wedged to a FORCED idle teardown,
+            // which then re-pokes it (the at-least-once path) and the
+            // connection reappears instantly — severance assertions would
+            // race that re-poke. In production the idle window itself
+            // guarantees settlement; forced teardown must wait explicitly.
+            // Bootstrap ingestion can hold a delivery open for a while, so
+            // only the teardown tests opt in (with a matching timeout).
+            (opts.settled !== true ||
+              latest!.runtime.connections[key]?.hasPendingDelivery === false),
         )
       );
     },
-    { description: "configured processor connections to become live" },
+    {
+      description:
+        opts.settled === true
+          ? "configured processor connections to become live and settled"
+          : "configured processor connections to become live",
+      timeoutMs: opts.settled === true ? 30_000 : undefined,
+    },
   );
 
   const state = latest!;
@@ -610,6 +666,7 @@ function asStreamRuntimeState(value: unknown): StreamRuntimeState {
 
 function subscriptionConfiguredEvent(input: {
   delivery: Record<string, unknown>;
+  deliver?: string;
   subscriptionKey: string;
 }): StreamEventInput {
   // These tests hand-author the public event instead of using the bootstrap
@@ -622,6 +679,7 @@ function subscriptionConfiguredEvent(input: {
     payload: {
       subscriptionKey: input.subscriptionKey,
       delivery: input.delivery,
+      ...(input.deliver === undefined ? {} : { deliver: input.deliver }),
     },
   };
 }
