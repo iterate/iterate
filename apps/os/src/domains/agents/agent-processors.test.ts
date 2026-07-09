@@ -133,9 +133,14 @@ describe("minimal web-chat agent processors", () => {
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
-    expect(writes).toHaveLength(1);
-    expect(writes[0]!.path).toBe("/script-results/agent-output-7.json");
-    expect(writes[0]!.content).toBe(JSON.stringify(result, null, 2));
+    // The scratch dir self-ignores so `git.add({ filepath: "." })` never
+    // commits spills to the workspace branch.
+    expect(writes.map((write) => write.path)).toEqual([
+      "/script-results/.gitignore",
+      "/script-results/agent-output-7.json",
+    ]);
+    expect(writes[0]!.content).toBe("*\n");
+    expect(writes[1]!.content).toBe(JSON.stringify(result, null, 2));
 
     const input = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -165,17 +170,49 @@ describe("minimal web-chat agent processors", () => {
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
-    expect(writes.length).toBeGreaterThan(1);
-    expect(writes[0]!.path).toBe("/script-results/agent-output-7.part1.json");
-    expect(writes.map((write) => write.content).join("")).toBe(JSON.stringify(result, null, 2));
-    for (const write of writes) expect(write.content.length).toBeLessThanOrEqual(450_001);
+    const parts = writes.filter((write) => !write.path.endsWith(".gitignore"));
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts[0]!.path).toBe("/script-results/agent-output-7.part1.json");
+    expect(parts.map((write) => write.content).join("")).toBe(JSON.stringify(result, null, 2));
+    for (const write of parts) expect(write.content.length).toBeLessThanOrEqual(450_001);
 
     const content = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
     )?.payload?.content as string;
-    expect(content).toContain(`split across ${writes.length} files`);
+    expect(content).toContain(`split across ${parts.length} files`);
     expect(content).toContain('"/script-results/agent-output-7.part1.json"');
     expect(content).toContain("parts.join(");
+  });
+
+  it("stops suggesting JSON.parse when the spill cap drops the tail", async () => {
+    const stream = new MemoryStream();
+    const writes: { content: string; path: string }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      writeWorkspaceFile: async (input) => {
+        writes.push(input);
+      },
+    });
+
+    // Past the 20-part × 450k-char spill cap, so the tail cannot be saved.
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: "x".repeat(9_200_000) },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const parts = writes.filter((write) => !write.path.endsWith(".gitignore"));
+    expect(parts).toHaveLength(20);
+
+    const content = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    )?.payload?.content as string;
+    expect(content).toContain("the saved text is NOT complete JSON");
+    // The recipe must be text search — an example that JSON.parses the
+    // incomplete text would contradict the warning right above it. (The prose
+    // may say "not JSON.parse"; an actual call must not appear.)
+    expect(content).toContain("text.indexOf(");
+    expect(content).not.toContain("JSON.parse(");
   });
 
   it("falls back to inline truncation when the workspace spill fails", async () => {

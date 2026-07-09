@@ -576,6 +576,10 @@ async function spillScriptResult(input: {
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
 }): Promise<ScriptResultSpill> {
   const base = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+  // The agent's documented publish flow is `git.add({ filepath: "." })` —
+  // without this nested ignore every spill would ride along into workspace
+  // commits (isomorphic-git's add respects .gitignore).
+  await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
   // UTF-8 bytes ≥ UTF-16 code units, so a text already over the byte cap in
   // chars skips the (allocating) encode check entirely.
   if (
@@ -605,26 +609,43 @@ async function spillScriptResult(input: {
  * The model-facing text after a truncated preview: where the full result
  * lives and a concrete next-script recipe for paging it, so the model reads
  * the file with plain JavaScript instead of re-running the expensive fetch.
+ * Three variants, each with ONE coherent recipe: single file (JSON.parse it),
+ * complete parts (concatenate then JSON.parse), dropped tail (the saved text
+ * is not complete JSON, so the recipe searches it as text — never parse).
  */
 function spillNotice(input: { spill: ScriptResultSpill; totalChars: number }): string {
   const { paths, savedChars } = input.spill;
-  const dropped =
-    savedChars < input.totalChars
-      ? ` Only the first ${savedChars.toLocaleString("en-US")} chars fit the spill cap — the tail was dropped, so the saved text is NOT complete JSON: search it as text (regex/indexOf) instead of JSON.parse, and return less next time (slice arrays, pick fields).`
-      : "";
+  const shown = SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US");
+  const total = input.totalChars.toLocaleString("en-US");
   if (paths.length === 1) {
     return [
-      `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(paths[0])} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
+      `…truncated: showing the first ${shown} of ${total} chars. The full result is saved in your workspace at ${JSON.stringify(paths[0])} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
       "```js",
       "async (itx) => {",
       `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(paths[0])}));`,
       "  return Object.keys(data); // then slice/filter/regex to return only what you need",
       "}",
-      "```" + dropped,
+      "```",
+    ].join("\n");
+  }
+  if (savedChars < input.totalChars) {
+    return [
+      `…truncated: showing the first ${shown} of ${total} chars. Only the first ${savedChars.toLocaleString("en-US")} chars are saved in your workspace, split across ${paths.length} files (workspace files cap at 1.5MB; the tail past the spill cap was dropped, so the saved text is NOT complete JSON):`,
+      ...paths.map((path) => `- ${JSON.stringify(path)}`),
+      "Don't re-fetch; search the files as text (regex/indexOf — not JSON.parse) in your next script, e.g.:",
+      "```js",
+      "async (itx) => {",
+      `  const paths = ${JSON.stringify(paths)};`,
+      '  const text = (await Promise.all(paths.map((p) => itx.workspace.readFile(p)))).join("");',
+      '  const at = text.indexOf("needle");',
+      "  return text.slice(Math.max(0, at - 200), at + 800);",
+      "}",
+      "```",
+      "Return less next time: slice arrays, pick fields.",
     ].join("\n");
   }
   return [
-    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace, split across ${paths.length} files (workspace files cap at 1.5MB):`,
+    `…truncated: showing the first ${shown} of ${total} chars. The full result is saved in your workspace, split across ${paths.length} files (workspace files cap at 1.5MB):`,
     ...paths.map((path) => `- ${JSON.stringify(path)}`),
     "Don't re-fetch; read and concatenate them with plain JavaScript in your next script, e.g.:",
     "```js",
@@ -634,7 +655,7 @@ function spillNotice(input: { spill: ScriptResultSpill; totalChars: number }): s
     '  const data = JSON.parse(parts.join(""));',
     "  return Object.keys(data); // then slice/filter/regex to return only what you need",
     "}",
-    "```" + dropped,
+    "```",
   ].join("\n");
 }
 
