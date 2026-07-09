@@ -63,8 +63,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // Incarnation-local bookkeeping. Dies with every eviction, and that is fine:
   // it is the "actual" half of reconciliation, never the source of truth.
-  /** requestIds whose debounce timer is armed in THIS incarnation. */
-  readonly #scheduledRequestsWithActiveTimers = new Set<string>();
+  /** Armed debounce timers by requestId; `cancel()` disarms without firing. */
+  readonly #scheduledRequestTimers = new Map<string, { cancel: () => void }>();
   /** llmRequestOffsets with an execution alive in THIS incarnation. */
   readonly #liveLlmExecutions = new Set<number>();
 
@@ -155,26 +155,43 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // The debounce timer is a droppable ATTEMPT: the scheduled event is
         // the durable evidence, and #reconcileLlmScheduling re-derives a lost
         // timer from the fold. Losing this closure costs latency, never the
-        // request.
-        this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
+        // request. A scheduled-phase cancel disarms it (see the cancelled
+        // case below) so an interrupted turn can never fire its request.
         runInBackground(async () => {
-          await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
+          const requestId = event.payload.requestId;
+          const fired = await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => resolve(true), event.payload.debounceMs);
+            this.#scheduledRequestTimers.set(requestId, {
+              cancel: () => {
+                clearTimeout(timer);
+                resolve(false);
+              },
+            });
+          });
           try {
+            if (!fired) return;
             await append(
               this.#buildLlmRequestRequested({
                 model: event.payload.model,
-                requestId: event.payload.requestId,
+                requestId,
                 scheduledOffset: event.offset,
               }),
             );
           } finally {
-            this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
+            this.#scheduledRequestTimers.delete(requestId);
           }
         });
         return;
       // The LLM starts in the reconcile lane (#reconcileLlmObligations), not
       // here — so a mid-refold never dials env.AI for a long-settled request.
       case "events.iterate.com/agent/llm-request-requested":
+        return;
+      case "events.iterate.com/agent/llm-request-cancelled":
+        // A cancel during the debounce window disarms the armed timer, so the
+        // interrupted request never fires its llm-request-requested. Safe on
+        // refold: replayed cancels find no armed timer and no-op.
+        if (event.payload.phase !== "scheduled") return;
+        this.#scheduledRequestTimers.get(event.payload.requestId)?.cancel();
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
@@ -269,7 +286,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * Open LLM obligations (the fold's `llmRequests`) against this incarnation's
    * live executions:
    *
-   * - `requested`, not live, not expired → START the attempt
+   * - `requested`, current (or nothing is current — bare-journal recovery),
+   *   not live, not expired → START the attempt
+   * - `requested` but another request is current → settle as superseded
+   *   failure WITHOUT dialing: a stray requested event (raw append, an
+   *   abandoned turn) must never run a parallel LLM turn nobody asked for
    * - `requested` but expired → settle as expired failure
    * - `started`, not live → CANCEL as durable-object-crashed (in-flight when
    *   the incarnation died — kill/reset/eviction). Never re-drive: the model
@@ -282,11 +303,30 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): Promise<void> {
     const now = this.#now();
     const cancelCrashed: number[] = [];
-    const expire: { llmRequestOffset: number; message: string }[] = [];
+    const settleAsFailed: { llmRequestOffset: number; message: string }[] = [];
     for (const [key, request] of Object.entries(args.state.llmRequests)) {
       const llmRequestOffset = Number(key);
       if (this.#liveLlmExecutions.has(llmRequestOffset)) continue;
-      if (request.status === "requested" && now < request.expiresAt) {
+      if (request.status === "requested" && now >= request.expiresAt) {
+        settleAsFailed.push({
+          llmRequestOffset,
+          message:
+            "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
+        });
+        continue;
+      }
+      if (request.status === "requested") {
+        const isCurrent =
+          args.state.currentRequest?.phase === "requested" &&
+          args.state.currentRequest.llmRequestOffset === llmRequestOffset;
+        if (!isCurrent && args.state.currentRequest !== null) {
+          settleAsFailed.push({
+            llmRequestOffset,
+            message:
+              "LLM request is not the agent's current request (superseded or raw-appended); settled by the reconciler without starting an attempt.",
+          });
+          continue;
+        }
         this.#liveLlmExecutions.add(llmRequestOffset);
         args.runInBackground(async () => {
           try {
@@ -297,17 +337,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         });
         continue;
       }
-      if (request.status === "started") {
-        cancelCrashed.push(llmRequestOffset);
-        continue;
-      }
-      expire.push({
-        llmRequestOffset,
-        message:
-          "LLM request expired before any attempt started (the host was down past the request's expiry). Failed by the reconciler; the agent's next trigger reschedules.",
-      });
+      cancelCrashed.push(llmRequestOffset);
     }
-    if (cancelCrashed.length === 0 && expire.length === 0) return;
+    if (cancelCrashed.length === 0 && settleAsFailed.length === 0) return;
     args.blockProcessorWhile(async () => {
       for (const llmRequestOffset of cancelCrashed) {
         console.error("[agent] cancelling in-flight llm request after durable-object crash", {
@@ -323,7 +355,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           },
         });
       }
-      for (const { llmRequestOffset, message } of expire) {
+      for (const { llmRequestOffset, message } of settleAsFailed) {
         console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
         await args.append({
           type: "events.iterate.com/agent/llm-request-completed",
@@ -407,7 +439,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       });
       return;
     }
-    if (this.#scheduledRequestsWithActiveTimers.has(state.currentRequest.requestId)) return;
+    if (this.#scheduledRequestTimers.has(state.currentRequest.requestId)) return;
     // No active timer for this scheduled request: the DO restarted and lost the
     // debounce. Fire llm-request-requested immediately. The idempotency key
     // makes this safe if the timer also fires concurrently.

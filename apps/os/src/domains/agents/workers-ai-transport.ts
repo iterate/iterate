@@ -25,6 +25,10 @@ type WorkersAiCompletion = {
  * out to the agent's last-resort backstop instead of failing within the
  * attempt's own horizon.
  *
+ * On timeout the response reader is CANCELLED before the error propagates, so
+ * a dead attempt can never keep streaming `onChunk` calls (and journaled
+ * chunk events) after the caller has already settled it as failed.
+ *
  * `onChunk` fires once per parsed SSE chunk, in order and awaited, so the
  * caller can journal chunks as events without racing the drain.
  */
@@ -35,45 +39,53 @@ export async function runWorkersAiAttempt(input: {
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
 }): Promise<WorkersAiCompletion> {
-  return await withDeadline({
+  const deadline = startDeadline({
     deadlineMs: input.deadlineMs,
     message: `LLM attempt timed out after ${input.deadlineMs / 60_000} minutes.`,
-    work: (async () => {
-      const raw = await input.ai.run(input.model, { messages: input.messages, stream: true });
-      if (raw instanceof ReadableStream) {
-        return await drainSseResponse({ body: raw, onChunk: input.onChunk });
-      }
-      return {
-        text: extractAssistantText(raw),
-        rawResponse: jsonCompatible(raw),
-        usage: extractUsage(raw),
-      };
-    })(),
   });
-}
-
-async function withDeadline<T>(input: {
-  deadlineMs: number;
-  message: string;
-  work: Promise<T>;
-}): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
-      input.work,
-      new Promise<never>((_resolve, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(input.message)), input.deadlineMs);
-      }),
-    ]);
+    const raw = await deadline.race(
+      input.ai.run(input.model, { messages: input.messages, stream: true }),
+    );
+    if (raw instanceof ReadableStream) {
+      return await drainSseResponse({ body: raw, deadline, onChunk: input.onChunk });
+    }
+    return {
+      text: extractAssistantText(raw),
+      rawResponse: jsonCompatible(raw),
+      usage: extractUsage(raw),
+    };
   } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    deadline.clear();
   }
 }
 
+/** One armed timer raced against every phase of an attempt, so dial + drain
+ * share a single wall-clock budget instead of restarting it per await. */
+function startDeadline(input: { deadlineMs: number; message: string }): {
+  race<T>(work: Promise<T>): Promise<T>;
+  clear(): void;
+} {
+  let reject: (error: Error) => void;
+  const expired = new Promise<never>((_resolve, rejectPromise) => {
+    reject = rejectPromise;
+  });
+  // A raced-and-lost `expired` promise would otherwise reject unobserved.
+  expired.catch(() => {});
+  const timeoutId = setTimeout(() => reject(new Error(input.message)), input.deadlineMs);
+  return {
+    race: (work) => Promise.race([work, expired]),
+    clear: () => clearTimeout(timeoutId),
+  };
+}
+
 /** Parse SSE frames off the response stream, handing each chunk to `onChunk`
- * and accumulating the assistant text and last-seen usage. */
+ * and accumulating the assistant text and last-seen usage. Every read races
+ * the attempt deadline; on timeout the reader is cancelled so the source
+ * stops producing. */
 async function drainSseResponse(input: {
   body: ReadableStream;
+  deadline: { race<T>(work: Promise<T>): Promise<T> };
   onChunk: (chunk: unknown, index: number) => Promise<void>;
 }): Promise<WorkersAiCompletion> {
   const reader = input.body.getReader();
@@ -90,16 +102,23 @@ async function drainSseResponse(input: {
     chunkCount += 1;
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffered += typeof value === "string" ? value : decoder.decode(value, { stream: true });
-    const frames = buffered.split(/\r?\n\r?\n/);
-    buffered = frames.pop() ?? "";
-    for (const frame of frames) {
-      const chunk = parseSseFrame(frame);
-      if (chunk !== undefined) await handleChunk(chunk);
+  try {
+    while (true) {
+      const { done, value } = await input.deadline.race(reader.read());
+      if (done) break;
+      buffered += typeof value === "string" ? value : decoder.decode(value, { stream: true });
+      const frames = buffered.split(/\r?\n\r?\n/);
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) {
+        const chunk = parseSseFrame(frame);
+        if (chunk !== undefined) await handleChunk(chunk);
+      }
     }
+  } catch (error) {
+    // Deadline (or a mid-drain read failure): stop the source before the
+    // error settles the attempt, so no chunk can land after the completion.
+    await reader.cancel().catch(() => {});
+    throw error;
   }
   buffered += decoder.decode();
   const finalChunk = parseSseFrame(buffered);

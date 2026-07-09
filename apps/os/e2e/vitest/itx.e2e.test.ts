@@ -2244,20 +2244,32 @@ describe("itx", () => {
 
     // Birth mechanics: project-worker (every project stream) + agent processor +
     // capability-host. One agent processor owns history, scheduling, and the
-    // Workers AI call — no separate LLM provider processors.
-    const events = await agentStream.getEvents({ afterOffset: 0 });
-    const subscriptions = events.filter(
-      (event) => event.type === "events.iterate.com/stream/subscription-configured",
-    );
-    expect(subscriptions.length).toBeGreaterThanOrEqual(3);
-    const processorSlugs = subscriptions
-      .map(
-        (event) =>
-          (event.payload as { delivery?: { processorSlug?: string } } | undefined)?.delivery
-            ?.processorSlug,
-      )
-      .filter((slug): slug is string => typeof slug === "string");
+    // Workers AI call — no separate LLM provider processors. The mechanics come
+    // from the project processor's serialized lane (queued behind the worker
+    // probe), so they can land AFTER the pump-delivered policy above — wait
+    // for them instead of snapshotting the instant policy arrives.
+    const mechanicsDeadline = Date.now() + 60_000;
+    let subscriptionCount = 0;
+    let processorSlugs: string[] = [];
+    for (;;) {
+      const events = await agentStream.getEvents({ afterOffset: 0 });
+      const subscriptions = events.filter(
+        (event) => event.type === "events.iterate.com/stream/subscription-configured",
+      );
+      subscriptionCount = subscriptions.length;
+      processorSlugs = subscriptions
+        .map(
+          (event) =>
+            (event.payload as { delivery?: { processorSlug?: string } } | undefined)?.delivery
+              ?.processorSlug,
+        )
+        .filter((slug): slug is string => typeof slug === "string");
+      if (processorSlugs.includes("agent") && processorSlugs.includes("capability-host")) break;
+      if (Date.now() > mechanicsDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
     expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
+    expect(subscriptionCount).toBeGreaterThanOrEqual(3);
   });
 
   test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {

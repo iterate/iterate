@@ -928,6 +928,119 @@ describe("minimal web-chat agent processors", () => {
   });
 });
 
+describe("interrupt and stray-request hygiene", () => {
+  it("an interrupt during the debounce window disarms the timer; the cancelled request never fires", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      ai: {
+        async run() {
+          return { response: "answered the second message" };
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "first thought",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+    await deliver(); // reconcile schedules gen-0
+    await deliver(); // processEvent arms the gen-0 debounce timer
+    const scheduled = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    )!;
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "wait, scrap that",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      },
+    });
+    await deliver(); // appends the scheduled-phase cancel
+    await deliver(); // processes the cancel: disarms the timer, schedules gen-1
+
+    // Past the original debounce: the cancelled request must NOT have fired.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(
+      stream.events.find(
+        (event) => event.idempotencyKey === `agent/llm-request-requested@${scheduled.offset}`,
+      ),
+    ).toBeUndefined();
+
+    // The interrupting input's own turn still proceeds (a fresh generation).
+    await vi.waitFor(async () => {
+      await deliver();
+      const requested = stream.events.filter(
+        (event) => event.type === "events.iterate.com/agent/llm-request-requested",
+      );
+      expect(requested).toHaveLength(1);
+      expect((requested[0]!.payload as { requestId: string }).requestId).not.toBe(
+        (scheduled.payload as { requestId: string }).requestId,
+      );
+    });
+  });
+
+  it("settles a stray non-current requested obligation without dialing the AI binding", async () => {
+    const stream = new MemoryStream();
+    let dials = 0;
+    const agent = new AgentProcessor({
+      stream,
+      ai: {
+        async run() {
+          dials += 1;
+          return { response: "the real answer" };
+        },
+      },
+    });
+    // A current request mid-lifecycle plus a stray raw-appended requested
+    // event: driving the stray would run a parallel LLM turn nobody asked for.
+    const [, current, stray] = await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: { debounceMs: 60_000, model: "m", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "m", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "m", requestId: "llm-request:stray" },
+      },
+    );
+    await agent.ingest({ events: stream.events, streamMaxOffset: stray!.offset });
+
+    await vi.waitFor(() => {
+      const strayCompletion = stream.events.find(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-completed" &&
+          (event.payload as { llmRequestOffset: number }).llmRequestOffset === stray!.offset,
+      );
+      expect(strayCompletion?.payload).toMatchObject({
+        result: {
+          status: "failure",
+          error: { message: expect.stringContaining("not the agent's current request") },
+        },
+      });
+    });
+    await vi.waitFor(() => {
+      const currentCompletion = stream.events.find(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-completed" &&
+          (event.payload as { llmRequestOffset: number }).llmRequestOffset === current!.offset,
+      );
+      expect(currentCompletion?.payload).toMatchObject({ result: { status: "success" } });
+    });
+    expect(dials).toBe(1);
+  });
+});
+
 describe("refold safety", () => {
   // The doctrine's refold test (docs/writing-stream-processors.md): every
   // processor whose process* hooks touch a vendor must prove that replaying a
