@@ -29,7 +29,7 @@ export type WorkspaceChange = {
   path: string;
 };
 
-/** One commit returned by `WorkspaceGit.log` (the workspace branch's history). */
+/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;
@@ -38,8 +38,9 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** Result of `WorkspaceGit.commit` — the published snapshot. */
+/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */
 export type WorkspacePublishResult = {
+  /** The repo branch the commit landed on — the config repo's default (main). */
   branch: string;
   /** Paths committed (after .gitignore filtering) plus deletions applied. */
   changedPaths: string[];

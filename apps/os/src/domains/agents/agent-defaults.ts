@@ -16,7 +16,7 @@
 
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
+import { agentWorkspacePath } from "../workspaces/utils.ts";
 import {
   slackConnectionFromAgentPath,
   telegramChatIdFromAgentPath,
@@ -254,8 +254,8 @@ export function agentDefaultsForPath(input: {
         expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
         instructions:
           `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
-          'Reads see latest main until you shadow a path; writes/edits/deletes stay private (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
-          `workspace.git.commit({ message }) publishes your changes as a snapshot commit on the config repo branch "${workspaceBranchName(agentWorkspacePath(agentPath))}", never to main.`,
+          'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
+          "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
       },
     },
     // Per-agent boot context as a model-visible input (the system prompt is
@@ -274,7 +274,7 @@ export function agentDefaultsForPath(input: {
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>, Telegram chat agents under /agents/telegram/<connection>/chat-<chatId>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',
-          '- You also have your own workspace: `itx.workspace` is an instant copy-on-write overlay over the config repo\'s latest main in a durable filesystem — no container, no clone, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. Reads see latest main until you shadow a path; your changes stay private until `await itx.workspace.git.commit({ message })` publishes them as a snapshot commit on your own branch in the config repo, never main. `itx.workspaces.get("/")` is the shared read-only root (the config repo\'s latest main). Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
+          '- You also have your own workspace: `itx.workspace` is an instant copy-on-write overlay over the config repo\'s latest main in a durable filesystem — no container, no clone, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. Reads see latest main until you shadow a path; your changes stay private until you commit. To ship changes (including the project homepage/worker): `await itx.workspace.git.commit({ message })` — that commits them straight to the config repo\'s MAIN branch and the project worker/website redeploys automatically; no branches, no push, no other steps. `itx.workspaces.get("/")` is the shared read-only root (the config repo\'s latest main). Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
           "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
