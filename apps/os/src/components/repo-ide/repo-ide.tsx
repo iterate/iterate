@@ -291,7 +291,11 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 expandedOid={expandedCommitOid}
                 selectedPath={selectedPath}
                 onExpand={(oid) => patchSearch({ commit: oid })}
-                onOpenFile={(path) => patchSearch({ file: path })}
+                // selectFile clears diff/preview/staged too, so a lingering
+                // preview=true doesn't spuriously re-open Preview for the file
+                // you pick out of a commit (history/commit stay set — the
+                // commit diff keeps showing until you leave History).
+                onOpenFile={(path) => selectFile(path)}
               />
             </Suspense>
           ) : gh ? (
