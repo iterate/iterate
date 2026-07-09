@@ -194,6 +194,13 @@ class CompactionProcessor extends StreamProcessor<
     const triggeringEventOffset = event.offset;
 
     runInBackground(async () => {
+      // At-least-once redelivery guard: appends dedupe on their idempotency
+      // keys either way, but the summary itself is an expensive AI call — if
+      // this trigger already produced its completion, skip the whole run.
+      const alreadyCompleted = await this.stream.getEvent({
+        idempotencyKey: `compaction/completed@${triggeringEventOffset}`,
+      });
+      if (alreadyCompleted !== undefined) return;
       const startedAt = Date.now();
       await append({
         type: "events.iterate.com/compaction/compaction-started",
