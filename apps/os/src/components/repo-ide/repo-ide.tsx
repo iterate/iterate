@@ -56,6 +56,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   const {
     file: selectedPath,
     diff,
+    preview,
     scm,
     gh,
     stagedView,
@@ -65,7 +66,8 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   } = useRepoIdeSearch();
 
   const selectFile = useCallback(
-    (path: string | undefined) => patchSearch({ file: path, diff: undefined, staged: undefined }),
+    (path: string | undefined) =>
+      patchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined }),
     [patchSearch],
   );
 
@@ -319,10 +321,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                 patchSearch({
                   file: path,
                   diff: status === "modified" ? true : undefined,
+                  preview: undefined,
                   staged: undefined,
                 })
               }
-              onOpenStaged={(path) => patchSearch({ file: path, diff: undefined, staged: true })}
+              onOpenStaged={(path) =>
+                patchSearch({ file: path, diff: undefined, preview: undefined, staged: true })
+              }
             />
           ) : (
             <RepoFileTree
@@ -370,7 +375,15 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                   headHasPath={headPathSet.has(selectedPath)}
                   change={changes.get(selectedPath)}
                   diffOpen={diff}
-                  onToggleDiff={(open) => patchSearch({ diff: open ? true : undefined })}
+                  // Diff and preview are mutually exclusive views of the same
+                  // buffer — turning one on turns the other off.
+                  onToggleDiff={(open) =>
+                    patchSearch({ diff: open ? true : undefined, preview: undefined })
+                  }
+                  previewOpen={preview}
+                  onTogglePreview={(open) =>
+                    patchSearch({ preview: open ? true : undefined, diff: undefined })
+                  }
                   onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
                   onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
                   onStageFile={() => store.stage(selectedPath)}
@@ -378,7 +391,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
                     store.unstage(selectedPath);
                     patchSearch({ staged: undefined });
                   }}
-                  onOpenWorking={() => patchSearch({ staged: undefined, diff: undefined })}
+                  onOpenWorking={() =>
+                    patchSearch({ staged: undefined, diff: undefined, preview: undefined })
+                  }
                   stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
                   onRestore={() => dropChange(selectedPath)}
                 />
@@ -592,6 +607,7 @@ function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {
     file?: string;
     diff?: boolean;
+    preview?: boolean;
     scm?: boolean;
     gh?: boolean;
     staged?: boolean;
@@ -603,6 +619,7 @@ function useRepoIdeSearch() {
     (patch: {
       file?: string | undefined;
       diff?: boolean | undefined;
+      preview?: boolean | undefined;
       scm?: boolean | undefined;
       gh?: boolean | undefined;
       staged?: boolean | undefined;
@@ -622,6 +639,7 @@ function useRepoIdeSearch() {
   return {
     file: search.file,
     diff: search.diff === true,
+    preview: search.preview === true,
     scm: search.scm === true,
     gh: search.gh === true,
     stagedView: search.staged === true,

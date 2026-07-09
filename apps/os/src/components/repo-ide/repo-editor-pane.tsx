@@ -7,7 +7,8 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { changedLinesGutter } from "./change-gutter.ts";
-import { repoFileKind } from "./repo-file-kinds.ts";
+import { HtmlPreview } from "./html-preview.tsx";
+import { isHtmlPreviewPath, repoFileKind } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -28,6 +29,8 @@ export function RepoEditorPane({
   change,
   diffOpen,
   onToggleDiff,
+  previewOpen,
+  onTogglePreview,
   onSetWorking,
   onSetStaged,
   onStageFile,
@@ -44,6 +47,9 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
+  /** Html files only: the sandboxed rendered view of the current buffer. */
+  previewOpen: boolean;
+  onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
   onSetStaged: (entry: FileEntry | undefined) => void;
   onStageFile: () => void;
@@ -248,11 +254,20 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
+    // Diff wins if a hand-edited URL sets both: the toggles keep `preview` and
+    // `diff` mutually exclusive, but honor that invariant here too so the pane
+    // never renders Preview while the header shows the Diff/"Working Tree" state.
+    const showPreview = previewOpen && !diffOpen && isHtmlPreviewPath(path);
     return (
       <FileChrome
         path={path}
-        {...(diffOpen ? { suffix: "(Working Tree)" } : {})}
+        {...(diffOpen ? { suffix: "(Working Tree)" } : showPreview ? { suffix: "(Preview)" } : {})}
         status={status}
+        leading={
+          isHtmlPreviewPath(path) ? (
+            <CodePreviewToggle previewOpen={showPreview} onTogglePreview={onTogglePreview} />
+          ) : undefined
+        }
         actions={
           <>
             {headHasPath || staged !== undefined ? (
@@ -269,18 +284,22 @@ export function RepoEditorPane({
           </>
         }
       >
-        <SourceCodeBlock
-          key={path}
-          className="min-h-0 flex-1"
-          plainChrome
-          showLineNumbers
-          editable
-          wrapLongLines={false}
-          code={value}
-          language={kind.language}
-          codeMirrorExtensions={editorExtensions}
-          onChange={stageText}
-        />
+        {showPreview ? (
+          <HtmlPreview html={value} />
+        ) : (
+          <SourceCodeBlock
+            key={path}
+            className="min-h-0 flex-1"
+            plainChrome
+            showLineNumbers
+            editable
+            wrapLongLines={false}
+            code={value}
+            language={kind.language}
+            codeMirrorExtensions={editorExtensions}
+            onChange={stageText}
+          />
+        )}
       </FileChrome>
     );
   }
@@ -342,6 +361,33 @@ export function RepoEditorPane({
   );
 }
 
+/** The vscode-style "Preview | Code" tab pair at the top-left of an html
+ * file's header. */
+function CodePreviewToggle({
+  previewOpen,
+  onTogglePreview,
+}: {
+  previewOpen: boolean;
+  onTogglePreview: (open: boolean) => void;
+}) {
+  const tab = (label: string, active: boolean, onClick: () => void) => (
+    <Button
+      variant={active ? "secondary" : "ghost"}
+      size="sm"
+      className="h-5 rounded-sm px-2 text-[11px]"
+      onClick={onClick}
+    >
+      {label}
+    </Button>
+  );
+  return (
+    <span className="flex shrink-0 items-center gap-0.5 rounded-md border p-0.5">
+      {tab("Code", !previewOpen, () => onTogglePreview(false))}
+      {tab("Preview", previewOpen, () => onTogglePreview(true))}
+    </span>
+  );
+}
+
 /** Shared editor-pane chrome (path header + status badge + actions slot) —
  * exported for the sibling readonly commit-diff pane so every pane matches. */
 export function FileChrome({
@@ -349,6 +395,7 @@ export function FileChrome({
   suffix,
   readonly = false,
   status,
+  leading,
   actions,
   children,
 }: {
@@ -357,12 +404,15 @@ export function FileChrome({
   suffix?: string;
   readonly?: boolean;
   status?: "added" | "deleted" | "modified";
+  /** Rendered before the path — the Code/Preview toggle lives here. */
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        {leading}
         <span className="min-w-0 truncate font-mono text-xs">
           {path}
           {suffix === undefined ? null : <span className="text-muted-foreground"> {suffix}</span>}
