@@ -190,7 +190,7 @@ function ProjectReposIndexContent() {
           <Suspense fallback={null}>
             <AddRepoFromGithub
               projectId={project.id}
-              existingRepoPaths={(repos ?? []).map((repo) => repo.path)}
+              existingRepoPaths={repos?.map((repo) => repo.path)}
               onAdded={(path) => {
                 void navigate({
                   to: "/projects/$projectSlug/repos/$",

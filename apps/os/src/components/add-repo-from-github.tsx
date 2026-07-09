@@ -99,7 +99,9 @@ async function listInstallationRepos(
  * `existingRepoPaths` (the page's live repo list) gates the path field:
  * `repos.create` is create-if-absent, so without the gate an existing path —
  * `/repos/config` included — would be silently linked and force-synced,
- * discarding its local history.
+ * discarding its local history. `undefined` means the list has not arrived
+ * yet, and the gate stays CLOSED (submit disabled): an unknown list must not
+ * read as "every path is free".
  */
 export function AddRepoFromGithub({
   projectId,
@@ -107,7 +109,7 @@ export function AddRepoFromGithub({
   onAdded,
 }: {
   projectId: string;
-  existingRepoPaths: string[];
+  existingRepoPaths: string[] | undefined;
   onAdded: (path: string) => void;
 }) {
   const connections = useItxQuery({
@@ -162,7 +164,7 @@ function AddRepoFromGithubWizard({
   onAdded,
 }: {
   connections: string[];
-  existingRepoPaths: string[];
+  existingRepoPaths: string[] | undefined;
   onAdded: (path: string) => void;
 }) {
   const itx = useItx();
@@ -173,9 +175,22 @@ function AddRepoFromGithubWizard({
   // Once the user edits the path by hand, picking a different repository
   // stops overwriting it.
   const [pathEdited, setPathEdited] = useState(false);
+  // Paths THIS wizard created. A failed linkGithub leaves the dialog open for
+  // a retry, but by then the just-created repo is in the live list — without
+  // this exemption the taken-path gate would block the very retry the
+  // idempotent create→link→sync flow is built for. Fresh seed only, so the
+  // force-sync stays safe; closing the dialog drops the exemption and the
+  // repo page's GitHub panel is the repair path from there.
+  const [createdHere, setCreatedHere] = useState<ReadonlySet<string>>(new Set());
   const normalizedPath = path.trim();
-  const pathTaken = existingRepoPaths.includes(normalizedPath);
-  const pathValid = REPO_PATH_PATTERN.test(normalizedPath) && !pathTaken;
+  // undefined = the live repo list has not arrived yet: the gate stays
+  // CLOSED (submit disabled) rather than treating every path as free.
+  const pathsKnown = existingRepoPaths !== undefined;
+  const pathTaken =
+    existingRepoPaths !== undefined &&
+    existingRepoPaths.includes(normalizedPath) &&
+    !createdHere.has(normalizedPath);
+  const pathValid = REPO_PATH_PATTERN.test(normalizedPath) && pathsKnown && !pathTaken;
 
   const addRepo = useMutation({
     mutationFn: async (input: { path: string; repo: InstallationRepo }) => {
@@ -183,7 +198,10 @@ function AddRepoFromGithubWizard({
       // existing path would sail through and the force-sync below would
       // discard its history — re-check against the live list right before
       // mutating (the submit gate can race a repo created since last render).
-      if (existingRepoPaths.includes(input.path)) {
+      if (existingRepoPaths === undefined) {
+        throw new Error("The project's repo list has not loaded yet; try again in a moment.");
+      }
+      if (existingRepoPaths.includes(input.path) && !createdHere.has(input.path)) {
         throw new Error(
           `${input.path} already exists. To back an existing repo with GitHub, use the GitHub panel on that repo's page.`,
         );
@@ -191,6 +209,7 @@ function AddRepoFromGithubWizard({
       // create is "create if it does not exist yet", so a retry after a
       // mid-flow failure is safe and finishes the job.
       await itx.repos.create({ path: input.path });
+      setCreatedHere((previous) => new Set(previous).add(input.path));
       const repo = itx.repos.get(input.path);
       const link = await repo.linkGithub({
         connection,
