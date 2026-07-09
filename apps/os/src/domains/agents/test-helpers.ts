@@ -26,7 +26,9 @@ export class MemoryStream implements Stream {
       const offset = (this.events.at(-1)?.offset ?? 0) + 1;
       const event: StreamEvent = {
         ...input,
-        createdAt: new Date(offset).toISOString(),
+        // Wall-clock createdAt: expiry/backstop fold from createdAt, so epoch
+        // timestamps from offsets would mark every request expired immediately.
+        createdAt: new Date().toISOString(),
         offset,
         path: this.path,
       };
