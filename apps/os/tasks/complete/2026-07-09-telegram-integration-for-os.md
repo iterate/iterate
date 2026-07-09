@@ -513,6 +513,32 @@ gate, not authz.
     the same snippet with the other stream's path.
   - The two new event-type constants live on the contracts, not utils.ts
     (contract catalogs need literal keys; knip flagged the unused mirrors).
+- 2026-07-09 (later): live-testing + review round-up, all landed:
+  - Reply-hint recovery fixed after a live failure: the taught thread-read is
+    now FILTERED (eventTypes: webhook-received + send-requested — the
+    two-sided transcript) with paging advice, and the hint is imperative and
+    LEADS the transcription above the YAML dump. New test seeds a
+    real-shaped noisy thread and proves the taught call returns exactly the
+    user/bot exchange.
+  - Feed rendering: the agent-ui reducer (packages/ui) renders
+    telegram/webhook-received as user bubbles (sender username/first name,
+    caption + [photo]-style placeholders for media) and
+    telegram/send-requested as the assistant bubble — same via-label pattern
+    as Slack, schema version bumped to 9 so stale mirrors rebuild.
+  - /debug command (mirroring Slack's !debug, compiled straight to a script
+    execution — no LLM turn): runs itx.debug() and posts the result through
+    the journaled send on the same session stream, truncated to Telegram's
+    4096-char limit. Registered in setMyCommands next to /new. Slack's
+    general !<expression> compiler deliberately NOT ported — possible
+    follow-up.
+  - setMyCommands is best-effort (the / menu is cosmetic; its failure must
+    never roll back a live webhook — bugbot), and the setWebhook-failure
+    rollback gained a best-effort deleteWebhook (defense in depth for
+    partial/ambiguous registration failures).
+  - Steal ordering refined once more (bugbot): prepare new → atomic swap →
+    dispossess old, so no window ever routes to a bricked handler; the old
+    project's dashboard is momentarily stale until its disconnected fact
+    lands (accepted).
 - 2026-07-09: two more bugbot findings folded in (both real):
   - Journaled sends are THREAD-BOUND: payload-supplied
     chat_id/message_thread_id are stripped and the stream-path identity is
