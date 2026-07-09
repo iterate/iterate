@@ -1129,7 +1129,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     return new Response("not found", { status: 404 });
   }
 
-  processEvent() {}
+  processEventBatch() {}
 }
 \`,
     },

@@ -25,6 +25,18 @@ import {
 } from "../integrations/utils.ts";
 import type { GithubRepoLink, LinkGithubResult } from "./types.ts";
 
+/** Whether a failed repo-create was GitHub's 422 "name already exists" — the
+ * tell that the repository IS there but the installation cannot see it (an App
+ * installed with "selected repositories" answers 404 on `GET /repos/...` for
+ * unselected repos, so create-on-link runs into the existing name). */
+function isGithubNameAlreadyExistsError(error: unknown): boolean {
+  const e = error as { message?: string; response?: { data?: unknown }; status?: number };
+  if (e.status !== 422) return false;
+  const data = e.response?.data;
+  const text = typeof data === "string" ? data : JSON.stringify(data ?? "");
+  return text.includes("name already exists") || (e.message ?? "").includes("name already exists");
+}
+
 /** The one rule id a repo's GitHub webhook cross-post rule lives under, so
  * re-linking replaces it and unlinking knows what to remove. */
 function githubCrossPostRuleId(repoPath: string): string {
@@ -99,6 +111,15 @@ export async function linkRepoToGithub(input: {
       });
       created = true;
     } catch (createError) {
+      // "name already exists" means the earlier 404 was an ACCESS miss, not a
+      // missing repo: the App is installed with "selected repositories" and
+      // this one is not selected. Say so — the generic message below claims
+      // the repository "does not exist", the opposite of the truth.
+      if (isGithubNameAlreadyExistsError(createError)) {
+        throw new Error(
+          `GitHub repository ${owner}/${repo} exists, but connection "${input.connection}" (App installation ${status.externalId}) has no access to it — the App is installed with "selected repositories" and this one is not selected. An org owner can grant access under Repository access at https://github.com/organizations/${owner}/settings/installations/${status.externalId}, then link again.`,
+        );
+      }
       throw new Error(
         `GitHub repository ${owner}/${repo} does not exist and could not be created via connection "${input.connection}" (App installations can only create org repositories, and need Administration write). Create it on GitHub and link again. Cause: ${normalizeGithubError(createError, input.connection).message}`,
       );

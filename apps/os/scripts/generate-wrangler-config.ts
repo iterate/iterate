@@ -111,7 +111,7 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // so we always run current compat behavior and never accumulate opt-in flags
 // for things that became default. Only genuinely non-default flags go in
 // compatibility_flags below.
-const COMPATIBILITY_DATE = "2026-07-01";
+export const COMPATIBILITY_DATE = "2026-07-01";
 
 // The os worker (reader) and the builder (writer) must name the same
 // miniflare namespace in local dev or cache reads never see builds.
@@ -169,61 +169,33 @@ const DO_CLASSES = {
   ),
 } as const;
 
-// Durable Object migration history. Deployed workers only apply tags NEWER
-// than the one they already passed, so a new class must arrive in a NEW tag —
-// adding it to an existing tag is silently ignored on every existing
-// deployment and the deploy fails at bind time with API error 10061. Fresh
-// workers (local dev, new envs) replay all tags in order.
-const DO_MIGRATIONS = [
-  {
-    tag: "v1",
-    new_sqlite_classes: [
-      "AgentDurableObject",
-      "CapabilityHostDurableObject",
-      "ProjectDurableObject",
-      "RepoDurableObject",
-      "CloudflareSandboxDurableObject",
-      "SecretDurableObject",
-      "StreamDurableObject",
-      "StatefulWorkerDurableObject",
-    ],
-  },
-  { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
-  { tag: "v3", new_sqlite_classes: ["WorkspaceDurableObject"] },
-  // Sandboxes became pets with a fixed per-sandbox instance type: one
-  // container class per Cloudflare instance type replaces the single
-  // implicit-size class. The old class is DELETED (its Durable Objects and
-  // their data go with it — old sandboxes were ephemeral by design and their
-  // R2 snapshots age out).
-  {
-    tag: "v4",
-    new_sqlite_classes: SANDBOX_INSTANCE_TYPES.map(
-      (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-    ),
-    deleted_classes: ["CloudflareSandboxDurableObject"],
-  },
-];
-
-// Every bound class needs a live (created and not later deleted) migration
-// entry — and every live migrated class must still be bound.
-{
-  const migrated = new Set(
-    DO_MIGRATIONS.flatMap((migration) => migration.new_sqlite_classes ?? []),
-  );
-  for (const migration of DO_MIGRATIONS) {
-    for (const deleted of ("deleted_classes" in migration && migration.deleted_classes) || []) {
-      migrated.delete(deleted);
-    }
-  }
-  const bound = Object.values(DO_CLASSES);
-  const missing = bound.filter((className) => !migrated.has(className));
-  const stale = [...migrated].filter((className) => !(bound as string[]).includes(className));
-  if (missing.length > 0 || stale.length > 0) {
-    throw new Error(
-      `DO_MIGRATIONS out of sync with DO_CLASSES (missing: ${missing.join(", ") || "none"}; stale: ${stale.join(", ") || "none"})`,
-    );
-  }
-}
+// Durable Object lifecycle, DECLARATIVE (wrangler's `exports` field, GA in
+// wrangler 4.107): every class the worker hosts gets a live entry, and the
+// server reconciles the declared set against the live namespaces ON EVERY
+// DEPLOY. There is no migration tag and no linear history — which is what
+// lets a preview slot deploy cleanly from any branch, regardless of what the
+// previous branch left on the worker (the old tag-diff model wedged slots
+// with API 10074/10061 whenever branch histories diverged).
+//
+// Deleting a class = replace its live entry with a hand-written
+// `state: "deleted"` tombstone. That destroys the class's Durable Objects,
+// their storage and alarms on the next deploy of each env. Tombstones are
+// idempotent (a stale one is an info, not an error) and can be removed once
+// every deployed env reports "Safe to remove from `exports`". Forgetting one
+// fails the deploy with the exact tombstone line to add.
+const DO_EXPORTS = {
+  // Live entries derive from DO_CLASSES: bound ⇔ hosted, one source of truth.
+  ...Object.fromEntries(
+    Object.values(DO_CLASSES).map((className) => [
+      className,
+      { type: "durable-object", storage: "sqlite" },
+    ]),
+  ),
+  // Sandboxes became pets with one container class per instance type (#1747);
+  // the old implicit-size class is retired (old sandboxes were ephemeral by
+  // design and their R2 snapshots age out).
+  CloudflareSandboxDurableObject: { type: "durable-object", state: "deleted" },
+};
 
 /**
  * Per-size concurrent-instance caps. Cloudflare validates
@@ -477,7 +449,7 @@ export const config = {
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.
-  migrations: DO_MIGRATIONS,
+  exports: DO_EXPORTS,
   // Local dev: containers off by default so `pnpm dev` never requires Docker —
   // sandbox Durable Objects fail at their constructor until you opt in with
   // `OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev`, which builds the sandbox
