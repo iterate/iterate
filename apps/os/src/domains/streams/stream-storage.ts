@@ -251,6 +251,15 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         updated_at text not null
       )
     `);
+    const subscriptionColumns = new Set(
+      this.sql
+        .exec<{ name: string }>("pragma table_info(subscriptions)")
+        .toArray()
+        .map((column) => column.name),
+    );
+    if (!subscriptionColumns.has("epoch")) {
+      this.sql.exec("alter table subscriptions add column epoch integer not null default 0");
+    }
   }
 
   #nextEpoch(): number {

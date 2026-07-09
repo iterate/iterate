@@ -242,6 +242,7 @@ at-least-once redelivery a no-op.
 export class RepoDurableObject extends DurableObject<Env> {
   readonly #host = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({ auth, projectId, path }),
+    version: workerVersion(this.env),
   });
   readonly #repoProcessor = this.#host.add((deps) => new RepoProcessor({ ...deps, github }));
 

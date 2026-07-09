@@ -20,7 +20,6 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
-  - drizzle-kit
   - miniflare
   - wrangler
   - workerd
@@ -51,7 +50,6 @@ minimumReleaseAgeExclude:
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
-  - better-sqlite3
   - esbuild
   - lightningcss
   - node-pty
@@ -77,7 +75,6 @@ overrides:
   agents>x402: '-'
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  better-sqlite3: npm:libsql@0.5.22
   capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
   # Pre-release build of iterate/middlewright#3 (videoMode trimStart default +
   # the upstreamed spinner-waiter multi-match fix, so the local patch is gone).

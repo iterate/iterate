@@ -491,13 +491,13 @@ describe("minimal web-chat agent processors", () => {
       },
     );
 
-    // First chunk delivers only input one; its batch appends the scheduled
-    // event at offset 3. The second chunk delivers only input two — a batch
-    // that predates the scheduled event, so state still shows no current
-    // request. The generation-keyed idempotency collapses the re-derived
-    // schedule into the event already on the stream.
+    // The first chunk is BEHIND the head (input two exists past it), so the
+    // at-head gate defers scheduling entirely; the second chunk reaches the
+    // head and derives exactly one scheduled event for both inputs. The
+    // generation-keyed idempotency remains the second line of defense for
+    // batches that raced to the same derivation.
     await agent.ingest({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
-    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 3 });
+    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 2 });
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -1120,11 +1120,12 @@ describe("minimal web-chat agent processors", () => {
         throw new Error("should not dial during orphan recovery");
       },
     });
-    // Deliver only the STARTED event (the requested event is before the
-    // checkpoint of a caught-up-but-restarted instance in the real incident;
-    // any batch works — the sweep reads folded state, not the batch).
+    // Deliver the dead incarnation's events; the fold shows the obligation at
+    // `started` and the reconciler settles it WITHOUT starting an attempt
+    // (started + nobody live = orphaned, never re-driven — hence the throwing
+    // websocket factory above proving no dial happens).
     await openAiWs.ingest({
-      events: stream.events.filter((event) => event.offset > requested!.offset),
+      events: stream.events,
       streamMaxOffset: stream.events.length,
     });
     await new Promise((resolve) => setTimeout(resolve, 50));

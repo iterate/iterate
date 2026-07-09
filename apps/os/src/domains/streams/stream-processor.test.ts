@@ -322,3 +322,38 @@ describe("StreamProcessor parse-failure skipping", () => {
     }
   });
 });
+
+describe("StreamProcessor checkpoint loading", () => {
+  it("treats a snapshot that fails the current state schema as a cache miss and refolds", async () => {
+    // The deploy-a-schema-change scenario: the stored checkpoint carries the
+    // OLD state shape. Wedging on it would make snapshot()/ingest() reject
+    // forever — with the recovery machinery itself crash-looping on the
+    // parse. The checkpoint is a disposable cache of the fold; discard and
+    // refold from the journal.
+    nextOffset = 0;
+    const processor = new CounterProcessor({
+      stream: neverStream,
+      readState: () => ({
+        offset: 7,
+        state: { count: "three", legacyField: true } as never,
+      }),
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await processor.ingest({
+        events: [incrementedEvent(2, 1), incrementedEvent(3, 2)],
+        streamMaxOffset: 2,
+      });
+      // The poisoned offset-7 checkpoint was discarded: both events (below
+      // offset 7) folded from scratch.
+      expect(processor.state).toEqual({ count: 5 });
+      expect(processor.checkpointOffset).toBe(2);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("discarding the cache"),
+        expect.anything(),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});

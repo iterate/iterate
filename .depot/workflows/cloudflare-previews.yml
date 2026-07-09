@@ -1,13 +1,19 @@
-# The whole preview lifecycle — deploy + e2e on open/reopen/synchronize, and
-# cleanup on close — lives here on Depot CI. Depot CI picks up jobs in ~7s
-# where GitHub Actions runner assignment took 20s-3m39s (measured 2026-07-02,
-# once ~40min during a webhook incident).
+# Preview deploy + e2e on open/reopen/synchronize lives here on Depot CI;
+# cleanup on close lives in cloudflare-preview-cleanup.yml. Depot CI picks up
+# jobs in ~7s where GitHub Actions runner assignment took 20s-3m39s (measured
+# 2026-07-02, once ~40min during a webhook incident).
 #
-# Deploy and cleanup share one workflow so the concurrency groups coordinate
-# them: closing a PR mid-deploy cancels the in-flight deploy run
-# (cancel-in-progress at the workflow level) and then runs cleanup — the two
-# never race the same preview slot. (When deploy ran on Depot and cleanup on
-# GitHub, a close during a run tore down the slot under the deploy.)
+# Cleanup is a SEPARATE workflow because every run of a workflow re-emits all
+# of its job check names on the head SHA: when deploy and cleanup shared this
+# file with complementary `if:`s, the `closed`-event run re-reported
+# "Preview / deploy + e2e" as skipped, clobbering the earlier success on every
+# merged PR (GitHub displays the latest check run per name). The two workflows
+# still coordinate through the same concurrency groups (copied verbatim in the
+# cleanup file): closing a PR mid-deploy cancels the in-flight deploy run
+# (cancel-in-progress on the shared workflow-level group) and the job-level
+# lifecycle group serializes whatever remains — the two never race the same
+# preview slot. (When deploy ran on Depot and cleanup on GitHub, a close
+# during a run tore down the slot under the deploy.)
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged. Test
@@ -29,15 +35,14 @@ name: Cloudflare Previews (Depot CI)
 # marking ready for review, or a manual dispatch (dispatch passes
 # --allow-draft below). The policy lives in scripts/preview/preview.ts
 # (decideDraftPreviewPolicy) where it's unit-tested; the trigger types beyond
-# open/reopen/synchronize/close just make sure the script runs whenever a
-# PR's draft or label state changes, so it can claim a slot or give one back.
+# open/reopen/synchronize just make sure the script runs whenever a PR's
+# draft or label state changes, so it can claim a slot or give one back.
 on:
   pull_request:
     types:
       - opened
       - reopened
       - synchronize
-      - closed
       - ready_for_review
       - converted_to_draft
       - labeled
@@ -76,8 +81,7 @@ jobs:
     # Label events for anything but the preview opt-in label change nothing
     # about the preview lifecycle — skip the checkout+install entirely.
     if: |-
-      github.event.action != 'closed' &&
-        (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
     # 8-core: the job is network-bound (waiting on deployed slots), not
@@ -142,37 +146,3 @@ jobs:
           path: test-results
           include-hidden-files: true
           if-no-files-found: ignore
-  cleanup:
-    if: github.event.action == 'closed'
-    name: Preview / cleanup
-    runs-on: depot-ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-      - name: Preview / cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-        run: |-
-          set -euo pipefail
-          doppler run --project _shared --config prd -- pnpm preview cleanup \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}"

@@ -74,11 +74,33 @@ type ReduceArgs<Contract> = {
   state: ProcessorState<Contract>;
 };
 
-/** Side-effect scheduling helpers handed to the `process*` hooks. */
+/**
+ * Side-effect scheduling helpers handed to the `process*` hooks. Two
+ * primitives, two guarantees — every side effect must pick one deliberately:
+ *
+ * - `blockProcessorWhile` — SHORT work the next event must not overtake.
+ *   At-least-once: the checkpoint is held, a crash redelivers the batch, and
+ *   append idempotency keys collapse the re-run. Long work does NOT belong
+ *   here: it head-of-line-blocks every later event (including cancellations).
+ *
+ * - `runInBackground` — a DROPPABLE ATTEMPT. The checkpoint advances
+ *   immediately; an eviction loses the closure silently. Every callsite must
+ *   answer "what recovers the OUTCOME if this attempt drops?" — legitimate
+ *   answers are "an end-of-batch reconciliation, via journaled
+ *   requested/completed evidence" (LLM calls, scripts, debounce timers) or
+ *   "nothing, the outcome genuinely doesn't matter" (telemetry). A naked
+ *   runInBackground around consequential work with no reconciler is the bug
+ *   class the 2026-06-10 / 2026-07-07 incidents came from.
+ *
+ * Both are keepalive-backed: while either kind of work is in flight the host
+ * parks a durable alarm ahead of it, so an incarnation that dies owing work
+ * is revived and the reconcilers get their batch
+ * (docs/writing-stream-processors.md has the full doctrine).
+ */
 type SideEffectHelpers = {
   /** Hold the checkpoint (and the next batch) until this work completes. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
-  /** Fire-and-forget work; failures are caught and logged. */
+  /** A droppable attempt; failures are caught and logged, evictions lose it. */
   runInBackground: (work: () => Promise<unknown>) => void;
 };
 
@@ -658,7 +680,24 @@ export abstract class StreamProcessor<
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
         return;
       }
-      this.#state = this.contract.stateSchema.parse(snapshot.state) as ProcessorState<Contract>;
+      // The checkpoint is a disposable CACHE of the fold (see
+      // docs/domain-objects-and-stream-processors.md); the journal is the
+      // authority. A snapshot that fails the current schema — the normal
+      // aftermath of deploying a state-shape change — is a cache miss, not an
+      // error: discard it and refold from offset 0. Wedging here would turn
+      // every schema evolution into a permanently unresponsive processor
+      // (snapshot() and ingest() rethrowing forever), with the recovery
+      // machinery itself crash-looping on the parse.
+      const parsed = this.contract.stateSchema.safeParse(snapshot.state);
+      if (!parsed.success) {
+        console.error(
+          `stream processor "${this.contract.slug}" checkpoint no longer fits its state schema; discarding the cache and refolding from the journal`,
+          parsed.error,
+        );
+        this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        return;
+      }
+      this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
     })().catch((error: unknown) => {
       // Clear the memoized load so a later batch retries the snapshot read

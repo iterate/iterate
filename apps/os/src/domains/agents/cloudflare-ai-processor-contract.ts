@@ -7,8 +7,24 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Runs agent LLM requests through an AI binding shaped like env.AI.",
   stateSchema: z.object({
+    /**
+     * The provider's open OBLIGATIONS, keyed by llmRequestId — the exact
+     * shape (and reconciliation semantics) of the openai-ws sibling; see
+     * OpenAiWsProcessorContract.stateSchema. The earlier shape here only
+     * tracked started/completed, so a request whose incarnation died between
+     * `requested` and `started` was invisible to recovery — the sibling
+     * drift this contract's parity now prevents.
+     */
     requests: z
-      .record(z.string(), z.object({ status: z.enum(["started", "completed"]) }))
+      .record(
+        z.string(),
+        z.object({
+          status: z.enum(["requested", "started"]),
+          model: z.string().min(1),
+          /** Epoch ms past which no attempt may START (only-settle-past-expiry). */
+          expiresAt: z.number().int().positive(),
+        }),
+      )
       .default({}),
   }),
   events: {
@@ -90,6 +106,8 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract],
   consumes: [
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-cancelled",
+    "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/cloudflare-ai/llm-request-started",
     "events.iterate.com/cloudflare-ai/llm-request-completed",
   ],
