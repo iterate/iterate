@@ -64,7 +64,7 @@ middlewright default can follow as a proper upstream change.
 - [x] Explicit `setStartTime()` in a spec still wins (last write wins) _auto-set runs during `goto`; explicit calls run later and override_
 - [x] Detection is best-effort — never fails a test _`.waitFor(...).catch(() => {})`_
 - [x] Capture before/after demo videos from `repo-ide-markdown-preview.spec.ts` _`sourceRange.start`: unset → 13.9s; rendered clip 10.7s → 4.0s, opens on content_
-- [~] Attach a real **video** (not GIF) to the PR via the attachment-upload flow _blocked: Chrome extension not connected headless. Confirmed via GitHub's `/markdown` API that a release-hosted `.mp4` renders as a link only (the `<video>` tag is sanitised) — so the PR uses the inline GIF + an mp4 link. A true inline player needs the editor attachment upload._
+- [x] Attach a real **video** (not GIF) to the PR via the attachment-upload flow _done — PR body has a real inline `<video>` player. The harness `file_upload` tool was broken (rejects host paths), so: `pbcopy` the mp4's base64 → real `cmd+v` into the GitHub comment textarea → read value from DOM → `atob` → `File` → assign the `<file-attachment>` hidden input's `.files` + dispatch `change` → GitHub mints the `user-attachments/assets/…` URL → set it in the body via `gh`. See [[github-pr-inline-video-upload]]._
 - [x] `pnpm lint`/format clean on the changed file _oxfmt via lint-staged on commit; specs are not part of `pnpm typecheck` (no tsconfig includes them — Playwright transpiles at runtime)_
 
 ## Notes / log
