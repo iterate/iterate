@@ -10,7 +10,9 @@ export const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-messag
 export const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
 export const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
-export const ProjectWorkerForwardingProbeContract = defineProcessorContract({
+// Not exported: only the processor class below crosses module boundaries;
+// the contract value/type stay internal (knip flags unused exports).
+const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   slug: "minimal-itx-v4.project-worker-forwarding-probe",
   version: "0.1.0",
   description:
@@ -31,7 +33,7 @@ export const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   consumes: [PROJECT_WORKER_FORWARDED_EVENT_TYPE],
   emits: [],
 });
-export type ProjectWorkerForwardingProbeContract = typeof ProjectWorkerForwardingProbeContract;
+type ProjectWorkerForwardingProbeContract = typeof ProjectWorkerForwardingProbeContract;
 export type ProjectWorkerForwardingProbeState = {
   childPaths: string[];
   markers: string[];
