@@ -1,0 +1,38 @@
+import { expect } from "@playwright/test";
+import { connectAdminItx } from "./test-support/forged-session.ts";
+import { test } from "./test-support/test.ts";
+
+/**
+ * The markdown file's Code / Preview toggle: a `.md` buffer renders to HTML
+ * (the same streamdown/MessageResponse pipeline the chat uses, GitHub-sanitized)
+ * from the live working-tree text. Toggling back to Code returns the editable
+ * CodeMirror buffer.
+ */
+test("toggle a markdown file between Code and its rendered Preview", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  await using fixture = await helpers.createFixture("repo-ide-md");
+
+  // The template seeds AGENTS.md / README.md, so a real markdown file is
+  // present without seeding.
+  using itx = await connectAdminItx(baseURL!);
+  using project = itx.projects.get(fixture.project.id);
+  await project.repos.create({ path: "/repos/ide" });
+
+  await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
+
+  // Code view: the raw markdown source, including the leading `# ` heading.
+  await page.locator('[data-item-path="README.md"]').click();
+  await expect(page.locator(".cm-content")).toContainText("# ");
+
+  // Preview renders the markdown: the `# Heading` becomes a real <h1>, with no
+  // literal `#` in the rendered output.
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.getByRole("heading").first()).toBeVisible();
+
+  // Back to Code: the editable source (with the `#` markers) returns.
+  await page.getByRole("button", { name: "Code" }).click();
+  await expect(page.locator(".cm-content")).toContainText("# ");
+});
