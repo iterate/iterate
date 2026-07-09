@@ -5,12 +5,14 @@ import { normalizePath } from "../durable-object-names.ts";
  * `getSecret({ path: "/secrets/…" })` (substitute the whole material — which
  * must then be a string) or `getSecret({ path: "/secrets/…", field: "a.b" })`
  * (substitute one dotted field of structured material). Substitution reaches
- * the request ENVELOPE — headers and the request URL (for providers that
- * carry the credential in the URL path, e.g. Telegram's `/bot<token>/…`) —
- * never the body: a header or URL is a substitutable reference, a body is
- * bytes the composer already holds (see
- * apps/os/docs/integrations-and-secrets-design.md §1 and ADR 0005). The
- * `field` key is optional; omit it for whole-material (plain-string) secrets.
+ * headers and the request URL PATH (for providers that carry the credential
+ * there, e.g. Telegram's `/bot<token>/…`) — never the query string, and never
+ * the body: a header or path segment is a substitutable reference, everything
+ * else is bytes the composer already holds (see
+ * apps/os/docs/integrations-and-secrets-design.md §1 and ADR 0005). A
+ * placeholder outside the path fails loudly at substitution instead of
+ * leaking the literal reference string to the provider. The `field` key is
+ * optional; omit it for whole-material (plain-string) secrets.
  */
 const SECRET_REFERENCE =
   /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)/g;
@@ -49,7 +51,11 @@ export function secretReferencesFromHeaders(headers: Headers): SecretReference[]
 
 /** Every distinct placeholder across all headers AND the request URL. The
  * request-level view of {@link secretReferencesFromHeaders} — URL placeholders
- * exist for providers whose credential lives in the URL path (Telegram). */
+ * exist for providers whose credential lives in the URL path (Telegram).
+ * Deliberately scans the WHOLE url, not just the path: a placeholder in the
+ * query must still route to the Secret DO, where substitution rejects it
+ * loudly (see {@link substituteSecretRequest}) instead of the request sailing
+ * through egress with the literal placeholder in it. */
 export function secretReferencesFromRequest(request: {
   headers: Headers;
   url: string;
@@ -176,23 +182,41 @@ export function substituteSecretHeaders(
 
 /**
  * Rewrites every `getSecret(...)` placeholder in every header AND in the
- * request URL — the whole request envelope, still never the body. URL
- * substitution exists for providers that authenticate in the URL path
- * (Telegram's `/bot<token>/<method>`; there is no header auth). Matching runs
- * on the decoded URL (see {@link decodedUrl}); a request whose URL carries no
- * placeholder keeps its original URL byte-identical.
+ * request URL's PATH — never the query (or fragment/userinfo/host), and never
+ * the body. URL substitution exists for providers that authenticate in the
+ * URL path (Telegram's `/bot<token>/<method>`; there is no header auth), and
+ * the path is deliberately ALL it covers: a placeholder anywhere else in the
+ * URL throws here — silently passing the literal placeholder through to the
+ * provider would leak the reference string and answer as a confusing
+ * provider-side 401. Matching runs on the decoded part (see
+ * {@link decodedUrl}); a URL whose path carries no placeholder stays
+ * byte-identical.
  */
 export function substituteSecretRequest(
   request: Request,
   resolve: (reference: SecretReference) => string,
 ): Request {
   const substituted = substituteSecretHeaders(request, resolve);
-  const decoded = decodedUrl(request.url);
-  let urlHasPlaceholder = false;
-  const rewrittenUrl = decoded.replaceAll(
+  const url = new URL(request.url);
+  for (const [part, value] of [
+    ["query", url.search],
+    ["fragment", url.hash],
+    ["username", url.username],
+    ["password", url.password],
+    ["host", url.host],
+  ] as const) {
+    if (decodedUrl(value).match(SECRET_REFERENCE) !== null) {
+      throw new SecretSubstitutionError(
+        "secret_reference_outside_url_path",
+        `getSecret(...) placeholders in a request URL are only substituted in the path; found one in the ${part}`,
+      );
+    }
+  }
+  let pathHasPlaceholder = false;
+  const rewrittenPath = decodedUrl(url.pathname).replaceAll(
     SECRET_REFERENCE,
     (_match, path: string, field: string | undefined) => {
-      urlHasPlaceholder = true;
+      pathHasPlaceholder = true;
       return resolve(
         field === undefined
           ? { path: normalizeSecretPath(path) }
@@ -200,7 +224,9 @@ export function substituteSecretRequest(
       );
     },
   );
-  return urlHasPlaceholder ? new Request(rewrittenUrl, substituted) : substituted;
+  if (!pathHasPlaceholder) return substituted;
+  url.pathname = rewrittenPath;
+  return new Request(url.toString(), substituted);
 }
 
 /** Hex-encoded keyed HMAC-SHA256 over caller bytes — the webhook-signature
@@ -285,13 +311,18 @@ type SecretErrorCode =
   | "secret_not_found"
   | "secret_reference_field_not_found"
   | "secret_reference_foreign"
+  | "secret_reference_outside_url_path"
   | "secret_reference_required";
 
 /** A substitution failure carrying a stable code so the egress path can answer
- * a 4xx instead of leaking an exception. */
+ * a 4xx instead of leaking an exception. `detail` (message-only) names the
+ * specifics — e.g. which URL part held a disallowed placeholder. */
 export class SecretSubstitutionError extends Error {
-  constructor(readonly code: SecretErrorCode) {
-    super(code);
+  constructor(
+    readonly code: SecretErrorCode,
+    detail?: string,
+  ) {
+    super(detail === undefined ? code : `${code}: ${detail}`);
     this.name = "SecretSubstitutionError";
   }
 }

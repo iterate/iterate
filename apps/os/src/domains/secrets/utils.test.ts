@@ -167,6 +167,32 @@ describe("substituteSecretRequest", () => {
     expect(substituted.url).toBe(request.url);
     expect(substituted.headers.get("authorization")).toBe("Bearer tok");
   });
+
+  test("a path placeholder substitutes while innocent query params stay byte-identical", () => {
+    const path = "/secrets/integrations/telegram/my-bot/bot-token";
+    const request = new Request(
+      `https://api.telegram.org/botgetSecret({ path: "${path}" })/getUpdates?offset=42&q=x%20y`,
+      { method: "POST" },
+    );
+    const substituted = substituteSecretRequest(request, () => "123456:AAH-abc");
+    expect(substituted.url).toBe(
+      "https://api.telegram.org/bot123456:AAH-abc/getUpdates?offset=42&q=x%20y",
+    );
+  });
+
+  // The URL ratchet: substitution covers the PATH only — exactly what
+  // Telegram's /bot<token>/ shape needs. A placeholder in the query must fail
+  // LOUDLY here; silently passing the literal placeholder through to the
+  // provider would leak the reference string and answer as a confusing
+  // provider-side 401.
+  test("a placeholder in the query string throws instead of passing through", () => {
+    const request = new Request(
+      'https://api.example.com/v1/lookup?token=getSecret({ path: "/secrets/example" })',
+    );
+    const substitute = () => substituteSecretRequest(request, () => "tok");
+    expect(substitute).toThrow(SecretSubstitutionError);
+    expect(substitute).toThrow(/secret_reference_outside_url_path.*query/);
+  });
 });
 
 describe("compute helpers", () => {

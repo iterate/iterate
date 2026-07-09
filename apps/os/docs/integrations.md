@@ -230,7 +230,8 @@ the redirect machinery:
   — the Bot API is flat, so exactly one method segment with one params object
   (`sendMessage`, `sendPhoto`, `getMe`, …). The Bot API authenticates in the
   **URL path** (`/bot<token>/<method>`), which is why secret substitution
-  reaches the request URL (ADR 0005's envelope rule): the request carries
+  reaches the request URL's path — and only its path — per ADR 0005: the
+  request carries
   `/botgetSecret({ path: ... })/<method>` through project egress and the
   Secret DO fills the token in.
 - **Inbound updates** land on the per-bot door path (Telegram payloads don't
@@ -266,7 +267,7 @@ the redirect machinery:
 - **Implicit/default connections.** `itx.integrations.slack.chat.postMessage`
   is an error that tells you to name a connection, not a guess.
 - **Webhook signature verification in project workers** — worker code cannot
-  hold the HMAC secret (substitution is egress-envelope-only); capability-URL
+  hold the HMAC secret (substitution is egress-headers/path-only); capability-URL
   tokens are the workaround. The userspace verification story returns with the
   jail lane (ADR 0005), not as a compute method on the public secret.
 - **A generic refresh framework.** Refresh is named strategies in the
