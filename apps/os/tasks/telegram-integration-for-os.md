@@ -1,5 +1,5 @@
 ---
-state: done
+state: in-progress
 priority: high
 size: large
 dependsOn: []
@@ -13,12 +13,17 @@ the existing Slack/GitHub/Google integration machinery.
 
 ## Status summary
 
-DONE — implemented, CI fully green, and verified end-to-end by Misha from his
-phone against preview-2 (BotFather token pasted in the dashboard, message sent
-to the bot, agent replied in the chat). All pieces landed: URL secret
-substitution, connect/status/disconnect flows, webhook door (plus the ingress
-lane fix), router + agent processors, itx dispatch + `connectTelegram` verb,
-system prompt via agent-defaults, dashboard card, four new test files.
+Part 1 (the integration) is DONE — implemented, CI fully green, and verified
+end-to-end by Misha from his phone against preview-2 (BotFather token pasted
+in the dashboard, message sent to the bot, agent replied in the chat). All
+pieces landed: URL secret substitution, connect/status/disconnect flows,
+webhook door (plus the ingress lane fix), router + agent processors, itx
+dispatch + `connectTelegram` verb, system prompt via agent-defaults,
+dashboard card, four new test files.
+
+Part 2 (threading — spec below, bundled into the same PR at Misha's request)
+is NOT started: `/new` session rotation, reply_to as an agent hint, and the
+`send-requested`/`message-sent` journaled-send pair.
 
 ## Objective
 
@@ -199,6 +204,110 @@ and outbound calls at a fake Bot API server (follow whatever pattern
 - Telegram group privacy mode: bots in groups only see commands/mentions by
   default. v1 targets direct messages; note in the UI copy or PR body.
 - Rate limits (~30 msg/s global, 1 msg/s per chat) — ignore for v1.
+
+## Part 2: threading — /new sessions, reply hints, journaled sends
+
+Designed with Misha on the PR, 2026-07-09. v1 routes every DM to one agent
+stream forever; this adds thread semantics from Telegram's actual primitives.
+
+### `/new` rotates the session — the ONLY routing rule
+
+- Session streams: `/agents/telegram/<connection>/chat-<chatId>/session-<unixSeconds>`,
+  named by the `/new` message's `date`. Order sessions by `(date, message_id)`
+  — `date` is unix seconds so ties are possible; `message_id` is strictly
+  increasing per chat and breaks them.
+- Every inbound update routes to the LATEST session — plain messages never
+  route anywhere else; replies do not route either (next section).
+- Pre-`/new` history is session zero: the bare `/chat-<chatId>` stream, so
+  existing chats behave exactly as v1 until the first `/new`.
+- `/new trailing text` starts the session AND transcribes the trailing text
+  as its first message.
+- `/new` is acknowledged by a FIXED processor-level message for now (not an
+  agent greeting) — e.g. "Started a fresh thread." sent via the journaled
+  send pair below (decided by Misha).
+- The router folds per-chat session starts from its own journal — same shape
+  as the Slack router's `routes` table.
+- Register the command via `setMyCommands` during `connectTelegram` so the
+  `/` menu advertises it (already-connected bots pick it up on reconnect —
+  acceptable).
+- Forum topics compose: sessions nest under `/topic-<threadId>` the same way.
+
+### reply_to is a HINT to the agent, not a routing rule
+
+Hard-routing replies to old sessions was considered and rejected:
+reply-to-quote and reply-to-continue are the same gesture, and a routing rule
+cannot disambiguate them — the failure mode is extending the wrong
+conversation, invisibly. Instead rely on intelligence:
+
+- The message routes to the latest session like everything else.
+- The transcription annotates it: "this replies to <sender>'s message
+  (<excerpt>) from thread `<sessionPath>`" — resolved from the provenance map
+  (below) for bot messages, falling back to "latest session started at or
+  before `reply_to_message.date`" for user messages (`reply_to_message`
+  embeds the replied-to message including its `date` — no lookup needed).
+- The telegram agent system prompt (agent-defaults.ts) encourages the agent
+  to read the referenced stream for context (`itx.streams.get(path)`),
+  cross-post its answer there, or simply answer in place — its judgement.
+
+### Journaled sends: `telegram/send-requested` → effect → `telegram/message-sent`
+
+Replace the agent's direct `sendMessage` tool call for chat replies with the
+platform's intent/effect idiom (docs/domain-objects-and-stream-processors.md;
+`-requested` suffix + `blockProcessorWhile`, same as llm-request-requested):
+
+- `telegram/send-requested` appended to the SESSION stream — carries the
+  plain Bot API `sendMessage` payload. The stream it lives on IS its thread
+  identity; bot messages never need timestamp inference.
+- `TelegramAgentProcessor` consumes it inside `blockProcessorWhile`: call the
+  Bot API, then append `telegram/message-sent` with `{ requestOffset,
+messageId }`. A request without a marker is an unmet obligation (crash →
+  checkpoint held → retried); a marked one is satisfied (replay-safe).
+- The effect ALSO appends a claim to the CONNECTION stream —
+  `{ messageId, chatId, sessionPath, request: { stream, offset } }` — the
+  router can only fold its own journal; this makes reply hints exact for bot
+  messages. Cross-posting facts to the folding stream mirrors connect-time.
+- `reply_to_message_id` on outbound sends is a deterministic rule (decided by
+  Misha): if the message being answered is still the latest inbound in the
+  chat at send time, do NOT set it (quote is noise); if newer messages have
+  arrived since, DO set it (quote disambiguates). Compare by `message_id`.
+- ACCEPTED CAVEAT: at-least-once at the Telegram boundary. A crash between
+  the API call and the marker append re-sends on retry (duplicate message in
+  the chat). Telegram's sendMessage has no idempotency key, so this cannot be
+  fixed in principle; the JOURNAL is exactly-once, the send is not. Do not
+  add pretend-dedupe.
+- Agent-facing surface: either the agent appends send-requested via
+  `itx.streams`, or a thin `reply({ text, ... })` capability mounted on
+  telegram agent scopes constructs it (chat_id filled from the path) —
+  whichever reads best in the system prompt. Raw
+  `itx.integrations.telegram["<conn>"].sendMessage` stays available for
+  arbitrary Bot API use.
+
+### Part 2 touch points
+
+- [ ] `utils.ts`: session-aware `telegramChatStreamPath` (+ session parse
+      helpers); v1 paths stay valid as session zero
+- [ ] Router (`telegram-processor-implementation.ts` + contract): fold
+      per-chat session starts from `/new` messages and `message_id →
+    sessionPath` from the connection-stream sent-claims; route everything
+      to the latest session
+- [ ] Agent processor (`telegram-agent-processor-implementation.ts` +
+      contract): consume `send-requested` (blockProcessorWhile: send → marker + connection-stream claim + deterministic reply_to_message_id);
+      reply-hint annotation in transcription; `/new` fixed acknowledgement +
+      trailing-text handling
+- [ ] `agent-defaults.ts`: telegram system prompt gains reply-hint guidance
+      (read / cross-post / answer in place) and the send-requested reply
+      surface
+- [ ] `connect-flows.ts`: `setMyCommands` (`/new` — "start a fresh thread")
+      during `connectTelegram`
+- [ ] Tests: session rotation ordering (same-second tie via message_id),
+      pre-/new compatibility, reply-hint resolution (bot message via claim,
+      user message via timestamp fallback, reply older than first session →
+      session zero), send obligation retry (crash before marker → re-send +
+      single marker), reply_to_message_id rule (latest → unset, stale →
+      set), `/new` fixed ack + trailing text
+- [ ] Manual test plan addendum: send `/new`, verify fixed ack + fresh
+      context; reply to an old bot message, verify the agent references the
+      old thread
 
 ## Implementation log
 
