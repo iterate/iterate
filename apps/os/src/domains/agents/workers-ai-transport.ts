@@ -72,7 +72,7 @@ export async function runWorkersAiAttempt(input: {
  * models reject unknown params with a whole-request failure, the same reason
  * the old processor gated its `reasoning` options.
  */
-export function openAiReasoningExtras(model: string): Record<string, unknown> {
+function openAiReasoningExtras(model: string): Record<string, unknown> {
   if (!/(^|\/)(gpt-5|o[1-9]|codex)/.test(model)) return {};
   return { reasoning_effort: "medium", stream_options: { include_usage: true } };
 }
