@@ -488,22 +488,23 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * appends the batch's events into THIS stream with provenance stamping,
    * structural loop protection, and source-derived idempotency keys. A source
    * stream cross-posts here by configuring
-   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "ingest"] } }`.
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
    */
-  ingest(batch: StreamPushEventBatch): Promise<void> {
-    // Only the platform's own delivery spine dials ingest: it arrives through
-    // a push expression evaluated against the project's trusted itx root. A
-    // session principal appending copies would bypass provenance stamping.
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void> {
+    // Only the platform's own delivery spine dials acceptCrossPost: it arrives
+    // through a push expression evaluated against the project's trusted itx
+    // root. A session principal appending copies would bypass provenance
+    // stamping.
     if (this.props.auth.principal !== "trusted-internal") {
-      throw new Error("ingest is dialed by stream push subscriptions, not sessions");
+      throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
-    return Promise.resolve(this.durableObjectStub.ingest(batch));
+    return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
   }
 
   /**
    * "When events matching this land HERE, post them onto stream `path`" — the
    * cross-post verb. Pure sugar over appending a `subscription-configured`
-   * push subscription targeting the destination's `ingest` sink; the appended
+   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
    * event (returned) is the real interface and shows in the log like any
    * other config. Same-`key` calls replace the previous cross-post; remove
    * with `removeCrossPost`. Copies carry the full provenance chain
@@ -540,7 +541,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: args.key ?? `cross-post:${destination}`,
-        delivery: { mode: "push", expression: ["streams", ["get", destination], "ingest"] },
+        delivery: {
+          mode: "push",
+          expression: ["streams", ["get", destination], "acceptCrossPost"],
+        },
         ...(Object.keys(selector).length === 0 ? {} : { selector }),
         ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
         ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),

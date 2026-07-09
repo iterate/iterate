@@ -300,7 +300,7 @@ export function createSubscriberDial(deps: {
      * One push delivery: evaluate the expression to a sink and invoke it with
      * the batch — `["processEventBatch"]` reaches the project root's own
      * dispatch point (which delegates to the project worker) and
-     * `["streams", ["get", path], "ingest"]` reaches a sibling stream —
+     * `["streams", ["get", path], "acceptCrossPost"]` reaches a sibling stream —
      * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
      * retry/park machine. The authority root is cached across deliveries and
@@ -370,7 +370,7 @@ export function createSubscriberDial(deps: {
  * so the invocation happens receiver-bound on the remote side. Reading the
  * method as a property and applying it locally worked in-process but DETACHED
  * the method from `this` across the real loopback RPC hop on deployed workerd
- * (thermo round 2, blocker 1: every ingest delivery failed with "Cannot read
+ * (thermo round 2, blocker 1: every cross-post delivery failed with "Cannot read
  * properties of undefined (reading 'auth')"). Config validation enforces the
  * tail shape at append time; this re-check protects hand-edited state.
  */

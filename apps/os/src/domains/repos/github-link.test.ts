@@ -237,7 +237,7 @@ describe("linkRepoToGithub", () => {
 
     // The cross-post push subscription on the connection stream: GitHub
     // webhooks about exactly this repository copy onto the repo's own stream
-    // via its `ingest` sink.
+    // via its `acceptCrossPost` sink.
     const subscription = network.streams
       .get(CONNECTION_STREAM)
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-configured");
@@ -249,7 +249,7 @@ describe("linkRepoToGithub", () => {
       },
       delivery: {
         mode: "push",
-        expression: ["streams", ["get", "/repos/project"], "ingest"],
+        expression: ["streams", ["get", "/repos/project"], "acceptCrossPost"],
       },
       deliver: "new",
     });

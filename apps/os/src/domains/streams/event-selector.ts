@@ -45,7 +45,7 @@ export type CompiledEventSelector = {
   matches(event: StreamEvent): boolean;
 };
 
-// Compiled-expression cache: selector conditions (and ingest transforms,
+// Compiled-expression cache: selector conditions (and cross-post transforms,
 // which share this compiler) re-evaluate on every matching append, and a
 // stream's expression set is small and stable, so compile-once is the
 // sensible steady state. Bounded so pathological churn of expressions cannot
@@ -57,7 +57,7 @@ const MAX_COMPILED_EXPRESSIONS = 200;
 /**
  * Parse a JSONata expression, throwing on invalid input. Used for selector
  * `condition`s (must evaluate to exactly `true` to match) and for
- * `Stream.ingest` transforms (construct the cross-posted event body) — one
+ * `Stream.acceptCrossPost` transforms (construct the cross-posted event body) — one
  * compiler, one cache, one language for everything expression-shaped that
  * evaluates against a committed event.
  */

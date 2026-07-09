@@ -44,7 +44,7 @@ test("github webhooks about a linked repository cross-post onto the repo stream"
       },
       delivery: {
         mode: "push",
-        expression: ["streams", ["get", repoPath], "ingest"],
+        expression: ["streams", ["get", repoPath], "acceptCrossPost"],
       },
       deliver: "new",
     },
