@@ -36,7 +36,7 @@ import {
 } from "./machine-capability.ts";
 
 /** Path the machine capability mounts at, on both the agent and project scopes. */
-export const MACHINE_CAPABILITY_PATH = ["usersMachine"];
+const MACHINE_CAPABILITY_PATH = ["usersMachine"];
 
 const RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 15_000;

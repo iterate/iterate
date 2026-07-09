@@ -9,7 +9,7 @@
  * agent in the project can reach your machine while the CLI runs — and
  * `/unshare` narrows it back to this session.
  */
-export type ChatSlashCommand = { kind: "share" } | { kind: "unshare" };
+type ChatSlashCommand = { kind: "share" } | { kind: "unshare" };
 
 export function parseChatSlashCommand(input: string): ChatSlashCommand | null {
   const trimmed = input.trim();

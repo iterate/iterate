@@ -41,14 +41,14 @@ export type MachineInvocation = {
 };
 
 /** Mirrors the shape of `itx.workspace`'s file-info entries (the fields that matter locally). */
-export type LocalFileInfo = {
+type LocalFileInfo = {
   path: string;
   name: string;
   type: "file" | "directory" | "symlink";
   size: number;
 };
 
-export type MachineCapability = {
+type MachineCapability = {
   exec(
     command: string,
     cwd?: string,
