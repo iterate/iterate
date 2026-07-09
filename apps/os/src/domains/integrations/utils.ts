@@ -53,6 +53,9 @@ export const GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/github/web
 export const TELEGRAM_CONNECTED_EVENT_TYPE = "events.iterate.com/telegram/connected";
 export const TELEGRAM_DISCONNECTED_EVENT_TYPE = "events.iterate.com/telegram/disconnected";
 export const TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/telegram/webhook-received";
+// The journaled-send pair (`telegram/send-requested` → `telegram/message-sent`)
+// is declared on the telegram processor contracts, not here: contract event
+// catalogs need literal keys, and no door-side code composes those strings.
 
 export function readRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -181,9 +184,15 @@ export function telegramChatStreamPath(input: {
   chatId: string;
   connection: string;
   messageThreadId?: string;
+  /** The `/new` session start, as unix seconds (the /new message's `date`).
+   * Omitted = session zero: the bare chat path, which is exactly the v1
+   * shape, so chats keep their history until their first `/new`. */
+  session?: string;
 }): string {
   const base = `/agents/telegram/${input.connection}/chat-${input.chatId}`;
-  return input.messageThreadId === undefined ? base : `${base}/topic-${input.messageThreadId}`;
+  const topical =
+    input.messageThreadId === undefined ? base : `${base}/topic-${input.messageThreadId}`;
+  return input.session === undefined ? topical : `${topical}/session-${input.session}`;
 }
 
 /**
@@ -207,6 +216,19 @@ export function telegramChatIdFromAgentPath(agentPath: string): string | null {
   if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
     const chatSegment = segments[4]!;
     if (chatSegment.startsWith("chat-")) return chatSegment.slice("chat-".length) || null;
+  }
+  return null;
+}
+
+/** Forum topic id of a routed Telegram agent path (the optional
+ * `topic-{threadId}` segment after the chat segment), or null. The journaled
+ * send effect passes it back as `message_thread_id` so replies land in the
+ * right topic. */
+export function telegramTopicIdFromAgentPath(agentPath: string): string | null {
+  const segments = agentPath.split("/");
+  if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "telegram") {
+    const topicSegment = segments[5]!;
+    if (topicSegment.startsWith("topic-")) return topicSegment.slice("topic-".length) || null;
   }
   return null;
 }

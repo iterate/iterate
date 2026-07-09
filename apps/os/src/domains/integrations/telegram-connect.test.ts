@@ -143,6 +143,7 @@ describe("connectTelegram", () => {
     expect(api.requests.map((request) => request.path)).toEqual([
       `/bot${BOT_TOKEN}/getMe`,
       `/bot${BOT_TOKEN}/setWebhook`,
+      `/bot${BOT_TOKEN}/setMyCommands`,
     ]);
     expect(api.requests[1]!.body).toEqual({
       secret_token: await telegramWebhookSecretToken({
@@ -150,6 +151,10 @@ describe("connectTelegram", () => {
         keyMaterial: SECRET_ENCRYPTION_KEY,
       }),
       url: `https://os.example.test/api/integrations/telegram/webhook/${BOT_ID}`,
+    });
+    // The /new session-rotation command is advertised in the chat's `/` menu.
+    expect(api.requests[2]!.body).toEqual({
+      commands: [{ command: "new", description: "Start a fresh thread" }],
     });
 
     // The token lands in the connection secret, egress pinned to the Bot API
@@ -396,6 +401,9 @@ async function startFakeTelegramApi() {
             username: "MishasHelperBot",
           },
         });
+      }
+      if (path.endsWith("/setMyCommands")) {
+        return respond(200, { ok: true, result: true });
       }
       if (path.endsWith("/setWebhook")) {
         return respond(200, { ok: true, result: true, description: "Webhook was set" });

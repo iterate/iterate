@@ -115,18 +115,20 @@ export class AgentDurableObject extends DurableObject<Env> {
 
   // Registered on every agent host; it only wakes on routed Telegram agent
   // streams (`/agents/telegram/**`) where the project processor configured its
-  // subscription. Telegram-facing side effects (the typing chat action) are
-  // best effort: a failure must not wedge the processor checkpoint.
+  // subscription. Two Telegram lanes with opposite failure policies: the
+  // typing chat action is best effort (a failure must never wedge the
+  // processor checkpoint), while the journaled send THROWS on failure so the
+  // send obligation holds the checkpoint and retries.
   readonly telegramAgentProcessor = this.#processorHost.add(
     (deps) =>
       new TelegramAgentProcessor({
         ...deps,
+        agentPath: this.#name.path,
         callTelegramApi: async (method, body) => {
-          // Only best-effort UX side effects ride this dep — the agent's
-          // actual REPLY goes through itx.integrations.telegram in its script,
-          // which fails loudly on its own. The agent path carries the named
-          // connection (/agents/telegram/{connection}/chat-{chatId}); without
-          // it there is no bot token, so skip rather than wedge the checkpoint.
+          // Only best-effort UX side effects (the typing chat action) ride
+          // this dep. The agent path carries the named connection
+          // (/agents/telegram/{connection}/chat-{chatId}); without it there
+          // is no bot token, so skip rather than wedge the checkpoint.
           const connection = telegramConnectionFromAgentPath(this.#name.path);
           if (connection === null) {
             console.error(
@@ -149,6 +151,26 @@ export class AgentDurableObject extends DurableObject<Env> {
               path: this.#name.path,
             });
           }
+        },
+        sendTelegramMessage: async (body) => {
+          // The journaled send (telegram/send-requested): deliberately NO
+          // catch — a failed delivery must reject the batch, hold the
+          // checkpoint, and be retried until the message-sent marker exists.
+          const connection = telegramConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            throw new Error(`agent path carries no Telegram connection: ${this.#name.path}`);
+          }
+          const result = await callProjectTelegramBotApi({
+            body,
+            connection,
+            method: "sendMessage",
+            projectId: this.#name.projectId,
+          });
+          const messageId = (result.result as { message_id?: unknown } | undefined)?.message_id;
+          if (typeof messageId !== "number") {
+            throw new Error("Telegram sendMessage returned no message_id");
+          }
+          return { messageId };
         },
       }),
   );

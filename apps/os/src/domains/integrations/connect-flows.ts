@@ -666,6 +666,16 @@ export async function connectTelegram(input: {
     botToken,
     method: "setWebhook",
   });
+  // Advertise /new in the chat's `/` command menu (the session-rotation verb
+  // the telegram router understands). Same strictness as setWebhook — a token
+  // that can set a webhook can set commands; already-connected bots pick the
+  // menu up on reconnect.
+  await callTelegramWithToken({
+    apiBaseUrl,
+    body: { commands: [{ command: "new", description: "Start a fresh thread" }] },
+    botToken,
+    method: "setMyCommands",
+  });
 
   await recordConnection({
     connection,

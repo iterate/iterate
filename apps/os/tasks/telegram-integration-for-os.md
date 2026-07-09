@@ -22,8 +22,11 @@ dispatch + `connectTelegram` verb, system prompt via agent-defaults,
 dashboard card, four new test files.
 
 Part 2 (threading — spec below, bundled into the same PR at Misha's request)
-is NOT started: `/new` session rotation, reply_to as an agent hint, and the
-`send-requested`/`message-sent` journaled-send pair.
+is implemented and unit-green: `/new` session rotation (+ setMyCommands +
+fixed ack + trailing text), reply_to as a router-resolved agent hint, and the
+`send-requested`/`message-sent` journaled-send pair with the deterministic
+reply_to_message_id rule. Remaining: the phone-side Part 2 manual test
+against the preview (steps 6–9 of the manual plan).
 
 ## Objective
 
@@ -195,6 +198,21 @@ and outbound calls at a fake Bot API server (follow whatever pattern
 5. Reply again in the same chat — same agent stream continues the
    conversation.
 
+Part 2 (threading) addendum:
+
+6. Send `/new` (it should appear in the `/` command menu). Expect the fixed
+   "Started a fresh thread." acknowledgement, no agent greeting, and fresh
+   context (ask something referencing the earlier conversation — the agent
+   should not know it).
+7. Send `/new plan something` — expect the fixed ack AND an agent answer to
+   the trailing text as the new thread's first message.
+8. Reply (swipe-to-reply) to one of the bot's messages from BEFORE the `/new`.
+   Expect the agent's answer to acknowledge/reference the old thread (its
+   input carries the old session's stream path).
+9. While the agent is working on one question, send another message, then
+   check the answer to the first: it should quote (reply to) the message it
+   answers; answers to the latest message should NOT quote.
+
 ## Risks / open questions
 
 - URL secret substitution is the one change outside the integrations domain —
@@ -284,30 +302,56 @@ messageId }`. A request without a marker is an unmet obligation (crash →
 
 ### Part 2 touch points
 
-- [ ] `utils.ts`: session-aware `telegramChatStreamPath` (+ session parse
-      helpers); v1 paths stay valid as session zero
-- [ ] Router (`telegram-processor-implementation.ts` + contract): fold
+- [x] `utils.ts`: session-aware `telegramChatStreamPath` (+ session parse
+      helpers); v1 paths stay valid as session zero — _optional `session`
+      param appends `/session-<unixSeconds>` after the chat/topic segments;
+      added `telegramTopicIdFromAgentPath` (the send effect passes
+      message_thread_id back); the existing connection/chat-id parsers already
+      tolerate the extra segment_
+- [x] Router (`telegram-processor-implementation.ts` + contract): fold
       per-chat session starts from `/new` messages and `message_id →
-    sessionPath` from the connection-stream sent-claims; route everything
-      to the latest session
-- [ ] Agent processor (`telegram-agent-processor-implementation.ts` +
-      contract): consume `send-requested` (blockProcessorWhile: send → marker + connection-stream claim + deterministic reply_to_message_id);
+  sessionPath` from the connection-stream sent-claims; route everything
+      to the latest session — _state = `sessionsByChat` (full history per
+      chat, ordered `(date, message_id)` with a backwards-roll guard — the
+      history serves the reply-date fallback) + `sentMessages`
+      (`chatId:messageId → sessionPath`); reply hints resolved AT THE ROUTER
+      (where the folded state lives) and attached to the forwarded payload as
+      `replyHint`; hints for the routing destination itself are suppressed as
+      noise, as is the forum-topic-starter pseudo-reply Telegram puts on every
+      topic message_
+- [x] Agent processor (`telegram-agent-processor-implementation.ts` +
+      contract): consume `send-requested` (blockProcessorWhile: send → marker + connection-stream claim + deterministic reply*to_message_id);
       reply-hint annotation in transcription; `/new` fixed acknowledgement +
-      trailing-text handling
-- [ ] `agent-defaults.ts`: telegram system prompt gains reply-hint guidance
+      trailing-text handling — \_new deps: `agentPath` (chat/topic/connection
+      derive from it) and `sendTelegramMessage` (THROWS on failure — the
+      obligation depends on it; typing stays best-effort on the swallowing
+      dep). Replay safety reads the journal for the request's marker (markers
+      land after their request, so folded state can never see them); the
+      reply_to rule compares `answeringMessageId` (latest inbound snapshotted
+      at llm-request-requested) against the current latest inbound. Bare
+      `/new` acks without waking the LLM; trailing text triggers, with the
+      ack's send request appended first so it lands before the answer*
+- [x] `agent-defaults.ts`: telegram system prompt gains reply-hint guidance
       (read / cross-post / answer in place) and the send-requested reply
-      surface
-- [ ] `connect-flows.ts`: `setMyCommands` (`/new` — "start a fresh thread")
-      during `connectTelegram`
-- [ ] Tests: session rotation ordering (same-second tie via message_id),
+      surface — _prompt takes `agentPath` and embeds the exact
+      `itx.streams.get("<path>").append({ type: ".../send-requested" ... })`
+      snippet; progress notes ride the same journaled send; scheduled scripts
+      keep the direct sendMessage (they outlive sessions)_
+- [x] `connect-flows.ts`: `setMyCommands` (`/new` — "Start a fresh thread")
+      during `connectTelegram` — _same strictness as setWebhook; reconnects
+      refresh the menu_
+- [x] Tests: session rotation ordering (same-second tie via message*id),
       pre-/new compatibility, reply-hint resolution (bot message via claim,
       user message via timestamp fallback, reply older than first session →
       session zero), send obligation retry (crash before marker → re-send +
       single marker), reply_to_message_id rule (latest → unset, stale →
-      set), `/new` fixed ack + trailing text
-- [ ] Manual test plan addendum: send `/new`, verify fixed ack + fresh
+      set), `/new` fixed ack + trailing text — \_all in
+      telegram-processors.test.ts (now 26 tests) + the marked-request replay
+      case (crash AFTER marker → no re-send); connect test asserts the
+      setMyCommands call*
+- [x] Manual test plan addendum: send `/new`, verify fixed ack + fresh
       context; reply to an old bot message, verify the agent references the
-      old thread
+      old thread — _appended to the manual test plan above_
 
 ## Implementation log
 
@@ -367,6 +411,38 @@ messageId }`. A request without a marker is an unmet obligation (crash →
   regenerated rather than hand-merged; `StreamEvent.path` from #1745 threaded
   into the test MemoryStream). Post-merge CI then flagged three unused
   telegram exports (knip) — un-exported.
+- 2026-07-09: Part 2 (threading) implemented per the agreed spec. Notable
+  choices within its latitude:
+  - Reply hints are resolved AT THE ROUTER and attached to the forwarded
+    payload (`replyHint: { sessionPath, resolvedBy }`): the provenance map and
+    session history are router folds, and the agent processor cannot read
+    another processor's state. Hints are suppressed when they would name the
+    routing destination itself (plain in-thread replies) and for Telegram's
+    forum-topic-starter pseudo-replies.
+  - The session STREAM is named by the /new message's `date` only
+    (`session-<unixSeconds>`); the `(date, message_id)` pair orders the FOLD
+    (same-second /new pairs keep one stream, the fold keeps the higher
+    message_id, and a duplicate/out-of-order delivery can't roll the live
+    session backwards).
+  - The `message-sent` event type serves both halves (session marker +
+    connection-stream claim) with one schema (`messageId` required, the rest
+    optional) — the spec's two payload shapes are projections of one fact.
+  - "The message being answered" for the reply_to rule is
+    `answeringMessageId`: the latest inbound snapshotted when
+    llm-request-requested folds. Comparing it to the current latest inbound at
+    send time is exactly "newer messages arrived since", and it's a pure fold
+    (no wall clock).
+  - Marked-request replay safety reads the JOURNAL for the marker
+    (`getEvents` after the request's offset): markers land after their
+    request, so folded state at the request's offset can never contain them.
+    Crash-before-marker re-sends (the accepted at-least-once caveat, spec'd);
+    crash-after-marker never does.
+  - The agent reply surface is a raw `itx.streams.get(<own path>).append`
+    snippet baked into the system prompt (the spec's "whichever reads best"
+    choice) — no new capability plumbing; cross-posting to another thread is
+    the same snippet with the other stream's path.
+  - The two new event-type constants live on the contracts, not utils.ts
+    (contract catalogs need literal keys; knip flagged the unused mirrors).
 - 2026-07-08 (night): CI "Preview / deploy + e2e" flaked once on the new
   births-agents test (timed out right after deploy; passes in ~7s when run
   against the live slot) — re-dispatched, green. Misha verified the round trip

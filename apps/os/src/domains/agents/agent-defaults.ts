@@ -75,31 +75,37 @@ export function slackAgentSystemPrompt(connection: string): string {
 
 /**
  * Agents under `/agents/telegram/**` are Telegram-chat agents: the telegram
- * webhook router forwards raw chat updates to their stream, the
- * `telegram-agent` processor transcribes them, and replies go out through the
- * named Telegram connection's itx.integrations.telegram[connection] Bot API
- * capability instead of web chat. The connection and chat id come from the
- * agent's path (`/agents/telegram/{connection}/chat-{chatId}`).
+ * webhook router forwards raw chat updates to their stream (one stream per
+ * chat SESSION — `/new` rotates to a fresh one), the `telegram-agent`
+ * processor transcribes them, and replies go out through the journaled send
+ * pair (`telegram/send-requested` appended to the session stream → the
+ * processor delivers it and marks `telegram/message-sent`) instead of web
+ * chat. The connection and chat id come from the agent's path
+ * (`/agents/telegram/{connection}/chat-{chatId}[/session-{unixSeconds}]`).
  */
 export function telegramAgentSystemPrompt(input: {
+  agentPath: string;
   chatId: string | null;
   connection: string;
 }): string {
-  const sendMessage = `itx.integrations.telegram[${JSON.stringify(input.connection)}].sendMessage`;
+  const telegramConnection = `itx.integrations.telegram[${JSON.stringify(input.connection)}]`;
   const chatIdNote = input.chatId === null ? "" : ` (this chat's id is ${input.chatId})`;
+  const sendRequest = (streamPath: string, text: string) =>
+    `itx.streams.get(${JSON.stringify(streamPath)}).append({ type: "events.iterate.com/telegram/send-requested", payload: { text: ${text} } })`;
   return [
     "You are an iterate AI agent running inside a Telegram chat.",
     "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Incoming Telegram webhook updates arrive as your inputs (message text, sender, chat).",
-    `To reply in the chat, use await ${sendMessage}({ chat_id, text }) with the chat_id from the incoming update payloads${chatIdNote}. Never use itx.chat.sendMessage for Telegram replies.`,
-    `Any Bot API method works the same way — itx.integrations.telegram[${JSON.stringify(input.connection)}].<method>(params) with ONE params object: sendPhoto, sendDocument, sendChatAction, editMessageText, answerCallbackQuery, … (https://core.telegram.org/bots/api).`,
+    `To reply in the chat, append a SEND REQUEST to your own stream — it is delivered reliably and recorded in this thread's journal: await ${sendRequest(input.agentPath, '"..."')}. The payload is a plain Bot API sendMessage body: chat_id${chatIdNote} is filled in for you, and any other sendMessage params (parse_mode, reply_to_message_id, ...) can ride along in the payload. Never use itx.chat.sendMessage for Telegram replies.`,
+    `THREADS: this stream is one conversation session — /new from the user rotates the chat to a fresh session stream. Some inputs carry a note that the user REPLIED to a message from a different thread (its stream path is in the note): you can read that thread for context (await itx.streams.get(path).getEvents({ limit: 50 })), answer INTO that thread by appending your send request to that stream instead of your own, or simply answer here — your judgement.`,
+    `For any other Bot API call (sendPhoto, sendDocument, editMessageText, answerCallbackQuery, …) use ${telegramConnection}.<method>(params) with ONE params object (https://core.telegram.org/bots/api) — these are immediate calls, not journaled sends, so pass chat_id yourself.`,
     'Messages are plain text by default. For formatting pass parse_mode: "HTML" with simple tags (<b>, <i>, <code>, <pre>, <a href>) — Telegram does NOT render markdown headings or tables, so prefer short plain-text replies.',
     "v1 limitation: photos/voice/stickers people send arrive only as bracketed placeholders like [photo] — you cannot view them yet; say so if asked about one.",
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
-    `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendMessage}({ chat_id, text: "Checking that now..." }), itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
+    `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendRequest(input.agentPath, '"Checking that now..."')}, itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
-    `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this chat, bake the chat_id into it and call ${sendMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
+    `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this chat, bake the chat_id into it and call ${telegramConnection}.sendMessage (scheduled scripts outlive sessions, so use the direct call there, not a session send request). itx.scheduler.list() / cancel(key) manage schedules.`,
     "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
   ].join("\n");
 }
@@ -164,6 +170,7 @@ function agentSystemPromptForPath(agentPath: string): string {
   const telegramConnection = telegramConnectionFromAgentPath(agentPath);
   if (telegramConnection !== null) {
     return telegramAgentSystemPrompt({
+      agentPath,
       chatId: telegramChatIdFromAgentPath(agentPath),
       connection: telegramConnection,
     });
