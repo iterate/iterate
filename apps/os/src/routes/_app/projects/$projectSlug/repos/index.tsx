@@ -23,7 +23,6 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import type { ProjectProcessorState } from "../../../../../domains/projects/project-processor-contract.ts";
 import { AddRepoFromGithub } from "~/components/add-repo-from-github.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -33,7 +32,7 @@ import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   path: z
@@ -82,10 +81,11 @@ function ProjectReposIndexContent() {
   });
   // The repos list is a slice of the project processor's reduced state; new
   // repos land here via the processor's state push, no invalidation needed.
-  const projectState = useItxState<ProjectProcessorState>(
-    (itx, setState) => itx.processor.onStateChange(setState),
+  const projectState = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced,
     [],
-  ).state;
+  ).value;
   const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
