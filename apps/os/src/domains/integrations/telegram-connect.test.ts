@@ -346,6 +346,26 @@ describe("connectTelegram", () => {
     expect(swapBatch).toMatchObject({
       types: [CONNECTION_UNCLAIMED_EVENT_TYPE, CONNECTION_CLAIMED_EVENT_TYPE],
     });
+    // And the ordering around the swap eliminates every broken window: the
+    // NEW connection is fully prepared (connected fact + arm) BEFORE routing
+    // flips, and the OLD project is dispossessed only AFTER — until the swap
+    // its token still works (clean handling continues), and after it the
+    // brief live-token tail just drains in-flight replies.
+    const batchIndex = (predicate: (batch: { name: string; types: string[] }) => boolean) =>
+      network.appendBatches.findIndex(predicate);
+    const newConnectedIndex = batchIndex(
+      (batch) =>
+        batch.name.includes("mishashelperbot") &&
+        batch.types.includes(TELEGRAM_CONNECTED_EVENT_TYPE),
+    );
+    const swapIndex = batchIndex((batch) => batch === swapBatch);
+    const oldDisconnectedIndex = batchIndex(
+      (batch) =>
+        batch.name.includes("their-bot") && batch.types.includes(TELEGRAM_DISCONNECTED_EVENT_TYPE),
+    );
+    expect(newConnectedIndex).toBeGreaterThanOrEqual(0);
+    expect(newConnectedIndex).toBeLessThan(swapIndex);
+    expect(swapIndex).toBeLessThan(oldDisconnectedIndex);
     expect(directory?.at(-1)).toMatchObject({
       payload: { connection: "mishashelperbot", externalId: BOT_ID, projectId: PROJECT_ID },
     });

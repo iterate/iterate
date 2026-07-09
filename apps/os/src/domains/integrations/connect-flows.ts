@@ -689,34 +689,6 @@ export async function connectTelegram(input: {
   if (foreignClaim !== null && input.steal !== true) {
     return { botUsername: bot.username ?? null, error: "telegram_bot_already_claimed", ok: false };
   }
-  if (foreignClaim !== null) {
-    // Dispossess the old project's STORAGE first: its stored token becomes
-    // unusable (egress emptied) and its dashboard shows disconnected. Its
-    // directory claim deliberately stays live here — recordConnection below
-    // swaps it for the new claim in ONE atomic directory append, so a bot
-    // with live traffic never has an unclaimed window (the door would
-    // ACK-and-drop, and Telegram never retries an ACK).
-    await recordDisconnection({
-      connection: foreignClaim.connection,
-      disconnectedEvent: {
-        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
-        payload: {
-          botId: bot.id,
-          botUsername: bot.username,
-          connection: foreignClaim.connection,
-          externalId: bot.id,
-          projectId: foreignClaim.projectId,
-          // Breadcrumb for the old project's journal; deliberately does NOT
-          // name the project that took the bot.
-          reason: "stolen-by-another-project",
-        },
-      },
-      projectId: foreignClaim.projectId,
-      secretPath: telegramBotTokenSecretPath(foreignClaim.connection),
-      slug: "telegram",
-    });
-  }
-
   // Same-project reconnects reuse the claiming connection's name; fresh
   // connects (steals included — the old name belonged to the old project)
   // derive it from the bot username (or the bot id when the username
@@ -732,6 +704,13 @@ export async function connectTelegram(input: {
   // and setWebhook simply routes to the just-recorded connection. The old
   // order (setWebhook first) had a real loss window on steal: claim-less
   // updates are ACK-200-dropped and Telegram never retries an ACK.
+  //
+  // Steal ordering inside this call is deliberate too: recordConnection
+  // prepares the NEW connection completely (secret, connected fact, router
+  // arm) and the atomic [unclaim old, claim new] directory swap comes LAST —
+  // so the instant routing flips, the new connection is fully ready, and
+  // until it flips the old project keeps a WORKING token (its dispossession
+  // happens after, below). No window routes to a bricked handler.
   await recordConnection({
     connection,
     projectId: input.projectId,
@@ -774,6 +753,35 @@ export async function connectTelegram(input: {
           }),
     },
   });
+
+  if (foreignClaim !== null) {
+    // Dispossess the old project AFTER the swap: brick its stored token
+    // (egress emptied) and append its disconnected fact. Its directory claim
+    // is already gone (the atomic swap above), so no unclaim here. The old
+    // project keeps a live token for the sub-second between swap and brick —
+    // accepted, and actually good: in-flight replies to pre-swap messages
+    // drain gracefully, and it receives nothing new. Its dashboard is
+    // momentarily stale (still "connected") until this fact lands — harmless.
+    await recordDisconnection({
+      connection: foreignClaim.connection,
+      disconnectedEvent: {
+        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        payload: {
+          botId: bot.id,
+          botUsername: bot.username,
+          connection: foreignClaim.connection,
+          externalId: bot.id,
+          projectId: foreignClaim.projectId,
+          // Breadcrumb for the old project's journal; deliberately does NOT
+          // name the project that took the bot.
+          reason: "stolen-by-another-project",
+        },
+      },
+      projectId: foreignClaim.projectId,
+      secretPath: telegramBotTokenSecretPath(foreignClaim.connection),
+      slug: "telegram",
+    });
+  }
 
   try {
     const secretToken = await telegramWebhookSecretToken({
