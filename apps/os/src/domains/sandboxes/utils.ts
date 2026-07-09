@@ -22,7 +22,8 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  *   anything since the last snapshot.
  * - `start()` boots the container now instead of lazily; `sleep()` snapshots
  *   and tears down now instead of waiting for `sleepAfter` (the SDK's
- *   `stop()` forwards to it); `destroy()` is permanent — the name is retired.
+ *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
+ *   `destroy()` is permanent — the name is retired.
  * - `__describe()` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
@@ -33,7 +34,10 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
-export type CloudflareSandbox = object;
+export type CloudflareSandbox = object & {
+  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void>;
+};
 
 /** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
  * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */

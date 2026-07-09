@@ -98,9 +98,5 @@ function ProjectRepoDetailContent() {
 
 function repoPathFromSplat(splat: string | undefined) {
   const suffix = splat?.replace(/^\/+/, "") ?? "";
-  // TEMPORARY HACK: the legacy project repo lives at path "/", whose suffix is
-  // empty — its URL ".../repos//" normalizes to the repos index, making it
-  // unviewable. "ROOT" stands in for it until the / repo becomes /repos/config.
-  if (suffix === "ROOT") return "/";
   return `/repos/${suffix}`;
 }

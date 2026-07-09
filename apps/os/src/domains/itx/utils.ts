@@ -198,6 +198,7 @@ const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
       "getConnection",
       "startOAuthFlow",
       "completeConnect",
+      "connectTelegram",
       "disconnect",
       "invokeCapability",
     ]),

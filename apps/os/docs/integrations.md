@@ -22,7 +22,8 @@ await itx.integrations.list(); // every connection, built-in and provided
 Two kinds of member, one address space — every dotted call is
 `{slug}.{connection}.{...method}`:
 
-- **Built-in slugs are dispatch branches** (`slack`, `google`) in the
+- **Built-in slugs are dispatch branches** (`slack`, `google`, `github`,
+  `telegram`) in the
   collection's `invokeCapability` — plain imperative branches whose code ships
   with the OS deployment. Not classes: their only callers are untyped dotted
   scripts, so a typed per-provider class ladder bought nothing (an earlier cut
@@ -210,6 +211,45 @@ The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
 
+## Telegram: the fourth builtin
+
+Telegram has no OAuth — the BotFather token IS the credential — so it gets a
+dedicated verb, `connectTelegram({ botToken })`, instead of a contortion of
+the redirect machinery:
+
+- **Connect**: `getMe` validates the pasted token and yields the bot's numeric
+  id (the stable identity — usernames can change); the id is checked against
+  the deployment-wide directory, `setWebhook` points the bot at
+  `/api/integrations/telegram/webhook/<botId>` with a secret token **derived**
+  as `hmac(SECRET_ENCRYPTION_KEY, "telegram-webhook:<botId>")` (nothing
+  stored, no deployment config — previews work untouched), and the shared
+  `recordConnection` does the rest: token in the connection secret (egress
+  pinned to `https://api.telegram.org`), `telegram/connected` on the journal,
+  router armed, bot id claimed. Connection named from the bot username.
+- **API calls**: `itx.integrations.telegram["<connection>"].<method>(params)`
+  — the Bot API is flat, so exactly one method segment with one params object
+  (`sendMessage`, `sendPhoto`, `getMe`, …). The Bot API authenticates in the
+  **URL path** (`/bot<token>/<method>`), which is why secret substitution
+  reaches the request URL's path — and only its path — per ADR 0005: the
+  request carries
+  `/botgetSecret({ path: ... })/<method>` through project egress and the
+  Secret DO fills the token in.
+- **Inbound updates** land on the per-bot door path (Telegram payloads don't
+  identify the bot), verify the echoed `X-Telegram-Bot-Api-Secret-Token`
+  against the derived value (timing-safe; the one 401), and route on the bot
+  id with idempotency key `telegram-webhook:<botId>:<update_id>` — Telegram
+  retries undelivered updates and `update_id` is the delivery identity.
+- **Routing** is stateless (no Slack-style route table): an update's
+  destination is a pure function of its chat —
+  `/agents/telegram/<connection>/chat-<chatId>` (`/topic-<threadId>` appended
+  for forum supergroup topics; ids verbatim, sign included). The
+  `telegram-agent` processor transcribes updates into agent input (v1: media
+  as bracketed placeholders like `[photo]`), ignores bot-authored updates, and
+  sends the `typing` chat action while the agent works; the agent replies via
+  `sendMessage` with the chat id from its own path/inputs.
+- **Disconnect**: best-effort `deleteWebhook` (through the substituting egress
+  path — no material read), then the shared `recordDisconnection`.
+
 ## Deliberately not built
 
 - **A provider-file registry.** An earlier cut of this work modeled built-ins
@@ -227,7 +267,7 @@ on the project host's own worker).
 - **Implicit/default connections.** `itx.integrations.slack.chat.postMessage`
   is an error that tells you to name a connection, not a guess.
 - **Webhook signature verification in project workers** — worker code cannot
-  hold the HMAC secret (substitution is egress-header-only); capability-URL
+  hold the HMAC secret (substitution is egress-headers/path-only); capability-URL
   tokens are the workaround. The userspace verification story returns with the
   jail lane (ADR 0005), not as a compute method on the public secret.
 - **A generic refresh framework.** Refresh is named strategies in the

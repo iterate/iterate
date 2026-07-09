@@ -40,7 +40,7 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 //      to a persisted itx expression) plus selector / deliver / onPoison;
 //      spine facts (subscription-parked/-resumed/-cursor-set) fold into the
 //      subscription records; cross-post rules deleted (a cross-post is a push
-//      subscription addressing the target stream's `ingest`); worker wake
+//      subscription addressing the target stream's `acceptCrossPost`); worker wake
 //      targets deleted (stateless workers consume via push).
 // - 11: one addressing grammar for every durable mode — wake targets are itx
 //      expressions too, naming the domain node's processor (`["agents",
@@ -99,7 +99,7 @@ export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
  * - `push`: the subscriber is a stateless effect named by the expression
  *   (`["processEventBatch"]` — the project root's own dispatch point the
  *   birth-certificate worker feed names, `["streams", ["get", path],
- *   "ingest"]`, …). The stream owns the AUTHORITATIVE cursor, dials the
+ *   "acceptCrossPost"]`, …). The stream owns the AUTHORITATIVE cursor, dials the
  *   expression fresh per batch, and advances only on a successful awaited
  *   call.
  * - `webhook`: push semantics over plain HTTP, one event per POST — the
@@ -172,7 +172,7 @@ const SubscriptionConfiguredPayload = z
      * (the frame carries the configured event). The platform never interprets
      * this bag — the generic spine filters and dials, nothing more; a NAMED
      * receiver documents and applies its own params (selectors filter, receivers
-     * transform). `Stream.ingest` reads `params.transform` here, for example.
+     * transform). `Stream.acceptCrossPost` reads `params.transform` here, for example.
      */
     params: z.record(z.string(), z.unknown()).optional(),
   })
@@ -446,7 +446,7 @@ export const CoreProcessorContract = defineProcessorContract({
             },
             delivery: {
               mode: "push",
-              expression: ["streams", ["get", "/repos/root"], "ingest"],
+              expression: ["streams", ["get", "/repos/root"], "acceptCrossPost"],
             },
             deliver: "new",
           },

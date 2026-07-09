@@ -1,7 +1,8 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { PROJECT_REPO_PATH } from "../repos/utils.ts";
+import { CONFIG_REPO_PATH } from "../repos/utils.ts";
+import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
@@ -13,7 +14,11 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { TelegramAgentProcessorContract } from "../integrations/telegram-agent-processor-contract.ts";
+import {
+  slackConnectionFromAgentPath,
+  telegramConnectionFromAgentPath,
+} from "../integrations/utils.ts";
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
@@ -89,16 +94,17 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // The root saga and the email router arm in parallel — each is one
-          // batched append, cutting the create round-trips (see
-          // tasks/os-cold-create-latency.md). The Slack webhook router is NOT
-          // armed here: connection streams (/integrations/slack/{connection})
-          // are born at connect time by recordSlackConnection. The onboarding
-          // agent is deliberately NOT born here: its policy comes from the
-          // project worker, so birth waits for the repo-created lane below —
-          // after the worker readiness probe — where the pump delivers the
-          // birth announcement to an already-built worker and policy lands
-          // immediately instead of opening a stock-defaults window.
+          // The root saga, the config repo, and the email router arm in
+          // parallel — each is one batched append, cutting the create
+          // round-trips (see tasks/os-cold-create-latency.md). The Slack
+          // webhook router is NOT armed here: connection streams
+          // (/integrations/slack/{connection}) are born at connect time by
+          // recordSlackConnection. The onboarding agent is deliberately NOT
+          // born here: its policy comes from the project worker, so birth
+          // waits for the repo-created lane below — after the worker
+          // readiness probe — where the pump delivers the birth announcement
+          // to an already-built worker and policy lands immediately instead
+          // of opening a stock-defaults window.
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -110,11 +116,44 @@ export class ProjectProcessor extends StreamProcessor<
                   processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
                 }),
+              ),
+            ),
+            // The config repo is an ordinary repo on its own stream. Its
+            // birth batch is: the repo processor subscription, the
+            // cross-post rule that copies EVERY config-repo event onto the
+            // project stream `/` (deliver: "all", so the full history —
+            // including the `repo/created` this saga's next lane waits for —
+            // arrives with provenance), and the create request itself.
+            timedStep("create-timing", timing, "config-repo-append", () =>
+              this.deps.itx.streams.get(CONFIG_REPO_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: CONFIG_REPO_PATH,
+                  }),
+                  idempotencyKey: `repo-processor-subscription:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
+                  processor: ["repos", ["get", CONFIG_REPO_PATH], "processor"],
+                  processorSlug: RepoProcessorContract.slug,
+                }),
+                {
+                  type: "events.iterate.com/stream/subscription-configured",
+                  idempotencyKey: `config-repo-cross-post:${this.deps.itx.projectId}`,
+                  payload: {
+                    // The key crossPostTo would pick for destination "/", so
+                    // `removeCrossPost({ path: "/" })` can manage this rule.
+                    subscriptionKey: "cross-post:/",
+                    delivery: {
+                      mode: "push",
+                      expression: ["streams", ["get", "/"], "acceptCrossPost"],
+                    },
+                    deliver: "all",
+                  },
+                },
                 {
                   type: "events.iterate.com/repo/create-requested",
-                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
+                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
                   payload: {
-                    path: PROJECT_REPO_PATH,
+                    path: CONFIG_REPO_PATH,
                     projectId: this.deps.itx.projectId,
                   },
                 },
@@ -191,9 +230,10 @@ export class ProjectProcessor extends StreamProcessor<
             // sees this same child-stream-created event through its stream
             // delivery and applies itx.agents.defaults (see
             // project-repo-template/worker.ts and agents/agent-defaults.ts).
-            // Slack-agent wiring requires the full thread shape — the
-            // connection segment is what replies authenticate with.
+            // Slack/Telegram-agent wiring requires the full routed-path shape
+            // — the connection segment is what replies authenticate with.
             const isSlack = slackConnectionFromAgentPath(childPath) !== null;
+            const isTelegram = telegramConnectionFromAgentPath(childPath) !== null;
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding
               // subscriptions, so whichever lane runs second dedupes cleanly.
@@ -203,6 +243,7 @@ export class ProjectProcessor extends StreamProcessor<
                 githubPr: isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
+                telegram: isTelegram,
               }),
             );
             return;
@@ -219,9 +260,12 @@ export class ProjectProcessor extends StreamProcessor<
         return;
       }
       case "events.iterate.com/repo/created": {
+        // Arrives as a cross-posted copy: the config repo commits its facts
+        // on its own stream, and the `cross-post:/` rule armed at create
+        // copies them here — this saga only ever reacts to events ON `/`.
         if (
           event.payload.projectId !== this.deps.itx.projectId ||
-          event.payload.path !== PROJECT_REPO_PATH ||
+          event.payload.path !== CONFIG_REPO_PATH ||
           state.created ||
           state.createRequest === null
         ) {
@@ -283,8 +327,8 @@ function onboardingAgentStartEvents(deps: { itx: Pick<ProjectRpcTarget, "project
 
 /**
  * The MECHANICS an agent stream is born with: the processor subscriptions
- * that give it an LLM loop, a capability host, and (for Slack/email threads)
- * its domain transcriber. Policy — prompt, model, mounts, boot context —
+ * that give it an LLM loop, a capability host, and (for Slack/Telegram/email
+ * threads) its domain transcriber. Policy — prompt, model, mounts, boot context —
  * comes from the project worker via itx.agents.defaults
  * (agents/agent-defaults.ts).
  */
@@ -294,6 +338,7 @@ function agentSubscriptionEvents(input: {
   githubPr?: boolean;
   projectId: string;
   slack?: boolean;
+  telegram?: boolean;
 }) {
   const durableObjectName = DurableObjectNameCodec.stringify({
     projectId: input.projectId,
@@ -317,6 +362,7 @@ function agentSubscriptionEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
     ...(input.githubPr ? [subscription(PrAgentProcessorContract.slug, "agent")] : []),
   ];
@@ -334,10 +380,7 @@ function recordStream<
   return {
     ...state,
     agents: path.startsWith("/agents/") ? addStreamListItem(state.agents, item) : state.agents,
-    repos:
-      path === PROJECT_REPO_PATH || path.startsWith("/repos/")
-        ? addStreamListItem(state.repos, item)
-        : state.repos,
+    repos: path.startsWith("/repos/") ? addStreamListItem(state.repos, item) : state.repos,
     secrets: path.startsWith("/secrets/") ? addStreamListItem(state.secrets, item) : state.secrets,
     streams: addStreamListItem(state.streams, item),
   };

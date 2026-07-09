@@ -170,7 +170,7 @@ describe("worker builds", () => {
         durableWorkerKey: `swr-${crypto.randomUUID().slice(0, 8)}`,
         path: "/",
         source: {
-          files: { include: ["swr/**"], repoPath: "/", type: "repo" },
+          files: { include: ["swr/**"], repoPath: "/repos/config", type: "repo" },
           options: { entryPoint: "swr/probe.ts" },
         },
         type: "stateful",
