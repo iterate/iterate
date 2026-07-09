@@ -269,7 +269,8 @@ export function createProcessorHostHarness<
     }) as unknown as Stream;
     host = createStreamProcessorHost(fakeDurableObjectState(store), {
       stream: fencedStream,
-      version: typeof options.version === "function" ? options.version() : options.version,
+      version:
+        (typeof options.version === "function" ? options.version() : options.version) ?? "v-test",
       now: () => clock.now,
       catchUpPageSize: options.catchUpPageSize,
     });

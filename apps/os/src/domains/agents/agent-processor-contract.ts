@@ -20,12 +20,18 @@ export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
 
 /**
  * The agent's own outer deadline on a `requested` request, enforced by its
- * per-batch reconciliation. Providers normally settle their own orphans; this
- * backstop only fires when the provider layer is entirely absent (the
- * cloudflare-ai-without-recovery class of bug), so it sits deliberately past
- * the provider deadline + expiry.
+ * per-batch reconciliation. Providers normally settle their own orphans well
+ * before this; the backstop only fires when the provider layer is entirely
+ * absent (the cloudflare-ai-without-recovery class of bug). It sits past TWO
+ * provider deadlines so even an attempt queued behind another full-length
+ * request finishes or fails first. If the pathological case still occurs (a
+ * deep execution queue), the outcomes CONVERGE rather than conflict: the
+ * backstop failure and any late provider completion carry idempotent keys,
+ * the reducer ignores completions for a request that is no longer current,
+ * and the late attempt's output is gated on request currency — the journal
+ * records both facts, the fold believes exactly one.
  */
-export const AGENT_LLM_REQUEST_BACKSTOP_MS = 15 * 60_000;
+export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 
 /**
  * Snippet-writing guidance shared by every codemode prompt (web-chat default,

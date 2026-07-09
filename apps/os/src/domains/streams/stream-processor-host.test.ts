@@ -6,7 +6,7 @@
 // wiring — storage keys, alarm plumbing, fenced streams, catch-up rethrow —
 // against the same code the Durable Objects run.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "./processor-contracts.ts";
 import { StreamProcessor, type StreamProcessorConstructorArgs } from "./stream-processor.ts";
@@ -177,6 +177,44 @@ describe("lost-alarm self-healing", () => {
     // is gone rather than re-armed in the past.
     expect(h.host.getAlarmSlice("scheduler")).toBeNull();
     expect(h.store.alarm.at).toBeNull();
+  });
+});
+
+describe("filtered wake-lane delivery", () => {
+  it("a consumes-filtered batch left behind the head gets a trailing unfiltered catch-up", async () => {
+    // Production's wake lane filters delivered events through the contract's
+    // consumes list but stamps batches with the RAW head. A non-consumed tail
+    // event (a presence fact, another processor's chunk) therefore leaves the
+    // checkpoint legitimately behind streamMaxOffset with no further delivery
+    // coming — and the reconcilers' at-head gate defers on such folds. The
+    // host must converge it: a trailing unfiltered catch-up after the behind
+    // batch. Without it, this is the review-round-2 forever-wedge.
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
+    });
+    const [ping] = await h.stream.append({ type: PING, payload: {} });
+    await h.stream.append({ type: "events.iterate.com/other/presence-fact", payload: {} });
+
+    const wake = await h.host.wakeStreamSubscriber({
+      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 2 },
+      subscriptionKey: "wake:recorder-a",
+      processorSlug: "recorder-a",
+    });
+    // The spine's filtered delivery: only the consumed event, raw head as max.
+    await wake.sink({
+      projectId: "prj_test",
+      path: h.stream.path,
+      events: [ping!],
+      streamMaxOffset: 2,
+    } as Parameters<typeof wake.sink>[0]);
+
+    // The trailing catch-up pulls the non-consumed tail; the checkpoint
+    // reaches the true head, so the deferred reconciliation ran at-head.
+    await vi.waitFor(async () => {
+      expect((await h.processors.a.snapshot()).offset).toBe(2);
+    });
+    const lastBatch = h.processors.a.batches.at(-1)!;
+    expect(lastBatch).toContain("events.iterate.com/other/presence-fact");
   });
 });
 

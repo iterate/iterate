@@ -165,8 +165,11 @@ export function createStreamProcessorHost(
   options: {
     stream: Stream;
     /** Worker deploy version; a change resets the keepalive's crash-loop
-     * budget (the antidote deploy). Pass `workerVersion(env)`. */
-    version?: string;
+     * budget (the antidote deploy). Pass `workerVersion(env)`. REQUIRED: a
+     * host that silently defaulted this could never take the version-reset
+     * lane, so a deterministic crash loop would wait out the full plateau
+     * even after the fixing deploy shipped. */
+    version: string;
     /** Injected clock for the node test harness; production uses Date.now. */
     now?: () => number;
     /** Catch-up read page size; tests shrink it to exercise paging. */
@@ -253,6 +256,10 @@ export function createStreamProcessorHost(
       // consume it. Failures throw: the keepalive's breaker owns retries.
       await options.stream.append({
         type: PROCESSOR_HOST_REVIVED_EVENT_TYPE,
+        // Keyed per attempt: a platform retry of a throwing alarm handler
+        // re-runs the pass without journaling a duplicate fact; distinct
+        // attempts (distinct mark timestamps) still narrate individually.
+        idempotencyKey: `processor-host-revived@${record.version}:${record.revivals}:${record.lastRevivalAt}`,
         payload: {
           revivals: record.revivals,
           version: record.version,
@@ -268,7 +275,7 @@ export function createStreamProcessorHost(
         console.error("stream processor host evidence append failed", error);
       });
     },
-    version: options.version ?? "unversioned",
+    version: options.version,
   });
   // A fresh incarnation restores the keepalive's persisted desire — and
   // RE-ISSUES it. The desire surviving only in the slice map would leave a
@@ -426,6 +433,28 @@ export function createStreamProcessorHost(
         // gets this host redialed — the stream-side retry needs the stream
         // DO awake to notice the corpse.
         keepalive.track(attempt);
+        // Wake-lane batches are consumes-FILTERED but stamped with the RAW
+        // stream head, so a delivered batch can leave the checkpoint behind
+        // streamMaxOffset with nothing ever delivering the difference (a
+        // non-consumed tail event — a presence fact, another processor's
+        // chunk — produces no further push). The reconcilers' at-head gate
+        // rightly defers on such folds, so every behind batch gets a trailing
+        // UNFILTERED catch-up: it checkpoints through the non-consumed tail
+        // and its final page is at-head, guaranteeing the deferred
+        // reconciliation runs. Already-at-head batches pay one snapshot read.
+        keepalive.track(
+          attempt
+            .then(async () => {
+              const { offset } = await entry.processor.snapshot();
+              if (offset < batch.streamMaxOffset) {
+                await catchUpInternal(name, { rethrow: false });
+              }
+            })
+            .catch(() => {
+              // A failed ingest is the spine's problem (nack → backoff →
+              // redelivery); the trailing pull only follows success.
+            }),
+        );
         return attempt;
       };
 

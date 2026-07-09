@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AgentProcessorContract,
@@ -133,6 +134,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             payload: {
               code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
+              expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
             },
           });
         });

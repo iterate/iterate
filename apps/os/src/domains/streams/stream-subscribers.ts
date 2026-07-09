@@ -310,6 +310,11 @@ export class StreamSubscribers {
       const row = this.#hooks.store.get(subscriptionKey);
       if (row === undefined) continue; // unreachable after ensure; defensive
       if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
+      // "Caught up" trusts the monotonic watermark. A subscriber that
+      // discarded its checkpoint (schema-change refold) and lost its
+      // connection mid-replay parks here at a partial refold until the next
+      // append or dial moves the head — self-healing, but slow on a quiet
+      // stream; the subscriber's own keepalive covers the DO-death variant.
       if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
 
       if (config.delivery.mode === "wake") {

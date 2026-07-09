@@ -179,8 +179,12 @@ export class OpenAiWsProcessor extends StreamProcessor<
     // obligation whose outcome sits in the next page; starting from it would
     // re-drive a real, paid vendor call (append-level dedup keeps the journal
     // clean but cannot un-call an API), and settling from it would journal a
-    // false failure. The final catch-up page and every live push batch report
-    // themselves at head, so recovery always gets its reconciliation.
+    // false failure. The final catch-up page is at head by construction, and
+    // for wake-lane push batches — which are consumes-filtered but stamped
+    // with the RAW head, so they can legitimately sit behind a non-consumed
+    // tail — the host schedules a trailing unfiltered catch-up after every
+    // behind batch (stream-processor-host.ts), so a deferred reconciliation
+    // always runs.
     if (args.checkpointOffset < args.streamMaxOffset) return;
     const now = (this.deps.now ?? Date.now)();
     const settle: { llmRequestId: number; message: string }[] = [];

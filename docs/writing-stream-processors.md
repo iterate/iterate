@@ -27,8 +27,10 @@ A processor is two halves plus a comparison:
   converge. Reconcile only an AT-HEAD fold (`checkpointOffset >=
 streamMaxOffset`): a mid-catch-up fold shows obligations whose outcomes sit
   in the next page, and acting on it re-drives real vendor calls. The final
-  catch-up page and every live batch qualify, so recovery always gets its
-  pass.
+  catch-up page qualifies by construction; wake-lane push batches are
+  consumes-filtered yet stamped with the raw head, so the host runs a
+  trailing unfiltered catch-up after any behind batch — recovery always gets
+  its pass.
 
 The reference implementations, in reading order:
 `OpenAiWsProcessor.processEventBatch` (the canonical obligation reconciler),
@@ -68,9 +70,13 @@ reconciler**:
 1. **Evidence**: a `…-requested` event opens the obligation; the fold tracks
    it (with everything needed to start an attempt from state alone — model,
    code, expiry). A `…-started` event marks that an attempt began, appended
-   durably **before** the work body runs. Terminal events
-   (`…-completed`, a cancellation) close the obligation and delete it from
-   the fold.
+   durably **before** the work body runs — and if that append FAILS, the body
+   must not run and no completion may be appended: the obligation stays
+   `requested`, the failure propagates (marking the keepalive window), and a
+   later reconciliation retries the whole attempt. Release the live-set entry
+   in a `finally` either way, or the reconciler skips the id for the rest of
+   the incarnation. Terminal events (`…-completed`, a cancellation) close the
+   obligation and delete it from the fold.
 2. **Attempt**: `runInBackground`, registered in an in-memory live-set
    _synchronously, before any await_, so the same pass never classifies its
    own attempt as undriven.
@@ -227,7 +233,9 @@ Scenarios every obligation-carrying processor should have (crib from
    expires);
 3. expired obligation → settled without the vendor ever being dialed;
 4. full-journal refold → completions dedupe, nothing re-executes;
-5. the crash-loop breaker engaging on your processor's poison shape.
+5. the crash-loop breaker engaging on your processor's poison shape;
+6. a failed started-append → nothing runs, nothing settles, the live-set is
+   released, and a later batch retries the whole attempt.
 
 ## Checklist for a new processor
 
@@ -236,7 +244,9 @@ Scenarios every obligation-carrying processor should have (crib from
       attempt needs; terminal events delete the entry.
 - [ ] End-of-batch reconciler: start undriven fresh work, settle orphans and
       expired intent, idempotency keys shared with the normal path.
-- [ ] `expiresAt` stamped by the requester; reconciler honors it.
+- [ ] `expiresAt` stamped by the requester; reconciler honors it (and the
+      `createdAt + DEFAULT` fallback covers raw appends).
+- [ ] A failed started-append never settles and never leaks the live-set.
 - [ ] Injected `now` dep for anything clock-dependent.
 - [ ] Hosting DO wires `alarm()` (and alarm slices if it schedules).
 - [ ] Harness scenarios 1–5 above.

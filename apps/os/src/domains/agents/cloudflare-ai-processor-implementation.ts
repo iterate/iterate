@@ -8,6 +8,30 @@ import {
 import { DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
 
+/** Hard wall-clock cap per request — the openai-ws sibling's deadline, which
+ * this provider previously lacked: a hung AI binding call kept the attempt
+ * "live" forever, exactly the state where the agent's backstop would race a
+ * still-running attempt. */
+const CLOUDFLARE_AI_REQUEST_DEADLINE_MS = 10 * 60_000;
+
+async function withRequestDeadline<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `Workers AI request exceeded the ${CLOUDFLARE_AI_REQUEST_DEADLINE_MS / 1000}s deadline.`,
+        ),
+      );
+    }, CLOUDFLARE_AI_REQUEST_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class CloudflareAiProcessor extends StreamProcessor<
   CloudflareAiProcessorContract,
   {
@@ -139,10 +163,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
           role: message.role,
           content: flattenMessageToText(message),
         }));
-        const raw = await this.deps.ai.run(model, { messages, stream: true });
+        const raw = await withRequestDeadline(this.deps.ai.run(model, { messages, stream: true }));
         const completion =
           raw instanceof ReadableStream
-            ? await this.#consumeStream({ body: raw, llmRequestId })
+            ? await withRequestDeadline(this.#consumeStream({ body: raw, llmRequestId }))
             : {
                 text: extractAssistantText(raw),
                 rawResponse: jsonCompatible(raw),
