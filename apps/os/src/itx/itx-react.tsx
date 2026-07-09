@@ -424,38 +424,56 @@ export function useItxQuery<T>({
 function useItxEffect(
   setup: (itx: ItxHandle) => void | (() => void) | Promise<void | (() => void)>,
   deps: unknown[],
-  opts?: { itx?: ItxHandle },
+  opts?: { itx?: ItxHandle; address?: ItxAddress },
 ): void {
+  // `useItx()` must run unconditionally (rules of hooks), and the ambient context
+  // is already connected in practice, so this never suspends. A lazy `address`
+  // ignores it and dials inside the effect instead (see below).
   const fallback = useItx();
   const itx = opts?.itx ?? fallback; // an explicit { itx } override wins
+  const address = opts?.address;
   useEffect(() => {
     let disposed = false;
     let cleanup: void | (() => void);
-    const result = setup(itx);
-    if (result instanceof Promise) {
-      // Async: the cleanup lands later. If we unmounted in the meantime, run it
-      // immediately so nothing leaks (React's documented async-effect guard).
-      void result.then(
-        (c) => {
-          if (disposed) c?.();
-          else cleanup = c;
-        },
-        // A rejected async setup has no resource to clean up — surface it rather
-        // than leave an unhandled rejection. A setup that wants to RENDER the
-        // failure should try/catch and setState itself (see itx-activity-tail).
-        (error: unknown) => {
-          if (!disposed) console.error("useItxEffect: async setup failed", error);
-        },
-      );
+    const apply = (handle: ItxHandle) => {
+      if (disposed) return;
+      const result = setup(handle);
+      if (result instanceof Promise) {
+        // Async: the cleanup lands later. If we unmounted in the meantime, run it
+        // immediately so nothing leaks (React's documented async-effect guard).
+        void result.then(
+          (c) => {
+            if (disposed) c?.();
+            else cleanup = c;
+          },
+          // A rejected async setup has no resource to clean up — surface it rather
+          // than leave an unhandled rejection. A setup that wants to RENDER the
+          // failure should try/catch and setState itself (see itx-activity-tail).
+          (error: unknown) => {
+            if (!disposed) console.error("useItxEffect: async setup failed", error);
+          },
+        );
+      } else {
+        cleanup = result; // cleanup captured now, like a normal effect
+      }
+    };
+    if (address) {
+      // Lazy address (e.g. ⌘K reaching a project from the app shell): dial INSIDE
+      // the effect via connectItxBrowser so render never suspends — the documented
+      // ⌘K contract. Reconnect recovery rides useItxSubscription's watchdog, not an
+      // [itx] dep (there is no render-time handle to key on).
+      void connectItxBrowser(address).then(apply, (error: unknown) => {
+        if (!disposed) console.error("useItxEffect: dial failed", error);
+      });
     } else {
-      cleanup = result; // sync: cleanup captured now, like a normal effect
+      apply(itx); // synchronous, exactly like a plain effect
     }
     return () => {
       disposed = true;
       cleanup?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- [itx] + caller's deps; setup read fresh per run
-  }, [itx, ...deps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handle/address + caller's deps; setup read fresh per run
+  }, [address ? null : itx, address?.projectId, ...deps]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -594,7 +612,7 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
 export function useItxSubscription(
   subscribe: (itx: ItxHandle) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
-  opts?: { enabled?: boolean; itx?: ItxHandle },
+  opts?: { enabled?: boolean; itx?: ItxHandle; address?: ItxAddress },
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
   const enabled = opts?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
@@ -659,10 +677,10 @@ export function useItxSubscription(
       };
     },
     [enabled, epoch, ...deps],
-    // A `{ itx }` override subscribes through THAT connection (e.g. ⌘K opening a
-    // project's live index from outside its provider) — and keys the effect's
-    // reconnect on that socket, not the ambient one.
-    { itx: opts?.itx },
+    // Subscribe through a specific connection: `{ itx }` uses a handle you already
+    // hold; `{ address }` (e.g. ⌘K reaching a project from the app shell) dials
+    // lazily inside the effect so render never suspends.
+    { itx: opts?.itx, address: opts?.address },
   );
 
   return {
@@ -722,17 +740,20 @@ function createLiveStateStore<State>() {
  *
  * `value` is `undefined` between mount and the first snapshot (one round trip);
  * render a loading row for that window. `deps` re-point the hook at a different
- * node — a change drops the held state so a stale slice never shows. `opts.itx`
- * subscribes through a specific connection instead of the ambient one — pass
- * `useItx({ projectId })` to read a project's live state from OUTSIDE its provider
- * (the ⌘K palette does this: it mounts in the global context but wants a project's
- * streams index).
+ * node — a change drops the held state so a stale slice never shows.
+ *
+ * By default it subscribes through the ambient connection. To read a DIFFERENT
+ * project's live state from OUTSIDE its provider (the ⌘K palette mounts in the
+ * app shell but wants a project's streams index), pass `opts.address =
+ * { projectId }`: the hook dials that connection LAZILY inside its effect, so it
+ * never suspends the surrounding tree (the documented ⌘K contract). `opts.itx`
+ * is the eager sibling for when you already hold the handle.
  */
 export function useLiveState<State, Selected = State>(
   live: (itx: ItxHandle) => LiveStateRpc<State>,
   selector: (state: State) => Selected = (state) => state as unknown as Selected,
   deps: unknown[] = [],
-  opts?: { itx?: ItxHandle },
+  opts?: { itx?: ItxHandle; address?: ItxAddress },
 ): {
   value: Selected | undefined;
   status: ItxSubscriptionStatus;
@@ -750,7 +771,7 @@ export function useLiveState<State, Selected = State>(
   const subscription = useItxSubscription(
     (itx) => live(itx).subscribe((update) => store.apply(update, () => refreshRef.current())),
     deps,
-    { itx: opts?.itx },
+    { itx: opts?.itx, address: opts?.address },
   );
   refreshRef.current = subscription.refresh;
 

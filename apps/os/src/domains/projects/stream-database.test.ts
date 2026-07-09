@@ -30,7 +30,7 @@ describe("StreamDatabase", () => {
     db.touch("/a", "2026-01-01T00:00:00.000Z", "y", 5); // redelivery: same maxOffset, older at — no inflation, no regress
     expect(db.all()["/a"]).toMatchObject({
       lastActivityAt: "2026-01-02T00:00:00.000Z",
-      lastType: "y",
+      lastType: "x", // recency didn't advance → the latest activity's type stays "x", not the redelivery's "y"
       eventCount: 5,
     });
     db.touch("/a", "2026-01-03T00:00:00.000Z", "z", 8); // new events through offset 8

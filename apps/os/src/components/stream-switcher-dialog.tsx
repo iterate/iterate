@@ -13,7 +13,7 @@ import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
+import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
 // segments separated by single slashes, no trailing slash.
@@ -123,16 +123,15 @@ export function StreamSwitcherDialog({
   // node. That is the "⌘K, type, see" path; an empty query falls back to the
   // browsable tree.
   //
-  // `scope` is the project id. ⌘K opens from the global palette — OUTSIDE the
-  // project's `<ItxProvider>` — so we subscribe through the project's own
-  // connection (`useItx({ projectId })`) rather than the ambient global socket,
-  // which has no `liveState`. Re-point the subscription when the scope changes.
-  const projectItx = useItx({ projectId: scope });
+  // `scope` is the project id. ⌘K opens from the global palette — the app shell,
+  // OUTSIDE the project's `<ItxProvider>` — so we subscribe through the project's
+  // own connection via `address`, which dials LAZILY (never suspends the shell)
+  // rather than the ambient global socket, which has no `liveState`.
   const streamsIndex = useLiveState(
     (itx) => itx.liveState,
     (state) => state.streamsIndex,
     [scope],
-    { itx: projectItx },
+    { address: { projectId: scope } },
   );
   const query = destination.trim().replace(/^\/+/, "").toLowerCase();
   const rows = streamsIndex.value === undefined ? [] : Object.values(streamsIndex.value);

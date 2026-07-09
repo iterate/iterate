@@ -60,7 +60,13 @@ export class StreamDatabase {
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
          last_activity_at = max(excluded.last_activity_at, streams.last_activity_at),
-         last_type = excluded.last_type,
+         -- last_type describes the LATEST activity, so only adopt the incoming type
+         -- when this batch actually advances recency; a redelivery of older events
+         -- (recency unchanged) must not clobber it.
+         last_type = CASE
+           WHEN excluded.last_activity_at > streams.last_activity_at THEN excluded.last_type
+           ELSE streams.last_type
+         END,
          event_count = max(excluded.event_count, streams.event_count)`,
       path,
       at,
@@ -69,13 +75,14 @@ export class StreamDatabase {
       maxOffset,
     );
     const prev = this.#projection[path];
+    const advancesRecency = prev === undefined || at > prev.lastActivityAt;
     this.#projection = {
       ...this.#projection,
       [path]: {
         path,
         createdAt: prev?.createdAt ?? at,
-        lastActivityAt: prev && prev.lastActivityAt > at ? prev.lastActivityAt : at,
-        lastType: type,
+        lastActivityAt: advancesRecency ? at : prev.lastActivityAt,
+        lastType: advancesRecency ? type : prev.lastType,
         eventCount: Math.max(prev?.eventCount ?? 0, maxOffset),
       },
     };
