@@ -34,6 +34,13 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         model: z.string().min(1),
       }),
+      examples: [
+        {
+          description:
+            "The provider picks up a scheduled request; llmRequestId is the stream offset of the agent's llm-request-requested event.",
+          payload: { llmRequestId: 117, model: "@cf/moonshotai/kimi-k2.7-code" },
+        },
+      ],
     },
     "events.iterate.com/cloudflare-ai/llm-response-chunk": {
       description: "One streamed provider chunk received from the AI binding.",
@@ -42,6 +49,12 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         sequence: z.number().int().nonnegative(),
       }),
+      examples: [
+        {
+          description: "The first streamed Workers AI delta of a response.",
+          payload: { chunk: { response: "Hello" }, llmRequestId: 117, sequence: 0 },
+        },
+      ],
     },
     "events.iterate.com/cloudflare-ai/llm-request-completed": {
       description: "The Cloudflare AI processor finished an agent LLM request.",
@@ -61,6 +74,33 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
           }),
         ]),
       }),
+      examples: [
+        {
+          description: "The request finished successfully after a few seconds of streaming.",
+          payload: {
+            durationMs: 2843,
+            llmRequestId: 117,
+            result: {
+              status: "success",
+              usage: { completion_tokens: 96, prompt_tokens: 412, total_tokens: 508 },
+            },
+          },
+        },
+        {
+          description: "The request failed because the model was temporarily overloaded.",
+          payload: {
+            durationMs: 4519,
+            llmRequestId: 121,
+            result: {
+              error: {
+                message:
+                  "InferenceUpstreamError: 3040: Capacity temporarily exceeded for @cf/moonshotai/kimi-k2.7-code, please try again",
+              },
+              status: "failure",
+            },
+          },
+        },
+      ],
     },
   },
   processorDeps: [AgentProcessorContract],

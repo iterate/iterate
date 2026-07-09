@@ -42,6 +42,9 @@ const OpenAiResponsesStreamMessage = z.looseObject({
   response: z
     .looseObject({
       id: z.string().optional(),
+      // Explicitly null (not absent) on completed responses — .nullish(), or
+      // the terminal frame fails parsing and the consumer waits forever.
+      incomplete_details: z.looseObject({ reason: z.string().nullish() }).nullish(),
       usage: z.unknown().optional(),
     })
     .optional(),
@@ -450,6 +453,18 @@ export class OpenAiWsProcessor extends StreamProcessor<
           text,
           ...(usage === undefined ? {} : { usage }),
         };
+      }
+
+      if (parsed.data.type === "response.incomplete") {
+        // A terminal frame like response.completed, but the output was cut
+        // short (max_output_tokens, content filter). Keeping the partial text
+        // would hand the agent a prefix of a script — fail the request
+        // instead so it retries like any other provider failure.
+        this.#previousResponseId = null;
+        const reason = parsed.data.response?.incomplete_details?.reason;
+        throw new Error(
+          `OpenAI response ended incomplete${reason === undefined ? "" : ` (${reason})`}; discarding partial output.`,
+        );
       }
 
       if (parsed.data.type === "response.failed" || parsed.data.type === "error") {

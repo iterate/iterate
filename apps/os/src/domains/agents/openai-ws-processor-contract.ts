@@ -39,6 +39,13 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         model: z.string().min(1),
       }),
+      examples: [
+        {
+          description:
+            "The provider picks up a scheduled request; llmRequestId is the stream offset of the agent's llm-request-requested event.",
+          payload: { llmRequestId: 117, model: "gpt-5.5" },
+        },
+      ],
     },
     "events.iterate.com/openai-ws/llm-response-chunk": {
       description: "One raw frame received from the OpenAI Responses WebSocket.",
@@ -47,6 +54,16 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive(),
         sequence: z.number().int().nonnegative(),
       }),
+      examples: [
+        {
+          description: "The first output text delta frame of a response.",
+          payload: {
+            chunk: { type: "response.output_text.delta", delta: "Hello" },
+            llmRequestId: 117,
+            sequence: 0,
+          },
+        },
+      ],
     },
     "events.iterate.com/openai-ws/llm-request-completed": {
       description: "The OpenAI WebSocket processor finished an agent LLM request.",
@@ -66,6 +83,32 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
           }),
         ]),
       }),
+      examples: [
+        {
+          description: "The request finished successfully after a few seconds of streaming.",
+          payload: {
+            durationMs: 4127,
+            llmRequestId: 117,
+            result: {
+              status: "success",
+              usage: { input_tokens: 1204, output_tokens: 87, total_tokens: 1291 },
+            },
+          },
+        },
+        {
+          description: "The request failed after hitting the per-response deadline.",
+          payload: {
+            durationMs: 600004,
+            llmRequestId: 121,
+            result: {
+              error: {
+                message: "OpenAI request exceeded the 600s deadline; dropping the socket.",
+              },
+              status: "failure",
+            },
+          },
+        },
+      ],
     },
   },
   processorDeps: [AgentProcessorContract],
