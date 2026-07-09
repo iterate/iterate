@@ -227,8 +227,13 @@ function ChatHeader(props: { status: AgentConnectionStatus; notice: string; even
 }
 
 function FeedItem(props: { item: AgentUiItem }) {
-  if (props.item.kind === "activity") return <SettledActivity activity={props.item} />;
-  return <Message item={props.item} />;
+  const item = props.item;
+  if (item.kind === "activity") return <SettledActivity activity={item} />;
+  if (item.kind === "user" || item.kind === "assistant") return <Message item={item} />;
+  if (item.kind === "child-stream-created") {
+    return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
+  }
+  return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
 }
 
 function Message(props: { item: AgentUiMessageItem }) {
@@ -268,9 +273,7 @@ function LiveActivity(props: { activity: AgentUiActivity }) {
         : "";
   return (
     <box flexDirection="column">
-      <text fg={props.activity.status === "waiting" ? COLORS.textMuted : COLORS.warning}>
-        ✦ {props.activity.status === "waiting" ? "waiting" : "working…"}
-      </text>
+      <text fg={COLORS.warning}>✦ working…</text>
       {props.activity.steps.map((step) => (
         <text key={step.id} fg={COLORS.textMuted}>
           {"  "}· {formatStepLine(step)}
