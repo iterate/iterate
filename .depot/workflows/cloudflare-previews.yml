@@ -89,13 +89,12 @@ jobs:
     # while halving the per-second cost. Re-check with
     # `depot ci metrics --run <id>` before changing.
     runs-on: depot-ubuntu-24.04-8
-    # Hard backstop on ONE attempt. Everything inside is individually bounded
-    # (slot wait 10m, both e2e sub-lanes 360s watchdogs, per-test caps), so a
-    # healthy attempt is ~4m and a watchdogged one ~8m; this ceiling only
-    # exists so an unforeseen wedge (2026-07-09 saw 31m and ~90m attempts:
-    # unerasable-slot loops, an unbounded playwright tail) can never stack
-    # with retries into an hour-long wall.
-    timeout-minutes: 15
+    # Hard backstop on ONE attempt: a preview run past 10 minutes IS a flake
+    # (healthy ~4m; slot wait 6m, both e2e sub-lanes 360s watchdogs and
+    # per-test caps all fail loudly before this fires). 2026-07-09 saw 31m
+    # and ~90m attempts (unerasable-slot loops, an unbounded playwright
+    # tail); nothing can stack past this anymore.
+    timeout-minutes: 10
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false
