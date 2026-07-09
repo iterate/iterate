@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamEventBatch } from "../streams/rpc-types.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -217,7 +217,16 @@ export interface ProjectWorkerSlack {
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  processEvent(input: { event: StreamEvent }): Promise<void>;
+  /**
+   * Checkpointed event delivery: every project-scoped stream pumps its
+   * committed events here (see ProjectWorkerDelivery). Batches arrive in
+   * per-stream order, at-least-once — each event carries the `path` of the
+   * stream it lives on, so `${event.path}@${event.offset}` identifies a
+   * delivery globally and is the idempotency-key idiom for reactions. The
+   * stream only advances its checkpoint when this resolves; throwing means
+   * the whole batch is redelivered later.
+   */
+  processEventBatch(batch: StreamEventBatch): Promise<void>;
   slack: ProjectWorkerSlack;
 }
 
