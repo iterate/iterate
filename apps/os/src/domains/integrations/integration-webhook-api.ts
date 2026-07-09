@@ -9,6 +9,7 @@
 
 import { fetchGithubWebhook } from "./github-webhook.ts";
 import { fetchSlackWebhook } from "./slack-webhook.ts";
+import { fetchTelegramWebhook } from "./telegram-webhook.ts";
 import type { AppConfig } from "~/config.ts";
 
 type IntegrationWebhookFetch = (input: {
@@ -16,7 +17,11 @@ type IntegrationWebhookFetch = (input: {
   request: Request;
 }) => Promise<Response | null>;
 
-const WEBHOOK_HANDLERS: IntegrationWebhookFetch[] = [fetchSlackWebhook, fetchGithubWebhook];
+const WEBHOOK_HANDLERS: IntegrationWebhookFetch[] = [
+  fetchSlackWebhook,
+  fetchGithubWebhook,
+  fetchTelegramWebhook,
+];
 
 /** Serve one request if any integration claims it; null means "not a webhook". */
 export async function handleIntegrationWebhookApiRequest(input: {

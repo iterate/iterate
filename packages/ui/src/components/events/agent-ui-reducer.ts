@@ -74,8 +74,9 @@ export type AgentUiFileAttachment = {
 
 /** Marks a message that arrived through an external chat integration. */
 export type AgentUiMessageVia = {
-  service: "slack";
-  /** Best-effort sender label: slack user id for humans, bot name for bots. */
+  service: "slack" | "telegram";
+  /** Best-effort sender label: slack user id / telegram username for humans,
+   * bot name for bots. */
   sender?: string;
 };
 
@@ -198,6 +199,8 @@ const CODEMODE_SCRIPT_EXECUTION_REQUESTED =
 const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
   "events.iterate.com/codemode/script-execution-completed";
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
+const TELEGRAM_WEBHOOK_RECEIVED = "events.iterate.com/telegram/webhook-received";
+const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
@@ -469,6 +472,39 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         : emitUserMessageItem(state, ops, item);
     }
 
+    case TELEGRAM_WEBHOOK_RECEIVED: {
+      // Always a user bubble: Telegram never delivers the bot's own messages
+      // through the webhook (the outbound side renders from send-requested).
+      const message = readTelegramWebhookMessage(event);
+      if (message == null) return state;
+      return emitUserMessageItem(state, ops, {
+        kind: "user",
+        id: `telegram-${event.offset}`,
+        text: message.text,
+        timestampMs,
+        via: {
+          service: "telegram",
+          ...(message.sender == null ? {} : { sender: message.sender }),
+        },
+      });
+    }
+
+    case TELEGRAM_SEND_REQUESTED: {
+      // The journaled send IS the bot's outbound message (the telegram-agent
+      // processor is obliged to deliver it and Telegram won't echo it back),
+      // so it renders as the assistant bubble. Emitted directly: sends happen
+      // mid-turn, from inside a code step or the processor's /new ack.
+      const text = readString(event, "text");
+      if (text == null || text === "") return state;
+      return emitItem(state, ops, {
+        kind: "assistant",
+        id: `telegram-send-${event.offset}`,
+        text,
+        timestampMs,
+        via: { service: "telegram" },
+      });
+    }
+
     case STREAM_SUBSCRIBER_CONNECTED: {
       const payload = readPayloadRecord(event);
       if (payload == null) return state;
@@ -735,6 +771,57 @@ function readStringArray(value: unknown): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
+
+// Best-effort view of a Telegram Update webhook, mirroring the shape the
+// telegram-agent processor parses (apps/os
+// telegram-agent-processor-implementation.ts) without depending on it: the
+// reducer only needs enough to render a chat bubble. Edits and non-message
+// updates (membership changes, callback queries, ...) return null; media-only
+// messages render their caption plus bracketed placeholders, matching the
+// transcription the agent sees.
+function readTelegramWebhookMessage(event: Event): { text: string; sender?: string } | null {
+  const body = readRecord(event, "body");
+  const message = isRecord(body?.message)
+    ? body.message
+    : isRecord(body?.channel_post)
+      ? body.channel_post
+      : null;
+  if (message == null) return null;
+  const from = isRecord(message.from) ? message.from : null;
+  if (from?.is_bot === true) return null;
+  const caption = typeof message.caption === "string" ? message.caption : "";
+  const rawText = typeof message.text === "string" ? message.text : caption;
+  const placeholders = TELEGRAM_MEDIA_PLACEHOLDERS.filter(([key]) => message[key] != null)
+    .map(([, placeholder]) => placeholder)
+    .join(" ");
+  const text = [rawText, rawText === caption ? "" : "", placeholders]
+    .filter((part) => part !== "")
+    .join(" ")
+    .trim();
+  if (text === "") return null;
+  const username = typeof from?.username === "string" ? from.username : "";
+  const firstName = typeof from?.first_name === "string" ? from.first_name : "";
+  const sender = username || firstName;
+  return { text, ...(sender === "" ? {} : { sender }) };
+}
+
+/** Mirrors telegramMediaPlaceholders in apps/os
+ * telegram-agent-processor-implementation.ts (kept import-free — the ui
+ * package cannot depend on apps/os). */
+const TELEGRAM_MEDIA_PLACEHOLDERS: Array<[key: string, placeholder: string]> = [
+  ["photo", "[photo]"],
+  ["voice", "[voice message]"],
+  ["audio", "[audio]"],
+  ["video", "[video]"],
+  ["video_note", "[video note]"],
+  ["sticker", "[sticker]"],
+  ["document", "[document]"],
+  ["animation", "[animation]"],
+  ["location", "[location]"],
+  ["contact", "[contact]"],
+  ["poll", "[poll]"],
+  ["venue", "[venue]"],
+];
 
 // Best-effort view of a Slack Events API `event_callback` message webhook.
 // Mirrors the shape the slack-agent processor parses (see apps/os

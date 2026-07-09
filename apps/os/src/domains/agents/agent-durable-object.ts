@@ -11,7 +11,12 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
-import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
+import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
+import {
+  slackConnectionFromAgentPath,
+  telegramConnectionFromAgentPath,
+} from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
 import { mintProjectFileUrl } from "../files/project-files.ts";
@@ -125,6 +130,68 @@ export class AgentDurableObject extends DurableObject<Env> {
             projectId: this.#name.projectId,
             storageKey: input.storageKey,
           });
+        },
+      }),
+  );
+
+  // Registered on every agent host; it only wakes on routed Telegram agent
+  // streams (`/agents/telegram/**`) where the project processor configured its
+  // subscription. Two Telegram lanes with opposite failure policies: the
+  // typing chat action is best effort (a failure must never wedge the
+  // processor checkpoint), while the journaled send THROWS on failure so the
+  // send obligation holds the checkpoint and retries.
+  readonly telegramAgentProcessor = this.#processorHost.add(
+    (deps) =>
+      new TelegramAgentProcessor({
+        ...deps,
+        agentPath: this.#name.path,
+        callTelegramApi: async (method, body) => {
+          // Only best-effort UX side effects (the typing chat action) ride
+          // this dep. The agent path carries the named connection
+          // (/agents/telegram/{connection}/chat-{chatId}); without it there
+          // is no bot token, so skip rather than wedge the checkpoint.
+          const connection = telegramConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            console.error(
+              "[telegram-agent] agent path carries no connection; skipping Telegram call",
+              { method, path: this.#name.path },
+            );
+            return;
+          }
+          try {
+            await callProjectTelegramBotApi({
+              body,
+              connection,
+              method,
+              projectId: this.#name.projectId,
+            });
+          } catch (error) {
+            console.error("[telegram-agent] Telegram side effect failed", {
+              error,
+              method,
+              path: this.#name.path,
+            });
+          }
+        },
+        sendTelegramMessage: async (body) => {
+          // The journaled send (telegram/send-requested): deliberately NO
+          // catch — a failed delivery must reject the batch, hold the
+          // checkpoint, and be retried until the message-sent marker exists.
+          const connection = telegramConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            throw new Error(`agent path carries no Telegram connection: ${this.#name.path}`);
+          }
+          const result = await callProjectTelegramBotApi({
+            body,
+            connection,
+            method: "sendMessage",
+            projectId: this.#name.projectId,
+          });
+          const messageId = (result.result as { message_id?: unknown } | undefined)?.message_id;
+          if (typeof messageId !== "number") {
+            throw new Error("Telegram sendMessage returned no message_id");
+          }
+          return { messageId };
         },
       }),
   );
