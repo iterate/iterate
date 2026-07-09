@@ -170,6 +170,8 @@ describe("attempt bookkeeping under stream failures", () => {
     let dials = 0;
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       ai: {
         async run() {
           dials += 1;
@@ -213,6 +215,8 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       ai: {
         async run() {
           throw new Error("must not dial for expired intent");
@@ -252,6 +256,8 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     });
     const agent = new AgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       readState: () => ({ offset: 2, state: stuck }),
       now: () => now,
     });

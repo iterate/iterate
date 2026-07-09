@@ -29,6 +29,7 @@ type MaybePromise<T> = T | Promise<T>;
  */
 export type StreamProcessorContract = {
   slug: string;
+  version: string;
   stateSchema: z.ZodType;
   events: EventCatalog;
   processorDeps?: readonly unknown[];
@@ -39,13 +40,18 @@ export type StreamProcessorContract = {
 
 /**
  * Host-provided constructor dependencies shared by every processor:
- * the stream append capability, optional checkpoint storage
- * (`readState`/`writeState`), and an optional `keepAliveWhile` hook for hosts
- * whose runtime would otherwise shut down while async work is in flight (e.g.
- * a Durable Object).
+ * the stream append capability, the home stream's identity (`path` /
+ * `projectId`, stamped as provenance onto every emitted event), optional
+ * checkpoint storage (`readState`/`writeState`), and an optional
+ * `keepAliveWhile` hook for hosts whose runtime would otherwise shut down
+ * while async work is in flight (e.g. a Durable Object).
  */
 export type StreamProcessorBaseDeps<Contract> = {
   stream: Stream;
+  /** Path of the stream this processor runs on (the stream `stream` points at). */
+  path: string;
+  /** Owning project, or null on a global (deployment-root) stream. */
+  projectId: string | null;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
@@ -107,8 +113,16 @@ type SideEffectHelpers = {
 /** What `processEvent` receives: one reduction result plus batch context and helpers. */
 type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
   SideEffectHelpers & {
-    /** Append one or more events listed in `contract.emits`. */
+    /**
+     * Append one or more events listed in `contract.emits` to this stream,
+     * stamped with `source.processor` provenance pointing at THIS event as
+     * `whileProcessing`. The binding is a closure, so appends made later from
+     * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
+     * the event that was being processed.
+     */
     append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
+    /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
+    appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
     streamMaxOffset: number;
     /**
      * The offset this batch will checkpoint through once all blocking work
@@ -119,7 +133,13 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
 
 /** What `processEventBatch` receives: the whole delivered batch plus its reductions. */
 type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
-  /** Append one or more events listed in `contract.emits`. */
+  /**
+   * Append one or more events listed in `contract.emits`, stamped with
+   * `source.processor` but no `whileProcessing`: a batch-level append is
+   * derived from the whole fold, not one event, and the stamp says so by
+   * omission. Per-event attribution comes from the `processEvent` lane
+   * (`super.processEventBatch(args)` keeps it running).
+   */
   append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
   /** New events past the checkpoint, in stream order, consumed or not. */
   events: readonly StreamEvent[];
@@ -249,6 +269,10 @@ export abstract class StreamProcessor<
 > extends RpcTarget {
   abstract readonly contract: Contract;
   protected readonly stream: Stream;
+  /** Path of the home stream — the one `this.stream` points at. */
+  protected readonly path: string;
+  /** Owning project, or null on a global (deployment-root) stream. */
+  protected readonly projectId: string | null;
   protected readonly deps: Deps;
 
   #checkpointOffset = 0;
@@ -270,8 +294,10 @@ export abstract class StreamProcessor<
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
     super();
     // Base deps are destructured out; everything else is the subclass's Deps.
-    const { stream, keepAliveWhile, readState, writeState, ...deps } = args;
+    const { stream, path, projectId, keepAliveWhile, readState, writeState, ...deps } = args;
     this.stream = stream;
+    this.path = path;
+    this.projectId = projectId;
     this.deps = deps as Deps;
     this.#keepAliveWhile = keepAliveWhile;
     this.#readState = readState ?? (() => this.#memorySnapshot);
@@ -440,7 +466,7 @@ export abstract class StreamProcessor<
   protected async prepare(): Promise<void> {}
 
   /** Build and validate an append input for an event listed in `contract.emits`. */
-  protected buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
+  #buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
     if (!this.contract.emits.includes(event.type)) {
       throw new Error(
         `Processor "${this.contract.slug}" cannot build emitted event "${event.type}".`,
@@ -478,13 +504,19 @@ export abstract class StreamProcessor<
    */
   protected async processEventBatch(args: ProcessEventBatchArgs<Contract>): Promise<void> {
     for (const reducedEvent of args.reducedEvents) {
+      // Event-bound append lanes: everything appended through them (including
+      // later, from work scheduled here) is stamped as emitted while
+      // processing THIS event.
+      const whileProcessing = reducedEvent.event;
       this.processEvent({
         ...reducedEvent,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset: args.checkpointOffset,
         blockProcessorWhile: args.blockProcessorWhile,
         runInBackground: args.runInBackground,
-        append: args.append,
+        append: (...input) => this.#appendStamped({ target: this.stream, whileProcessing }, input),
+        appendTo: (path, ...input) =>
+          this.#appendStamped({ target: this.stream.at(path), whileProcessing }, input),
       });
     }
   }
@@ -582,7 +614,7 @@ export abstract class StreamProcessor<
         state,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset,
-        append: (...input) => this.#appendEmitted(...input),
+        append: (...input) => this.append(...input),
         blockProcessorWhile: (work) => {
           blockingWork.push(this.#runKeepAliveBackedWork(work));
         },
@@ -626,10 +658,15 @@ export abstract class StreamProcessor<
         `stream processor "${this.contract.slug}" skipped event at offset ` +
         `${event.offset} ("${event.type}"): it fails the contract's schema`;
       console.error(message, error);
+      // Raw `stream.append`, not the emitted lane: `stream/error-occurred` is
+      // core-owned and deliberately absent from subclass `emits` — this is the
+      // runtime speaking, not the processor author. It still carries the full
+      // provenance stamp (which processor skipped which event).
       this.runInBackground(() =>
         this.stream.append({
           type: "events.iterate.com/stream/error-occurred",
-          idempotencyKey: `processor-event-parse-failed:${this.contract.slug}:${event.offset}`,
+          idempotencyKey: this.idempotencyKey("event-parse-failed", event),
+          source: { processor: this.#processorStamp(event) },
           payload: {
             message,
             error: { name: error.name, message: error.message },
@@ -639,9 +676,67 @@ export abstract class StreamProcessor<
     }
   }
 
-  #appendEmitted(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
-    const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
-    return this.stream.append(...events);
+  /**
+   * Append events listed in `contract.emits` to this processor's own stream,
+   * stamped with `source.processor` provenance (no `whileProcessing`: this
+   * lane is for appends outside any batch — alarm handlers, DO methods — and
+   * for batch-level decisions derived from the whole fold). Inside
+   * `processEvent`, prefer the event-bound `args.append`.
+   */
+  protected append(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
+    return this.#appendStamped({ target: this.stream }, input);
+  }
+
+  /** Like {@link append}, onto a sibling stream (resolved via `stream.at(path)`). */
+  protected appendTo(path: string, ...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
+    return this.#appendStamped({ target: this.stream.at(path) }, input);
+  }
+
+  /**
+   * Processor-scoped idempotency key: `<slug>/<key>`, plus `@<path>:<offset>`
+   * when the append is a deterministic consequence of processing one event —
+   * a redelivered batch then dedupes instead of double-appending. The path
+   * makes fan-in safe: two same-slug processors on different streams
+   * forwarding into one target can never collide. Omit `whileProcessing` for
+   * state-derived appends and fold the deciding state into `key` instead
+   * (e.g. a generation counter).
+   */
+  protected idempotencyKey(
+    key: string,
+    whileProcessing?: Pick<StreamEvent, "offset" | "path">,
+  ): string {
+    const base = `${this.contract.slug}/${key}`;
+    if (whileProcessing === undefined) return base;
+    return `${base}@${whileProcessing.path}:${whileProcessing.offset}`;
+  }
+
+  /**
+   * The provenance stamp for one append lane. Always overwrites any
+   * caller-supplied `source.processor`: the stamp describes THIS append, and
+   * ancestry stays walkable through `whileProcessing` (and `crossPostedFrom`
+   * for cross-post copies, which preserve the original stamp).
+   */
+  #processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">) {
+    return {
+      slug: this.contract.slug,
+      version: this.contract.version,
+      stream: { path: this.path, projectId: this.projectId },
+      ...(whileProcessing === undefined
+        ? {}
+        : { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }),
+    };
+  }
+
+  #appendStamped(
+    args: { target: Stream; whileProcessing?: Pick<StreamEvent, "offset" | "type"> },
+    input: EmittedInput<Contract>[],
+  ): Promise<StreamEvent[]> {
+    const processor = this.#processorStamp(args.whileProcessing);
+    const events = input.map((event) => {
+      const built = this.#buildEmittedEvent(event) as StreamEventInput;
+      return { ...built, source: { ...built.source, processor } };
+    });
+    return args.target.append(...events);
   }
 
   // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered

@@ -413,9 +413,9 @@ return {
   },
   {
     id: "workspace-edit-and-push",
-    title: "Edit files in a workspace, then push its branch",
+    title: "Edit files in a workspace, then publish its branch",
     description:
-      'A workspace is a private checkout of the config repo in a durable virtual filesystem (no container, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other. The first call clones the project repo and every call waits for that clone. Changes stay private until pushed: git.push() publishes to the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) publishes the whole overlay as ONE snapshot commit on the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -423,11 +423,11 @@ return {
 // workspace is itx.workspace — for the example we address one by path.
 const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
 
-// Reads wait for the clone, so a successful read proves the checkout exists.
+// Reads fall through to the repo's latest main until shadowed by a write.
 // Paths are absolute; "/" is the repo root.
 const readme = await workspace.readFile("/README.md");
 
-// Write and edit freely — this is a working tree, not a commit-per-change.
+// Write and edit freely — the overlay is a private working tree.
 await workspace.writeFile("/notes/workspace-example.md", "status: draft\\n");
 const edited = await workspace.edit({
   path: "/notes/workspace-example.md",
@@ -435,16 +435,17 @@ const edited = await workspace.edit({
   newString: "status: reviewed",
 });
 
-// Ordinary git publishes to the workspace's own branch (never main).
-await workspace.git.add({ filepath: "." });
-const commit = await workspace.git.commit({ message: "Workspace example note" });
-const pushed = await workspace.git.push();
+// What changed vs main, and one-call publish to the workspace's own branch
+// (a snapshot commit — no add/push dance, .gitignored files are skipped).
+const changes = await workspace.git.status();
+const published = await workspace.git.commit({ message: "Workspace example note" });
 
 return {
   readmePresent: readme !== null,
   edited,
-  commitOid: commit.oid,
-  pushedBranch: pushed.branch,
+  changes,
+  commitOid: published.commitOid,
+  publishedBranch: published.branch,
 };
 `.trim(),
   },

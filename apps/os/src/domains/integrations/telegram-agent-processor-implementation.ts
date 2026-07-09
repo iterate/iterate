@@ -109,6 +109,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
 
   protected override processEvent({
     append,
+    appendTo,
     blockProcessorWhile,
     event,
     state,
@@ -217,7 +218,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
           // claim replays into a single claim.
           const connection = telegramConnectionFromAgentPath(sessionPath);
           if (connection !== null) {
-            await this.stream.at(integrationConnectionStreamPath("telegram", connection)).append({
+            await appendTo(integrationConnectionStreamPath("telegram", connection), {
               type: "events.iterate.com/telegram/message-sent",
               idempotencyKey: `telegram:sent-claim:${sessionPath}:${event.offset}`,
               payload: {

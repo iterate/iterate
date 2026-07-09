@@ -2281,6 +2281,16 @@ describe("itx", () => {
       eventTypes: ["events.iterate.com/capability-host/capability-provided"],
       timeoutMs: 60_000,
     });
+    // Policy (worker) and mechanics (project processor) are appended by two
+    // INDEPENDENT reactors to the same child-stream-created announcement —
+    // policy arriving says nothing about the mechanics batch. Await the batch
+    // itself: it is one atomic append, so its capability-host member visible
+    // means all four are.
+    const mechanics = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/stream/subscription-configured"],
+      predicate: (event) => event.idempotencyKey?.endsWith("#capability-host") ?? false,
+      timeoutMs: 60_000,
+    });
 
     // Any append materializes the agent stream; the platform announces it on
     // the root stream, the project worker reacts with the defaults batch.
@@ -2293,6 +2303,7 @@ describe("itx", () => {
     expect(configEvent.payload?.systemPrompt).toContain("async (itx)");
     expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
     expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+    await mechanics;
 
     // Birth mechanics: project-worker (every project stream) + agent processor +
     // capability-host. One agent processor owns history, scheduling, and the
@@ -2481,6 +2492,8 @@ describe("itx", () => {
     const processor = new ProjectWorkerForwardingProbeProcessor({
       readState: () => storedSnapshot,
       stream: outputStream as never,
+      path: outputPath,
+      projectId: null,
       writeState: (snapshot) => {
         storedSnapshot = snapshot;
       },

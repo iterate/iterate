@@ -57,7 +57,7 @@ export class PrAgentProcessor extends StreamProcessor<PrAgentProcessorContract> 
         blockProcessorWhile(async () => {
           await append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `github-pr-agent:route-context:${routeKey}`,
+            idempotencyKey: this.idempotencyKey(`route-context:${routeKey}`),
             payload: {
               content: [
                 `You are the agent for pull request #${event.payload.number} of ${event.payload.owner}/${event.payload.repo}.`,
@@ -89,7 +89,7 @@ export class PrAgentProcessor extends StreamProcessor<PrAgentProcessorContract> 
         blockProcessorWhile(async () => {
           await append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `github-pr-agent:webhook-to-agent-input:${event.offset}`,
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: pullRequestWebhookAgentInput(event.payload, body, state),
               ...(triggers

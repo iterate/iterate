@@ -23,6 +23,7 @@ function makeProcessor(options: {
     stream: options.stream,
     itx: {} as Project,
     path: "/",
+    projectId: null,
     scriptExecutionEntrypoint: {
       run:
         options.run ??

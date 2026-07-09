@@ -20,7 +20,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("forwards a private-chat message to the chat's agent stream, verbatim", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -39,7 +44,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("routes forum-topic messages to a per-topic stream, negative group ids verbatim", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     const payload = humanMessageWebhookPayload({ chatId: -1004242, chatType: "supergroup" });
@@ -59,7 +69,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("drops chat-less updates (inline queries) without creating any stream", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -80,7 +95,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("ignores connected/disconnected lifecycle facts (status is a journal fold, not router state)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -102,7 +122,12 @@ describe("TelegramProcessor (webhook router)", () => {
     const network = new MemoryStreamNetwork();
     // A mis-armed subscription: telegram router woken on a non-connection path.
     const stream = network.get("/integrations/telegram");
-    const processor = new TelegramProcessor({ stream, connection: null });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: null,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -128,7 +153,12 @@ describe("TelegramProcessor (webhook router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const [webhook] = await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
@@ -156,7 +186,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("/new rotates the chat to a fresh session stream; /new itself routes into it", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
     const sessionZero = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
 
@@ -190,7 +225,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("orders same-second /new pairs by message_id and never rolls the session backwards", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -230,7 +270,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("group-chat /new@BotName and trailing text both rotate the session", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -250,7 +295,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("annotates replies to bot messages with the EXACT thread from the sent claim", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
     const oldSession = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`;
 
@@ -300,7 +350,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("falls back to the reply date for user messages: containing session, or session zero when older than the first /new", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
     const chatPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
 
@@ -968,6 +1023,8 @@ function setup(input: { agentPath?: string; now?: () => number } = {}) {
   };
   const processor = new TelegramAgentProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     agentPath,
     // MemoryStream stamps events at ~epoch (ms 1, 2, 3…); a clock just past
     // that keeps the ack freshness gate (#1807) open by default. Stale-gate

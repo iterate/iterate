@@ -205,6 +205,8 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
@@ -247,7 +249,12 @@ describe("SlackProcessor (webhook router)", () => {
     // produce a window where a message is dropped.
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream, connection: CONNECTION });
+    const processor = new SlackProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -266,7 +273,12 @@ describe("SlackProcessor (webhook router)", () => {
   it("forwards follow-up webhooks through the reduced routing table", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream, connection: CONNECTION });
+    const processor = new SlackProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -298,7 +310,12 @@ describe("SlackProcessor (webhook router)", () => {
   it("drops item-keyed events (reactions) whose thread has no route", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream, connection: CONNECTION });
+    const processor = new SlackProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -328,7 +345,12 @@ describe("SlackProcessor (webhook router)", () => {
   it("ignores connected/disconnected lifecycle facts (status is a journal fold, not router state)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream, connection: CONNECTION });
+    const processor = new SlackProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append(connectedEvent(), {
@@ -346,7 +368,12 @@ describe("SlackProcessor (webhook router)", () => {
     const network = new MemoryStreamNetwork();
     // A mis-armed subscription: slack router woken on a non-connection path.
     const stream = network.get("/integrations/slack");
-    const processor = new SlackProcessor({ stream, connection: null });
+    const processor = new SlackProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: null,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -365,6 +392,8 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
@@ -399,6 +428,8 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
@@ -420,6 +451,8 @@ describe("SlackProcessor (webhook router)", () => {
     const refoldAcked: unknown[] = [];
     const refolded = new SlackProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         refoldAcked.push(payload);
@@ -445,6 +478,8 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
@@ -486,7 +521,12 @@ describe("SlackProcessor (webhook router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new SlackProcessor({ stream, connection: CONNECTION });
+    const processor = new SlackProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     // The connected fact folds first (the connection names new thread paths).
     const [connected] = await stream.append(connectedEvent());
     await processor.ingest({ events: [connected!], streamMaxOffset: 1 });
@@ -532,6 +572,8 @@ describe("SlackAgentProcessor", () => {
     const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
     const processor = new SlackAgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       callSlackApi: async (method, body) => {
         slackCalls.push({ body, method });
       },
@@ -904,6 +946,8 @@ describe("SlackAgentProcessor", () => {
     const refoldCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
     const refolded = new SlackAgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       callSlackApi: async (method, body) => {
         refoldCalls.push({ body, method });
       },
@@ -969,7 +1013,7 @@ describe("SlackAgentProcessor", () => {
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
-      idempotencyKey: "slack-agent:bang-command:2",
+      idempotencyKey: "slack-agent/bang-command@/agents/slack/nustom/c123/ts-111-222:2",
       payload: { executionId: "slack-bang-command-2" },
     });
     const code = (scripts[0]!.payload as { code: string }).code;
@@ -1006,6 +1050,8 @@ describe("SlackAgentProcessor", () => {
     };
     const processor = new SlackAgentProcessor({
       stream,
+      path: stream.path,
+      projectId: null,
       callSlackApi: async (method) => {
         calls.push(`slack:${method}`);
       },
@@ -1038,7 +1084,9 @@ describe("SlackAgentProcessor", () => {
       (event) => event.type === "events.iterate.com/agent/input-added",
     );
     expect(inputs).toHaveLength(1);
-    expect(inputs[0]).toMatchObject({ idempotencyKey: "slack-agent:webhook-to-agent-input:1" });
+    expect(inputs[0]).toMatchObject({
+      idempotencyKey: "slack-agent/webhook-to-agent-input@/agents/slack/nustom/c123/ts-111-222:1",
+    });
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
     expect(payload.content).toContain("type: block_actions");
     expect(payload.content).toContain("action_id: approve");

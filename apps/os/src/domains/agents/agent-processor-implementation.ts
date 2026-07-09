@@ -106,7 +106,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/system-prompt-updated",
-            idempotencyKey: `agent/system-prompt-updated@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("system-prompt-updated", event),
             payload: { systemPrompt },
           }),
         );
@@ -116,7 +116,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-web-message@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-web-message", event),
             payload: {
               content: event.payload.content,
               llmRequestPolicy: { behaviour: "after-current-request" },
@@ -131,7 +131,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-web-response@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-web-response", event),
             payload: {
               content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
               ...(files === undefined || files.length === 0 ? {} : { files }),
@@ -148,7 +148,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interrupted = previousState.currentRequest;
         if (interrupted === null) return;
-        blockProcessorWhile(() => append(cancelEventForCurrentRequest(interrupted)));
+        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interrupted)));
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
@@ -199,7 +199,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           if (code === null) return;
           await append({
             type: "events.iterate.com/capability-host/script-execution-requested",
-            idempotencyKey: `itx/script-execution-requested@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("script-execution-requested", event),
             payload: {
               code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
@@ -218,7 +218,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           if (content === null) return;
           await append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-script-result@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-script-result", event),
             payload: {
               content,
               llmRequestPolicy: { behaviour: "after-current-request" },
@@ -249,7 +249,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/render-llm-failure@${event.offset}`,
+            idempotencyKey: this.idempotencyKey("render-llm-failure", event),
             payload: {
               content:
                 `Your LLM request failed:\n\`\`\`\n${result.error.message}\n\`\`\`` +
@@ -347,7 +347,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         });
         await args.append({
           type: "events.iterate.com/agent/llm-request-cancelled",
-          idempotencyKey: `agent/llm-request-cancelled@requested:${llmRequestOffset}`,
+          idempotencyKey: this.idempotencyKey(
+            `llm-request-cancelled@requested:${llmRequestOffset}`,
+          ),
           payload: {
             phase: "requested",
             reason: "durable-object-crashed",
@@ -359,7 +361,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
         await args.append({
           type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `agent/llm-request-completed@${llmRequestOffset}`,
+          idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
           payload: {
             durationMs: 0,
             llmRequestOffset,
@@ -391,7 +393,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       ) {
         await args.append({
           type: "events.iterate.com/agent/loop-stopped",
-          idempotencyKey: `agent/autonomous-turn-limit:${state.pendingTriggerOffset}`,
+          idempotencyKey: this.idempotencyKey(
+            `autonomous-turn-limit:${state.pendingTriggerOffset}`,
+          ),
           payload: {
             maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
             reason: `Agent circuit breaker stopped after ${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS} consecutive autonomous turns.`,
@@ -402,7 +406,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       await args.append({
         type: "events.iterate.com/agent/llm-request-scheduled",
-        idempotencyKey: `agent/llm-request-scheduled@generation:${state.requestGeneration}`,
+        idempotencyKey: this.idempotencyKey(
+          `llm-request-scheduled@generation:${state.requestGeneration}`,
+        ),
         payload: {
           debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
           model: state.llmConfig.model,
@@ -425,7 +431,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       const llmRequestOffset = state.currentRequest.llmRequestOffset;
       await args.append({
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: `agent/backstop-completed@${llmRequestOffset}`,
+        idempotencyKey: this.idempotencyKey(`backstop-completed@${llmRequestOffset}`),
         payload: {
           durationMs: this.#now() - requestedAt,
           llmRequestOffset,
@@ -452,16 +458,47 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     );
   }
 
-  /** The one construction of llm-request-requested (debounce and recovery
-   * paths), so the expiry stamp and idempotency key can never drift apart. */
+  /** The one construction of llm-request-requested — the debounce timer and
+   * the restart-recovery lane both fire the request for one
+   * llm-request-scheduled event, and the SHARED key (per scheduled offset) is
+   * what collapses that race to a single append; building the whole event in
+   * one place also keeps the expiry stamp and key from drifting apart. */
   #buildLlmRequestRequested(input: { model: string; requestId: string; scheduledOffset: number }) {
     return {
       type: "events.iterate.com/agent/llm-request-requested" as const,
-      idempotencyKey: `agent/llm-request-requested@${input.scheduledOffset}`,
+      idempotencyKey: this.idempotencyKey(`llm-request-requested@${input.scheduledOffset}`),
       payload: {
         model: input.model,
         requestId: input.requestId,
         expiresAt: this.#now() + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
+      },
+    };
+  }
+
+  #cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
+    if (request.phase === "scheduled") {
+      return {
+        type: "events.iterate.com/agent/llm-request-cancelled" as const,
+        idempotencyKey: this.idempotencyKey(
+          `llm-request-cancelled@scheduled:${request.scheduledOffset}`,
+        ),
+        payload: {
+          phase: "scheduled" as const,
+          reason: "interrupted-by-user-input" as const,
+          requestId: request.requestId,
+        },
+      };
+    }
+
+    return {
+      type: "events.iterate.com/agent/llm-request-cancelled" as const,
+      idempotencyKey: this.idempotencyKey(
+        `llm-request-cancelled@requested:${request.llmRequestOffset}`,
+      ),
+      payload: {
+        phase: "requested" as const,
+        reason: "interrupted-by-user-input" as const,
+        llmRequestOffset: request.llmRequestOffset,
       },
     };
   }
@@ -479,9 +516,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // Started-evidence outside the try: if this append fails the model was
     // never dialed, so no completion may be appended — the obligation stays
     // `requested` and a later reconciliation retries the attempt.
-    await this.stream.append({
+    await this.append({
       type: "events.iterate.com/agent/llm-request-started",
-      idempotencyKey: `agent/llm-request-started@${llmRequestOffset}`,
+      idempotencyKey: this.idempotencyKey(`llm-request-started@${llmRequestOffset}`),
       payload: { llmRequestOffset, model },
     });
 
@@ -508,9 +545,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         })),
         model,
         onChunk: async (chunk, index) => {
-          await this.stream.append({
+          await this.append({
             type: "events.iterate.com/agent/llm-response-chunk",
-            idempotencyKey: `agent/llm-response-chunk@${llmRequestOffset}:${index}`,
+            idempotencyKey: this.idempotencyKey(`llm-response-chunk@${llmRequestOffset}:${index}`),
             payload: { chunk: jsonCompatible(chunk), llmRequestOffset, sequence: index },
           });
         },
@@ -522,7 +559,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // still open — the crash-cancel would then re-run an answered turn).
       const completedEvent = {
         type: "events.iterate.com/agent/llm-request-completed" as const,
-        idempotencyKey: `agent/llm-request-completed@${llmRequestOffset}`,
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
         payload: {
           durationMs: this.#now() - startedAt,
           llmRequestOffset,
@@ -534,21 +571,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         },
       };
       if (await this.#isRequestStillCurrent({ llmRequestOffset })) {
-        await this.stream.append(
+        await this.append(
           {
             type: "events.iterate.com/agent/output-added",
-            idempotencyKey: `agent/output-added@${llmRequestOffset}`,
+            idempotencyKey: this.idempotencyKey(`output-added@${llmRequestOffset}`),
             payload: { content: completion.text, llmRequestOffset },
           },
           completedEvent,
         );
       } else {
-        await this.stream.append(completedEvent);
+        await this.append(completedEvent);
       }
     } catch (error) {
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: `agent/llm-request-completed@${llmRequestOffset}`,
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
         payload: {
           durationMs: this.#now() - startedAt,
           llmRequestOffset,
@@ -797,30 +834,6 @@ function agentInputTriggerSource(
     : "user";
 }
 
-function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
-  if (request.phase === "scheduled") {
-    return {
-      type: "events.iterate.com/agent/llm-request-cancelled" as const,
-      idempotencyKey: `agent/llm-request-cancelled@scheduled:${request.scheduledOffset}`,
-      payload: {
-        phase: "scheduled" as const,
-        reason: "interrupted-by-user-input" as const,
-        requestId: request.requestId,
-      },
-    };
-  }
-
-  return {
-    type: "events.iterate.com/agent/llm-request-cancelled" as const,
-    idempotencyKey: `agent/llm-request-cancelled@requested:${request.llmRequestOffset}`,
-    payload: {
-      phase: "requested" as const,
-      reason: "interrupted-by-user-input" as const,
-      llmRequestOffset: request.llmRequestOffset,
-    },
-  };
-}
-
 // =============================================================================
 // Building the model-facing chat request.
 // =============================================================================
@@ -976,9 +989,9 @@ async function spillScriptResult(input: {
   text: string;
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
 }): Promise<string> {
-  // The agent's documented publish flow is `git.add({ filepath: "." })` —
-  // without this nested ignore every spill would ride along into workspace
-  // commits (isomorphic-git's add respects .gitignore).
+  // Workspace publishes commit every non-ignored local file — without this
+  // nested ignore every spill would ride along into workspace snapshot
+  // commits (the overlay publish honors .gitignore).
   await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
   const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
   await input.writeWorkspaceFile({ content: input.text, path });

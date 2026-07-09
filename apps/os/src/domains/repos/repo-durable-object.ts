@@ -63,6 +63,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
   readonly #repoProcessor = this.#host.add(
@@ -70,8 +72,6 @@ export class RepoDurableObject extends DurableObject<Env> {
       new RepoProcessor({
         ...deps,
         createRepoArtifact: (input) => this.createArtifactRepo(input),
-        path: this.#name.path,
-        projectId: this.#name.projectId,
       }),
   );
 
