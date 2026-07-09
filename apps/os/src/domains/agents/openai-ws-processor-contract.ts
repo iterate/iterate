@@ -112,6 +112,7 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "events.iterate.com/openai-ws/llm-request-completed",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/token-usage-reported",
   ],
 });
 

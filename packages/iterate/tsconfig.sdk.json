@@ -13,6 +13,9 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "outDir": "dist",
-    "types": []
+    "types": [],
+    // The runtime machinery (stream-processor.ts) imports capnweb, whose d.ts
+    // references node builtins this node-free config does not carry.
+    "skipLibCheck": true
   }
 }

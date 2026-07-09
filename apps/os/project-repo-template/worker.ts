@@ -1,5 +1,13 @@
 import { WebClient } from "@slack/web-api";
-import { IterateProjectWorker, type DynamicWorkerRef, type StreamEvent } from "./sdk.ts";
+import { StreamProcessor, defineProcessorContract, z } from "iterate/sdk";
+import {
+  IterateProjectWorker,
+  type Agent,
+  type Ai,
+  type DynamicWorkerRef,
+  type StreamEvent,
+  type StreamEventBatch,
+} from "./sdk.ts";
 import { waitroseClient } from "./integrations/waitrose/client.ts";
 
 /** Configuration for the `slack` getter below. Commit changes here to point
@@ -51,6 +59,187 @@ const APPS = {
   },
 } satisfies Record<string, DynamicWorkerRef>;
 
+// ---------------------------------------------------------------------------
+// Compaction: userspace history management for this project's agents.
+//
+// The platform reports normalized token usage after every LLM request
+// (agent/token-usage-reported) and folds agent/history-reset events into the
+// model-visible history wholesale. Everything between those two events is
+// project policy, and it lives HERE: once a turn's context passes half the
+// model's window, summarize the history with itx.ai and reset it to the
+// summary. Built on the same StreamProcessor the platform's own processors
+// run on (iterate/sdk). Delivery is at-least-once, so every append is
+// idempotency-keyed on the triggering report's offset — redelivery is a no-op.
+// ---------------------------------------------------------------------------
+
+/** Compact once a request's context passes this fraction of the model window. */
+const COMPACTION_TRIGGER_FRACTION = 0.5;
+
+/** Reports this far behind the stream head are backlog replay, not a live
+ * turn — compacting from them would describe history that has moved on. */
+const COMPACTION_MAX_TRIGGER_LAG_EVENTS = 200;
+
+const COMPACTION_MODEL = "@cf/moonshotai/kimi-k2.7-code";
+
+const COMPACTION_PROMPT =
+  "You compress an agent's conversation history. Produce a dense, factual summary " +
+  "preserving: the user's goals and open asks, decisions made, key script/tool results, " +
+  "and anything the agent promised to do. Write it so the agent can continue as if it " +
+  "remembered everything.";
+
+const CompactionProcessorContract = defineProcessorContract({
+  slug: "compaction",
+  version: "0.1.0",
+  description:
+    "Summarizes an agent's history into a history-reset once a turn's context passes half the model window.",
+  // Stateless on purpose: dedup lives in the idempotency keys, not in a fold.
+  stateSchema: z.object({}),
+  events: {
+    // The platform's agent contract owns the two agent/* schemas; they are
+    // declared here with the slice this processor reads/writes so the
+    // contract resolves them standalone.
+    "events.iterate.com/agent/token-usage-reported": {
+      payloadSchema: z.looseObject({
+        llmRequestId: z.number(),
+        model: z.string(),
+        maxContextTokens: z.number(),
+        inputTokens: z.number(),
+        outputTokens: z.number(),
+      }),
+    },
+    "events.iterate.com/agent/history-reset": {
+      payloadSchema: z.object({
+        systemPrompt: z.string(),
+        history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })),
+        reason: z.string().optional(),
+      }),
+    },
+    "events.iterate.com/compaction/compaction-started": {
+      description: "History crossed the compaction threshold; a summary is being generated.",
+      payloadSchema: z.object({
+        triggeringEventOffset: z.number().int().positive(),
+        contextTokens: z.number().int().nonnegative(),
+        thresholdTokens: z.number().int().positive(),
+      }),
+    },
+    "events.iterate.com/compaction/compaction-completed": {
+      description: "The compaction appended history-reset, or failed.",
+      payloadSchema: z.object({
+        triggeringEventOffset: z.number().int().positive(),
+        durationMs: z.number().int().nonnegative(),
+        result: z.discriminatedUnion("status", [
+          z.object({ status: z.literal("success") }),
+          z.object({ status: z.literal("failure"), error: z.object({ message: z.string() }) }),
+        ]),
+      }),
+    },
+  },
+  consumes: ["events.iterate.com/agent/token-usage-reported"],
+  emits: [
+    "events.iterate.com/compaction/compaction-started",
+    "events.iterate.com/compaction/compaction-completed",
+    "events.iterate.com/agent/history-reset",
+  ],
+});
+
+class CompactionProcessor extends StreamProcessor<
+  typeof CompactionProcessorContract,
+  {
+    /** THIS agent's control surface; its processor fold carries history + system prompt. */
+    agent: Agent;
+    /** Workers AI, for the summary itself. */
+    ai: Ai;
+  }
+> {
+  readonly contract = CompactionProcessorContract;
+
+  protected override processEvent({
+    append,
+    event,
+    runInBackground,
+    streamMaxOffset,
+  }: Parameters<
+    StreamProcessor<typeof CompactionProcessorContract>["processEvent"]
+  >[0]): undefined {
+    const usage = event.payload;
+    const contextTokens = usage.inputTokens + usage.outputTokens;
+    const thresholdTokens = Math.floor(usage.maxContextTokens * COMPACTION_TRIGGER_FRACTION);
+    if (contextTokens < thresholdTokens) return;
+    if (streamMaxOffset - event.offset > COMPACTION_MAX_TRIGGER_LAG_EVENTS) return;
+    const triggeringEventOffset = event.offset;
+
+    runInBackground(async () => {
+      const startedAt = Date.now();
+      await append({
+        type: "events.iterate.com/compaction/compaction-started",
+        idempotencyKey: `compaction/started@${triggeringEventOffset}`,
+        payload: { triggeringEventOffset, contextTokens, thresholdTokens },
+      });
+      try {
+        // Read-your-writes: wait until the agent's fold includes the trigger,
+        // then take history + system prompt from its reduced state — no event
+        // re-reading, no second fold.
+        await this.deps.agent.processor.waitUntilEvent({
+          offset: triggeringEventOffset,
+          timeoutMs: 30_000,
+        });
+        const { state } = await this.deps.agent.processor.snapshot();
+        const transcript = state.history
+          .map((item) => `${item.role}:\n${item.content}`)
+          .join("\n\n");
+        const raw = await this.deps.ai.run(COMPACTION_MODEL, {
+          messages: [
+            { role: "system", content: COMPACTION_PROMPT },
+            { role: "user", content: transcript },
+          ],
+        });
+        const summary =
+          typeof raw === "object" && raw !== null && "response" in raw
+            ? String((raw as { response: unknown }).response)
+            : JSON.stringify(raw);
+        await append(
+          {
+            type: "events.iterate.com/agent/history-reset",
+            idempotencyKey: `compaction/history-reset@${triggeringEventOffset}`,
+            payload: {
+              systemPrompt: state.systemPrompt,
+              history: [
+                {
+                  role: "user",
+                  content: `[Earlier conversation history was compacted. Summary:]\n\n${summary}`,
+                },
+              ],
+              reason: `compaction@${triggeringEventOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
+            },
+          },
+          {
+            type: "events.iterate.com/compaction/compaction-completed",
+            idempotencyKey: `compaction/completed@${triggeringEventOffset}`,
+            payload: {
+              triggeringEventOffset,
+              durationMs: Date.now() - startedAt,
+              result: { status: "success" },
+            },
+          },
+        );
+      } catch (error) {
+        await append({
+          type: "events.iterate.com/compaction/compaction-completed",
+          idempotencyKey: `compaction/completed@${triggeringEventOffset}`,
+          payload: {
+            triggeringEventOffset,
+            durationMs: Date.now() - startedAt,
+            result: {
+              status: "failure",
+              error: { message: error instanceof Error ? error.message : String(error) },
+            },
+          },
+        });
+      }
+    });
+  }
+}
+
 export default class ProjectWorker extends IterateProjectWorker {
   async fetch(req: Request): Promise<Response> {
     const appSlug = req.headers.get("x-iterate-app");
@@ -98,6 +287,24 @@ export default class ProjectWorker extends IterateProjectWorker {
         </html>`,
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
+  }
+
+  override async processEventBatch(batch: StreamEventBatch): Promise<void> {
+    // Agent streams run through the compaction processor before the per-event
+    // reactions below. A fresh instance per delivery is correct: the contract
+    // is stateless, and `keepAliveWhile` bridges its background summary work
+    // onto this invocation's waitUntil.
+    if (batch.path.startsWith("/agents/")) {
+      const itx = await this.env.ITX.get();
+      const compaction = new CompactionProcessor({
+        stream: itx.streams.get(batch.path),
+        keepAliveWhile: (work) => this.ctx.waitUntil(work()),
+        agent: itx.agents.get(batch.path),
+        ai: itx.ai,
+      });
+      await compaction.ingest({ events: batch.events, streamMaxOffset: batch.streamMaxOffset });
+    }
+    await super.processEventBatch(batch);
   }
 
   override async processEvent(event: StreamEvent): Promise<void> {

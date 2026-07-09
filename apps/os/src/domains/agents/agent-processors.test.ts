@@ -21,7 +21,7 @@ import {
   type ProcessorLike,
 } from "./test-helpers.ts";
 
-function openAiWsRequestEvents(content: string): StreamEventInput[] {
+function openAiWsRequestEvents(content: string, requestId = "llm-request:1"): StreamEventInput[] {
   return [
     {
       type: "events.iterate.com/agent/input-added",
@@ -33,12 +33,12 @@ function openAiWsRequestEvents(content: string): StreamEventInput[] {
         debounceMs: 0,
         model: "gpt-5.5",
         provider: "openai-ws",
-        requestId: "llm-request:1",
+        requestId,
       },
     },
     {
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-5.5", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model: "gpt-5.5", provider: "openai-ws", requestId },
     },
   ];
 }
@@ -351,7 +351,6 @@ describe("minimal web-chat agent processors", () => {
           };
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
     const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
@@ -554,7 +553,6 @@ describe("minimal web-chat agent processors", () => {
           return { response: "```js\nasync (itx) => {}\n```" };
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
     const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
@@ -666,7 +664,6 @@ describe("minimal web-chat agent processors", () => {
           );
         },
       },
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append(
@@ -716,6 +713,19 @@ describe("minimal web-chat agent processors", () => {
     expect(output.payload).toMatchObject({
       content: expect.stringContaining("real-ai-agent-ok"),
     });
+    // The terminal chunk's usage normalizes into token-usage-reported (kimi's
+    // window from the provider's model table; no cache/reasoning breakdown).
+    const report = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/token-usage-reported"],
+      timeoutMs: 2_000,
+    });
+    expect(report.payload).toMatchObject({
+      provider: "cloudflare-ai",
+      model: "@cf/moonshotai/kimi-k2.7-code",
+      maxContextTokens: 256_000,
+      inputTokens: 34,
+      outputTokens: 12,
+    });
   });
 
   it("executes openai-ws requests over the Responses WebSocket and records every frame", async () => {
@@ -739,7 +749,6 @@ describe("minimal web-chat agent processors", () => {
         sockets.push(socket);
         return socket;
       },
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append(...openAiWsRequestEvents("hello over ws"));
@@ -792,7 +801,6 @@ describe("minimal web-chat agent processors", () => {
             },
           },
         ]),
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append(...openAiWsRequestEvents("hello over ws"));
@@ -848,7 +856,6 @@ describe("minimal web-chat agent processors", () => {
         sockets.push(socket);
         return socket;
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     const cursors = new Map<object, number>();
 
@@ -893,7 +900,6 @@ describe("minimal web-chat agent processors", () => {
         dialed += 1;
         throw new Error("should not dial");
       },
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append({
@@ -921,7 +927,6 @@ describe("minimal web-chat agent processors", () => {
       createResponsesWebSocketClient: async () => {
         throw new Error("should not dial without a key");
       },
-      readStreamEvents: () => stream.getEvents(),
     });
 
     await stream.append(...openAiWsRequestEvents("hello without a key"));
@@ -1114,7 +1119,6 @@ describe("minimal web-chat agent processors", () => {
       createResponsesWebSocketClient: async () => {
         throw new Error("should not dial during orphan recovery");
       },
-      readStreamEvents: () => stream.getEvents(),
     });
     // Deliver only the STARTED event (the requested event is before the
     // checkpoint of a caught-up-but-restarted instance in the real incident;
@@ -1156,16 +1160,14 @@ describe("minimal web-chat agent processors", () => {
   });
 });
 
-describe("context window compaction (openai-ws)", () => {
+describe("context window compaction mechanics (openai-ws)", () => {
   // OpenAI's Responses API rejects a request whose input exceeds the model's
-  // context window with a context_length_exceeded error instead of answering.
-  // The fake socket mirrors that contract: any response.create estimated past
-  // the window fails, anything smaller succeeds. The processor is expected to
-  // get an over-window history through to a successful completion anyway — by
-  // compacting what it sends, not by failing the request.
-  //
-  // RED until compaction exists. Once green here, port the same test to the
-  // cloudflare-ai sibling processor.
+  // context window with a context_length_exceeded error instead of answering;
+  // the fake socket mirrors that contract, and under-window requests succeed
+  // with OpenAI-shaped usage. Compaction itself is USERSPACE policy (the
+  // CompactionProcessor in the project repo template). These tests pin down
+  // the platform's half of that loop: normalized token-usage-reported after
+  // every successful turn, and history-reset folding into a smaller request.
   const FAKE_CONTEXT_WINDOW_TOKENS = 200_000;
   // The ~4-chars-per-token heuristic; plenty for a threshold mock.
   const estimateRequestTokens = (request: unknown) => Math.ceil(JSON.stringify(request).length / 4);
@@ -1188,61 +1190,126 @@ describe("context window compaction (openai-ws)", () => {
         { type: "response.output_text.delta", delta: "```js\nasync (itx) => {}\n```" },
         {
           type: "response.completed",
-          response: { id: "resp_fits", usage: { total_tokens: 42 } },
+          response: {
+            id: "resp_fits",
+            usage: {
+              input_tokens: estimateRequestTokens(request),
+              input_tokens_details: { cached_tokens: 128, cache_write_tokens: 0 },
+              output_tokens: 9,
+              output_tokens_details: { reasoning_tokens: 2 },
+              total_tokens: estimateRequestTokens(request) + 9,
+            },
+          },
         },
       ];
     });
   }
 
-  it("completes a request over an over-window history by compacting instead of failing", async () => {
+  // ~100 conversation turns of ~6k chars per message ≈ 1.2M chars ≈ 300k
+  // estimated tokens — well past the fake 200k window.
+  function overWindowHistory(): StreamEventInput[] {
+    const filler = "All work and no compaction makes the context window overflow. ".repeat(96);
+    return Array.from({ length: 100 }).flatMap((_, turn): StreamEventInput[] => [
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: `[turn ${turn}] ${filler}`,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/output-added",
+        payload: { content: `[ack ${turn}] ${filler}` },
+      },
+    ]);
+  }
+
+  it("fails an over-window request with the provider's context error, reporting no usage", async () => {
+    const stream = new MemoryStream();
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => contextWindowLimitedSocket(),
+    });
+
+    await stream.append(...overWindowHistory());
+    await stream.append(...openAiWsRequestEvents("are you still with me?"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+
+    const completed = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    expect(completed.payload).toMatchObject({
+      provider: "openai-ws",
+      result: {
+        status: "failure",
+        error: { message: expect.stringContaining("context window") },
+      },
+    });
+    // A failed request has no usage — so no report. Userspace compaction is
+    // proactive: it triggers off the reports of the SUCCESSFUL turns leading
+    // up to the window, before overflow ever happens.
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/token-usage-reported"),
+    ).toBe(false);
+  });
+
+  it("a history-reset (what userspace compaction appends) shrinks the next request under the window", async () => {
     const stream = new MemoryStream();
     const socket = contextWindowLimitedSocket();
     const openAiWs = new OpenAiWsProcessor({
       stream,
       apiKey: "sk-test",
       createResponsesWebSocketClient: async () => socket,
-      readStreamEvents: () => stream.getEvents(),
     });
+    const cursors = new Map<object, number>();
 
-    // ~100 conversation turns of ~6k chars per message ≈ 1.2M chars ≈ 300k
-    // estimated tokens — well past the fake 200k window.
-    const filler = "All work and no compaction makes the context window overflow. ".repeat(96);
-    const history: StreamEventInput[] = Array.from({ length: 100 }).flatMap(
-      (_, turn): StreamEventInput[] => [
-        {
-          type: "events.iterate.com/agent/input-added",
-          payload: {
-            content: `[turn ${turn}] ${filler}`,
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          },
-        },
-        {
-          type: "events.iterate.com/agent/output-added",
-          payload: { content: `[ack ${turn}] ${filler}` },
-        },
-      ],
-    );
-    await stream.append(...history);
+    await stream.append(...overWindowHistory());
     await stream.append(...openAiWsRequestEvents("are you still with me?"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors });
+    const firstCompleted = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    expect(firstCompleted.payload).toMatchObject({ result: { status: "failure" } });
 
-    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
-    const completed = await stream.waitForEvent({
+    // What the template's CompactionProcessor appends after summarizing.
+    await stream.append({
+      type: "events.iterate.com/agent/history-reset",
+      idempotencyKey: "compaction/history-reset@42",
+      payload: {
+        systemPrompt: "You are a helpful assistant.",
+        history: [
+          {
+            role: "user",
+            content:
+              "[Earlier conversation history was compacted. Summary:]\n\nA hundred turns of overflow filler.",
+          },
+        ],
+        reason: "compaction@42: over half the window",
+      },
+    });
+    await stream.append(...openAiWsRequestEvents("second ask, after the reset", "llm-request:2"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors });
+    const secondCompleted = await stream.waitForEvent({
+      afterOffset: firstCompleted.offset,
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
 
-    // Today the processor sends the whole history verbatim, the provider
-    // rejects it, and this completion is a context_length_exceeded failure.
-    expect(completed.payload).toMatchObject({
+    expect(secondCompleted.payload).toMatchObject({
       provider: "openai-ws",
       result: { status: "success" },
     });
-    // The request that succeeded must actually have fit the window...
+    // The reset folded into the request body: under the window, summary
+    // included, giant turns gone, and the live question still present.
     const finalRequest = socket.sent.at(-1);
     expect(estimateRequestTokens(finalRequest)).toBeLessThanOrEqual(FAKE_CONTEXT_WINDOW_TOKENS);
-    // ...while still carrying the newest user message: compaction drops or
-    // summarizes the OLD end of history, never the live question.
-    expect(JSON.stringify(finalRequest)).toContain("are you still with me?");
+    const finalRequestJson = JSON.stringify(finalRequest);
+    expect(finalRequestJson).toContain("history was compacted");
+    expect(finalRequestJson).toContain("second ask, after the reset");
+    expect(finalRequestJson).not.toContain("[turn 0]");
     // And the agent got a usable turn out of it.
     const output = stream.events.find(
       (event) =>
@@ -1250,6 +1317,45 @@ describe("context window compaction (openai-ws)", () => {
         (event.payload as { llmRequestId?: number }).llmRequestId !== undefined,
     );
     expect(output?.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
+  });
+
+  it("normalizes provider usage into token-usage-reported and tallies it in agent state", async () => {
+    const stream = new MemoryStream();
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => contextWindowLimitedSocket(),
+    });
+
+    await stream.append(...openAiWsRequestEvents("hello, small context"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    const report = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/token-usage-reported"],
+      timeoutMs: 2_000,
+    });
+    const usage = report.payload as { inputTokens: number };
+    expect(report.payload).toMatchObject({
+      provider: "openai-ws",
+      model: "gpt-5.5",
+      maxContextTokens: 272_000,
+      outputTokens: 9,
+      cachedInputTokens: 128,
+      reasoningOutputTokens: 2,
+    });
+    expect(usage.inputTokens).toBeGreaterThan(0);
+
+    // The agent fold tallies lifetime totals from the normalized report.
+    expect(reduceAgentEvents(stream.events).tokenUsage).toEqual({
+      totalInputTokens: usage.inputTokens,
+      totalOutputTokens: 9,
+      totalCachedInputTokens: 128,
+      totalReasoningOutputTokens: 2,
+    });
   });
 });
 

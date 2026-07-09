@@ -1507,6 +1507,12 @@ export type AgentProcessorState = {
     startedAt: string;
   }[];
   scriptExecutionsCompleted: string[];
+  tokenUsage: {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCachedInputTokens: number;
+    totalReasoningOutputTokens: number;
+  };
 };
 
 export type StreamEvent = {

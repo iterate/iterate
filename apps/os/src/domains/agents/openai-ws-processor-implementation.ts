@@ -13,11 +13,11 @@
 
 import { z } from "zod";
 import type { ResponseInput, ResponsesClientEvent } from "openai/resources/responses/responses";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   buildAgentLlmRequestBody,
   flattenMessageToText,
+  readAgentPromptEvents,
   reduceAgentEvents,
   renderFileHintLine,
   type AgentChatMessage,
@@ -64,13 +64,47 @@ const OpenAiWebSocketReadyState = {
  * long reasoning turns are minutes, not tens of minutes. */
 const OPENAI_WS_REQUEST_DEADLINE_MS = 10 * 60_000;
 
+/**
+ * The slice of OpenAI Responses usage that token-usage-reported normalizes.
+ * Loose on purpose: unknown fields ride along in the raw completion event.
+ */
+const OpenAiResponsesUsage = z.looseObject({
+  input_tokens: z.number().int().nonnegative(),
+  input_tokens_details: z
+    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  output_tokens: z.number().int().nonnegative(),
+  output_tokens_details: z
+    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+});
+
+/**
+ * Context windows by model prefix, longest match wins. Consumers (e.g. the
+ * userspace compaction reaction) judge fullness from the usage report alone,
+ * so the number rides in every token-usage-reported payload.
+ */
+const OPENAI_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  "gpt-5.5": 272_000,
+  "gpt-5": 272_000,
+};
+const DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS = 128_000;
+
+function openAiContextWindowTokens(model: string): number {
+  const match = Object.keys(OPENAI_CONTEXT_WINDOW_TOKENS)
+    .filter((prefix) => model.startsWith(prefix))
+    .sort((a, b) => b.length - a.length)[0];
+  return match === undefined
+    ? DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS
+    : OPENAI_CONTEXT_WINDOW_TOKENS[match]!;
+}
+
 export class OpenAiWsProcessor extends StreamProcessor<
   OpenAiWsProcessorContract,
   {
     /** Null when the deployment has no OpenAI key; requests then fail politely. */
     apiKey: string | null;
     createResponsesWebSocketClient?: (apiKey: string) => Promise<OpenAiResponsesWebSocket>;
-    readStreamEvents(): Promise<StreamEvent[]>;
   }
 > {
   readonly contract = OpenAiWsProcessorContract;
@@ -209,7 +243,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
       // Request-by-reference: the requested event carries no body; rebuild the
       // chat request from committed history up to the request's own offset.
       const body = buildAgentLlmRequestBody({
-        events: await this.deps.readStreamEvents(),
+        events: await readAgentPromptEvents(this.stream),
         llmRequestId,
       });
       const attemptedPreviousResponseId = this.#previousResponseId;
@@ -254,11 +288,12 @@ export class OpenAiWsProcessor extends StreamProcessor<
         if (completion.responseId !== undefined) this.#previousResponseId = completion.responseId;
       }
 
-      await this.#appendCompletion({ durationMs, llmRequestId, result: providerResult });
+      await this.#appendCompletion({ durationMs, llmRequestId, model, result: providerResult });
     } catch (error) {
       await this.#appendCompletion({
         durationMs: Date.now() - startedAt,
         llmRequestId,
+        model,
         result: {
           status: "failure" as const,
           error: { message: stringifyError(error) },
@@ -269,16 +304,23 @@ export class OpenAiWsProcessor extends StreamProcessor<
     }
   }
 
-  /** The one durable outcome of a request — provider + agent completion pair.
+  /** The one durable outcome of a request — provider + agent completion pair,
+   * plus the normalized token-usage report when the response carried usage.
    * Success, in-execution failure, and the orphan sweep all land here with
-   * identical idempotency keys, so races collapse at the append dedup layer. */
+   * identical idempotency keys, so races collapse at the append dedup layer.
+   * (`model` is absent on the orphan sweep, which has no usage to report.) */
   async #appendCompletion(input: {
     durationMs: number;
     llmRequestId: number;
+    model?: string;
     result:
       | { status: "success"; rawResponse?: unknown; usage?: unknown }
       | { status: "failure"; error: { message: string }; rawResponse?: unknown };
   }): Promise<void> {
+    const usage =
+      input.result.status === "success" && input.model !== undefined
+        ? OpenAiResponsesUsage.safeParse(input.result.usage)
+        : undefined;
     await this.stream.append(
       {
         type: "events.iterate.com/openai-ws/llm-request-completed",
@@ -299,6 +341,28 @@ export class OpenAiWsProcessor extends StreamProcessor<
           result: input.result,
         },
       },
+      ...(usage?.success !== true
+        ? []
+        : [
+            {
+              type: "events.iterate.com/agent/token-usage-reported" as const,
+              idempotencyKey: `openai-ws/token-usage@${input.llmRequestId}`,
+              payload: {
+                llmRequestId: input.llmRequestId,
+                provider: "openai-ws" as const,
+                model: input.model!,
+                maxContextTokens: openAiContextWindowTokens(input.model!),
+                inputTokens: usage.data.input_tokens,
+                outputTokens: usage.data.output_tokens,
+                ...(usage.data.input_tokens_details?.cached_tokens === undefined
+                  ? {}
+                  : { cachedInputTokens: usage.data.input_tokens_details.cached_tokens }),
+                ...(usage.data.output_tokens_details?.reasoning_tokens === undefined
+                  ? {}
+                  : { reasoningOutputTokens: usage.data.output_tokens_details.reasoning_tokens }),
+              },
+            },
+          ]),
     );
   }
 
@@ -454,7 +518,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }
 
   async #isRequestStillCurrent(input: { llmRequestId: number }) {
-    const state = reduceAgentEvents(await this.deps.readStreamEvents());
+    const state = reduceAgentEvents(await readAgentPromptEvents(this.stream));
     return (
       state.currentRequest?.phase === "requested" &&
       state.currentRequest.llmRequestId === input.llmRequestId

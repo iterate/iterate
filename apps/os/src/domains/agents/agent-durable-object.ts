@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
@@ -21,10 +20,7 @@ import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
-import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { parseAgentDurableObjectName, readOpenAiApiKeyFromAppConfig } from "./utils.ts";
-
-const AGENT_PROMPT_EVENT_PAGE_SIZE = 500;
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -58,7 +54,6 @@ export class AgentDurableObject extends DurableObject<Env> {
       new CloudflareAiProcessor({
         ...deps,
         ai: this.env.AI,
-        readStreamEvents: () => this.#readAgentPromptEvents(),
       }),
   );
   // Registered even without an OpenAI key: the processor then fails requests
@@ -68,7 +63,6 @@ export class AgentDurableObject extends DurableObject<Env> {
       new OpenAiWsProcessor({
         ...deps,
         apiKey: readOpenAiApiKeyFromAppConfig(this.env),
-        readStreamEvents: () => this.#readAgentPromptEvents(),
       }),
   );
 
@@ -164,20 +158,6 @@ export class AgentDurableObject extends DurableObject<Env> {
   // linked connection's itx.integrations.github Octokit, called by the agent
   // itself, so there are no side-effect deps here.
   readonly prAgentProcessor = this.#processorHost.add((deps) => new PrAgentProcessor(deps));
-
-  async #readAgentPromptEvents(): Promise<StreamEvent[]> {
-    const events: StreamEvent[] = [];
-    using pager = this.#stream.readEvents({
-      afterOffset: 0,
-      eventTypes: AgentProcessorContract.consumes,
-      limit: AGENT_PROMPT_EVENT_PAGE_SIZE,
-    });
-    for (;;) {
-      const page = await pager.next();
-      events.push(...page);
-      if (page.length < AGENT_PROMPT_EVENT_PAGE_SIZE) return events;
-    }
-  }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);

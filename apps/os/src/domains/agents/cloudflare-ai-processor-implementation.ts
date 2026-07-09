@@ -1,9 +1,9 @@
 import { z } from "zod";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   buildAgentLlmRequestBody,
   flattenMessageToText,
+  readAgentPromptEvents,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
@@ -13,11 +13,26 @@ type LlmRequestRequestedEvent = Extract<
   { type: "events.iterate.com/agent/llm-request-requested" }
 >;
 
+/**
+ * Context windows by model, with a conservative default for models we have not
+ * catalogued. Rides in every token-usage-reported payload so consumers judge
+ * fullness from the event alone.
+ */
+const CLOUDFLARE_AI_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  "@cf/moonshotai/kimi-k2.7-code": 256_000,
+};
+const DEFAULT_CLOUDFLARE_AI_CONTEXT_WINDOW_TOKENS = 128_000;
+
+/** The slice of Workers AI usage that token-usage-reported normalizes. */
+const CloudflareAiUsage = z.looseObject({
+  prompt_tokens: z.number().int().nonnegative(),
+  completion_tokens: z.number().int().nonnegative(),
+});
+
 export class CloudflareAiProcessor extends StreamProcessor<
   CloudflareAiProcessorContract,
   {
     ai: { run(model: string, body: unknown): Promise<unknown> };
-    readStreamEvents(): Promise<StreamEvent[]>;
   }
 > {
   readonly contract = CloudflareAiProcessorContract;
@@ -77,7 +92,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
 
     try {
       const body = buildAgentLlmRequestBody({
-        events: await this.deps.readStreamEvents(),
+        events: await readAgentPromptEvents(this.stream),
         llmRequestId,
       });
       // Workers AI chat bodies are text-only here: file attachments flatten
@@ -111,6 +126,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
         });
       }
 
+      const usage = CloudflareAiUsage.safeParse(completion.usage);
       await this.stream.append(
         {
           type: "events.iterate.com/cloudflare-ai/llm-request-completed",
@@ -131,6 +147,24 @@ export class CloudflareAiProcessor extends StreamProcessor<
             result: providerResult,
           },
         },
+        ...(usage.success !== true
+          ? []
+          : [
+              {
+                type: "events.iterate.com/agent/token-usage-reported" as const,
+                idempotencyKey: `cloudflare-ai/token-usage@${llmRequestId}`,
+                payload: {
+                  llmRequestId,
+                  provider: "cloudflare-ai" as const,
+                  model: input.event.payload.model,
+                  maxContextTokens:
+                    CLOUDFLARE_AI_CONTEXT_WINDOW_TOKENS[input.event.payload.model] ??
+                    DEFAULT_CLOUDFLARE_AI_CONTEXT_WINDOW_TOKENS,
+                  inputTokens: usage.data.prompt_tokens,
+                  outputTokens: usage.data.completion_tokens,
+                },
+              },
+            ]),
       );
     } catch (error) {
       const durationMs = Date.now() - startedAt;
@@ -216,7 +250,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
   }
 
   async #isRequestStillCurrent(input: { llmRequestId: number }) {
-    const state = reduceAgentEvents(await this.deps.readStreamEvents());
+    const state = reduceAgentEvents(await readAgentPromptEvents(this.stream));
     return (
       state.currentRequest?.phase === "requested" &&
       state.currentRequest.llmRequestId === input.llmRequestId

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
@@ -6,6 +7,7 @@ import {
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
+  type AgentInputItem,
 } from "./agent-processor-contract.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
@@ -268,10 +270,8 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
 }
 
 /** One agent-history message as providers receive it. */
-export type AgentChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-  files?: AgentFileAttachment[];
+export type AgentChatMessage = Omit<AgentInputItem, "role"> & {
+  role: AgentInputItem["role"] | "system";
 };
 
 function buildLlmChatRequest(state: AgentState): { messages: AgentChatMessage[] } {
@@ -312,6 +312,29 @@ export function buildAgentLlmRequestBody(input: {
   return buildLlmChatRequest(
     reduceAgentEvents(input.events.filter((event) => event.offset <= input.llmRequestId)),
   );
+}
+
+const AGENT_PROMPT_EVENT_PAGE_SIZE = 500;
+
+/**
+ * Every event that feeds the agent fold, paged from the stream the caller
+ * already holds. Provider processors rebuild request bodies from this
+ * (request-by-reference: the requested event carries no body).
+ */
+export async function readAgentPromptEvents(
+  stream: Pick<Stream, "readEvents">,
+): Promise<StreamEvent[]> {
+  const events: StreamEvent[] = [];
+  using pager = stream.readEvents({
+    afterOffset: 0,
+    eventTypes: AgentProcessorContract.consumes,
+    limit: AGENT_PROMPT_EVENT_PAGE_SIZE,
+  });
+  for (;;) {
+    const page = await pager.next();
+    events.push(...page);
+    if (page.length < AGENT_PROMPT_EVENT_PAGE_SIZE) return events;
+  }
 }
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
@@ -389,6 +412,28 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
         currentRequest: null,
         requestGeneration: state.requestGeneration + 1,
+      };
+    case "events.iterate.com/agent/token-usage-reported":
+      return {
+        ...state,
+        tokenUsage: {
+          totalInputTokens: state.tokenUsage.totalInputTokens + event.payload.inputTokens,
+          totalOutputTokens: state.tokenUsage.totalOutputTokens + event.payload.outputTokens,
+          totalCachedInputTokens:
+            state.tokenUsage.totalCachedInputTokens + (event.payload.cachedInputTokens ?? 0),
+          totalReasoningOutputTokens:
+            state.tokenUsage.totalReasoningOutputTokens +
+            (event.payload.reasoningOutputTokens ?? 0),
+        },
+      };
+    case "events.iterate.com/agent/history-reset":
+      // Wholesale replacement: every later history-mutating event folds on top
+      // of the new baseline, so a request built after a reset sees the reset
+      // history plus whatever arrived since.
+      return {
+        ...state,
+        history: event.payload.history,
+        systemPrompt: event.payload.systemPrompt,
       };
     case "events.iterate.com/agent/llm-request-cancelled":
       if (

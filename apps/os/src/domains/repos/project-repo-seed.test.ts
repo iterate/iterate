@@ -11,7 +11,7 @@ test("an override re-points the iterate dependency in package.json only", () => 
   const files = projectRepoSeedFiles(spec);
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
-  expect(packageJson).toMatchObject({ devDependencies: { iterate: spec } });
+  expect(packageJson).toMatchObject({ dependencies: { iterate: spec } });
 
   // Every other file is untouched, and nothing still carries @main.
   const others = files.filter((file) => file.path !== "package.json");
@@ -26,6 +26,9 @@ test("the template's own spec matches what the substitution looks for", () => {
     PROJECT_REPO_INITIAL_FILES.find((file) => file.path === "package.json")!.content,
   );
   expect(packageJson).toMatchObject({
-    devDependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
+    // A runtime dependency, not a devDependency: worker.ts imports the
+    // stream-processor machinery from iterate/sdk, so the worker build
+    // pipeline must install it.
+    dependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
   });
 });

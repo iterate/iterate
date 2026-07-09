@@ -47,7 +47,6 @@ it("still answers the user when they attach an image format OpenAI cannot ingest
     stream,
     apiKey: "sk-test",
     createResponsesWebSocketClient: async () => socket,
-    readStreamEvents: () => stream.getEvents({ limit: 5000 }),
     readState: async () => ({
       offset: lastSeededOffset,
       state: OpenAiWsProcessorContract.stateSchema.parse({}),

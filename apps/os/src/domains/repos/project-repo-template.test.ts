@@ -43,13 +43,16 @@ test("template gets the platform types from iterate/sdk, not a committed snapsho
   expect(seededSdk).not.toContain("codegen:start");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    devDependencies: Record<string, string>;
+    dependencies: Record<string, string>;
   };
-  expect(templatePackageJson.devDependencies).toMatchObject({
+  // A runtime dependency (not dev): worker.ts imports StreamProcessor and
+  // friends from iterate/sdk, so the worker build pipeline installs it.
+  expect(templatePackageJson.dependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 
   expect(templateFile("worker.ts")).toContain('from "./sdk.ts"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
 });
 
 test("template app links use custom-domain subdomains only for custom host routes", () => {
