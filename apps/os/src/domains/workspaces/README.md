@@ -11,6 +11,24 @@ publishes the merged view as one snapshot commit on the workspace's own branch
 (`workspaces/<path>`) — never main. See `workspace-durable-object.ts` for the
 full semantics.
 
+## Agreed next steps (in flight on PR #1804 and its follow-ups)
+
+1. **WorkspaceCore library split**: the overlay/cache semantics move into a
+   host-agnostic class constructed with `{ storage, getParent, repos, branch }`
+   (cloudflare/workspace's constructor shape); the DO becomes a thin host, so
+   the same core can be hosted by the Agent DO (zero-hop spills) or Repo DO.
+2. **Repo caches, generalized from the root**: one ditchable cache workspace
+   per repo (the root is the `{"/", main}` instance), filled by shallow clone
+   only when its recorded head lags the repo's cursor. Reserved DO paths under
+   `/workspaces/.repo<repoPath>`; user paths there are rejected.
+3. **Multi-repo overlays**: every agent workspace sees ALL project repos at
+   their repo paths — copy-on-write, fall-through per subtree to that repo's
+   cache. Repos live at arbitrary paths, so the router longest-prefix-matches
+   an injected repo list; default route is the project repo at "/". Publish
+   routes per mount: changes under a mounted repo commit to THAT repo's
+   `workspaces/<path>` branch. Per-file git laziness is impossible
+   (isomorphic-git has no partial clone) — laziness lives at the cache layer.
+
 ## Direction of travel (deliberately not built yet)
 
 Researched 2026-07-09 against Cloudflare's own stack; these are the seams we
