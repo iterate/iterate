@@ -26,6 +26,13 @@ import { StreamEvent as StreamEventSchema } from "./schemas.ts";
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
 
+/**
+ * A committed event paired with its serialized byte length (the exact bytes
+ * stored in `event_chunks`). Delivery batching sizes batches against the byte
+ * cap with these instead of re-stringifying every event on every read.
+ */
+export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
+
 export class StreamEventLog {
   constructor(
     readonly sql: SqlStorage,
@@ -62,7 +69,13 @@ export class StreamEventLog {
     );
   }
 
-  insert(events: readonly StreamEvent[]): void {
+  /**
+   * Returns each event's serialized byte length (the exact bytes written to
+   * `event_chunks`), so the commit path can hand delivery fan-out a sized
+   * fresh tail without anyone re-stringifying what was just serialized here.
+   */
+  insert(events: readonly StreamEvent[]): number[] {
+    const byteLengths: number[] = [];
     for (const event of events) {
       this.sql.exec(
         "insert into events (offset, type, created_at, idempotency_key) values (?, ?, ?, ?)",
@@ -72,6 +85,7 @@ export class StreamEventLog {
         event.idempotencyKey ?? null,
       );
       const rawJsonBytes = textEncoder.encode(JSON.stringify(event));
+      byteLengths.push(rawJsonBytes.byteLength);
       for (const [chunkIndex, chunk] of chunkBytes(rawJsonBytes, EVENT_CHUNK_SIZE)) {
         this.sql.exec(
           "insert into event_chunks (offset, chunk_index, chunk_bytes) values (?, ?, ?)",
@@ -81,6 +95,7 @@ export class StreamEventLog {
         );
       }
     }
+    return byteLengths;
   }
 
   getByOffset(offset: number): StreamEvent | undefined {
@@ -106,6 +121,20 @@ export class StreamEventLog {
     eventTypes?: readonly string[];
     limit: number;
   }): StreamEvent[] {
+    return this.getRangeSized(args).map((sized) => sized.event);
+  }
+
+  /**
+   * `getRange` plus each event's serialized byte length, summed from the
+   * chunk rows already in hand — so delivery batching can enforce its byte
+   * cap without re-stringifying every event it just parsed.
+   */
+  getRangeSized(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+  }): SizedStreamEvent[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
@@ -144,7 +173,10 @@ export class StreamEventLog {
         eventChunks.push(chunk.chunkBytes);
       }
     }
-    return [...chunksByOffset.values()].map((eventChunks) => this.#parseEvent(eventChunks));
+    return [...chunksByOffset.values()].map((eventChunks) => ({
+      event: this.#parseEvent(eventChunks),
+      byteLength: eventChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
+    }));
   }
 
   #readEventFromChunks(offset: number): StreamEvent {
@@ -251,15 +283,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         updated_at text not null
       )
     `);
-    // `epoch` postdates the table (#1784 shipped without it, #1792 queries it)
-    // and `if not exists` never upgrades a live DO's copy — add it in place.
-    // Pre-existing rows get epoch 0, the same fence value fresh #1784 rows
-    // had, so their ack semantics are unchanged.
-    const hasEpochColumn =
+    const subscriptionColumns = new Set(
       this.sql
-        .exec("select 1 from pragma_table_info('subscriptions') where name = 'epoch'")
-        .toArray().length > 0;
-    if (!hasEpochColumn) {
+        .exec<{ name: string }>("pragma table_info(subscriptions)")
+        .toArray()
+        .map((column) => column.name),
+    );
+    if (!subscriptionColumns.has("epoch")) {
       this.sql.exec("alter table subscriptions add column epoch integer not null default 0");
     }
   }
@@ -422,9 +452,12 @@ function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, A
   if (chunkIndex === 0) yield [0, new ArrayBuffer(0)];
 }
 
+// Shared across calls: each decode sequence runs synchronously to its final
+// flush inside the single-threaded DO, so no two decodes can interleave.
+const chunkDecoder = new TextDecoder();
+
 function decodeChunks(chunks: ArrayBuffer[]): string {
-  const textDecoder = new TextDecoder();
   let value = "";
-  for (const chunk of chunks) value += textDecoder.decode(chunk, { stream: true });
-  return value + textDecoder.decode();
+  for (const chunk of chunks) value += chunkDecoder.decode(chunk, { stream: true });
+  return value + chunkDecoder.decode();
 }

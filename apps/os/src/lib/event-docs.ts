@@ -21,7 +21,7 @@ const PROCESSOR_DOCS_BASE_PATH = "/docs/streams/processors";
 
 type EventDefinitionForDocs = {
   description?: string;
-  examples?: unknown;
+  examples?: readonly { description: string; payload: unknown }[];
   payloadSchema: z.ZodType;
 };
 
@@ -53,8 +53,20 @@ const processorContracts = [
   BrowserEventFeedContract,
 ] as const satisfies readonly ProcessorContractForDocs[];
 
+/**
+ * The contracts the public event docs are generated from, in docs order —
+ * exported so tests can validate documentation invariants (e.g. that every
+ * example payload parses against its event's payload schema) against the same
+ * list the site renders.
+ */
+export const documentedProcessorContracts: readonly ProcessorContractForDocs[] = processorContracts;
+
 export type EventDoc = {
+  /** Processors that list this event type in `consumes` (owner included; wildcard consumers excluded). */
+  consumedBy: ProcessorReferenceDoc[];
   description?: string;
+  /** Processors that list this event type in `emits`. */
+  emittedBy: ProcessorReferenceDoc[];
   eventPath: string;
   examples: EventExampleDoc[];
   href: string;
@@ -72,6 +84,8 @@ export type EventExampleDoc = {
 export type EventReferenceDoc = {
   description?: string;
   href?: string;
+  /** Contract slug of the processor that owns (defines) this event type. */
+  ownerContractSlug?: string;
   routeParams?: EventRouteParams;
   type: string;
 };
@@ -83,9 +97,13 @@ export type EventRouteParams = {
 
 export type ProcessorDoc = ProcessorReferenceDoc & {
   consumes: EventReferenceDoc[];
+  /** True when the contract's `consumes` includes the `"*"` wildcard. */
+  consumesAllEvents: boolean;
   dependencies: ProcessorReferenceDoc[];
+  /** Processors that list this contract in their `processorDeps`. */
+  dependents: ProcessorReferenceDoc[];
+  emits: EventReferenceDoc[];
   events: EventDoc[];
-  version?: string;
 };
 
 export type ProcessorReferenceDoc = {
@@ -95,6 +113,7 @@ export type ProcessorReferenceDoc = {
   href: string;
   routeParams: { processorSlug: string };
   slug: string;
+  version?: string;
 };
 
 type EventDocsRouteTarget =
@@ -158,12 +177,41 @@ function buildProcessorDocs(): ProcessorDoc[] {
   const referencesByContractSlug = new Map(
     references.map((processor) => [processor.contractSlug, processor]),
   );
+
+  // Cross-reference indexes over the full contract list, built before any
+  // event doc so every event can link back to the processors that consume,
+  // emit, or depend on it.
+  const consumersByType = new Map<string, ProcessorReferenceDoc[]>();
+  const emittersByType = new Map<string, ProcessorReferenceDoc[]>();
+  const dependentsByContractSlug = new Map<string, ProcessorReferenceDoc[]>();
+  processorContracts.forEach((contract, index) => {
+    const reference = references[index];
+    for (const type of contract.consumes) {
+      if (type === "*") continue;
+      pushMapArray(consumersByType, type, reference);
+    }
+    for (const type of contract.emits ?? []) {
+      pushMapArray(emittersByType, type, reference);
+    }
+    for (const dep of contract.processorDeps ?? []) {
+      pushMapArray(dependentsByContractSlug, dep.slug, reference);
+    }
+  });
+
   const eventReferencesByType = new Map<string, EventReferenceDoc>();
 
-  const docs = processorContracts.map((contract, index) => {
+  const docs = processorContracts.map((contract: ProcessorContractForDocs, index) => {
     const processor = references[index];
     const events = Object.entries(contract.events)
-      .map(([type, definition]) => buildEventDoc({ definition, processor, type }))
+      .map(([type, definition]) =>
+        buildEventDoc({
+          consumedBy: consumersByType.get(type) ?? [],
+          definition,
+          emittedBy: emittersByType.get(type) ?? [],
+          processor,
+          type,
+        }),
+      )
       .sort((a, b) => a.eventPath.localeCompare(b.eventPath));
 
     for (const event of events) {
@@ -172,9 +220,11 @@ function buildProcessorDocs(): ProcessorDoc[] {
 
     return {
       ...processor,
-      ...(contract.version == null ? {} : { version: contract.version }),
       consumes: [],
+      consumesAllEvents: contract.consumes.includes("*"),
       dependencies: [],
+      dependents: [],
+      emits: [],
       events,
     } satisfies ProcessorDoc;
   });
@@ -190,14 +240,28 @@ function buildProcessorDocs(): ProcessorDoc[] {
       dependencies: (contract.processorDeps ?? [])
         .map((dep) => referencesByContractSlug.get(dep.slug))
         .filter((dep): dep is ProcessorReferenceDoc => dep != null),
+      dependents: dependentsByContractSlug.get(contract.slug) ?? [],
+      emits: (contract.emits ?? [])
+        .map((type) => eventReferencesByType.get(type))
+        .filter((event): event is EventReferenceDoc => event != null),
     };
   });
+}
+
+function pushMapArray<Key, Value>(map: Map<Key, Value[]>, key: Key, value: Value) {
+  const values = map.get(key);
+  if (values === undefined) {
+    map.set(key, [value]);
+  } else {
+    values.push(value);
+  }
 }
 
 function processorReferenceDoc(contract: ProcessorContractForDocs): ProcessorReferenceDoc {
   const docsPath = processorDocsPath(contract);
   return {
     ...(contract.description == null ? {} : { description: contract.description }),
+    ...(contract.version == null ? {} : { version: contract.version }),
     contractSlug: contract.slug,
     docsPath,
     href: processorDocsPathForSlug(docsPath),
@@ -207,24 +271,30 @@ function processorReferenceDoc(contract: ProcessorContractForDocs): ProcessorRef
 }
 
 function buildEventDoc(args: {
+  consumedBy: ProcessorReferenceDoc[];
   definition: EventDefinitionForDocs;
+  emittedBy: ProcessorReferenceDoc[];
   processor: ProcessorReferenceDoc;
   type: string;
 }): EventDoc {
   const eventPath = eventPathFromType(args.type);
-  const examples = eventExamples(args.definition.examples);
   const processorEventPath = eventPathForProcessor({
     eventPath,
     processorSlug: args.processor.slug,
   });
   return {
     ...(args.definition.description == null ? {} : { description: args.definition.description }),
+    consumedBy: args.consumedBy,
+    emittedBy: args.emittedBy,
     eventPath,
-    examples,
+    examples: (args.definition.examples ?? []).map((example) => ({
+      description: example.description,
+      payload: example.payload,
+    })),
     href: `${processorDocsPathForSlug(args.processor.slug)}/events/${processorEventPath}`,
-    payloadJsonSchema: eventPayloadJsonSchema({
-      examples,
-      payloadSchema: args.definition.payloadSchema,
+    payloadJsonSchema: z.toJSONSchema(args.definition.payloadSchema, {
+      io: "input",
+      unrepresentable: "any",
     }),
     processor: args.processor,
     routeParams: {
@@ -239,52 +309,10 @@ function eventReferenceDoc(event: EventDoc): EventReferenceDoc {
   return {
     ...(event.description == null ? {} : { description: event.description }),
     href: event.href,
+    ownerContractSlug: event.processor.contractSlug,
     routeParams: event.routeParams,
     type: event.type,
   };
-}
-
-function eventPayloadJsonSchema(args: {
-  examples: readonly { payload: unknown }[];
-  payloadSchema: z.ZodType;
-}) {
-  const jsonSchema = z.toJSONSchema(args.payloadSchema, {
-    io: "input",
-    unrepresentable: "any",
-  });
-
-  if (args.examples.length === 0) return jsonSchema;
-  if (typeof jsonSchema !== "object" || jsonSchema === null || Array.isArray(jsonSchema)) {
-    return jsonSchema;
-  }
-
-  return {
-    ...jsonSchema,
-    examples: args.examples.map((example) => example.payload),
-  };
-}
-
-function eventExamples(examples: unknown): EventExampleDoc[] {
-  if (!Array.isArray(examples)) return [];
-
-  return examples
-    .map((example) => {
-      if (
-        typeof example === "object" &&
-        example !== null &&
-        "description" in example &&
-        "payload" in example &&
-        typeof example.description === "string"
-      ) {
-        return {
-          description: example.description,
-          payload: example.payload,
-        };
-      }
-
-      return null;
-    })
-    .filter((example): example is EventExampleDoc => example != null);
 }
 
 function processorDocsPath(contract: ProcessorContractForDocs) {

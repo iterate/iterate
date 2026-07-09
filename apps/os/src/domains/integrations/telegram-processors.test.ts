@@ -522,6 +522,70 @@ describe("TelegramAgentProcessor", () => {
     expect(telegramCalls).toHaveLength(0);
   });
 
+  it("refold safety (#1807): a full replay re-transcribes and re-sends but never re-types stale messages", async () => {
+    // A state-schema deploy discards the checkpoint and refolds the WHOLE
+    // journal. The durable lanes (agent input, the journaled send) must
+    // re-run/dedupe, but the user-visible typing acks are stale — re-typing
+    // months-old messages is a rate-limit burst. `now` far in the future
+    // makes every event's ~epoch timestamp stale.
+    const { cursors, processor, stream, telegramCalls, sentMessages } = setup({
+      now: () => 999_999_999_999,
+    });
+
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({ text: "hello from the past" }),
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      },
+      { type: "events.iterate.com/telegram/send-requested", payload: { text: "an old reply" } },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    // Durable lanes ran: the message reached the agent, and the reply was
+    // delivered (its journal marker is absent on this first pass).
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(1);
+    expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: "an old reply" }]);
+    // But NO typing ack (arrival OR "still working") on a stale replay.
+    expect(telegramCalls.filter((call) => call.method === "sendChatAction")).toHaveLength(0);
+  });
+
+  it("carries an unpainted typing fact across a non-at-head batch to the next at-head one", async () => {
+    const { cursors, processor, stream, telegramCalls } = setup();
+    // Establish the chat.
+    await stream.append({
+      type: "events.iterate.com/telegram/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    telegramCalls.length = 0;
+
+    const [llm] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+    });
+    // Deliver the lifecycle fact while the batch is BEHIND head (a lagging
+    // fold): no repaint yet, the fact is remembered.
+    await processor.ingest({ events: [llm!], streamMaxOffset: stream.events.length + 5 });
+    expect(telegramCalls).toHaveLength(0);
+
+    // The fold catches up: the next batch reaches head (its own event is an
+    // unconsumed stream fact, so the carried lifecycle fact is what paints).
+    const [woken] = await stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { reason: "catch-up" },
+    });
+    await processor.ingest({ events: [woken!], streamMaxOffset: stream.events.length });
+    expect(telegramCalls).toEqual([
+      { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
+    ]);
+  });
+
   it("delivers a send-requested, marks it, and claims the message on the connection stream", async () => {
     const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-5000`;
     const { cursors, network, processor, sentMessages, stream } = setup({ agentPath });
@@ -885,7 +949,7 @@ function humanMessageWebhookPayload(input: {
   };
 }
 
-function setup(input: { agentPath?: string } = {}) {
+function setup(input: { agentPath?: string; now?: () => number } = {}) {
   const network = new MemoryStreamNetwork();
   const agentPath = input.agentPath ?? `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
   const stream = network.get(agentPath);
@@ -905,6 +969,10 @@ function setup(input: { agentPath?: string } = {}) {
   const processor = new TelegramAgentProcessor({
     stream,
     agentPath,
+    // MemoryStream stamps events at ~epoch (ms 1, 2, 3…); a clock just past
+    // that keeps the ack freshness gate (#1807) open by default. Stale-gate
+    // tests pass a `now` far in the future.
+    now: input.now ?? (() => 60_000),
     callTelegramApi: async (method, body) => {
       calls.push(`telegram:${method}`);
       telegramCalls.push({ body, method });

@@ -1511,7 +1511,12 @@ export type AgentProcessorState = {
   llmProviderConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number }
+    | {
+        phase: "requested";
+        llmRequestId: number;
+        requestedAt?: number | undefined;
+        provider?: "cloudflare-ai" | "openai-ws" | undefined;
+      }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -1909,6 +1914,7 @@ export type GithubSyncResult = {
  */
 export type RepoProcessorState = {
   artifactName: string | null;
+  createRequested: boolean;
   created: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;

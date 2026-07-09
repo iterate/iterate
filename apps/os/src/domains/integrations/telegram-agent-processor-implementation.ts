@@ -2,23 +2,32 @@
 // slack-agent-processor-implementation.ts. Emitted event types, payloads, and
 // idempotency keys are stable wire formats.
 //
-// Side-effect policy mirrors the Slack agent processor, with one addition:
+// Side-effect policy mirrors the Slack agent processor (refold-safety
+// included, #1807):
 // - The agent-input append runs inside `blockProcessorWhile` (a failed append
-//   holds the checkpoint and replays).
-// - The Telegram-facing "typing…" chat action is best-effort — a failed
-//   sendChatAction must never wedge the checkpoint (the host dep already
-//   swallows errors; see agent-durable-object.ts).
+//   holds the checkpoint and replays). It ALWAYS runs — late webhooks still
+//   reach the agent — and dedupes on its idempotency key across a refold.
+// - The "typing…" chat action is a user-visible ACK ("we just heard you"),
+//   so it fires only for FRESH webhooks (webhookAckIsFresh): a state-schema
+//   deploy discards the checkpoint and refolds the whole journal, and typing
+//   on months-old messages would be a rate-limit burst. The arrival typing
+//   stays per-event (gated); the "still working" typing repaint moved to
+//   `processEventBatch` — latest lifecycle fact only, at-head, once — because
+//   per-event `blockProcessorWhile` closures run concurrently within a batch
+//   (a real pre-existing race) and a refold would replay every historical
+//   status flip.
 // - The journaled send (`telegram/send-requested` → Bot API → `message-sent`
-//   marker + connection-stream claim) is a DURABLE OBLIGATION: it runs under
-//   `blockProcessorWhile` through a dep that throws on failure, so a crash
-//   holds the checkpoint and the request is retried until marked. A replayed
-//   request first checks the journal for its marker — marked requests never
-//   re-send. The accepted caveat: a crash BETWEEN the Bot API call and the
-//   marker append re-sends on retry (Telegram's sendMessage has no
-//   idempotency key; the journal is exactly-once, the send is at-least-once).
+//   marker + connection-stream claim) is a DURABLE OBLIGATION, NOT an ack, so
+//   it is NOT freshness-gated: it must retry until marked. It is inherently
+//   refold-safe — a replayed request finds its journal marker and skips the
+//   re-send (the marker + claim appends dedupe on their idempotency keys). The
+//   accepted caveat: a crash BETWEEN the Bot API call and the marker append
+//   re-sends on retry (Telegram's sendMessage has no idempotency key; the
+//   journal is exactly-once, the send is at-least-once).
 
 import { stringify as stringifyYaml } from "yaml";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import {
   integrationConnectionStreamPath,
   readRecord,
@@ -26,6 +35,7 @@ import {
   telegramChatIdFromAgentPath,
   telegramConnectionFromAgentPath,
   telegramTopicIdFromAgentPath,
+  webhookAckIsFresh,
 } from "./utils.ts";
 import { telegramNewCommand } from "./telegram-processor-implementation.ts";
 import {
@@ -49,6 +59,8 @@ type TelegramAgentProcessorDeps = {
    * Telegram's message_id. MUST throw on failure — the send obligation relies
    * on the thrown error holding the checkpoint for retry. */
   sendTelegramMessage?(body: Record<string, unknown>): Promise<{ messageId: number }>;
+  /** Injectable clock for the ack freshness gate (defaults to Date.now). */
+  now?: () => number;
 };
 
 export class TelegramAgentProcessor extends StreamProcessor<
@@ -56,6 +68,10 @@ export class TelegramAgentProcessor extends StreamProcessor<
   TelegramAgentProcessorDeps
 > {
   readonly contract = TelegramAgentProcessorContract;
+
+  /** A typing-worthy lifecycle fact seen in a batch that was NOT at head, so
+   * the next at-head batch repaints it (mirrors slack-agent's status carry). */
+  #unpaintedTypingFact: StreamEvent | undefined;
 
   protected override reduce({
     event,
@@ -158,8 +174,15 @@ export class TelegramAgentProcessor extends StreamProcessor<
           });
           // After the input committed (never before — the typing indicator
           // must not signal receipt of a message that could still be lost),
-          // show "typing…" so the human knows the bot heard them.
-          if (triggers && target != null) await this.#sendTyping(target);
+          // show "typing…" so the human knows the bot heard them. Freshness-
+          // gated: a refold must not re-type on historical messages.
+          if (
+            triggers &&
+            target != null &&
+            webhookAckIsFresh(event, (this.deps.now ?? Date.now)())
+          ) {
+            await this.#sendTyping(target);
+          }
         });
         return;
       }
@@ -208,20 +231,38 @@ export class TelegramAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      case "events.iterate.com/agent/llm-request-requested":
-      case "events.iterate.com/capability-host/script-execution-requested": {
-        // Telegram's typing indicator auto-expires after ~5s; re-sending it on
-        // each LLM/tool hop keeps it roughly alive while the agent works.
-        const { chatId, messageThreadId } = state;
-        if (chatId == null) return;
-        blockProcessorWhile(async () => {
-          await this.#sendTyping({ chatId, messageThreadId });
-        });
-        return;
-      }
+      // llm-request-requested / script-execution-requested drive the "still
+      // working" typing repaint — handled once per batch in processEventBatch
+      // (below), not per-event, so a refold cannot replay every historical
+      // flip and concurrent per-event closures cannot race.
       default:
         return;
     }
+  }
+
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    // The "still working" typing indicator auto-expires after ~5s; one repaint
+    // per batch keeps it roughly alive while the agent works. Repaint the
+    // LATEST typing-worthy fact in the batch (an earlier one is already stale),
+    // carried across non-at-head batches so a lagging fold still paints once it
+    // catches up.
+    const latest =
+      args.reducedEvents.findLast(({ event }) => isTelegramTypingLifecycleFact(event))?.event ??
+      this.#unpaintedTypingFact;
+    if (args.checkpointOffset < args.streamMaxOffset) {
+      this.#unpaintedTypingFact = latest;
+      return;
+    }
+    this.#unpaintedTypingFact = undefined;
+    if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
+    const { chatId, messageThreadId } = args.state;
+    if (chatId == null) return;
+    args.blockProcessorWhile(async () => {
+      await this.#sendTyping({ chatId, messageThreadId });
+    });
   }
 
   /** Deliver one send-requested to the Bot API; returns Telegram's message_id. */
@@ -310,6 +351,14 @@ export class TelegramAgentProcessor extends StreamProcessor<
 function coerceTelegramId(id: string): number | string {
   const numeric = Number(id);
   return Number.isSafeInteger(numeric) ? numeric : id;
+}
+
+/** Events that mean "the agent is working now", driving the typing repaint. */
+function isTelegramTypingLifecycleFact(event: { type: string }): boolean {
+  return (
+    event.type === "events.iterate.com/agent/llm-request-requested" ||
+    event.type === "events.iterate.com/capability-host/script-execution-requested"
+  );
 }
 
 /** A message of exactly `/debug` (Telegram appends `@BotUsername` in groups). */

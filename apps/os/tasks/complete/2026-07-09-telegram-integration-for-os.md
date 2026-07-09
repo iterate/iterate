@@ -425,6 +425,40 @@ gate, not authz.
 
 ## Implementation log
 
+- 2026-07-09 (merge #1806/#1807/#1805/#1758-era main): three touchpoints.
+  - stream-storage.ts epoch backfill: main's #1806 shipped its OWN in-place
+    `alter table subscriptions add column epoch` (pragma table_info guard),
+    which SUPERSEDES the interim ALTER fix this branch carried (2b362afba).
+    Verified by reading #1806's SqliteSubscriptionCursorStore constructor: it
+    creates the table WITH epoch and backfills pre-epoch tables identically
+    (default 0). Took main's version wholesale — the interim fix is gone,
+    correctly, because the shape it patched is now handled upstream. (#1797,
+    the sqlfu version, is still not in main; nothing here pulls it in.)
+  - #1807 refold-safe side effects: adapted the telegram-agent processor to
+    the pattern main migrated Slack to. The typing chat action is a
+    user-visible ACK, so it now gates on the shared `webhookAckIsFresh` (added
+    to integrations/utils.ts by #1807; the merge kept both it and the telegram
+    event-type constants). The arrival typing stays per-event but
+    freshness-gated; the "still working" typing REPAINT moved from a per-event
+    `processEvent` case to `processEventBatch` (latest lifecycle fact only,
+    at-head, once, with an `#unpaintedTypingFact` carry across lagging folds)
+    — same shape as slack-agent's status repaint, fixing the same
+    concurrent-closure race and refold replay. Added an injectable `now?` dep.
+    The journaled SEND obligation is deliberately NOT freshness-gated: it is a
+    durable obligation, not an ack, and is already refold-safe by construction
+    (a replayed send-requested finds its journal marker and skips the re-send;
+    the marker + claim appends dedupe on idempotency keys). New tests: a full
+    stale replay re-transcribes + re-delivers but sends zero typing actions;
+    the unpainted-fact carry paints once when the fold reaches head.
+  - #1802 event docs: every contract-owned event type now needs an `examples`
+    entry (new event-docs test) — added realistic examples for
+    telegram/webhook-received, telegram/message-sent, telegram/send-requested.
+  - #1805 Drizzle removal / #1758 dual-copy codegen: lockfile merged clean
+    (pnpm install no-op); generated files regenerated through the post-#1758
+    path (itx-api in apps/os AND packages/iterate, types-source, template map;
+    template sdk.ts has no copy marker anymore so it's left as main's
+    hand-written re-export). Full typecheck/lint/knip/test green.
+
 - 2026-07-08: worktree + branch `telegram-integration` created off main; spec
   committed before implementation per AFK-task protocol.
 - 2026-07-08: URL secret substitution landed first (the one cross-domain

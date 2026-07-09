@@ -1162,9 +1162,10 @@ export const cloudflareAppSharedPaths = [
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
-  // The preview deploy + e2e + cleanup lifecycle is one Depot CI workflow.
-  // Keep this in sync with that file's own `on.pull_request.paths` list: a
-  // change to the workflow (or the shared preview orchestration) triggers a
+  // The preview deploy + e2e lifecycle is one Depot CI workflow; cleanup on
+  // close lives in cloudflare-preview-cleanup.yml, which mirrors the same
+  // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
+  // a change to the workflow (or the shared preview orchestration) triggers a
   // full-fleet preview.
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,

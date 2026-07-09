@@ -73,6 +73,24 @@ export const TelegramProcessorContract = defineProcessorContract({
       payloadSchema: z
         .object({ body: z.record(z.string(), z.unknown()), botId: z.string() })
         .loose(),
+      examples: [
+        {
+          description: "A private-chat text message, as Telegram's Bot API delivers it.",
+          payload: {
+            botId: "7000001",
+            body: {
+              update_id: 100001,
+              message: {
+                message_id: 42,
+                from: { id: 555123, is_bot: false, first_name: "Misha", username: "misha" },
+                chat: { id: 555123, type: "private" },
+                date: 1_751_980_451,
+                text: "Hey, can you check the deploy status?",
+              },
+            },
+          },
+        },
+      ],
     },
     "events.iterate.com/telegram/message-sent": {
       description:
@@ -86,6 +104,21 @@ export const TelegramProcessorContract = defineProcessorContract({
           sessionPath: z.string().optional(),
         })
         .loose(),
+      examples: [
+        {
+          description:
+            "The connection-stream provenance claim: bot message_id → the session stream its send-requested lived on.",
+          payload: {
+            messageId: 9001,
+            chatId: "555123",
+            sessionPath: "/agents/telegram/mishas-helper-bot/chat-555123/session-1751980500",
+            request: {
+              offset: 7,
+              stream: "/agents/telegram/mishas-helper-bot/chat-555123/session-1751980500",
+            },
+          },
+        },
+      ],
     },
   },
   consumes: [

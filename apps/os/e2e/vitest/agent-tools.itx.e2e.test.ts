@@ -7,6 +7,7 @@
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
 const PROOF_STREAM = "/e2e/agent-tools-proof";
 const PROOF_TYPE = "events.iterate.test/agent-tools-proof";
@@ -32,18 +33,23 @@ test(
 
     // The reply may arrive before or after the script completes depending on
     // how the model ordered its actions — poll both effects independently.
+    // (waitForCondition, not expect.poll: expect.poll loses the test context
+    // on vitest retry in the CI-parallel lane and turns any first-attempt
+    // flake into a hard "expect.poll() must be called inside a test" failure.)
     using itx = handle.itx();
-    await expect
-      .poll(
-        async () => {
-          const events = await itx.streams.get(PROOF_STREAM).getEvents({});
-          return events.some(
-            (event) => event.type === PROOF_TYPE && event.payload?.marker === marker,
-          );
-        },
-        { interval: 1_000, timeout: 120_000 },
-      )
-      .toBe(true);
+    await waitForCondition(
+      async () => {
+        const events = await itx.streams.get(PROOF_STREAM).getEvents({});
+        return events.some(
+          (event) => event.type === PROOF_TYPE && event.payload?.marker === marker,
+        );
+      },
+      {
+        description: "the proof event to land on the target stream",
+        intervalMs: 1_000,
+        timeoutMs: 120_000,
+      },
+    );
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     const types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));

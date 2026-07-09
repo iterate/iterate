@@ -57,6 +57,22 @@ export const TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/telegram
 // is declared on the telegram processor contracts, not here: contract event
 // catalogs need literal keys, and no door-side code composes those strings.
 
+/**
+ * How old a webhook may be and still deserve its user-visible acknowledgement
+ * (the 👀 reaction, the assistant status). Acks mean "your message was just
+ * picked up" — they are only meaningful near arrival. A full journal refold
+ * (the normal aftermath of deploying a state-schema change) or a late wake
+ * replays historical webhooks; re-acking those would resurrect reactions on
+ * old messages, and a burst of them is a Slack rate-limit crash-loop
+ * (docs/writing-stream-processors.md, "Refold safety").
+ */
+const WEBHOOK_ACK_FRESHNESS_MS = 15 * 60_000;
+
+/** Whether an event is young enough for its acknowledgement lane to act. */
+export function webhookAckIsFresh(event: { createdAt: string }, now: number): boolean {
+  return now - Date.parse(event.createdAt) <= WEBHOOK_ACK_FRESHNESS_MS;
+}
+
 export function readRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

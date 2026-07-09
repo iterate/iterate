@@ -282,6 +282,11 @@ function workerBindings(input: {
     browser: { binding: "BROWSER" },
     images: { binding: "IMAGES" },
     media: { binding: "MEDIA" },
+    // Deploy identity for the stream processor hosts' crash-loop breaker: a
+    // revival that sees a NEW version id starts from a fresh backoff budget
+    // (the antidote deploy). Absent in local dev (miniflare fakes it or omits
+    // it); workerVersion(env) tolerates undefined.
+    version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
     queues: {

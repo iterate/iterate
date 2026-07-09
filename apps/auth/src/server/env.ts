@@ -46,6 +46,8 @@ export interface CloudflareEnv {
   APP_CONFIG_ADMIN_ALLOWLIST?: string;
   /** "true" enables the email one-time-passcode sign-in lane. */
   APP_CONFIG_EMAIL_OTP_ENABLED?: string;
+  /** "true" enables fixed `+test@nustom.com` OTPs for test automation. */
+  APP_CONFIG_FIXED_TEST_OTP_ENABLED?: string;
   /**
    * Deployed base domain project homepages live under (e.g. "iterate.app").
    * Optional: src/config.ts defaults it.

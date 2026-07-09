@@ -95,6 +95,29 @@ describe("StreamEventLog.getRange", () => {
     expect(read(log, { afterOffset: 0, eventTypes: [], limit: 3 })).toEqual([]);
   });
 
+  it("insert reports serialized byte lengths and getRangeSized reads the same sizes back", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const committedEvents = [
+      event(1, "events.iterate.com/test/sized"),
+      event(2, "events.iterate.com/test/sized"),
+    ];
+
+    const insertedByteLengths = log.insert(committedEvents);
+    expect(insertedByteLengths).toEqual(
+      committedEvents.map((entry) => new TextEncoder().encode(JSON.stringify(entry)).byteLength),
+    );
+
+    // The sized read sums the chunk rows already in hand — no re-stringify —
+    // and must agree exactly with what insert serialized.
+    const sized = log.getRangeSized({
+      afterOffset: 0,
+      beforeOffset: Number.MAX_SAFE_INTEGER,
+      limit: 10,
+    });
+    expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
+    expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+  });
+
   it("adds the stream path when reading legacy stored events", () => {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
     const log = new StreamEventLog(sql, "/legacy/stream");
@@ -202,6 +225,49 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
   function makeStore() {
     return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
   }
+
+  it("migrates existing subscription tables that predate epoch fencing", () => {
+    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
+    sql.exec(`
+      create table subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        updated_at text not null
+      )
+    `);
+    sql.exec(
+      "insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at) values (?, ?, ?, ?, ?, ?)",
+      "legacy",
+      4,
+      2,
+      123,
+      "old failure",
+      new Date(0).toISOString(),
+    );
+
+    const store = new SqliteSubscriptionCursorStore(sql);
+
+    expect(store.get("legacy")).toMatchObject({
+      ackedOffset: 4,
+      attempt: 2,
+      epoch: 0,
+      lastError: "old failure",
+      nextAttemptAt: 123,
+    });
+
+    store.setCursor("legacy", 7);
+
+    expect(store.get("legacy")).toMatchObject({
+      ackedOffset: 7,
+      attempt: 0,
+      lastError: null,
+      nextAttemptAt: null,
+    });
+    expect(store.get("legacy")!.epoch).toBeGreaterThan(0);
+  });
 
   it("acks fenced on a stale epoch no-op; unfenced acks still land", () => {
     const store = makeStore();

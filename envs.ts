@@ -190,19 +190,45 @@ export interface AuthDeployedEnv {
   dopplerConfig: string;
   authWorkerName: string;
   authBaseUrl: string;
+  /** Enables fixed `+test@nustom.com` OTPs for test automation. */
+  fixedTestOtpEnabled: boolean;
   resources: { authDbId: string };
 }
 
+function authEnvFromDeployedEnv(
+  env: DeployedEnv,
+  options: { fixedTestOtpEnabled: boolean },
+): AuthDeployedEnv {
+  return {
+    cloudflareAccountId: env.cloudflareAccountId,
+    dopplerConfig: env.dopplerConfig,
+    authWorkerName: env.authWorkerName,
+    authBaseUrl: env.authBaseUrl,
+    fixedTestOtpEnabled: options.fixedTestOtpEnabled,
+    resources: { authDbId: env.resources.authDbId },
+  };
+}
+
 export const authEnvs = {
-  ...envs,
+  prd: authEnvFromDeployedEnv(envs.prd, { fixedTestOtpEnabled: false }),
+  preview_1: authEnvFromDeployedEnv(envs.preview_1, { fixedTestOtpEnabled: true }),
+  preview_2: authEnvFromDeployedEnv(envs.preview_2, { fixedTestOtpEnabled: true }),
+  preview_3: authEnvFromDeployedEnv(envs.preview_3, { fixedTestOtpEnabled: true }),
+  preview_4: authEnvFromDeployedEnv(envs.preview_4, { fixedTestOtpEnabled: true }),
+  preview_5: authEnvFromDeployedEnv(envs.preview_5, { fixedTestOtpEnabled: true }),
+  preview_6: authEnvFromDeployedEnv(envs.preview_6, { fixedTestOtpEnabled: true }),
+  preview_7: authEnvFromDeployedEnv(envs.preview_7, { fixedTestOtpEnabled: true }),
+  preview_8: authEnvFromDeployedEnv(envs.preview_8, { fixedTestOtpEnabled: true }),
+  preview_9: authEnvFromDeployedEnv(envs.preview_9, { fixedTestOtpEnabled: true }),
   dev_global: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "dev_global",
     authWorkerName: "auth-dev-global",
     authBaseUrl: "https://auth.iterate-dev.com",
+    fixedTestOtpEnabled: true,
     resources: { authDbId: "a4e70d97-74aa-4f9f-8da9-4540e552b2a9" },
   },
-} satisfies Record<string, AuthDeployedEnv>;
+} satisfies Record<EnvName | "dev_global", AuthDeployedEnv>;
 
 /**
  * apps/semaphore — the preview-slot lease coordinator. prd serves all real

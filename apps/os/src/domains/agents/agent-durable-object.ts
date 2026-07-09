@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
@@ -40,6 +40,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    version: workerVersion(this.env),
   });
   readonly #agentProcessor = this.#processorHost.add(
     (deps) =>
@@ -248,6 +249,11 @@ export class AgentDurableObject extends DurableObject<Env> {
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#processorHost.handleAlarm();
   }
 
   get processor() {

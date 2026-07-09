@@ -52,6 +52,13 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
       description:
         "The journaled-send intent: a plain Bot API sendMessage payload (text plus any optional params) appended to the session stream by the agent (or the processor's fixed `/new` acknowledgement). Thread-bound: `chat_id`/`message_thread_id` are FORCED from the stream path (payload values are ignored — the message-sent claim records this stream as the message's thread, so a send that went elsewhere would corrupt provenance; use the raw itx.integrations.telegram sendMessage to post to a different chat). The telegram-agent processor is OBLIGED to deliver it and mark it with a `message-sent` event.",
       payloadSchema: z.object({ text: z.string() }).loose(),
+      examples: [
+        {
+          description:
+            "An agent reply on its own session stream; chat_id is filled from the path on delivery.",
+          payload: { text: "The deploy is green — all three checks passed." },
+        },
+      ],
     },
   },
   processorDeps: [
