@@ -59,33 +59,34 @@ async function listInstallationRepos(
 ): Promise<{ error: string | null; repos: InstallationRepo[]; totalCount: number }> {
   const repos: InstallationRepo[] = [];
   let totalCount = 0;
-  try {
-    for (let page = 1; page <= MAX_INSTALLATION_REPO_PAGES; page++) {
-      const response = (await itx.integrations.invokeCapability({
+  let error: string | null = null;
+  for (let page = 1; page <= MAX_INSTALLATION_REPO_PAGES; page++) {
+    let response: GithubInstallationReposPage;
+    try {
+      response = (await itx.integrations.invokeCapability({
         args: [{ page, per_page: 100 }],
         path: ["github", connection, "rest", "apps", "listReposAccessibleToInstallation"],
       })) as GithubInstallationReposPage;
-      totalCount = response.data.total_count;
-      repos.push(
-        ...response.data.repositories.map((repo) => ({
-          defaultBranch: repo.default_branch,
-          fullName: repo.full_name,
-          name: repo.name,
-          owner: repo.owner.login,
-          pushedAt: repo.pushed_at,
-        })),
-      );
-      if (response.data.repositories.length === 0 || repos.length >= totalCount) break;
+    } catch (caught) {
+      // A later page's failure keeps what earlier pages returned: a partial
+      // list with a warning beats discarding fetched repositories.
+      error = caught instanceof Error ? caught.message : String(caught);
+      break;
     }
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : String(error),
-      repos: [],
-      totalCount: 0,
-    };
+    totalCount = response.data.total_count;
+    repos.push(
+      ...response.data.repositories.map((repo) => ({
+        defaultBranch: repo.default_branch,
+        fullName: repo.full_name,
+        name: repo.name,
+        owner: repo.owner.login,
+        pushedAt: repo.pushed_at,
+      })),
+    );
+    if (response.data.repositories.length === 0 || repos.length >= totalCount) break;
   }
   repos.sort((left, right) => (right.pushedAt ?? "").localeCompare(left.pushedAt ?? ""));
-  return { error: null, repos, totalCount };
+  return { error, repos, totalCount: Math.max(totalCount, repos.length) };
 }
 
 /**
@@ -115,12 +116,20 @@ export function AddRepoFromGithub({
   const connections = useItxQuery({
     key: ["github-connections", projectId],
     query: async (itx) => {
-      const entries = await itx.integrations.list();
-      // Only builtin GitHub connections can back a repo (they carry the App
-      // installation the mirror pushes authenticate through).
-      return entries.flatMap((entry) =>
-        entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
-      );
+      // Failures come back as data (an empty list, so the row simply doesn't
+      // render): this is optional sugar on the repos page, and a throw from a
+      // suspense query would take down the whole page, not just the button.
+      try {
+        const entries = await itx.integrations.list();
+        // Only builtin GitHub connections can back a repo (they carry the App
+        // installation the mirror pushes authenticate through).
+        return entries.flatMap((entry) =>
+          entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
+        );
+      } catch (error) {
+        console.error("AddRepoFromGithub: listing integrations failed", error);
+        return [];
+      }
     },
   });
   const [open, setOpen] = useState(false);
@@ -376,7 +385,7 @@ function InstallationRepoList({
     return repos.filter((repo) => repo.fullName.toLowerCase().includes(query));
   }, [filter, repos]);
 
-  if (error !== null) {
+  if (error !== null && repos.length === 0) {
     return (
       <div className="break-words rounded-md border p-3 text-sm text-red-600">
         Could not list repositories through connection "{connection}": {error}
@@ -423,7 +432,11 @@ function InstallationRepoList({
           })
         )}
       </div>
-      {repos.length < totalCount ? (
+      {error !== null ? (
+        <p className="break-words text-xs text-red-600">
+          Listing stopped early — showing the {repos.length} repositories fetched so far: {error}
+        </p>
+      ) : repos.length < totalCount ? (
         <p className="text-xs text-muted-foreground">
           Showing {repos.length} of {totalCount} repositories the installation can see.
         </p>
