@@ -26,10 +26,12 @@ import { OpenAiWsProcessorContract } from "../openai-ws-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, fakeResponsesWebSocket } from "../test-helpers.ts";
 
 it("still answers the user when they attach an image format OpenAI cannot ingest", async () => {
-  const seeded = JSON.parse(
-    readFileSync(new URL("./misha2-1648.events.json", import.meta.url), "utf8"),
-  ) as StreamEvent[];
-  const stream = new MemoryStream();
+  const seeded = (
+    JSON.parse(
+      readFileSync(new URL("./misha2-1648.events.json", import.meta.url), "utf8"),
+    ) as Array<Omit<StreamEvent, "path">>
+  ).map((event): StreamEvent => ({ ...event, path: "/agents/1648" }));
+  const stream = new MemoryStream("/agents/1648");
   // Direct push (not append) keeps the real prod offsets on the seeded history.
   stream.events.push(...seeded);
   const lastSeededOffset = seeded.at(-1)!.offset;
