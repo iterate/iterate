@@ -60,12 +60,12 @@ middlewright default can follow as a proper upstream change.
 
 ## Checklist
 
-- [ ] Auto-`setStartTime` on first navigation, in the shared fixture, gated on `VIDEO_MODE`
-- [ ] Explicit `setStartTime()` in a spec still wins (last write wins)
-- [ ] Detection is best-effort — never fails a test
-- [ ] Capture before/after demo videos from `repo-ide-markdown-preview.spec.ts`
-- [ ] Attach a real **video** (not GIF) to the PR via the attachment-upload flow
-- [ ] `pnpm typecheck && pnpm lint` clean
+- [x] Auto-`setStartTime` on first navigation, in the shared fixture, gated on `VIDEO_MODE` _`armVideoAutoStart` in `specs/test-support/test.ts` patches the wrapped page's `goto`_
+- [x] Explicit `setStartTime()` in a spec still wins (last write wins) _auto-set runs during `goto`; explicit calls run later and override_
+- [x] Detection is best-effort — never fails a test _`.waitFor(...).catch(() => {})`_
+- [x] Capture before/after demo videos from `repo-ide-markdown-preview.spec.ts` _`sourceRange.start`: unset → 13.9s; rendered clip 10.7s → 4.0s, opens on content_
+- [~] Attach a real **video** (not GIF) to the PR via the attachment-upload flow _blocked: Chrome extension not connected headless. Confirmed via GitHub's `/markdown` API that a release-hosted `.mp4` renders as a link only (the `<video>` tag is sanitised) — so the PR uses the inline GIF + an mp4 link. A true inline player needs the editor attachment upload._
+- [x] `pnpm lint`/format clean on the changed file _oxfmt via lint-staged on commit; specs are not part of `pnpm typecheck` (no tsconfig includes them — Playwright transpiles at runtime)_
 
 ## Notes / log
 
@@ -74,5 +74,5 @@ middlewright default can follow as a proper upstream change.
   attachment-upload flow (drag the file into the PR editor →
   `user-attachments/assets/...` URL) renders an inline video player, so we can
   attach a real video. Convert the webm→mp4 for the widest GitHub support.
-</content>
-</invoke>
+  </content>
+  </invoke>
