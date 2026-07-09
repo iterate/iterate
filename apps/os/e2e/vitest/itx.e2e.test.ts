@@ -333,11 +333,17 @@ describe("itx", () => {
     });
     expect(committedEvent).toMatchObject({
       type: "hello-world",
-      offset: 3, // first two events are created and woken
+      // The birth certificate: created(1), the project-worker feed's
+      // subscription-configured(2), woken(3) — the first user append is 4.
+      offset: 4,
     });
     expect(await project.streams.get("/some/path").getEvents()).toMatchObject([
       {
         type: "events.iterate.com/stream/created",
+      },
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { subscriptionKey: "project-worker" },
       },
       {
         type: "events.iterate.com/stream/woken",
@@ -1945,27 +1951,33 @@ describe("itx", () => {
     const outputOffset = events.find(
       (event) => event.type === AGENT_OUTPUT_ADDED_TYPE && event.payload?.content === content,
     )?.offset;
+    // Processor subscriptions are wake-mode deliveries addressed by itx
+    // expression over the ordinary domain surface: { delivery: { mode:
+    // "wake", expression: ["agents", ["get", path], "processor",
+    // "wakeStreamSubscriber"] } }. The expression ROOT names the host domain.
+    const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
+      event.payload as {
+        subscriptionKey?: string;
+        delivery?: { mode?: string; expression?: unknown[] };
+      };
+    const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
+      wakeSubscriptionPayload(event).delivery?.expression?.[0];
     const agentSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
-          ?.type === "agent" &&
-        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith("#agent"),
+        wakeExpressionRoot(event) === "agents" &&
+        String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
     )?.offset;
     const cloudflareAiSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
-          ?.type === "agent" &&
-        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith(
-          "#cloudflare-ai",
-        ),
+        wakeExpressionRoot(event) === "agents" &&
+        String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#cloudflare-ai"),
     )?.offset;
     const itxSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriber?: { type?: string } }).subscriber?.type ===
-          "capability-host",
+        wakeExpressionRoot(event) === "capabilityHosts",
     )?.offset;
     const scriptRequestedOffset = events.find(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -2254,8 +2266,9 @@ describe("itx", () => {
 
     using project = itx.projects.create({ slug: "project-worker-process-event" });
     const marker = `cross-post-${crypto.randomUUID()}`;
-    // NOT the root stream: delivery is derived on every project stream, so a
-    // freshly minted child stream must reach the worker with no wiring at all.
+    // NOT the root stream: every project stream self-configures the
+    // project-worker push feed at birth, so a freshly minted child stream must
+    // reach the worker with no wiring at all.
     const sourcePath = `/sources/ping-${crypto.randomUUID()}`;
 
     await project.repo.commitFiles({
@@ -2324,10 +2337,19 @@ describe("itx", () => {
       originalType: "events.iterate.com/test/source",
     });
 
-    // The source stream's durable checkpoint reflects the delivery.
-    const runtimeState = await project.streams.get(sourcePath).runtimeState();
-    expect(runtimeState.runtime.workerDelivery?.checkpoint).toBeGreaterThanOrEqual(
-      sourceEvent.offset,
+    // The source stream's worker-feed cursor reflects the delivery. The push
+    // ack lands after the worker's processEventBatch resolves — which can be a
+    // beat after the cross-posted copy became observable — so poll briefly.
+    await waitForCondition(
+      async () => {
+        const runtimeState = await project.streams.get(sourcePath).runtimeState();
+        const feed = runtimeState.runtime.subscriptions["project-worker"];
+        return (feed?.ackedOffset ?? 0) >= sourceEvent.offset;
+      },
+      {
+        description: "project-worker feed ackedOffset to reach the source event",
+        timeoutMs: 10_000,
+      },
     );
   });
 

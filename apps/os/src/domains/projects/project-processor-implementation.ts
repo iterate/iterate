@@ -107,8 +107,8 @@ export class ProjectProcessor extends StreamProcessor<
                     projectId: this.deps.itx.projectId,
                     path: "/",
                   }),
+                  processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
-                  subscriberType: "capability-host",
                 }),
                 {
                   type: "events.iterate.com/repo/create-requested",
@@ -135,8 +135,8 @@ export class ProjectProcessor extends StreamProcessor<
                     path: EMAIL_INTEGRATION_STREAM_PATH,
                   }),
                   idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processor: ["email", "processor"],
                   processorSlug: EmailProcessorContract.slug,
-                  subscriberType: "project",
                 }),
                 ...(event.payload.creatorEmail === undefined
                   ? []
@@ -178,8 +178,8 @@ export class ProjectProcessor extends StreamProcessor<
               buildDurableObjectProcessorSubscriptionConfiguredEvent({
                 durableObjectName,
                 idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
+                processor: ["schedulers", ["get", childPath], "processor"],
                 processorSlug: SchedulerProcessorContract.slug,
-                subscriberType: "scheduler",
               }),
             );
             return;
@@ -211,8 +211,8 @@ export class ProjectProcessor extends StreamProcessor<
           await this.deps.itx.streams.get(childPath).append(
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName,
+              processor: ["secrets", ["get", childPath], "processor"],
               processorSlug: SecretProcessorContract.slug,
-              subscriberType: "secret",
             }),
           );
         });
@@ -299,12 +299,15 @@ function agentSubscriptionEvents(input: {
     projectId: input.projectId,
     path: input.childPath,
   });
-  const subscription = (processorSlug: string, subscriberType: "agent" | "capability-host") =>
+  const subscription = (processorSlug: string, hostKind: "agent" | "capability-host") =>
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
+      processor:
+        hostKind === "agent"
+          ? ["agents", ["get", input.childPath], "processor"]
+          : ["capabilityHosts", ["get", input.childPath], "processor"],
       processorSlug,
-      subscriberType,
     });
   return [
     subscription(AgentProcessorContract.slug, "agent"),

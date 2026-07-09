@@ -14,32 +14,34 @@
 // }
 // ```
 //
-// This is the subscriber half of the configured-subscription handshake, which
-// is a live-capability provide — the same shape itx capabilities use (see
-// `domains/capability-host/live-capability.ts`): the Stream DO wakes this host with
-// serializable coordinates only, and the host answers with the one public
-// `subscribe` verb (`configured: true` + its durable subscriptionKey), handing
-// the stream a live `processEventBatch` callback capability that the stream
-// retains and invokes for every committed batch. Everything else here exists
-// to make that callback safe to re-issue: replay cursors come from the
-// processor's durable checkpoint, failed batches re-handshake, and connection
-// generations fence off batches from superseded connections.
+// This is the subscriber half of the wake handshake, and the whole handshake
+// is ONE call: the stream pokes `wakeStreamSubscriber` with serializable
+// coordinates, and the host RETURNS the processor's durable checkpoint plus a
+// live sink — the same `(batch: StreamEventBatch) => unknown` shape every
+// subscriber gives the stream. The stream owns the returned sink (returned-
+// stub ownership transfers to the caller), streams one-way batches into it
+// from the checkpoint, and pulls each batch's result as its liveness signal.
+//
+// Everything that used to live here to make a subscribe-BACK handshake safe —
+// connection generations, supersede fencing, ingest-failure re-handshakes,
+// poison records, the host-side idle timer — is gone, because its job moved
+// to structure: the stream initiated the connection, so the stream owns
+// replacement; a rejected batch result closes the connection stream-side and
+// the spine re-pokes with backoff, replaying from this host's checkpoint
+// (ingest is internally serialized and offset-deduped, so overlap between a
+// dying sink and its replacement is harmless); sustained failure parks the
+// subscription as a durable fact instead of a console line.
 
 import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamSubscriptionHandle } from "./rpc-types.ts";
-import type { StreamEvent } from "./schemas.ts";
+import type {
+  StreamEventBatch,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "./rpc-types.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 
-/** What the Stream DO sends when asking a hosted processor to subscribe back. */
-export type StreamSubscriberWakeRequest = {
-  stream: {
-    projectId: string | null;
-    path: string;
-    streamMaxOffset: number;
-  };
-  subscriptionKey: string;
-};
+export type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
 
 /**
  * Base deps the host provides to each processor it owns. Spread them into the
@@ -67,41 +69,19 @@ export type AnyHostedProcessor = {
     emits?: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
-  ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
+  ingest(args: {
+    events: readonly StreamEventBatch["events"][number][];
+    streamMaxOffset: number;
+  }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
 };
 
 type HostedEntry = {
   processor: AnyHostedProcessor;
-  handle: StreamSubscriptionHandle | undefined;
-  /** Consecutive ingest failures since the last successful batch. */
-  consecutiveIngestFailures: number;
-  /**
-   * Bumped on every (re)subscription. Batches delivered on a superseded
-   * generation are dropped instead of ingested — see the gate in
-   * `openSubscription`.
-   */
-  generation: number;
-  /** Serializes ingest per processor so the generation gate is re-checked between batches. */
+  /** Serializes sink batches per processor; ingest also dedupes by offset internally. */
   ingestChain: Promise<void>;
 };
-
-// A failed batch does not advance the checkpoint, so we re-handshake from it and
-// the stream replays the batch — this recovers transient failures. A batch that
-// keeps failing is poison: after this many consecutive failures we stop retrying,
-// record a stream/error-occurred event, and disconnect, leaving it to the
-// subscriber/processor (or a later wake) to decide whether to re-establish.
-const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
-
-// Belt-and-braces companion to the Stream DO's idle teardown. A live subscription
-// handle pins the delivery connection. If no batch arrives for this long, the
-// host unsubscribes so this subscriber DO and the producer can hibernate; the
-// durable checkpoint + subscription-key persist, so the producer re-wakes us and
-// the host re-handshakes when activity resumes. In-memory timer for the same
-// reason as the Stream DO side: a durable alarm's only extra power — waking a
-// hibernated DO — is exactly wrong.
-const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 
 type StreamProcessorHost = {
   readonly stream: Stream;
@@ -112,15 +92,17 @@ type StreamProcessorHost = {
    * them. Call during DO field initialization.
    */
   add<P extends AnyHostedProcessor>(build: (deps: HostedProcessorDeps) => P): P;
-  /** Wire this to the host DO's wakeStreamSubscriber RPC method. */
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void>;
+  /**
+   * Wire this to the host DO's wakeStreamSubscriber RPC method. Resolves the
+   * poked processor (by the request's `processorSlug`, or the only registered
+   * one) and answers with its checkpoint and a fresh sink.
+   */
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
   /**
    * Pull any events the push delivery has not (yet) brought this processor and
    * ingest them now. Call before serving a read that must reflect a write the
-   * caller just made (read-your-writes): push delivery is asynchronous and can
-   * stall when a configured-subscriber wake is lost mid-chain (see
-   * tasks/stream-subscriber-deliveries-stall-mid-turn.md). Ingest is
-   * checkpoint-filtered and serialized, so racing a live subscription is safe.
+   * caller just made (read-your-writes): push delivery is asynchronous. Ingest
+   * is checkpoint-filtered and serialized, so racing a live sink is safe.
    * Failures are logged and swallowed — the read then serves the last
    * successfully ingested state, exactly as it would have without the pull.
    */
@@ -133,15 +115,13 @@ export function createStreamProcessorHost(
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
-  // One id per host DO instance. It rides on each subscription's
-  // subscriber-connected presence fact: a connected event with a new
-  // incarnationId tells every reconciling processor that this host's
-  // non-serializable runtime state (timers, in-flight requests, sockets)
-  // was reset.
+  // One id per host DO instance. It rides on each poke response's subscriber
+  // descriptor: a connected presence fact with a new incarnationId tells every
+  // reconciling processor that this host's non-serializable runtime state
+  // (timers, in-flight requests, sockets) was reset.
   const hostIncarnationId = crypto.randomUUID();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
-  const subscriptionKeyKey = (name: string) => `stream-processor:${name}:subscription-key`;
 
   function requireEntry(name: string): HostedEntry {
     const entry = entries.get(name);
@@ -153,178 +133,15 @@ export function createStreamProcessorHost(
     return entry;
   }
 
-  function resolveProcessorName(subscriptionKey: string): string {
+  function resolveProcessorName(args: StreamSubscriberWakeRequest): string {
+    if (args.processorSlug !== undefined) {
+      requireEntry(args.processorSlug);
+      return args.processorSlug;
+    }
     if (entries.size === 1) return [...entries.keys()][0]!;
-    const suffix = subscriptionKey.split("#").at(-1);
-    if (suffix !== undefined && entries.has(suffix)) return suffix;
     throw new Error(
-      `wakeStreamSubscriber could not resolve processor for subscription "${subscriptionKey}" (registered: ${[...entries.keys()].join(", ")})`,
+      `wakeStreamSubscriber for "${args.subscriptionKey}" needs a processorSlug on a multi-processor host (registered: ${[...entries.keys()].join(", ")})`,
     );
-  }
-
-  /**
-   * Invalidate an entry's current connection: bump the generation so batches
-   * still queued on it are dropped by the gate in `openSubscription`, then tear
-   * the handle down. The durable checkpoint + subscription key persist, so a
-   * later wake or recovery re-handshakes from where the processor left off.
-   */
-  function supersedeConnection(entry: HostedEntry): void {
-    entry.generation += 1;
-    try {
-      entry.handle?.unsubscribe();
-    } catch {
-      // The producer may already be gone; the handle is dead either way.
-    }
-    entry.handle = undefined;
-  }
-
-  // In-memory idle teardown: unsubscribe after a quiet spell so this subscriber
-  // DO (and the producer connection it pins) can hibernate. See HOST_IDLE_TEARDOWN_MS.
-  let idleTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function hasLiveSubscription(): boolean {
-    for (const entry of entries.values()) if (entry.handle !== undefined) return true;
-    return false;
-  }
-
-  // (Re)armed on every handshake and every delivered batch; cleared once no
-  // entry holds a live subscription handle.
-  function armIdleTimer(): void {
-    if (idleTimer !== undefined) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
-    if (!hasLiveSubscription()) return;
-    idleTimer = setTimeout(runIdleDisconnectNow, HOST_IDLE_TEARDOWN_MS);
-  }
-
-  function runIdleDisconnectNow(): void {
-    idleTimer = undefined;
-    for (const entry of entries.values()) {
-      if (entry.handle !== undefined) supersedeConnection(entry);
-    }
-  }
-
-  // (Re)opens the configured subscription from the processor's durable checkpoint.
-  // Called for the initial handshake and again by `recoverFromIngestFailure`, so
-  // a failed batch replays from the last good offset instead of being skipped.
-  async function openSubscription(name: string): Promise<void> {
-    const entry = requireEntry(name);
-    const subscriptionKey = ctx.storage.kv.get<string>(subscriptionKeyKey(name));
-    if (subscriptionKey === undefined) {
-      throw new Error(`Stream processor "${name}" has no stored subscription key`);
-    }
-    // Each (re)subscription is a generation. The pump is fire-and-forget, so
-    // while a failed batch recovers the stream keeps delivering later batches;
-    // ingesting one of those would advance the checkpoint past the failed offset
-    // and lose it. Capturing the generation and dropping batches from a
-    // superseded connection makes the post-recovery replay the single source of
-    // truth.
-    const generation = entry.generation;
-    const snapshot = await entry.processor.snapshot();
-    // Another wake / recovery may have bumped the generation while we awaited the
-    // snapshot. If so, that newer handshake owns the entry now; opening ours
-    // would overwrite its live handle with a superseded connection whose batches
-    // the generation gate drops — stalling delivery until the idle teardown. Bail
-    // out and let the newer handshake win.
-    if (generation !== entry.generation) return;
-    const handle = await options.stream.subscribe({
-      subscriptionKey,
-      configured: true,
-      replayAfterOffset: snapshot.offset,
-      // The contract is the filter: the stream only delivers event types the
-      // processor consumes. A `"*"` in consumes means unfiltered delivery.
-      eventTypes: entry.processor.contract.consumes,
-      // The stream appends this identity as a subscriber-connected presence
-      // fact; the contract announcement feeds its processorsBySlug registry.
-      // Recovery re-subscriptions pass the same incarnationId — each (re)open
-      // genuinely is a new connection and re-lands on the roster.
-      subscriber: {
-        incarnationId: hostIncarnationId,
-        processor: {
-          announcement: announceContract(entry.processor.contract),
-          getRuntimeState: () => entry.processor.getRuntimeState(),
-        },
-      },
-      processEventBatch: (batch) => {
-        // A batch arrived — this subscription is active; reset the idle countdown.
-        armIdleTimer();
-        // Serialize ingest per processor so the generation gate is re-checked
-        // *between* batches: a batch queued on a now-dead connection must be
-        // dropped, not ingested. ingest serializes internally too, but that
-        // can't drop a batch that was already accepted.
-        entry.ingestChain = entry.ingestChain
-          .then(async () => {
-            if (generation !== entry.generation) return; // superseded connection; replay covers it
-            try {
-              await entry.processor.ingest(batch);
-              entry.consecutiveIngestFailures = 0;
-            } catch (error) {
-              await recoverFromIngestFailure(name, error);
-            }
-          })
-          // Recovery itself can throw (e.g. the re-handshake or the poison-path
-          // error append fails). Never let that leave the chain rejected, or every
-          // later batch's `.then` would be skipped and delivery would wedge. A
-          // future re-handshake (stream-side reconcile) is the way back.
-          .catch((error: unknown) => {
-            console.error(`stream processor "${name}" ingest recovery failed`, error);
-          });
-        // waitUntil keeps the DO alive through ingest + recovery after the RPC
-        // callback returns.
-        ctx.waitUntil(entry.ingestChain);
-        return entry.ingestChain;
-      },
-    });
-    // The subscribe await above is another window in which a newer handshake can
-    // take over. If it did, unsubscribe the connection we just opened rather than
-    // publishing it as the entry's live handle (which would strand the newer one).
-    if (generation !== entry.generation) {
-      handle.unsubscribe();
-      return;
-    }
-    entry.handle = handle;
-    // A fresh handshake opened a live subscription; start the idle countdown.
-    armIdleTimer();
-  }
-
-  // A failed batch never advances the checkpoint. Re-handshake from it (the
-  // stream replays the batch) to recover transient failures; give up and
-  // disconnect once a batch proves poison.
-  async function recoverFromIngestFailure(name: string, error: unknown): Promise<void> {
-    const entry = requireEntry(name);
-    entry.consecutiveIngestFailures += 1;
-    console.error(
-      `stream processor "${name}" failed to ingest batch (attempt ${entry.consecutiveIngestFailures})`,
-      error,
-    );
-
-    supersedeConnection(entry);
-
-    if (entry.consecutiveIngestFailures <= MAX_CONSECUTIVE_INGEST_FAILURES) {
-      // Transient: re-handshake from the durable checkpoint; the stream replays
-      // the failed batch (replay is idempotent — events <= checkpoint filter out).
-      await openSubscription(name);
-      return;
-    }
-
-    // Poison batch: stop retrying, record the failure on the stream, and stay
-    // disconnected. It is up to the subscriber/processor (or a later wake) to
-    // decide whether to re-establish the subscription.
-    const offset = (await entry.processor.snapshot()).offset;
-    const message = (error instanceof Error ? error.message : String(error)) || "unknown error";
-    await options.stream.append({
-      type: "events.iterate.com/stream/error-occurred",
-      idempotencyKey: `processor-ingest-failed:${name}:${offset}`,
-      payload: {
-        message: `stream processor "${name}" gave up after ${entry.consecutiveIngestFailures} failed ingest attempts at offset ${offset}`,
-        error: {
-          message,
-          ...(error instanceof Error && error.name ? { name: error.name } : {}),
-          ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
-        },
-      },
-    });
   }
 
   return {
@@ -354,13 +171,7 @@ export function createStreamProcessorHost(
         );
       }
       registeredSlug = processor.contract.slug;
-      entries.set(registeredSlug, {
-        processor,
-        handle: undefined,
-        consecutiveIngestFailures: 0,
-        generation: 0,
-        ingestChain: Promise.resolve(),
-      });
+      entries.set(registeredSlug, { processor, ingestChain: Promise.resolve() });
       return processor;
     },
 
@@ -373,7 +184,7 @@ export function createStreamProcessorHost(
           const events = await pager.next();
           if (events.length === 0) return;
           // Non-consumed event types reduce to no-ops but still advance the
-          // checkpoint, mirroring what a filtered subscription's cursor does.
+          // checkpoint, mirroring what a filtered delivery's cursor does.
           await entry.processor.ingest({
             events,
             streamMaxOffset: events.at(-1)!.offset,
@@ -388,26 +199,46 @@ export function createStreamProcessorHost(
     },
 
     async wakeStreamSubscriber(args) {
-      const name = resolveProcessorName(args.subscriptionKey);
+      const name = resolveProcessorName(args);
       const entry = requireEntry(name);
+      const snapshot = await entry.processor.snapshot();
 
-      ctx.storage.kv.put(subscriptionKeyKey(name), args.subscriptionKey);
+      // The sink: the one shape every subscriber gives the stream. Batches are
+      // serialized per processor; each batch's promise is RETURNED so the
+      // stream's result-pull observes ingest failures (its liveness signal —
+      // a rejection closes the connection and the spine re-pokes, replaying
+      // from this processor's checkpoint). The chain itself swallows the
+      // rejection so one failed batch never wedges the batches behind it.
+      const sink = (batch: StreamEventBatch) => {
+        const attempt = entry.ingestChain.then(() =>
+          entry.processor.ingest({ events: batch.events, streamMaxOffset: batch.streamMaxOffset }),
+        );
+        entry.ingestChain = attempt.catch((error: unknown) => {
+          console.error(`stream processor "${name}" failed to ingest batch`, error);
+        });
+        // waitUntil keeps the DO alive through ingest after the RPC callback returns.
+        ctx.waitUntil(entry.ingestChain);
+        return attempt;
+      };
 
-      // This handshake replaces any previous connection; batches still queued
-      // on it must be dropped — the new connection's replay from the checkpoint
-      // is authoritative.
-      supersedeConnection(entry);
-      entry.consecutiveIngestFailures = 0;
-
-      await openSubscription(name);
+      return {
+        checkpointOffset: snapshot.offset,
+        sink,
+        subscriber: {
+          incarnationId: hostIncarnationId,
+          processor: { announcement: announceContract(entry.processor.contract) },
+        },
+        getRuntimeState: () => entry.processor.getRuntimeState(),
+      };
     },
   };
 }
 
 /**
- * Serializable contract announcement carried on a subscription's connect event.
- * Shared by this Durable Object host and the browser mirror runtime so both
- * kinds of hosted processor land identically on the stream's presence roster.
+ * Serializable contract announcement carried on a poke response (and from
+ * there onto the subscription's connected presence fact). Shared by this
+ * Durable Object host and the browser mirror runtime so both kinds of hosted
+ * processor land identically on the stream's presence roster.
  */
 export function announceContract(contract: {
   slug: string;

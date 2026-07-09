@@ -95,21 +95,24 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
-  "stream-cross-post-rule": {
-    // Matrix runtimes share a project; per-runtime paths keep the rule and
-    // its copies from colliding with a sibling runtime's.
+  "stream-cross-post": {
+    // Matrix runtimes share a project; per-runtime paths keep the cross-post
+    // subscription and its copies from colliding with a sibling runtime's.
     vars: ({ marker }) => ({
       source: `/examples/cross-post/source-${marker}`,
       target: `/examples/cross-post/target-${marker}`,
     }),
-    assert: (result, _ctx, expect) => {
+    assert: (result, ctx, expect) => {
       const shaped = result as {
         copied: { importance: string; text: string };
-        provenance: Array<{ ruleId: string }>;
+        provenance: Array<{ subscriptionKey: string }>;
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
       expect(shaped.provenance).toHaveLength(1);
-      expect(shaped.provenance[0]).toMatchObject({ ruleId: "copy-important" });
+      // crossPostTo without an explicit key defaults to cross-post:<target>.
+      expect(shaped.provenance[0]).toMatchObject({
+        subscriptionKey: `cross-post:/examples/cross-post/target-${ctx.marker}`,
+      });
     },
   },
   "scheduler-basics": {

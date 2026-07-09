@@ -46,11 +46,11 @@ test("project.processor does not expose the host-only ingest method over RPC", a
 });
 
 // B3: append accepts an optional `offset` as an optimistic-concurrency
-// assertion. Before the fix, core policy events (subscription-configured,
-// rule-configured) ran the whole input — including that offset — through a
-// strict Zod parse with no offset key, so the assertion form always threw
-// "Unrecognized key: offset" instead of asserting.
-test("append accepts an offset assertion on a rule-configured core event", async () => {
+// assertion. Before the fix, core policy events (subscription-configured) ran
+// the whole input — including that offset — through a strict Zod parse with no
+// offset key, so the assertion form always threw "Unrecognized key: offset"
+// instead of asserting.
+test("append accepts an offset assertion on a subscription-configured core event", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/security/offset-assert/${marker}`;
 
@@ -62,25 +62,29 @@ test("append accepts an offset assertion on a rule-configured core event", async
   using project = itx.projects.create({ slug: `sec-offset-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  // A brand-new stream has committed created(1) + woken(2); the next append is 3.
-  // `offset` is the DO's optimistic-concurrency assertion. It rides on the append
-  // input at runtime but is intentionally absent from the narrow public `Stream`
-  // type, so it is cast in here exactly as a concurrency-sensitive caller would.
+  // A brand-new project stream has committed created(1) + the birth-certificate
+  // project-worker feed's subscription-configured(2) + woken(3); the next append
+  // is 4. `offset` is the DO's optimistic-concurrency assertion. It rides on the
+  // append input at runtime but is intentionally absent from the narrow public
+  // `Stream` type, so it is cast in here exactly as a concurrency-sensitive
+  // caller would.
   const appendWithOffset = stream.append as unknown as (
     event: Record<string, unknown>,
   ) => Promise<{ offset: number }[]>;
   const [configured] = await appendWithOffset({
-    type: "events.iterate.com/stream/rule-configured",
-    offset: 3,
+    type: "events.iterate.com/stream/subscription-configured",
+    offset: 4,
     payload: {
-      eventTypes: [STREAM_EVENT_TYPE],
-      path: `/e2e/security/offset-assert-target/${marker}`,
-      ruleId: `rule-${marker}`,
-      type: "cross-post",
+      subscriptionKey: `cross-post-${marker}`,
+      delivery: {
+        mode: "push",
+        expression: ["streams", ["get", `/e2e/security/offset-assert-target/${marker}`], "ingest"],
+      },
+      selector: { eventTypes: [STREAM_EVENT_TYPE] },
     },
   });
 
-  expect(configured!.offset).toBe(3);
+  expect(configured!.offset).toBe(4);
 });
 
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the

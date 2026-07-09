@@ -111,11 +111,23 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
+    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
   }
 
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
+  }
+
+  async ingest(): Promise<never> {
+    throw new Error("MemoryStream does not implement ingest().");
+  }
+
+  async crossPostTo(): Promise<never> {
+    throw new Error("MemoryStream does not implement crossPostTo().");
+  }
+
+  async removeCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement removeCrossPost().");
   }
 }
 

@@ -1,8 +1,5 @@
-import { DurableObjectNameCodec, type DurableObjectAddress } from "../durable-object-names.ts";
-import {
-  CoreProcessorContract,
-  type ConfiguredStreamSubscriber,
-} from "./core-processor-contract.ts";
+import type { ItxExpression } from "../../itx/expression.ts";
+import { CoreProcessorContract } from "./core-processor-contract.ts";
 import { buildEvent } from "./processor-contracts.ts";
 
 /**
@@ -34,41 +31,35 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
  * Builds the public `events.iterate.com/stream/subscription-configured` fact
  * for a processor hosted by one of this app's Durable Objects.
  *
- * This helper exists because that event has a deliberately involved payload:
- * it must carry the opaque durable subscription key, a typed subscriber target
- * (`agent`, `itx`, `project`, or `repo`), and the parsed Durable Object address
- * the Stream Durable Object will later wake. The event itself remains the public
- * interface: callers may append it directly, and this helper is only a
- * convenience for the bootstrap paths that would otherwise duplicate the same
- * shape in several places.
+ * `processor` is the itx expression naming the host's processor NODE on the
+ * ordinary domain surface — `["agents", ["get", path], "processor"]`,
+ * `["repos", ["get", path], "processor"]`, the project root's own
+ * `["processor"]`, `["email", "processor"]`, … — and the built delivery
+ * appends the wake door (`"wakeStreamSubscriber"`) to it. Each call site
+ * states its own domain address; this helper only owns the shared payload
+ * shape. The event itself remains the public interface: callers may append it
+ * directly.
  *
- * Validation and trust checks do not live here. A caller that can append to a
- * stream can always hand-write this event, so project/scope validation belongs
- * in the Stream Durable Object's append/reconcile path. The helper only parses
- * the target name and reuses the core processor contract via `buildEvent(...)`
- * so ordinary call sites get the same payload typing and Zod validation as any
- * other contract-owned event.
+ * Note what the expression does NOT carry: a projectId. Persisted config is a
+ * NAME; the delivering stream re-derives authority from its own itx root at
+ * dial time, so the host is always resolved in the stream's own project (or
+ * the deployment-global scope for `projectId: null` streams) — persisted
+ * config cannot smuggle cross-project reach, structurally.
  *
  * The default `subscriptionKey` is `${durableObjectName}#${processorSlug}` and
  * should be treated as opaque. `idempotencyKey` is an optional pass-through for
  * unusual repair/debug flows; normal bootstrap call sites intentionally omit it
  * so repeated configuration appends remain visible in the event log while
- * debugging failed subscription setup. The subscriber payload shape is likely
- * to change again as stream subscriptions settle, so keep new subscription
- * setup code funneled through this helper unless it is intentionally testing
- * hand-authored public events.
+ * debugging failed subscription setup.
  */
 export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
   durableObjectName: string;
   idempotencyKey?: string;
+  /** Itx expression to the host's processor node (the wake door is appended). */
+  processor: ItxExpression;
   processorSlug: string;
-  subscriberType: Exclude<ConfiguredStreamSubscriber["type"], "worker">;
   subscriptionKey?: string;
 }) {
-  const address = DurableObjectNameCodec.parse(input.durableObjectName, {
-    allowNullProjectId: true,
-  }) satisfies DurableObjectAddress;
-
   return buildEvent({
     contract: CoreProcessorContract,
     event: {
@@ -77,9 +68,13 @@ export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
       payload: {
         subscriptionKey:
           input.subscriptionKey ?? `${input.durableObjectName}#${input.processorSlug}`,
-        subscriber: {
-          address,
-          type: input.subscriberType,
+        delivery: {
+          mode: "wake",
+          expression: [...input.processor, "wakeStreamSubscriber"],
+          // processorSlug rides the delivery explicitly; the wake request
+          // carries it so multi-processor hosts resolve without parsing
+          // anything out of the (opaque) subscription key.
+          processorSlug: input.processorSlug,
         },
       },
     },

@@ -1,9 +1,9 @@
 import { z } from "zod";
+import { ItxExpressionStep } from "../../itx/expression.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
-  ItxExpressionStep as ItxExpressionStepType,
   RevokeCapabilityInput,
 } from "./types.ts";
 
@@ -11,15 +11,6 @@ const CapabilityMetadata = {
   instructions: z.string().optional(),
   types: z.string().optional(),
 };
-
-const ItxExpressionStep: z.ZodType<ItxExpressionStepType> = z.union([
-  z.string(),
-  z
-    .array(z.unknown())
-    .refine((step): step is [string, ...unknown[]] => typeof step[0] === "string", {
-      message: "call expression steps must start with a method name",
-    }),
-]);
 
 const ItxExpressionFields = {
   expression: z.array(ItxExpressionStep),
