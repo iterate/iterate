@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -48,6 +49,8 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 /** How many rows past the virtualizer's window the tail query prefetches. */
 const TAIL_PREFETCH_ROWS = 32;
+/** Cap on rows retained across window shifts (memory bound for long feeds). */
+const MAX_RETAINED_ROWS = 2000;
 
 /**
  * The clean agent chat feed: user and assistant messages plus archived
@@ -122,31 +125,37 @@ export function AgentFeedView({
   const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
   const totalCount = itemCount + liveCount + queuedCount;
 
+  // Settled rows are append-only at dense indices, so the index is a stable
+  // key for them. The live activity and queued panel keep their own keys:
+  // their index shifts up every time a settled row lands, and keying them by
+  // index would hand the (often tall) live block's cached measurement to the
+  // new settled row — a visible jump right when a turn settles.
+  const hasLive = live != null;
+  const getItemKey = useCallback(
+    (index: number) => {
+      if (index < itemCount) return index;
+      return hasLive && index === itemCount ? "live" : "queued";
+    },
+    [itemCount, hasLive],
+  );
+
   const virtualizer = useVirtualizer({
     count: totalCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 56,
-    // Agent feed rows are append-only and addressed by dense local_index, so
-    // the virtual index is a stable item key for TanStack's end anchoring.
-    getItemKey: (index) => index,
+    getItemKey,
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: 80,
     overscan: 16,
-    directDomUpdates: true,
+    // Deliberately NOT directDomUpdates: in that mode the virtualizer owns
+    // each row's transform and the container height, and this feed's async
+    // row loading (SQL windows resolving after the rows render) triggers
+    // remeasurement storms the direct-DOM path loses track of — the browser
+    // clamps scrollTop against a stale container height and the end anchor
+    // strands mid-history. The classic mode below (JSX-owned styles) rides
+    // the same anchorTo/followOnAppend machinery and holds the pin.
   });
-
-  // Open at the newest content. anchorTo/followOnAppend only act on option
-  // UPDATES — when the deduped query registry already knows the count on the
-  // first render (e.g. re-keyed remount for a previously-opened stream), there
-  // is no 0→N transition for followOnAppend to chase, so set the initial
-  // position explicitly. scrollToEnd's reconcile loop absorbs estimated→
-  // measured size drift.
-  useLayoutEffect(() => {
-    virtualizer.scrollToEnd();
-    // useVirtualizer returns one stable instance for the component's lifetime,
-    // so this runs once on mount; later appends are followOnAppend's job.
-  }, [virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
@@ -155,6 +164,14 @@ export function AgentFeedView({
   // the unfiltered Pretty+debug path can address rows by local_index directly.
   const denseWindow = query !== "" || !showDebug;
   const windowLimit = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
+  // While the feed is opening (initial end-pin below), anchor the row window
+  // to the TAIL regardless of the virtualizer's not-yet-scrolled range: the
+  // opening jump must land on rows with real measured sizes, or estimate
+  // error makes the total shrink under the clamped scroll offset and strands
+  // the reader mid-history. Once pinned, the virtualizer's range drives the
+  // window again.
+  const [initialPinDone, setInitialPinDone] = useState(false);
+  const windowStart = initialPinDone ? first : Math.max(0, itemCount - windowLimit);
   const rowClauses: string[] = [];
   const rowParams: Array<string | number> = [];
   if (!showDebug) rowClauses.push(DEBUG_KINDS_SQL);
@@ -172,31 +189,90 @@ export function AgentFeedView({
       : `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
          WHERE local_index >= ? AND local_index < ?
          ORDER BY local_index ASC`,
-    denseWindow ? [...rowParams, windowLimit, first] : [first, last + 1 + TAIL_PREFETCH_ROWS],
+    denseWindow
+      ? [...rowParams, windowLimit, windowStart]
+      : [windowStart, windowStart + windowLimit],
   );
-  // Retain the last committed rows across range re-queries so already-visible
-  // rows don't flash to skeletons while the shifted window's SQL runs. The
-  // retained rows are only valid for the filter they were fetched under —
-  // reusing them across a filter change would briefly show unfiltered rows.
+  // Retain rows across range re-queries by MERGING each resolved window into
+  // the previously-loaded rows (bounded below). Replacing the map with just
+  // the latest window would forget loaded rows the moment the window shifts;
+  // rows scrolled back into view would then re-render as skeletons, and the
+  // skeleton's measurement would overwrite the row's real size — with an
+  // end-anchored virtualizer those size collapses cascade into the total
+  // thrashing and the scroll position stranding mid-history. The retained
+  // rows are only valid for the filter they were fetched under — reusing
+  // them across a filter change would briefly show unfiltered rows.
   const filterKey = `${showDebug ? "debug" : "pretty"}:${query}`;
-  const lastRowsRef = useRef<{ filterKey: string; rows: Map<number, AgentUiItem> } | null>(null);
+  const lastRowsRef = useRef<{
+    filterKey: string;
+    rows: Map<number, { raw: string; item: AgentUiItem }>;
+  } | null>(null);
   const itemsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") {
-      const retained = lastRowsRef.current;
-      return retained?.filterKey === filterKey ? retained.rows : new Map<number, AgentUiItem>();
-    }
-    const rows = new Map<number, AgentUiItem>();
+    const retained =
+      lastRowsRef.current?.filterKey === filterKey
+        ? lastRowsRef.current.rows
+        : new Map<number, { raw: string; item: AgentUiItem }>();
+    if (rowsResult.status !== "ok") return retained;
+    const rows = new Map(retained);
     rowsResult.data.forEach((row, position) => {
-      const index = denseWindow ? first + position : Number(row.local_index);
+      const index = denseWindow ? windowStart + position : Number(row.local_index);
+      const raw = String(row.data);
+      // Identity stability is load-bearing: rows re-parse (new object) ONLY
+      // when their JSON changed. Handing memoized rows fresh-but-equal items
+      // on every window re-query re-renders their markdown, whose async
+      // re-parse collapses the row to empty for a frame — and a burst of
+      // rows momentarily measuring ~16px is exactly the kind of size storm
+      // that breaks the virtualizer's end anchor.
+      if (rows.get(index)?.raw === raw) return;
       try {
-        rows.set(index, JSON.parse(String(row.data)) as AgentUiItem);
+        rows.set(index, { raw, item: JSON.parse(raw) as AgentUiItem });
       } catch {
         // Skip unparseable rows; the row stays a skeleton.
       }
     });
+    // Keep memory bounded on very long histories: drop the oldest-inserted
+    // entries once well past what any viewport plus overscan can show.
+    if (rows.size > MAX_RETAINED_ROWS) {
+      const excess = rows.size - MAX_RETAINED_ROWS;
+      let dropped = 0;
+      for (const key of rows.keys()) {
+        if (dropped >= excess) break;
+        rows.delete(key);
+        dropped++;
+      }
+    }
     lastRowsRef.current = { filterKey, rows };
     return rows;
-  }, [rowsResult.data, rowsResult.status, filterKey, first, denseWindow]);
+  }, [rowsResult.data, rowsResult.status, filterKey, windowStart, denseWindow]);
+
+  // Open at the newest content. A single scrollToEnd on mount can't get
+  // there: the count and each row window resolve asynchronously, and a jump
+  // against estimated sizes lands short. So while the feed is opening,
+  // re-pin the end on every data wave, and stop once the pin has stuck (tail
+  // row's real data rendered and the reader is still at the end) — from then
+  // on TanStack's anchorTo/followOnAppend own the tail natively. A reader
+  // who starts scrolling during the load takes over immediately (listeners
+  // below).
+  useLayoutEffect(() => {
+    if (initialPinDone || totalCount === 0) return;
+    const tailRowLoaded = itemCount === 0 || itemsByIndex.has(itemCount - 1);
+    if (tailRowLoaded && virtualizer.isAtEnd()) {
+      setInitialPinDone(true);
+      return;
+    }
+    virtualizer.scrollToEnd();
+  }, [initialPinDone, totalCount, itemCount, itemsByIndex, virtualizer]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (element == null) return;
+    const takeOver = () => setInitialPinDone(true);
+    const events = ["wheel", "touchstart", "keydown"] as const;
+    for (const name of events) element.addEventListener(name, takeOver, { passive: true });
+    return () => {
+      for (const name of events) element.removeEventListener(name, takeOver);
+    };
+  }, []);
 
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.
@@ -226,7 +302,7 @@ export function AgentFeedView({
             const index = virtualItem.index;
             const isLiveItem = live != null && index === itemCount;
             const isQueuedItem = index === itemCount + liveCount && queuedCount > 0;
-            const item = index < itemCount ? itemsByIndex.get(index) : undefined;
+            const item = index < itemCount ? itemsByIndex.get(index)?.item : undefined;
             return (
               <div
                 key={virtualItem.key}
@@ -248,7 +324,15 @@ export function AgentFeedView({
                     onInterrupt={onInterruptQueuedMessages}
                   />
                 ) : item == null ? (
-                  <div className="my-2 h-10 rounded-xl bg-muted/40" />
+                  // Not-yet-loaded rows must measure exactly estimateSize
+                  // (56px, margins don't count toward offsetHeight): the
+                  // initial jump to the end renders these before their SQL
+                  // window resolves, and if they measured smaller the total
+                  // size would shrink under the scroll offset and break the
+                  // end anchor before the real rows arrive.
+                  <div className="h-14 py-2">
+                    <div className="h-full rounded-xl bg-muted/40" />
+                  </div>
                 ) : (
                   <AgentFeedItemRow
                     item={item}
@@ -364,9 +448,16 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
             <MessageViaLabel via={item.via} className="text-muted-foreground" />
           )}
           {/* Settled messages never stream, so skip streamdown's unpaired-
-              marker balancing — it appends a phantom `*` to text like "17 * 23". */}
+              marker balancing — it appends a phantom `*` to text like "17 * 23".
+              mode="static" is load-bearing for the virtualized feed: streaming
+              mode paints EMPTY on mount and fills the markdown in a deferred
+              transition, so every row mounting in the virtual window measures
+              ~16px before snapping to its real height — a measurement storm
+              that breaks the virtualizer's end anchor. Static mode renders
+              synchronously; the first measurement is the real one. */}
           <MessageResponse
             className="min-w-0 max-w-full overflow-hidden"
+            mode="static"
             parseIncompleteMarkdown={false}
           >
             {item.text}
@@ -633,9 +724,12 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
         // Slack text is converted to markdown-ish (mentions, [label](url)
         // links) by the reducer — render it through the markdown path so
         // links come out clickable instead of as raw syntax. Settled text
-        // never streams, so skip the unpaired-marker balancing.
+        // never streams, so skip the unpaired-marker balancing; mode="static"
+        // renders synchronously (see the assistant bubble for why that keeps
+        // the virtualizer's measurements sane).
         <MessageResponse
           className="min-w-0 max-w-full overflow-hidden"
+          mode="static"
           parseIncompleteMarkdown={false}
         >
           {item.text}

@@ -292,7 +292,13 @@ export function ProjectStreamView({
   const modeBody =
     caps.agentFeed && caps.rawFeed ? (
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="relative min-h-0 flex-[3] overflow-hidden border-b">{agentFeed}</div>
+        {/* Both pane wrappers must be flex columns: the feeds size themselves
+            with flex-1 and only scroll internally when a flex parent
+            constrains them — in a block wrapper they grow to content height
+            and the pane just clips them at the top. */}
+        <div className="relative flex min-h-0 flex-[3] flex-col overflow-hidden border-b">
+          {agentFeed}
+        </div>
         <div className="relative flex min-h-0 flex-[2] flex-col overflow-hidden">
           <div className="flex h-7 shrink-0 items-center border-b bg-muted/30 px-4">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -302,7 +308,7 @@ export function ProjectStreamView({
               click a row to inspect · arrow keys page
             </span>
           </div>
-          <div className="relative min-h-0 flex-1 overflow-hidden">{rawFeed}</div>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">{rawFeed}</div>
         </div>
       </div>
     ) : (
