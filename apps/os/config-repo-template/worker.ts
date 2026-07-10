@@ -3,12 +3,11 @@ import type { DynamicWorkerRef, ItxBinding, StreamEvent, StreamEventBatch } from
 
 // The whole seeded worker in ONE file, so reading this module is reading the
 // whole system: the root project worker (default export) routes HTTP and
-// reacts to project events, and the three example apps are named exports —
-// a stateless WorkerEntrypoint (HelloApp), a stateful Durable Object
-// (CounterApp), and a WebSocket Durable Object (WebsocketEchoApp). Each APPS
-// entry below builds from THIS file with a different entry class; split an
-// app into its own file (and point its ref's entryPoint at it) when it earns
-// one.
+// reacts to project events, and the example apps are named exports — a
+// stateless WorkerEntrypoint (HelloApp) and a stateful Durable Object with
+// live WebSocket updates (CounterApp). Each APPS entry below builds from THIS
+// file with a different entry class; split an app into its own file (and
+// point its ref's entryPoint at it) when it earns one.
 
 /** Bindings the platform supplies to every project worker. `ItxBinding`
  * (iterate/sdk) documents the two channels: `get()` for capability method
@@ -35,16 +34,6 @@ const APPS = {
     path: "/",
     className: "CounterApp",
     durableWorkerKey: "app-counter",
-    source: {
-      files: { type: "repo", repoPath: "/repos/config" },
-      options: { entryPoint: "worker.ts" },
-    },
-  },
-  websocket: {
-    type: "stateful",
-    path: "/",
-    className: "WebsocketEchoApp",
-    durableWorkerKey: "app-websocket",
     source: {
       files: { type: "repo", repoPath: "/repos/config" },
       options: { entryPoint: "worker.ts" },
@@ -175,30 +164,58 @@ export class HelloApp extends WorkerEntrypoint<Env> {
 }
 
 // A stateful app: a Durable Object class hosted as a repo-backed stateful
-// dynamic worker. State survives across requests under its durableWorkerKey.
+// dynamic worker. State survives across requests under its durableWorkerKey,
+// and every open page gets live updates over a WebSocket. The /ws upgrade's
+// 101 response reaches this Durable Object over the platform's fetch-native
+// worker lane (the ProjectWorker router above: `this.env.ITX.fetch(...)` with
+// the app's ref in the x-iterate-worker-dispatch header) — an `app.fetch(req)`
+// RPC method call could not carry a socket. Copy this shape for anything
+// real-time.
 export class CounterApp extends DurableObject {
+  private sockets = new Set<WebSocket>();
+
   async fetch(req: Request): Promise<Response> {
     // The path lane advertises its stripped URL prefix; host lanes have none.
     const prefix = req.headers.get("x-iterate-url-prefix") ?? "";
     const url = new URL(req.url);
 
-    if (req.method === "POST" && url.pathname === "/increment") {
-      await this.increment();
-      // Redirect back so the browser URL never sticks at /increment.
-      return new Response(null, { status: 303, headers: { location: `${prefix}/` } });
+    if (url.pathname === "/ws") {
+      if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+        return new Response("expected websocket", { status: 426 });
+      }
+      const pair = new WebSocketPair();
+      const ws = pair[1];
+      ws.accept();
+      this.sockets.add(ws);
+      const drop = () => this.sockets.delete(ws);
+      ws.addEventListener("close", drop);
+      ws.addEventListener("error", drop);
+      // Greet every new socket with the current count, so a fresh tab is
+      // correct before anyone clicks.
+      ws.send(String(await this.current()));
+      return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
-    const count = await this.current();
+    if (req.method === "POST" && url.pathname === "/increment") {
+      return Response.json({ count: await this.increment() });
+    }
+
+    // A mini client-side app: the count renders server-side, the button
+    // POSTs /increment, and the WebSocket pushes every new value to every
+    // open tab.
     return new Response(
       `<!doctype html>
         <html>
           <body>
             <main>
-              <p>count: ${count}</p>
-              <form method="post" action="${prefix}/increment">
-                <button type="submit">increment</button>
-              </form>
+              <p>count: <span id="n">${await this.current()}</span></p>
+              <button id="b">increment</button>
             </main>
+            <script>
+              document.getElementById("b").onclick = () => fetch("${prefix}/increment", { method: "POST" });
+              const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
+              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
+            </script>
           </body>
         </html>`,
       { headers: { "content-type": "text/html; charset=utf-8" } },
@@ -208,6 +225,7 @@ export class CounterApp extends DurableObject {
   async increment(): Promise<number> {
     const n = (this.ctx.storage.kv.get<number>("n") ?? 0) + 1;
     this.ctx.storage.kv.put("n", n);
+    for (const ws of this.sockets) ws.send(String(n));
     return n;
   }
 
@@ -215,93 +233,3 @@ export class CounterApp extends DurableObject {
     return this.ctx.storage.kv.get<number>("n") ?? 0;
   }
 }
-
-// The seeded WebSocket proof-of-concept: a stateful app whose Durable Object
-// holds every live socket and relays messages between them. Connect to /ws,
-// send a text frame, and the app echoes it back (`echo:<text>`) and forwards
-// it to every other connected client (`peer:<text>`). The homepage is a tiny
-// chat page exercising exactly that.
-//
-// All app HTTP — including the /ws upgrade below — reaches this Durable
-// Object over the platform's fetch-native worker lane (see the router in
-// ProjectWorker.fetch: `this.env.ITX.fetch(...)` with the app's ref in the
-// x-iterate-worker-dispatch header). That lane is what lets the 101 response
-// carry its socket; an `app.fetch(req)` RPC method call could not.
-export class WebsocketEchoApp extends DurableObject {
-  private sockets = new Set<WebSocket>();
-
-  async fetch(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-
-    if (url.pathname === "/ws") {
-      if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-        return new Response("expected websocket", { status: 426 });
-      }
-      const pair = new WebSocketPair();
-      this.acceptSocket(pair[1]);
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-
-    if (url.pathname === "/health") {
-      return Response.json({ connections: this.sockets.size, ok: true });
-    }
-
-    return new Response(WEBSOCKET_PAGE, {
-      headers: { "content-type": "text/html; charset=utf-8" },
-    });
-  }
-
-  // Named to avoid the DurableObject base class's `connect(socket)` TCP
-  // handler, which this would otherwise override with the wrong signature.
-  private acceptSocket(ws: WebSocket) {
-    ws.accept();
-    this.sockets.add(ws);
-
-    ws.addEventListener("message", (event) => {
-      const text = String(event.data ?? "");
-      ws.send(`echo:${text}`);
-      for (const peer of this.sockets) {
-        if (peer !== ws) peer.send(`peer:${text}`);
-      }
-    });
-
-    const drop = () => this.sockets.delete(ws);
-    ws.addEventListener("close", drop);
-    ws.addEventListener("error", drop);
-  }
-}
-
-const WEBSOCKET_PAGE = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>websocket echo</title>
-</head>
-<body>
-  <main>
-    <p>WebSocket echo: messages come back as <code>echo:</code>, other tabs see <code>peer:</code>.</p>
-    <p id="status">connecting…</p>
-    <form id="form"><input id="input" autocomplete="off" placeholder="say something"><button>send</button></form>
-    <pre id="log"></pre>
-  </main>
-  <script>
-    const status = document.getElementById("status");
-    const log = document.getElementById("log");
-    let ws;
-    function connect() {
-      ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-      ws.onopen = () => { status.textContent = "connected"; };
-      ws.onmessage = (event) => { log.textContent += event.data + "\\n"; };
-      ws.onclose = () => { status.textContent = "reconnecting…"; setTimeout(connect, 1000); };
-    }
-    document.getElementById("form").addEventListener("submit", (event) => {
-      event.preventDefault();
-      const input = document.getElementById("input");
-      if (ws && ws.readyState === WebSocket.OPEN && input.value) ws.send(input.value);
-      input.value = "";
-    });
-    connect();
-  </script>
-</body>
-</html>`;

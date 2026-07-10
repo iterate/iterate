@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
@@ -20,7 +20,6 @@ test("template is one worker file with no vendor SDK cruft", () => {
   expect(worker).toContain("export default class ProjectWorker");
   expect(worker).toContain("export class HelloApp");
   expect(worker).toContain("export class CounterApp");
-  expect(worker).toContain("export class WebsocketEchoApp");
   expect(worker).not.toMatch(/slack/i);
   expect(worker).not.toMatch(/waitrose/i);
 
