@@ -49,6 +49,15 @@ export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
 export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 
 /**
+ * Compaction trigger: once a completed turn's reported context (input plus
+ * output tokens) crosses this fraction of the model's window, the processor
+ * summarizes the conversation into a history-reset. Halfway leaves room for
+ * many more turns before the window actually fills, so a slow or failed
+ * summary attempt never races an imminent context overflow.
+ */
+export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
+
+/**
  * Snippet-writing guidance shared by every codemode prompt (web-chat default,
  * Slack). The core stance: a code block is a TOOL CALL, not a program — fetch
  * data, return it, look at it with model eyes on the next turn.
@@ -664,9 +673,9 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/history-reset": {
       description:
-        "Replaces the agent's model-visible history and system prompt wholesale. Anything may " +
-        "append this — the platform never does; it exists for userspace history management " +
-        "such as compaction (summarize-then-reset).",
+        "Replaces the agent's model-visible history and system prompt wholesale. The " +
+        "processor's compaction lane appends it when a turn's context crosses the window " +
+        "threshold; anything else may append one too (userspace history management).",
       payloadSchema: z.object({
         systemPrompt: z.string(),
         history: z.array(AgentInputItem),
@@ -781,6 +790,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-response-chunk",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/token-usage-reported",
+    "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
