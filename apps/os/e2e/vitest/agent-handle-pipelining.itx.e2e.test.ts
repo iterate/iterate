@@ -145,6 +145,49 @@ test(
 );
 
 test(
+  "fan-out: one un-awaited handle serves multiple pipelined calls (capnweb and workerd lanes)",
+  { timeout: 120_000 },
+  async ({ expect }) => {
+    await using handle = await createTestProject({ slugPrefix: "handle-fanout" });
+    using itx = handle.itx();
+
+    // THE capnweb-docs pattern, on the capnweb lane (this test body): take a
+    // handle WITHOUT awaiting it, then fan out several calls in one
+    // Promise.all — dependent calls ride one round trip instead of
+    // await-per-hop.
+    using capnwebAgent = itx.agents.get("/agents/fanout-capnweb");
+    const [sentA, sentB, description] = await Promise.all([
+      capnwebAgent.message("capnweb fanout A"),
+      capnwebAgent.message("capnweb fanout B"),
+      capnwebAgent.__describe(),
+    ]);
+    expect(sentA.type).toBe("events.iterate.com/agents/message-received");
+    expect(sentB.type).toBe("events.iterate.com/agents/message-received");
+    expect(sentA.offset).not.toBe(sentB.offset);
+    expect(description.agentPath).toBe("/agents/fanout-capnweb");
+
+    // The same pattern on the WORKERD lane (script isolate over env.ITX),
+    // written with a `using` declaration exactly as prompts/examples teach.
+    using projectHost = itx.capabilityHosts.get("/");
+    const run = await projectHost.runScript(`
+      async (itx) => {
+        using agent = itx.agents.get("/agents/fanout-workerd");
+        const [a, b, desc] = await Promise.all([
+          agent.message("workerd fanout A"),
+          agent.message("workerd fanout B"),
+          agent.__describe(),
+        ]);
+        return { a: a.offset, b: b.offset, path: desc.agentPath };
+      }
+    `);
+    expect(run.result).toMatchObject({ path: "/agents/fanout-workerd" });
+    const result = run.result as { a: number; b: number };
+    expect(result.a).not.toBe(result.b);
+    expect(Math.min(result.a, result.b)).toBeGreaterThan(0);
+  },
+);
+
+test(
   "the child-agent delegation one-liner pipelines from an agent scope (relative path + message)",
   { timeout: 120_000 },
   async ({ expect }) => {

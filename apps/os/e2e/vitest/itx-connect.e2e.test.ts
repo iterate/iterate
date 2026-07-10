@@ -48,7 +48,7 @@ describe("itx", () => {
       ).resolves.toEqual([{ id: 1, name: "available-pet", status: "available" }]);
       await expect(
         // @ts-expect-error - OpenAPI operations are derived at runtime.
-        (await project.openapi.connect({ headers, specUrl })).findPetsByStatus({
+        project.openapi.connect({ headers, specUrl }).findPetsByStatus({
           status: "sold",
         }),
       ).resolves.toEqual([{ id: 1, name: "sold-pet", status: "sold" }]);
@@ -132,7 +132,7 @@ describe("itx", () => {
       ).resolves.toEqual({ answer: "docs:Workers" });
       await expect(
         // @ts-expect-error - MCP tools are derived at runtime.
-        (await project.mcp.connect({ headers, url: mcp.url })).search_docs({
+        project.mcp.connect({ headers, url: mcp.url }).search_docs({
           query: "Pipelines",
         }),
       ).resolves.toEqual({ answer: "docs:Pipelines" });

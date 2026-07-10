@@ -353,7 +353,8 @@ describe("itx", () => {
     // agent's own capability host and mounts on the project root by addressing
     // it through `capabilityHosts.get("/")`.
     const execution = await agent.capabilityHost.runScript(`async (itx) => {
-      // Workers RPC: await the capability before calling through it.
+      // capabilityHosts.get() pipelines; a handle is kept here only because
+      // the script calls the root host twice (provide + invoke below).
       const host = await itx.capabilityHosts.get("/");
       const provision = await host.provideCapability({
         type: "live",
