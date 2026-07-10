@@ -148,6 +148,13 @@ export function AgentFeedView({
     followOnAppend: true,
     scrollEndThreshold: 80,
     overscan: 16,
+    // The feed's breathing room above/below the messages lives HERE, not as
+    // wrapper padding. Vertical chrome the virtualizer can't see would shift
+    // its coordinate space off the scroll element's: every scrollToEnd /
+    // isAtEnd / followOnAppend would then resolve that many px above the real
+    // DOM bottom, leaving the newest message hidden below the fold.
+    paddingStart: 20,
+    paddingEnd: 24,
     // Deliberately NOT directDomUpdates: in that mode the virtualizer owns
     // each row's transform and the container height, and this feed's async
     // row loading (SQL windows resolving after the rows render) triggers
@@ -171,9 +178,6 @@ export function AgentFeedView({
   // the reader mid-history. Once pinned, the virtualizer's range drives the
   // window again.
   const [initialPinDone, setInitialPinDone] = useState(false);
-  // Set by the takeover listeners below — distinguishes "the reader actually
-  // interacted" from "the initial pin completed" (initialPinDone covers both).
-  const userTookOver = useRef(false);
   const windowStart = initialPinDone ? first : Math.max(0, itemCount - windowLimit);
   const rowClauses: string[] = [];
   const rowParams: Array<string | number> = [];
@@ -269,38 +273,13 @@ export function AgentFeedView({
   useEffect(() => {
     const element = scrollRef.current;
     if (element == null) return;
-    const takeOver = () => {
-      userTookOver.current = true;
-      setInitialPinDone(true);
-    };
+    const takeOver = () => setInitialPinDone(true);
     const events = ["wheel", "touchstart", "keydown"] as const;
     for (const name of events) element.addEventListener(name, takeOver, { passive: true });
     return () => {
       for (const name of events) element.removeEventListener(name, takeOver);
     };
   }, []);
-
-  // Until the reader actually interacts, converge the tail EXACTLY. The pin
-  // above and followOnAppend both tolerate up to scrollEndThreshold (80px)
-  // of shortfall — the pin's isAtEnd() done-check accepts landing that far
-  // up, and a follow can resolve its target against a pre-commit
-  // scrollHeight — which is enough to leave the newest message hidden below
-  // the fold. TanStack Router's scroll restoration can also re-apply a stale
-  // element position after the pin completes (it records any scrolled
-  // element by CSS path, with no per-element opt-out). This cheap poll
-  // closes all of those; it dies with the first real user input, so a
-  // reader in history is never yanked.
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (userTookOver.current) return;
-      const element = scrollRef.current;
-      if (element == null) return;
-      if (element.scrollHeight - element.clientHeight - element.scrollTop > 2) {
-        virtualizer.scrollToEnd();
-      }
-    }, 250);
-    return () => clearInterval(id);
-  }, [virtualizer]);
 
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.
@@ -315,7 +294,9 @@ export function AgentFeedView({
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+      {/* Horizontal chrome only — vertical spacing is the virtualizer's
+          paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
+      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {totalCount === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>

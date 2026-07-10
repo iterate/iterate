@@ -53,7 +53,13 @@ export function getRouter() {
     defaultPendingMinMs: 200,
     // Restore scroll position on back/forward like a regular MPA would:
     // https://tanstack.com/router/latest/docs/framework/react/guide/scroll-restoration
-    scrollRestoration: true,
+    // …EXCEPT on stream feed pages. Restoration records every scrolled
+    // element by CSS path and re-applies the saved position on render — on a
+    // chat-style feed that races the feed's own open-at-latest end pin and
+    // can strand the viewport mid-history. Chat feeds open at the newest
+    // message, always (there is no per-element opt-out, so the whole
+    // location opts out; nothing else on those pages needs restoring).
+    scrollRestoration: ({ location }) => !location.pathname.includes("/streams"),
   });
 
   // Let route loaders and components share the same query client on server and client.

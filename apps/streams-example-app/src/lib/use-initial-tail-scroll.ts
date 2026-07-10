@@ -1,10 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import type { Virtualizer } from "@tanstack/react-virtual";
 
-// A copy of this hook lives in apps/os/src/lib/use-initial-tail-scroll.ts —
-// the two apps share no package, and the logic is deliberately identical.
-// If you fix a bug here, fix it there too.
-
 const TAIL_SETTLE_MS = 250;
 // Real scroll distance (in px) from the bottom of the scroller that still counts as "at the
 // tail". Kept tiny on purpose: TanStack's `scrollEndThreshold` (80px) decides when *following*
@@ -113,11 +109,6 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
         );
       }
       settledInitialEndScroll.current = true;
-      // Stay armed even after converging: anything that moves the viewport
-      // without user input — router scroll restoration re-applying a stale
-      // position after load, late row loads, font swaps — gets re-pinned.
-      // The poll dies with the first real user input above.
-      armTailSettleTimer();
     }, TAIL_SETTLE_MS);
   }
 

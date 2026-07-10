@@ -64,6 +64,11 @@ export function FeedItemsView({
     followOnAppend: true,
     scrollEndThreshold: 80,
     overscan: 16,
+    // Vertical breathing room lives here, not as wrapper padding, so the
+    // virtualizer's coordinates match the scroll element exactly — see
+    // agent-feed.tsx for the off-by-chrome tail shortfall this prevents.
+    paddingStart: 20,
+    paddingEnd: 24,
     // NOT directDomUpdates — see agent-feed.tsx: async row windows break the
     // direct-DOM path's end anchor; classic JSX-owned styles hold it.
   });
@@ -75,9 +80,6 @@ export function FeedItemsView({
   // to the tail so the opening jump lands on rows with real measured sizes —
   // see agent-feed.tsx for the stranding failure mode this prevents.
   const [initialPinDone, setInitialPinDone] = useState(false);
-  // Set by the takeover listeners below — distinguishes "the reader actually
-  // interacted" from "the initial pin completed" (initialPinDone covers both).
-  const userTookOver = useRef(false);
   const virtualWindowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
   const windowFirst = initialPinDone ? first : Math.max(0, itemCount - virtualWindowSize);
   // Fetch one row before the window (when there is one) so the topmost visible
@@ -144,10 +146,7 @@ export function FeedItemsView({
   useEffect(() => {
     const element = scrollRef.current;
     if (element == null) return;
-    const takeOver = () => {
-      userTookOver.current = true;
-      setInitialPinDone(true);
-    };
+    const takeOver = () => setInitialPinDone(true);
     const events = ["wheel", "touchstart", "keydown"] as const;
     for (const name of events) element.addEventListener(name, takeOver, { passive: true });
     return () => {
@@ -155,24 +154,11 @@ export function FeedItemsView({
     };
   }, []);
 
-  // Exact-tail convergence until the reader actually interacts — the pin and
-  // followOnAppend tolerate up to scrollEndThreshold (80px) of shortfall and
-  // router scroll restoration can re-apply stale positions. See agent-feed.tsx.
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (userTookOver.current) return;
-      const element = scrollRef.current;
-      if (element == null) return;
-      if (element.scrollHeight - element.clientHeight - element.scrollTop > 2) {
-        virtualizer.scrollToEnd();
-      }
-    }, 250);
-    return () => clearInterval(id);
-  }, [virtualizer]);
-
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+      {/* Horizontal chrome only — vertical spacing is the virtualizer's
+          paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
+      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {countResult.status !== "ok" ? (
           <Centered>
             {countResult.status === "error"
