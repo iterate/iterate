@@ -367,10 +367,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
-  "browse-examples": {
+  "docs-search-and-get": {
     assert: (result, _ctx, expect) => {
-      expect(result).toMatchObject({ hasCode: true, id: "describe-project" });
-      expect((result as { count: number }).count).toBeGreaterThan(10);
+      expect(result).toMatchObject({
+        exampleStartsWithAnnotation: true,
+        streamTypesIncludeAppend: true,
+      });
+      expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);
+      expect(result).toHaveProperty("firstHit.fetch");
     },
   },
   "agent-send-message": {
