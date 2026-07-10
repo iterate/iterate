@@ -73,12 +73,20 @@ test(
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
 
-    // Force a known Workers AI model for the assertion.
+    // Force an explicitly-selected model for the assertion — the model the
+    // DEPLOYMENT defaults to (itx.agents.defaults), not a hardcoded one:
+    // preview/dev runs on the non-prd Cloudflare account where OpenAI
+    // partner models fail with 2021, so a hardcoded openai/gpt-5.5 pin left
+    // the agent silent and this test watchdogged the whole lane
+    // (2026-07-10, run g5q2k6msxc). What this test proves is the explicit
+    // llm-provider-selected path, not any particular vendor.
+    using defaultsItx = handle.itx();
+    const policy = await defaultsItx.agents.defaults.forPath("/agents/e2e-model");
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires a model; a model-less
-      // append is schema-invalid and wedges the agent processor's ingest.
-      payload: { model: "openai/gpt-5.5" },
+      // The contract requires a model; a model-less append is schema-invalid
+      // and wedges the agent processor's ingest.
+      payload: { model: policy.model },
     });
 
     const response = await agent.ask({
