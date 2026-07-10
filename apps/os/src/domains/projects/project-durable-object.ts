@@ -389,12 +389,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
         // Final sweep before declaring expiry: a verdict appended in the last
         // wait-chunk's shadow must still win — a human who granted just in
         // time is honored, not expired. Same processing path, page reads
-        // instead of live waits, until the backlog is dry.
+        // instead of live waits. The sweep is bounded to events CREATED
+        // before the deadline: the first younger event ends it, so other
+        // holds' ongoing resolutions on a busy stream can't keep an expired
+        // hold open.
         const [swept] = await stream.getEvents({
           afterOffset: cursor,
           eventTypes: resolutionEventTypes,
         });
-        if (swept === undefined) return "expired";
+        if (swept === undefined || Date.parse(swept.createdAt) > input.deadline) return "expired";
         event = swept;
       } else {
         try {
