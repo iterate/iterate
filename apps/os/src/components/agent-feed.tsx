@@ -287,7 +287,7 @@ export function AgentTokenUsageStrip({ tokenUsage }: { tokenUsage: AgentUiTokenU
   return (
     <div
       title={breakdown}
-      className="flex shrink-0 items-center justify-end gap-3 px-4 pb-1 font-mono text-[11px] text-muted-foreground"
+      className="flex shrink-0 items-center justify-end gap-3 font-mono text-[11px] text-muted-foreground"
     >
       <span className={contextPercent >= 80 ? "text-destructive" : undefined}>
         context {formatTokens(contextTokens)}/{formatTokens(last.maxContextTokens)} (
