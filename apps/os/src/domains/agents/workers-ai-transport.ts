@@ -8,8 +8,48 @@
 
 import { z } from "zod";
 
-/** The `env.AI` surface one attempt needs. */
-export type WorkersAiBinding = { run(model: string, body: unknown): Promise<unknown> };
+/** The `env.AI` surface one attempt needs. `gateway` is optional so bare test
+ * fakes stay two-line objects; the BYOK lane requires it and fails the attempt
+ * loudly when the host's binding lacks it. */
+export type WorkersAiBinding = {
+  run(model: string, body: unknown): Promise<unknown>;
+  gateway?(gatewayId: string): CloudflareAiGatewayBinding;
+};
+
+/** `env.AI.gateway(id)` — the universal-endpoint door used by the BYOK lane. */
+export type CloudflareAiGatewayBinding = {
+  run(data: {
+    provider: string;
+    endpoint: string;
+    headers: Record<string, string>;
+    query: unknown;
+  }): Promise<Response>;
+};
+
+/**
+ * How one attempt travels through the Cloudflare AI Gateway.
+ *
+ * - `unified`: `env.AI.run` partner models on Cloudflare's unified billing.
+ * - `byok`: the gateway's universal endpoint with OUR OpenAI key. Same
+ *   gateway (analytics, logs), two differences that matter: OpenAI's own
+ *   prompt-cache discount lands on our bill directly (unified billing meters
+ *   cached tokens at the uncached price), and the gateway's RESPONSE cache
+ *   works on this path (it never engages for partner models).
+ *   `responseCacheTtlSeconds` opts a deployment into that response cache —
+ *   replayed answers, near-zero cost; only sane where conversations are
+ *   synthetic (e2e/preview), never prd.
+ */
+export type CloudflareAiGatewayTransport =
+  | { kind: "unified" }
+  | {
+      kind: "byok";
+      gatewayId: string;
+      openaiApiKey: string;
+      /** OpenAI `prompt_cache_key`: stable per agent stream so repeated turns
+       * route to the same provider-side prompt-cache shard. */
+      openaiPromptCacheKey?: string;
+      responseCacheTtlSeconds?: number;
+    };
 
 type WorkersAiCompletion = {
   /** Assistant text — concatenated across chunks for streamed responses. */
@@ -40,12 +80,20 @@ export async function runWorkersAiAttempt(input: {
   messages: { role: "system" | "user" | "assistant"; content: string }[];
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
+  /** Defaults to unified billing when omitted (bare test hosts, non-OpenAI models). */
+  transport?: CloudflareAiGatewayTransport;
 }): Promise<WorkersAiCompletion> {
   const deadline = startDeadline({
     deadlineMs: input.deadlineMs,
     message: `LLM attempt timed out after ${input.deadlineMs / 60_000} minutes.`,
   });
   try {
+    const transport = input.transport ?? { kind: "unified" };
+    // BYOK carries an OpenAI key, so only OpenAI models can ride it; other
+    // vendors' models fall back to unified billing rather than failing.
+    if (transport.kind === "byok" && input.model.startsWith("openai/")) {
+      return await runByokAttempt({ ...input, deadline, transport });
+    }
     const raw = await deadline.race(
       input.ai.run(input.model, {
         messages: input.messages,
@@ -64,6 +112,112 @@ export async function runWorkersAiAttempt(input: {
   } finally {
     deadline.clear();
   }
+}
+
+/**
+ * The BYOK lane: dial the gateway's universal endpoint with our OpenAI key
+ * and drain the SSE response. A response-cache HIT replays the recorded SSE
+ * byte-identically, so the drain (and the caller's chunk journaling) is the
+ * same code either way; the verdict rides `cloudflareAiGatewayResponseCacheStatus`
+ * on the raw-response evidence.
+ */
+async function runByokAttempt(input: {
+  ai: WorkersAiBinding;
+  deadline: { race<T>(work: Promise<T>): Promise<T> };
+  messages: { role: "system" | "user" | "assistant"; content: string }[];
+  model: string;
+  onChunk: (chunk: unknown, index: number) => Promise<void>;
+  transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
+}): Promise<WorkersAiCompletion> {
+  const { transport } = input;
+  const gateway = input.ai.gateway?.(transport.gatewayId);
+  if (gateway === undefined) {
+    throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
+  }
+  const body = {
+    model: input.model.replace(/^openai\//, ""),
+    messages: input.messages,
+    stream: true,
+    ...openAiReasoningExtras(input.model),
+    ...(transport.openaiPromptCacheKey === undefined
+      ? {}
+      : { prompt_cache_key: transport.openaiPromptCacheKey }),
+  };
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${transport.openaiApiKey}`,
+    "content-type": "application/json",
+  };
+  const ttlSeconds = transport.responseCacheTtlSeconds;
+  if (ttlSeconds !== undefined) {
+    headers["cf-aig-cache-ttl"] = String(ttlSeconds);
+    headers["cf-aig-cache-key"] = await cloudflareAiGatewayResponseCacheKey(body);
+  } else {
+    // No TTL configured means this deployment must NEVER serve a cached
+    // reply (prd). Said explicitly per request: the gateway otherwise falls
+    // back to its dashboard-level cache setting, which is account state this
+    // code can't see — live prd evidence showed cache lookups (MISS) even
+    // with no cache headers sent.
+    headers["cf-aig-skip-cache"] = "true";
+  }
+  const response = await input.deadline.race(
+    gateway.run({ provider: "openai", endpoint: "chat/completions", headers, query: body }),
+  );
+  if (!response.ok || response.body === null) {
+    const detail = await input.deadline.race(response.text()).catch(() => "");
+    throw new Error(
+      `AI Gateway BYOK request failed with status ${response.status}: ${detail.slice(0, 500)}`,
+    );
+  }
+  const cacheStatus = response.headers.get("cf-aig-cache-status");
+  const completion = await drainSseResponse({
+    body: response.body,
+    deadline: input.deadline,
+    onChunk: input.onChunk,
+  });
+  if (cacheStatus === null) return completion;
+  return {
+    ...completion,
+    rawResponse: {
+      ...(completion.rawResponse as Record<string, unknown>),
+      cloudflareAiGatewayResponseCacheStatus: cacheStatus,
+    },
+  };
+}
+
+/** Bump to invalidate every cached response at once (prompt-format overhauls,
+ * masking-rule changes). */
+const CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION = "cloudflare-ai-gateway-response-cache-v1";
+
+/**
+ * The custom `cf-aig-cache-key` for one request body: a hash of the body with
+ * fixture-specific identity masked out, so two e2e runs whose conversations
+ * differ ONLY in minted ids replay each other's responses.
+ *
+ * Masking is deliberately narrow — id-shaped tokens only. Over-masking would
+ * alias semantically different requests (wrong answers from cache);
+ * under-masking is just a cache miss (costs money, never correctness).
+ * Everything not masked — prompts, message text, model, sampling params —
+ * stays in the hash, so any prompt change invalidates naturally.
+ */
+export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promise<string> {
+  const masked = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(body));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${CLOUDFLARE_AI_GATEWAY_RESPONSE_CACHE_KEY_VERSION}:${masked}`),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** The masking half of the cache key, separated for tests. Masks: project ids,
+ * agent paths, signed-URL signature/expiry params, and the OpenAI
+ * `prompt_cache_key` (which is per-agent BY DESIGN — see LlmTransportConfig —
+ * and would otherwise defeat the cross-fixture cache it rides inside). */
+export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string): string {
+  return serialized
+    .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
+    .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
+    .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
+    .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"');
 }
 
 /**

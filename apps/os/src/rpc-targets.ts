@@ -185,6 +185,7 @@ import type {
   CfBrowserQuickAction,
   CfBrowserQuickActionOptions,
   CfImageTransformInput,
+  CfAiRunOptions,
   CfMarkdownConversionArgs,
   CfMarkdownConversionResult,
   CfMarkdownSupportedFormat,
@@ -1801,11 +1802,14 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     return Promise.resolve(env.AI.models());
   }
 
-  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`). */
-  run(model: string, body: unknown): Promise<unknown> {
-    const options: AiRunOptions | undefined =
-      this.props.gateway === undefined ? undefined : { gateway: this.props.gateway };
-    return env.AI.run(model, body as Record<string, unknown>, options);
+  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
+   * The optional third argument is the binding's own options object — e.g.
+   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
+   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown> {
+    const gateway = options?.gateway ?? this.props.gateway;
+    const merged = gateway === undefined ? options : { ...options, gateway };
+    return env.AI.run(model, body as Record<string, unknown>, merged as AiRunOptions | undefined);
   }
 
   /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */

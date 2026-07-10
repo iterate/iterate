@@ -43,6 +43,22 @@ export class AgentDurableObject extends DurableObject<Env> {
       new AgentProcessor({
         ...deps,
         ai: this.env.AI,
+        // Resolved per attempt (not at construction) so a config problem
+        // fails the turn with a journaled error instead of bricking the DO.
+        // The OpenAI prompt_cache_key is per agent stream: repeated turns
+        // grow a shared prefix, and a stable key routes them to the same
+        // provider-side prompt-cache shard.
+        cloudflareAiGatewayTransport: () => {
+          const gateway = parseConfig(this.env).cloudflareAiGateway;
+          if (gateway.transport === "unified") return { kind: "unified" };
+          return {
+            kind: "byok",
+            gatewayId: gateway.id,
+            openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
+            openaiPromptCacheKey: `${this.#name.projectId}:${this.#name.path}`,
+            responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
+          };
+        },
         // Oversized script results spill into the agent's OWN workspace (the
         // same checkout itx.workspace resolves to), so the model can page
         // through the file instead of blowing its context window. The first

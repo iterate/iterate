@@ -271,8 +271,11 @@ export interface Ai {
   __describe(): Promise<Description>;
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
-  /** Run one model invocation (\`run("@cf/meta/llama-3.1-8b-instruct", { prompt })\`). */
-  run(model: string, body: unknown): Promise<unknown>;
+  /** Run one model invocation (\`run("@cf/meta/llama-3.1-8b-instruct", { prompt })\`).
+   * The optional third argument is the binding's own options object — e.g.
+   * \`{ gateway: { id: "default", skipCache: true } }\` — passed through to
+   * \`env.AI.run\`; its \`gateway\` wins over any constructor-provided one. */
+  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
   /** Convert documents (\`{ name, blob }\`) to Markdown; call with no args for the supported-format list. */
   toMarkdown(
     ...args: CfMarkdownConversionArgs
@@ -1620,6 +1623,21 @@ export type StreamIndexRow = {
   lastType: string;
   /** How many events we've observed on the stream. */
   eventCount: number;
+};
+
+/** The Workers AI binding's per-call options (\`env.AI.run\`'s third argument),
+ * published structurally so itx callers can route a call through a specific
+ * AI Gateway configuration — e.g. \`{ gateway: { id: "default", skipCache: true } }\`. */
+export type CfAiRunOptions = {
+  gateway?: {
+    id: string;
+    cacheKey?: string;
+    cacheTtl?: number;
+    skipCache?: boolean;
+    metadata?: Record<string, number | string | boolean | null>;
+    collectLog?: boolean;
+  };
+  returnRawResponse?: boolean;
 };
 
 export type CfMarkdownConversionArgs =
