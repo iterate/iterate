@@ -10,7 +10,7 @@
 //                   (and the Playwright REPL specs) execute in a project scope
 //                   where the Session's __describe().principal / itx.projects
 //                   do not exist. Session behavior is proven by the itx e2e
-//                   suites (apps/os/e2e/itx/itx.e2e.test.ts).
+//                   suites (apps/os/e2e/vitest/itx-core.e2e.test.ts).
 //   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
@@ -51,6 +51,16 @@
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
+  /**
+   * Unique per test ATTEMPT, shared across the runtimes within it. For
+   * resources where the attempt should share one instance (the first runtime
+   * pays the cold path, the rest reuse it warm) but a RETRY must get a fresh
+   * one — a vitest retry that reuses the previous attempt's stuck resource
+   * can never recover (the sandbox container stall, marathons of
+   * 2026-07-10: the REPL spec's retry healed on a fresh placement while the
+   * matrix retry waited on the same stuck container).
+   */
+  attemptSalt: string;
   projectId: string;
 };
 
@@ -242,12 +252,16 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "sandbox-exec": {
     // One shared sandbox name for the whole matrix: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
-    // (the example's get-or-create makes reuse natural). No marker on
-    // purpose. 300s: a cold-host image pull + boot has a long tail even on
-    // the stock image; anything past that is a container stuck provisioning,
-    // and we'd rather fail and re-run than mask it.
-    completionTimeoutMs: 300_000,
-    vars: () => ({ sandboxName: "example-matrix" }),
+    // (the example's get-or-create makes reuse natural), and the retry's
+    // attemptSalt re-rolls the container placement. No marker on
+    // purpose. 150s: a healthy cold boot is well under a minute; a boot
+    // past this is a container stuck provisioning on a bad placement, and
+    // the retry's FRESH attempt re-rolls placement and typically lands in
+    // ~15s — waiting out a 300s budget just stretched both e2e lanes past
+    // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
+    // stalled the spec AND examples-matrix; the retry passed in 14.8s).
+    completionTimeoutMs: 150_000,
+    vars: ({ attemptSalt }) => ({ sandboxName: `example-${attemptSalt}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
     },
@@ -256,8 +270,10 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // Unique workspace per example × runtime: the path is durable identity
     // (one Durable Object), so sharing one across the matrix would make the
     // second runtime's edit() fail (oldString already replaced) and commits
-    // race. Overlays clone nothing, but the commit still clones main — the
-    // budget covers a cold Artifacts clone with the 503-retry tail.
+    // race. Since #1831 git.commit lands on the config repo's MAIN (no
+    // workspace branches); each runtime writes a distinct file path, so the
+    // two main commits don't conflict. The budget covers the repo commit
+    // lane's cold tail.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
     assert: (result, _ctx, expect) => {
