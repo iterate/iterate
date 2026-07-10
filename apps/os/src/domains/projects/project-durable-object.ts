@@ -259,10 +259,19 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#holdForHumanApproval({ request, rule, secretPaths });
   }
 
-  /** The project's egress rules, from reduced state (folded before first read). */
+  #egressRulesFreshAt = 0;
+
+  /**
+   * The project's egress rules, from reduced state with BOUNDED staleness:
+   * push delivery normally keeps the fold current, but a wedged subscription
+   * must not leave policy arbitrarily stale — so at most every 5s an egress
+   * request pays one catch-up. (Grants are the trust boundary and always
+   * catch up; rules are policy, where seconds of lag are acceptable.)
+   */
   async #egressRules(): Promise<readonly EgressRule[]> {
-    if (!this.#projectProcessor.isLoaded) {
+    if (!this.#projectProcessor.isLoaded || Date.now() - this.#egressRulesFreshAt > 5_000) {
       await this.#processorHost.catchUp(ProjectProcessorContract.slug);
+      this.#egressRulesFreshAt = Date.now();
     }
     return this.#projectProcessor.currentState.egressRules;
   }
@@ -368,30 +377,43 @@ export class ProjectDurableObject extends DurableObject<Env> {
     requestedPayload: HumanApprovalRequestedPayload;
   }): Promise<"granted" | "rejected" | "expired"> {
     const stream = this.#ownStream();
+    const resolutionEventTypes = [
+      "events.iterate.com/project/human-approval-granted",
+      "events.iterate.com/project/human-approval-rejected",
+    ];
     let cursor = input.approvalRequestEventOffset;
     while (true) {
       const remaining = input.deadline - Date.now();
-      if (remaining <= 0) return "expired";
       let event;
-      try {
-        event = await stream.waitForEvent({
+      if (remaining <= 0) {
+        // Final sweep before declaring expiry: a verdict appended in the last
+        // wait-chunk's shadow must still win — a human who granted just in
+        // time is honored, not expired. Same processing path, page reads
+        // instead of live waits, until the backlog is dry.
+        const [swept] = await stream.getEvents({
           afterOffset: cursor,
-          eventTypes: [
-            "events.iterate.com/project/human-approval-granted",
-            "events.iterate.com/project/human-approval-rejected",
-          ],
-          timeoutMs: Math.min(remaining, 25_000),
+          eventTypes: resolutionEventTypes,
         });
-      } catch (error) {
-        // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
-        // (and transient stream restarts) just re-arm from the same cursor.
-        if (
-          error instanceof Error &&
-          error.message.includes("Timed out waiting for stream event")
-        ) {
-          continue;
+        if (swept === undefined) return "expired";
+        event = swept;
+      } else {
+        try {
+          event = await stream.waitForEvent({
+            afterOffset: cursor,
+            eventTypes: resolutionEventTypes,
+            timeoutMs: Math.min(remaining, 25_000),
+          });
+        } catch (error) {
+          // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
+          // (and transient stream restarts) just re-arm from the same cursor.
+          if (
+            error instanceof Error &&
+            error.message.includes("Timed out waiting for stream event")
+          ) {
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
 
       cursor = event.offset;
