@@ -13,6 +13,7 @@
 // agent birth mounts. One shape, one evaluator, one zod schema — defined here,
 // at the leaf, so domain contracts can share them without import cycles.
 
+import { RpcTarget } from "capnweb";
 import { z } from "zod";
 
 /** One step of an {@link ItxExpression}: a property read, or a `[method, ...args]` call. */
@@ -49,6 +50,25 @@ export type EvaluatedItxExpression = {
  * stubs: property reads on a stub yield pipelined stubs, call steps invoke —
  * exactly the traffic ordinary `itx.streams.get(path).append(...)` user code
  * produces, so evaluating a stored expression is never a special lane.
+ *
+ * STUB HYGIENE: each awaited step over an RPC transport materializes a
+ * client-side stub, and every one except the final value (and its receiver,
+ * kept for `this`-preserving invocation) is an INTERMEDIATE this walk owns —
+ * `["agents", ["get", path], "processor", [...]]` materializes the agent
+ * collection, the agent, and the processor relay on the way to the answer.
+ * Dropping them un-disposed leaves reclamation to the GC, which workerd
+ * rightly warns about on every collection ("An RPC stub was not disposed
+ * properly") — at one stream-delivery dial per agent birth that is steady
+ * observability logspam. Disposing an intermediate releases only ITS export;
+ * values already obtained through it (including the final one) hold their
+ * own exports and survive — the same end state late GC produced, made
+ * deterministic and silent. In-process evaluation is untouched BY
+ * CONSTRUCTION, not just in practice: local targets are `instanceof
+ * RpcTarget` (every itx surface extends it) and the walk only disposes
+ * awaited values that are NOT — i.e. genuine client-side transport stubs.
+ * That gate matters: some local targets carry a REAL `Symbol.dispose`
+ * (CapabilityProvisionRpcTarget's revokes the mount), which an ungated sweep
+ * would invoke.
  */
 export async function evaluateItxExpression(
   root: unknown,
@@ -56,29 +76,58 @@ export async function evaluateItxExpression(
 ): Promise<EvaluatedItxExpression> {
   assertItxExpression(expression);
 
-  let value = root;
-  let receiver: unknown;
-  for (const step of expression) {
-    if (typeof step === "string") {
-      const target = await value;
-      assertObjectLike(target, step);
-      receiver = target;
-      value = Reflect.get(target, step);
-      continue;
+  const materialized: object[] = [];
+  const materialize = async (pending: unknown): Promise<unknown> => {
+    const target = await pending;
+    if (
+      isObjectLike(target) &&
+      target !== root &&
+      !(target instanceof RpcTarget) &&
+      !materialized.includes(target)
+    ) {
+      materialized.push(target);
+    }
+    return target;
+  };
+  const disposeIntermediates = (keep: unknown[]) => {
+    for (const target of materialized) {
+      if (keep.includes(target)) continue;
+      (target as Partial<Disposable>)[Symbol.dispose]?.();
+    }
+  };
+
+  try {
+    let value = root;
+    let receiver: unknown;
+    for (const step of expression) {
+      if (typeof step === "string") {
+        const target = await materialize(value);
+        assertObjectLike(target, step);
+        receiver = target;
+        value = Reflect.get(target, step);
+        continue;
+      }
+
+      const [method, ...args] = step;
+      const target = await materialize(value);
+      assertObjectLike(target, method);
+      const handler = Reflect.get(target, method);
+      if (typeof handler !== "function") {
+        throw new Error(`ITX expression method "${method}" did not resolve to a function`);
+      }
+      receiver = undefined;
+      value = Reflect.apply(handler, target, args);
     }
 
-    const [method, ...args] = step;
-    const target = await value;
-    assertObjectLike(target, method);
-    const handler = Reflect.get(target, method);
-    if (typeof handler !== "function") {
-      throw new Error(`ITX expression method "${method}" did not resolve to a function`);
-    }
-    receiver = undefined;
-    value = Reflect.apply(handler, target, args);
+    const finalValue = await value;
+    disposeIntermediates([finalValue, receiver]);
+    return { receiver, value: finalValue };
+  } catch (error) {
+    // The failed walk owns everything it materialized — release it all. The
+    // dial's own catch additionally disposes the root chain.
+    disposeIntermediates([]);
+    throw error;
   }
-
-  return { receiver, value: await value };
 }
 
 /** Structural validation of an expression (shape only, no evaluation). */

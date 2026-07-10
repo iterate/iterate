@@ -117,9 +117,18 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
     if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = event.payload?.childPath;
       if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
+        // env.ITX.get() hands this isolate an RPC stub; releasing it when the
+        // reaction ends keeps the runtime's "stub was not disposed" warning
+        // out of the logs (one agent birth = one reaction). try/finally, not
+        // a `using` declaration: this repo builds through the platform
+        // bundler at target es2022, which cannot transform `using` yet.
         const itx = await this.env.ITX.get();
-        const defaults = await itx.agents.defaults.forPath(childPath);
-        await itx.streams.get(childPath).append(...defaults.events);
+        try {
+          const defaults = await itx.agents.defaults.forPath(childPath);
+          await itx.streams.get(childPath).append(...defaults.events);
+        } finally {
+          itx[Symbol.dispose]?.();
+        }
       }
     }
   }
@@ -154,12 +163,17 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
 export class HelloApp extends WorkerEntrypoint<Env> {
   async fetch(req: Request): Promise<Response> {
     const project = await this.env.ITX.get();
-    const description = await project.__describe();
-    return Response.json({
-      app: "hello",
-      path: new URL(req.url).pathname,
-      projectId: description.projectId,
-    });
+    try {
+      const description = await project.__describe();
+      return Response.json({
+        app: "hello",
+        path: new URL(req.url).pathname,
+        projectId: description.projectId,
+      });
+    } finally {
+      // Release the itx stub (see the processEvent comment above).
+      project[Symbol.dispose]?.();
+    }
   }
 }
 

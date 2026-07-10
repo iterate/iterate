@@ -41,7 +41,12 @@ function scriptWorkerRef(input: { code: string; scopePath: string }): StatelessD
     const fn = ${input.code};
     export class ScriptEntrypoint extends WorkerEntrypoint {
       async run() {
-        const itx = await this.env.ITX.get();
+        // \`using\`: the itx root is an RPC stub this isolate owns for the
+        // script's duration; releasing it on return (the result is fully
+        // awaited by then) keeps the runtime's stub-disposal warning out of
+        // the logs. Values the script obtained THROUGH it (returned stubs,
+        // appended events) hold their own references and are unaffected.
+        using itx = await this.env.ITX.get();
         return await fn(itx);
       }
     }

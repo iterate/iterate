@@ -93,10 +93,10 @@ const projects = await itx.projects.list();
 // project REPL's \`itx\` has (streams, repo, workers, runScript, ...).
 const pid = vars.projectId ?? projects[0]?.id;
 if (!pid) throw new Error("Create a project first: await itx.projects.create({ slug: 'demo' })");
-const project = await itx.projects.get(pid);
 
-// describe() reports the project and its capability table.
-return await project.__describe();
+// describe() reports the project and its capability table. Method-returned
+// surfaces pipeline, so the get() needs no intermediate await.
+return await itx.projects.get(pid).__describe();
 `.trim(),
   },
   {
@@ -297,8 +297,8 @@ return { mountType: mount?.type, note: event.payload.note, offset: event.offset 
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// Await the ref before calling: script isolates reach itx over Workers RPC,
-// which does not pipeline calls through an unresolved return value.
+// A handle is kept here because the worker is called twice below; one-off
+// calls pipeline in a single expression: await itx.workers.get(ref).hello().
 const greeter = await itx.workers.get({
   type: "stateless",
   entrypoint: "Greeter",
@@ -328,10 +328,11 @@ const greeter = await itx.workers.get({
   },
 });
 
-return {
-  greeting: await greeter.hello({ name: "world" }),
-  sum: await greeter.add(2, 3),
-};
+const [greeting, sum] = await Promise.all([
+  greeter.hello({ name: "world" }),
+  greeter.add(2, 3),
+]);
+return { greeting, sum };
 `.trim(),
   },
   {
@@ -342,7 +343,9 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const counter = await itx.workers.get({
+// Sequential dependent calls: keep the handle (un-awaited — calls pipeline
+// through it), await each step because the next depends on it.
+const counter = itx.workers.get({
   type: "stateful",
   className: "CounterDurableObject",
   // The durable identity: reuse the key to come back to the same state.
@@ -705,11 +708,12 @@ return { record }; // ["capability-provided", "capability-revoked"]
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
-
-// The returned value is the committed stream event — the durable record the
+// One expression: get() pipelines, so no intermediate await is needed. The
+// returned value is the committed stream event — the durable record the
 // agent loop reduces into its history.
-const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
+const sent = await itx.agents
+  .get(vars.agentPath ?? "/agents/repl-demo")
+  .message(vars.message ?? "Hello from the examples catalogue");
 return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
@@ -802,10 +806,9 @@ return { pages, search };
     code: `
 const mcpUrl = vars.mcpUrl ?? "https://mcp.exa.ai/mcp";
 
-// Ad-hoc client: no mount, no project event. You can call MCP tools directly
-// by their tool name on the returned client.
-const mcp = await itx.mcp.connect({ url: mcpUrl });
-const search = await mcp.web_search_exa({
+// Ad-hoc client: no mount, no project event. Tool names are methods on the
+// returned client, and connect() pipelines — one expression end to end.
+const search = await itx.mcp.connect({ url: mcpUrl }).web_search_exa({
   query: vars.query ?? "Cloudflare Workers RPC capabilities",
   numResults: 2,
 });
@@ -847,12 +850,11 @@ return {
 const petstoreSpecUrl =
   vars.specUrl ?? "https://petstore3.swagger.io/api/v3/openapi.json";
 
-// Await the OpenAPI client, then call operationIds as methods. This is the
-// same operation as:
-//   await (await itx.openapi.connect({ specUrl: petstoreSpecUrl }))
-//     .findPetsByStatus({ status: "available" })
-const petstore = await itx.openapi.connect({ specUrl: petstoreSpecUrl });
-const availablePets = await petstore.findPetsByStatus({ status: "available" });
+// operationIds are methods on the connected client, and connect() pipelines
+// — call straight through it in one expression.
+const availablePets = await itx.openapi
+  .connect({ specUrl: petstoreSpecUrl })
+  .findPetsByStatus({ status: "available" });
 
 // Mount the recipe when the client should become a named project capability.
 await itx.provideCapability({
@@ -1086,8 +1088,7 @@ for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
 // enumerated by itx.integrations.list(). Mount at the PROJECT ROOT:
 // itx.integrations.* resolves through the project capability table, so an
 // own-scope itx.provideCapability from an agent is unreachable there.
-const rootHost = await itx.capabilityHosts.get("/");
-await rootHost.provideCapability({
+await itx.capabilityHosts.get("/").provideCapability({
   path: ["integrations", "github-mcp", connection],
   type: "itx-expression",
   instructions:

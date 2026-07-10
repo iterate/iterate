@@ -14,8 +14,8 @@
 
 import { expect, test as baseTest } from "vitest";
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
-import { connectGlobal } from "./e2e-env.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
+import { connectGlobal, connectProject } from "./e2e-env.ts";
 import { bakeProjectWorkerRunner, MATRIX_RUNTIMES, runExampleCode } from "./example-matrix.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -131,28 +131,44 @@ for (const example of MATRIX_EXAMPLES) {
       // Fresh per attempt, shared across this attempt's runtimes — see
       // ExampleRunContext.attemptSalt.
       const attemptSalt = crypto.randomUUID().slice(0, 8);
-      for (const runtime of runtimes) {
-        const ctx = {
-          attemptSalt,
-          marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
-          projectId,
-        };
-        const vars = exampleCase.vars?.(ctx) ?? {};
-        try {
-          const result = await runExampleCode(runtime, {
-            code: example.code,
-            id: example.id,
+      try {
+        for (const runtime of runtimes) {
+          const ctx = {
+            attemptSalt,
+            marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
             projectId,
-            vars,
-          });
-          exampleCase.assert(result, ctx, expect);
-        } catch (error) {
-          throw new Error(
-            `example "${example.id}" failed in the ${runtime} runtime: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            { cause: error },
-          );
+          };
+          const vars = exampleCase.vars?.(ctx) ?? {};
+          try {
+            const result = await runExampleCode(runtime, {
+              code: example.code,
+              id: example.id,
+              projectId,
+              vars,
+            });
+            exampleCase.assert(result, ctx, expect);
+          } catch (error) {
+            throw new Error(
+              `example "${example.id}" failed in the ${runtime} runtime: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              { cause: error },
+            );
+          }
+        }
+      } finally {
+        // In a FINALLY: the failed attempts are precisely the ones whose
+        // resources must not leak (a stuck container that failed this
+        // attempt would otherwise keep holding slot capacity while the
+        // retry mints a fresh attemptSalt). Best-effort — slot hygiene
+        // never turns the test's own outcome.
+        if (exampleCase.cleanup) {
+          try {
+            using project = connectProject(projectId);
+            await exampleCase.cleanup(project, { attemptSalt, marker: "cleanup", projectId });
+          } catch (error) {
+            console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
+          }
         }
       }
     },
