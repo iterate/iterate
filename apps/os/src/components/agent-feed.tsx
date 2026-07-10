@@ -1,7 +1,6 @@
 import {
   memo,
   useCallback,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -47,6 +46,7 @@ import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processo
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 /** How many rows past the virtualizer's window the tail query prefetches. */
 const TAIL_PREFETCH_ROWS = 32;
 /** Cap on rows retained across window shifts (memory bound for long feeds). */
@@ -145,7 +145,13 @@ export function AgentFeedView({
     estimateSize: () => 56,
     getItemKey,
     anchorTo: "end",
-    followOnAppend: true,
+    // followOnAppend stays OFF: following the tail is the stick's job (see
+    // useStickToBottom), measured against the real DOM. followOnAppend
+    // resolves against the virtualizer's internal offset model, which drifts
+    // from the DOM by a few px while async rows settle — its uncancellable
+    // reconcile loop then rewrites scrollTop every frame toward a bottom
+    // that isn't quite the bottom, out-writing the stick.
+    followOnAppend: false,
     scrollEndThreshold: 80,
     overscan: 16,
     // The feed's breathing room above/below the messages lives HERE, not as
@@ -252,34 +258,25 @@ export function AgentFeedView({
     return rows;
   }, [rowsResult.data, rowsResult.status, filterKey, windowStart, denseWindow]);
 
-  // Open at the newest content. A single scrollToEnd on mount can't get
-  // there: the count and each row window resolve asynchronously, and a jump
-  // against estimated sizes lands short. So while the feed is opening,
-  // re-pin the end on every data wave, and stop once the pin has stuck (tail
-  // row's real data rendered and the reader is still at the end) — from then
-  // on TanStack's anchorTo/followOnAppend own the tail natively. A reader
-  // who starts scrolling during the load takes over immediately (listeners
-  // below).
+  // All SCROLLING at the tail is owned by the stick (see the hook's docs):
+  // it opens the feed at the newest content, holds the bottom through async
+  // row loads AND viewport resizes (the composer below has variable height),
+  // and releases on real user input. This effect only governs which rows we
+  // FETCH while opening — it flips the row window from tail-anchored to
+  // virtualizer-driven once the tail row's real data has rendered (or the
+  // reader released the stick and took over, via onRelease below).
   useLayoutEffect(() => {
     if (initialPinDone || totalCount === 0) return;
     const tailRowLoaded = itemCount === 0 || itemsByIndex.has(itemCount - 1);
-    if (tailRowLoaded && virtualizer.isAtEnd()) {
-      setInitialPinDone(true);
-      return;
-    }
-    virtualizer.scrollToEnd();
+    if (tailRowLoaded && virtualizer.isAtEnd()) setInitialPinDone(true);
   }, [initialPinDone, totalCount, itemCount, itemsByIndex, virtualizer]);
 
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (element == null) return;
-    const takeOver = () => setInitialPinDone(true);
-    const events = ["wheel", "touchstart", "keydown"] as const;
-    for (const name of events) element.addEventListener(name, takeOver, { passive: true });
-    return () => {
-      for (const name of events) element.removeEventListener(name, takeOver);
-    };
-  }, []);
+  const contentRef = useRef<HTMLDivElement>(null);
+  useStickToBottom({
+    scrollElementRef: scrollRef,
+    contentElementRef: contentRef,
+    onRelease: () => setInitialPinDone(true),
+  });
 
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.
@@ -306,7 +303,11 @@ export function AgentFeedView({
             </EmptyHeader>
           </Empty>
         ) : null}
-        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        <div
+          ref={contentRef}
+          className="relative w-full"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
             const isLiveItem = live != null && index === itemCount;

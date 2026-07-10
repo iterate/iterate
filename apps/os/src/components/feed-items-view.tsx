@@ -1,8 +1,9 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { Centered } from "~/components/centered.tsx";
+import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import {
@@ -61,7 +62,8 @@ export function FeedItemsView({
     estimateSize: () => 44,
     getItemKey: (index) => index,
     anchorTo: "end",
-    followOnAppend: true,
+    // OFF — the stick owns tail-following in DOM truth (see agent-feed.tsx).
+    followOnAppend: false,
     scrollEndThreshold: 80,
     overscan: 16,
     // Vertical breathing room lives here, not as wrapper padding, so the
@@ -132,27 +134,20 @@ export function FeedItemsView({
     return rows;
   }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
 
-  // Open at the newest items: re-pin the end on every async data wave until
-  // the pin sticks, then hand the tail to anchorTo/followOnAppend (see
-  // agent-feed.tsx for why a one-shot mount scroll gets stranded).
+  // Scrolling at the tail is owned by the stick (see agent-feed.tsx and the
+  // hook's docs); this effect only flips the row window from tail-anchored
+  // to virtualizer-driven once the tail row's real data has rendered.
   useLayoutEffect(() => {
     if (initialPinDone || itemCount === 0) return;
-    if (rowsByIndex.has(itemCount - 1) && virtualizer.isAtEnd()) {
-      setInitialPinDone(true);
-      return;
-    }
-    virtualizer.scrollToEnd();
+    if (rowsByIndex.has(itemCount - 1) && virtualizer.isAtEnd()) setInitialPinDone(true);
   }, [initialPinDone, itemCount, rowsByIndex, virtualizer]);
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (element == null) return;
-    const takeOver = () => setInitialPinDone(true);
-    const events = ["wheel", "touchstart", "keydown"] as const;
-    for (const name of events) element.addEventListener(name, takeOver, { passive: true });
-    return () => {
-      for (const name of events) element.removeEventListener(name, takeOver);
-    };
-  }, []);
+
+  const contentRef = useRef<HTMLDivElement>(null);
+  useStickToBottom({
+    scrollElementRef: scrollRef,
+    contentElementRef: contentRef,
+    onRelease: () => setInitialPinDone(true),
+  });
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -171,6 +166,7 @@ export function FeedItemsView({
           </Centered>
         ) : null}
         <div
+          ref={contentRef}
           className="relative w-full"
           style={{ height: virtualizer.getTotalSize() }}
           data-testid="stream-feed-items"
