@@ -1000,6 +1000,9 @@ function isRateLimitErrorMessage(message: string): boolean {
   return /\b3021\b|rate.?limit/i.test(message);
 }
 
+const FENCED_SNIPPET_RE =
+  /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+
 type SnippetExtraction =
   | { kind: "script"; code: string }
   // The model queued several scripts in one response (planning ahead).
@@ -1008,9 +1011,6 @@ type SnippetExtraction =
   // rejects the whole output with corrective feedback instead.
   | { kind: "multiple"; count: number }
   | { kind: "none" };
-
-const FENCED_SNIPPET_RE =
-  /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
 
 function extractAsyncJsSnippet(content: string): SnippetExtraction {
   // Fences count only at line starts: scripts legitimately carry ``` inside
