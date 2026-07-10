@@ -17,7 +17,7 @@ export function normalizeAgentPath(path: string): string {
  * Resolve an agent path the way callers address agents: absolute
  * `/agents/...` paths pass through, and relative paths resolve against the
  * calling scope with plain filesystem semantics — `"."` stays put, `".."`
- * climbs (the parent agent of `/agents/a/subagents/b` is `"../.."`). Empty
+ * climbs (the parent agent of `/agents/a/b` is `".."`). Empty
  * segments are rejected: messaging a path births an agent, so a `"//"` (or
  * trailing-slash) typo must error, not mint a junk stream. Climbing above
  * `/agents/` fails the normalize guard.

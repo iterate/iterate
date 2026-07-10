@@ -855,8 +855,8 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       };
     case "events.iterate.com/stream/child-stream-created": {
       // Every descendant stream announces its FULL path to every ancestor;
-      // this agent's subagents are the announcements whose parent-agent path
-      // is exactly this stream (event.path), so grandchildren stay out.
+      // this agent's child agents are the announcements whose parent-agent
+      // path is exactly this stream (event.path), so grandchildren stay out.
       const childPath = event.payload.childPath;
       if (subagentParentPath(childPath) !== event.path) return state;
       if (state.subagents.some((subagent) => subagent.path === childPath)) return state;

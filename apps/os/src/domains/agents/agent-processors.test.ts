@@ -1325,17 +1325,17 @@ describe("subagents in reduced state", () => {
 
   it("folds immediate subagent births from child-stream-created announcements", () => {
     const state = reduceAgentEvents([
-      announced("/agents/main/subagents/researcher", 1),
+      announced("/agents/main/researcher", 1),
       // A grandchild announces to every ancestor too — it belongs to the
       // subagent's own fold, not this one.
-      announced("/agents/main/subagents/researcher/subagents/helper", 2),
+      announced("/agents/main/researcher/helper", 2),
       // Duplicate announcements dedupe.
-      announced("/agents/main/subagents/researcher", 3),
+      announced("/agents/main/researcher", 3),
       // A non-subagent child stream is not a subagent.
-      announced("/agents/main/notes", 4),
+      announced("/repos/config/branch", 4),
     ]);
     expect(state.subagents).toMatchObject([
-      { path: "/agents/main/subagents/researcher", spawnedAt: "2026-07-09T00:00:00.000Z" },
+      { path: "/agents/main/researcher", spawnedAt: "2026-07-09T00:00:00.000Z" },
     ]);
   });
 });
@@ -1346,7 +1346,7 @@ describe("inter-agent mail", () => {
     payload,
     offset,
     createdAt: "2026-07-09T00:00:00.000Z",
-    path: "/agents/main/subagents/researcher",
+    path: "/agents/main/researcher",
   });
 
   it("folds agent mail into history with the sender named, as an autonomous trigger", () => {

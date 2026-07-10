@@ -883,7 +883,7 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agents/message-received",
         payload: {
           content: "Done. Findings attached below.",
-          from: { kind: "agent", path: "/agents/main/subagents/researcher" },
+          from: { kind: "agent", path: "/agents/main/researcher" },
         },
       },
     ]);
@@ -892,7 +892,7 @@ describe("agent-ui reducer", () => {
       {
         kind: "user",
         text: "Done. Findings attached below.",
-        via: { service: "agent", sender: "/agents/main/subagents/researcher" },
+        via: { service: "agent", sender: "/agents/main/researcher" },
       },
     ]);
   });

@@ -8,47 +8,41 @@ describe("resolveAgentPath", () => {
   });
 
   it("resolves relative paths against the calling agent scope", () => {
-    expect(resolveAgentPath("subagents/researcher", "/agents/main")).toBe(
-      "/agents/main/subagents/researcher",
-    );
-    expect(resolveAgentPath("subagents/team/researcher", "/agents/main")).toBe(
-      "/agents/main/subagents/team/researcher",
+    expect(resolveAgentPath("researcher", "/agents/main")).toBe("/agents/main/researcher");
+    expect(resolveAgentPath("team/researcher", "/agents/main")).toBe(
+      "/agents/main/team/researcher",
     );
   });
 
-  it('".." climbs — a subagent reaches its parent via "../.."', () => {
-    expect(resolveAgentPath("../..", "/agents/main/subagents/researcher")).toBe("/agents/main");
-    expect(resolveAgentPath("../..", "/agents/a/subagents/b/subagents/c")).toBe(
-      "/agents/a/subagents/b",
-    );
-    expect(resolveAgentPath("../../../..", "/agents/a/subagents/b/subagents/c")).toBe("/agents/a");
-    expect(resolveAgentPath("../sibling", "/agents/main/subagents/researcher")).toBe(
-      "/agents/main/subagents/sibling",
-    );
+  it('".." climbs — a subagent reaches its parent with one segment', () => {
+    expect(resolveAgentPath("..", "/agents/main/researcher")).toBe("/agents/main");
+    expect(resolveAgentPath("..", "/agents/a/b/c")).toBe("/agents/a/b");
+    expect(resolveAgentPath("../..", "/agents/a/b/c")).toBe("/agents/a");
+    expect(resolveAgentPath("../sibling", "/agents/main/researcher")).toBe("/agents/main/sibling");
   });
 
   it('"." stays put', () => {
     expect(resolveAgentPath(".", "/agents/main")).toBe("/agents/main");
-    expect(resolveAgentPath("./subagents/x", "/agents/main")).toBe("/agents/main/subagents/x");
+    expect(resolveAgentPath("./x", "/agents/main")).toBe("/agents/main/x");
   });
 
   it("climbing above /agents/ fails the agent-path guard", () => {
-    expect(() => resolveAgentPath("../../..", "/agents/main/subagents/researcher")).toThrow(
+    expect(() => resolveAgentPath("../..", "/agents/main/researcher")).toThrow(
       /must start with "\/agents\/"/,
     );
   });
 
   it("rejects empty segments — messaging a typo must error, not birth a junk stream", () => {
-    expect(() => resolveAgentPath("subagents//x", "/agents/main")).toThrow(
+    expect(() => resolveAgentPath("team//x", "/agents/main")).toThrow(
       /invalid relative agent path/,
     );
-    expect(() => resolveAgentPath("subagents/x/", "/agents/main")).toThrow(
+    expect(() => resolveAgentPath("team/x/", "/agents/main")).toThrow(
       /invalid relative agent path/,
     );
   });
 
   it("rejects relative paths without an agent scope to resolve against", () => {
-    expect(() => resolveAgentPath("subagents/x", undefined)).toThrow(/needs an agent scope/);
-    expect(() => resolveAgentPath("subagents/x", "/repos/config")).toThrow(/needs an agent scope/);
+    expect(() => resolveAgentPath("x", undefined)).toThrow(/needs an agent scope/);
+    expect(() => resolveAgentPath("x", "/repos/config")).toThrow(/needs an agent scope/);
   });
 });

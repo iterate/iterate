@@ -1041,7 +1041,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("subagents/researcher") from an agent script addresses a subagent, get("../..") from a subagent addresses its parent. list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
         get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
@@ -3016,9 +3016,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. On a child-agent path a custom
+   * systemPrompt keeps the subagent contract: the "you are a subagent" suffix
+   * is appended after it (agents/agent-defaults.ts).
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
     const defaultModel = parseConfig(env).defaultAgentModel;

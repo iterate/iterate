@@ -323,11 +323,11 @@ export const AgentProcessorContract = defineProcessorContract({
       .default({}),
     /**
      * This agent's subagents: agents whose streams sit at
-     * `<this path>/subagents/<path>` (see lib/subagent-paths.ts). Derived
+     * `<this path>/<name>` (see lib/subagent-paths.ts). Derived
      * entirely from the `stream/child-stream-created` announcements every
      * descendant stream posts to its ancestors — a subagent someone births by
      * raw stream append shows up exactly like one born by messaging
-     * `itx.agents.get("subagents/<name>")`.
+     * `itx.agents.get("<name>")`.
      */
     subagents: z
       .array(
@@ -688,7 +688,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-completed",
     // Subagent births: every descendant stream announces itself to its
-    // ancestors; the fold keeps the immediate `<path>/subagents/<name>` ones.
+    // ancestors; the fold keeps the immediate `<path>/<name>` ones.
     "events.iterate.com/stream/child-stream-created",
   ],
   emits: [

@@ -333,9 +333,9 @@ export interface Agent {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. On a child-agent path a custom
+   * systemPrompt keeps the subagent contract: the "you are a subagent" suffix
+   * is appended after it (agents/agent-defaults.ts).
    */
   configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
