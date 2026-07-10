@@ -41,10 +41,7 @@ export const StreamViewSearch = z.object({
    * as `group`, `stream.woken`, `stream.child-stream-created`.
    */
   components: z.array(z.string()).optional().catch(undefined),
-  /**
-   * Explicitly hide the raw feed rail in Pretty+raw (`raw=false`). Omitted =
-   * show raw (default for Pretty+raw / Raw). Pure Pretty never shows raw.
-   */
+  /** Legacy Pretty+raw raw-rail toggle. Accepted so old links keep parsing. */
   raw: z.boolean().optional().catch(undefined),
   /** Inclusive lower offset bound for feed_items. */
   from: z.number().optional().catch(undefined),
@@ -108,10 +105,10 @@ const PRETTY_RAW_CAPS: StreamModeCapabilities = {
   eventInspector: true,
   filters: true,
   search: true,
-  rawPresets: true,
-  rawEventTypes: true,
-  rawComponents: true,
-  rawOffsets: true,
+  rawPresets: false,
+  rawEventTypes: false,
+  rawComponents: false,
+  rawOffsets: false,
 };
 
 const RAW_CAPS: StreamModeCapabilities = {
@@ -184,19 +181,6 @@ export function modeCapabilities(
 ): StreamModeCapabilities {
   const mode = streamViewMode(search, streamPath);
   const base = mode === "pretty" ? PRETTY_CAPS : mode === "pretty-raw" ? PRETTY_RAW_CAPS : RAW_CAPS;
-  // Pretty+raw can turn the raw rail off via `raw=false` without leaving the mode.
-  if (mode === "pretty-raw" && search.raw === false) {
-    return {
-      ...base,
-      rawFeed: false,
-      eventInspector: false,
-      // Keep type-filter controls so the user can re-enable raw and pick types.
-      rawPresets: true,
-      rawEventTypes: true,
-      rawComponents: true,
-      rawOffsets: false,
-    };
-  }
   return base;
 }
 

@@ -88,6 +88,19 @@ export type StreamRuntimeState = {
   coreProcessorState: unknown;
   runtime: {
     connections: Record<string, unknown>;
+    subscriptions: Record<
+      string,
+      {
+        mode: "wake" | "push" | "webhook";
+        ackedOffset: number;
+        lag: number;
+        attempt: number;
+        nextAttemptAt: number | null;
+        lastError: string | null;
+        parkedAtOffset: number | null;
+        connected: boolean;
+      }
+    >;
   };
 };
 

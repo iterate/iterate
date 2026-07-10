@@ -95,7 +95,29 @@ describe("feedItemsFilterFromSearch", () => {
     });
   });
 
-  it("honors components + types from the URL", () => {
+  it("ignores stale raw filters in pretty-raw so the grouped rail stays complete", () => {
+    expect(
+      feedItemsFilterFromSearch(
+        {
+          mode: "pretty-raw",
+          components: ["stream.woken"],
+          types: ["events.iterate.com/stream/woken"],
+          q: "only-pretty",
+          from: 10,
+        },
+        "/agents/x",
+      ),
+    ).toEqual({
+      eventTypes: null,
+      components: null,
+      eventTypePrefix: null,
+      searchQuery: null,
+      offsetFrom: null,
+      offsetTo: null,
+    });
+  });
+
+  it("honors components + types from the URL in raw mode", () => {
     expect(
       feedItemsFilterFromSearch(
         { mode: "raw", components: ["stream.woken"], types: ["events.iterate.com/stream/woken"] },
@@ -132,19 +154,19 @@ describe("feedFiltersActive", () => {
   it("signals raw filter deviations including components", () => {
     expect(feedFiltersActive({ mode: "raw", preset: "everything" }, agentPath)).toBe(true);
     expect(feedFiltersActive({ mode: "raw", q: "boom" }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ mode: "pretty-raw", components: ["group"] }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ mode: "pretty-raw", components: ["group"] }, agentPath)).toBe(false);
     expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
     expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
   });
 
   it("accepts legacy pretty-debug as pretty-raw for filter activity", () => {
     expect(feedFiltersActive({ mode: "pretty-debug", components: ["group"] }, agentPath)).toBe(
-      true,
+      false,
     );
   });
 
-  it("treats raw=false on pretty-raw as an active filter", () => {
-    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(true);
+  it("ignores the legacy raw=false toggle in pretty-raw", () => {
+    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(false);
   });
 
   it("does not treat pretty mode on non-agent paths as pretty (clamped to raw)", () => {

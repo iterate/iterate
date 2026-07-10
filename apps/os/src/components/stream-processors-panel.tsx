@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
-import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type {
+  AgentUiPresenceEntry,
+  AgentUiProcessorAnnouncement,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
@@ -57,6 +60,71 @@ export function PresenceAvatar({
  * a facet of "the stream's consumers". Overview lists every consumer with
  * (simulated) RTT/lag; clicking one drills into its announced contract.
  */
+export type StreamRuntimeDebugState = {
+  coreProcessorState: unknown;
+  runtime: {
+    connections: Record<string, unknown>;
+    subscriptions: Record<string, SubscriptionRuntimeState>;
+  };
+};
+
+type SubscriptionRuntimeState = {
+  mode: "wake" | "push" | "webhook";
+  ackedOffset: number;
+  lag: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  parkedAtOffset: number | null;
+  connected: boolean;
+};
+
+type ProcessorPanelEntry = {
+  subscriptionKey: string;
+  kind: "core" | "processor" | "subscriber" | "consumer";
+  connected: boolean;
+  direction: "inbound" | "outbound";
+  description?: string;
+  processor?: AgentUiProcessorAnnouncement;
+  subscriptionType?: "configured" | "ephemeral";
+  deliveryMode?: "wake" | "push" | "webhook";
+  configuredAtOffset?: number;
+  runtimeSubscription?: SubscriptionRuntimeState;
+  runtimeConnection?: Record<string, unknown>;
+};
+
+type StreamRuntimeLoad =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "loaded"; state: StreamRuntimeDebugState }
+  | { status: "error"; message: string };
+
+const CORE_PROCESSOR_KEY = "__stream-core__";
+const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
+  slug: "core",
+  version: "0.1.0",
+  description:
+    "Maintains the stream's own reduced state: head offset, child streams, durable subscriptions, presence, pause state, and append circuit breaker.",
+  consumes: ["*"],
+  emits: [
+    "events.iterate.com/stream/subscriber-connected",
+    "events.iterate.com/stream/subscriber-disconnected",
+    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-parked",
+    "events.iterate.com/stream/subscription-resumed",
+  ],
+  ownedEvents: [
+    { type: "events.iterate.com/stream/created" },
+    { type: "events.iterate.com/stream/woken" },
+    { type: "events.iterate.com/stream/configured" },
+    { type: "events.iterate.com/stream/subscription-configured" },
+    { type: "events.iterate.com/stream/subscriber-connected" },
+    { type: "events.iterate.com/stream/subscriber-disconnected" },
+    { type: "events.iterate.com/stream/paused" },
+    { type: "events.iterate.com/stream/resumed" },
+  ],
+};
+
 type ProcessorRuntimeStateResult = {
   runtimeState: ProcessorRuntimeState | null;
   streamMaxOffset: number;
@@ -75,6 +143,7 @@ export function StreamProcessorsPanel({
   onClose,
   onClearClientDatabase,
   getProcessorRuntimeState,
+  getStreamRuntimeState,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -89,10 +158,44 @@ export function StreamProcessorsPanel({
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
   getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeStateResult>;
+  getStreamRuntimeState: () => Promise<StreamRuntimeDebugState>;
 }) {
+  const [streamRuntimeLoad, setStreamRuntimeLoad] = useState<StreamRuntimeLoad>({
+    status: "idle",
+  });
+  const [streamRefreshKey, setStreamRefreshKey] = useState(0);
+  useEffect(() => {
+    if (!open) {
+      setStreamRuntimeLoad({ status: "idle" });
+      return;
+    }
+    let disposed = false;
+    setStreamRuntimeLoad({ status: "loading" });
+    void getStreamRuntimeState()
+      .then((state) => {
+        if (!disposed) setStreamRuntimeLoad({ status: "loaded", state });
+      })
+      .catch((error: unknown) => {
+        if (!disposed) {
+          setStreamRuntimeLoad({
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [getStreamRuntimeState, open, streamRefreshKey]);
+
+  const streamRuntime = streamRuntimeLoad.status === "loaded" ? streamRuntimeLoad.state : undefined;
+  const entries = useMemo(
+    () => buildProcessorPanelEntries(presence, streamRuntime),
+    [presence, streamRuntime],
+  );
   // A stale or never-connected key (e.g. after a reconnect) falls back to the
   // overview rather than a blank detail pane.
-  const focused = presence.find((entry) => entry.subscriptionKey === focusedKey) ?? null;
+  const focused = entries.find((entry) => entry.subscriptionKey === focusedKey) ?? null;
   const focusedSubscriptionKey = focused?.subscriptionKey ?? null;
   const focusedConnected = focused?.connected ?? false;
   const [runtimeStateLoad, setRuntimeStateLoad] = useState<ProcessorRuntimeStateLoad>({
@@ -112,6 +215,32 @@ export function StreamProcessorsPanel({
   useEffect(() => {
     if (focusedSubscriptionKey == null) {
       setRuntimeStateLoad({ status: "idle" });
+      return;
+    }
+
+    if (focused?.kind === "core") {
+      if (streamRuntimeLoad.status === "loading" || streamRuntimeLoad.status === "idle") {
+        setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
+        return;
+      }
+      if (streamRuntimeLoad.status === "error") {
+        setRuntimeStateLoad({
+          status: "error",
+          subscriptionKey: focusedSubscriptionKey,
+          message: streamRuntimeLoad.message,
+        });
+        return;
+      }
+      const coreState = streamRuntimeLoad.state.coreProcessorState;
+      setRuntimeStateLoad({
+        status: "loaded",
+        subscriptionKey: focusedSubscriptionKey,
+        runtimeState: {
+          snapshot: { offset: readNumber(coreState, "maxOffset") ?? 0, state: coreState },
+          runtime: streamRuntimeLoad.state.runtime,
+        },
+        streamMaxOffset: readNumber(coreState, "maxOffset") ?? 0,
+      });
       return;
     }
 
@@ -151,7 +280,14 @@ export function StreamProcessorsPanel({
     return () => {
       disposed = true;
     };
-  }, [focusedConnected, focusedSubscriptionKey, getProcessorRuntimeState, refreshKey]);
+  }, [
+    focused,
+    focusedConnected,
+    focusedSubscriptionKey,
+    getProcessorRuntimeState,
+    refreshKey,
+    streamRuntimeLoad,
+  ]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -165,7 +301,7 @@ export function StreamProcessorsPanel({
         </SheetTitle>
         {focused == null ? (
           <ProcessorsOverview
-            presence={presence}
+            entries={entries}
             metrics={metrics}
             eventCount={eventCount}
             busy={busy}
@@ -173,13 +309,18 @@ export function StreamProcessorsPanel({
             onFocus={onFocus}
             onClose={onClose}
             onClearClientDatabase={onClearClientDatabase}
+            onRefreshStreamRuntime={() => setStreamRefreshKey((key) => key + 1)}
+            streamRuntimeLoad={streamRuntimeLoad}
           />
         ) : (
           <ProcessorDetail
             entry={focused}
             busy={busy}
             runtimeStateLoad={focusedRuntimeStateLoad}
-            onRefreshRuntimeState={() => setRefreshKey((key) => key + 1)}
+            onRefreshRuntimeState={() => {
+              setRefreshKey((key) => key + 1);
+              if (focused.kind === "core") setStreamRefreshKey((key) => key + 1);
+            }}
             onBack={onBack}
             onClose={onClose}
           />
@@ -201,7 +342,7 @@ type ProcessorRuntimeStateLoad =
   | { status: "error"; subscriptionKey: string; message: string };
 
 function ProcessorsOverview({
-  presence,
+  entries,
   metrics,
   eventCount,
   busy,
@@ -209,8 +350,10 @@ function ProcessorsOverview({
   onFocus,
   onClose,
   onClearClientDatabase,
+  onRefreshStreamRuntime,
+  streamRuntimeLoad,
 }: {
-  presence: readonly AgentUiPresenceEntry[];
+  entries: readonly ProcessorPanelEntry[];
   metrics: RttMetrics;
   eventCount: number;
   busy: boolean;
@@ -218,10 +361,13 @@ function ProcessorsOverview({
   onFocus: (subscriptionKey: string) => void;
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
+  onRefreshStreamRuntime: () => void;
+  streamRuntimeLoad: StreamRuntimeLoad;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
   const points = sparklinePoints(metrics.spark, 368, 44);
   const area = `2,42 ${points} 366,42`;
+  const sections = processorEntrySections(entries);
 
   return (
     <>
@@ -266,6 +412,18 @@ function ProcessorsOverview({
           </div>
           <div className="mt-3 flex justify-end">
             <Button
+              variant="ghost"
+              size="sm"
+              disabled={streamRuntimeLoad.status === "loading"}
+              onClick={onRefreshStreamRuntime}
+              className="mr-2 text-muted-foreground"
+            >
+              <RefreshCwIcon
+                className={cn("size-3.5", streamRuntimeLoad.status === "loading" && "animate-spin")}
+              />
+              Refresh
+            </Button>
+            <Button
               variant="outline"
               size="sm"
               disabled={clearState === "clearing"}
@@ -284,76 +442,372 @@ function ProcessorsOverview({
               Could not clear local client data.
             </div>
           ) : null}
+          {streamRuntimeLoad.status === "error" ? (
+            <div className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
+              {streamRuntimeLoad.message}
+            </div>
+          ) : null}
         </div>
-        <div>
-          <div className="grid grid-cols-[minmax(0,1fr)_52px_44px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
-            <span>Consumer</span>
-            <span className="text-right">RTT</span>
-            <span className="text-right">Lag</span>
-          </div>
-          <div className="flex flex-col">
-            {presence.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-muted-foreground">
-                No subscribers have connected yet.
-              </p>
-            ) : (
-              presence.map((entry) => (
-                <button
-                  key={entry.subscriptionKey}
-                  type="button"
-                  onClick={() => onFocus(entry.subscriptionKey)}
-                  className={cn(
-                    "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
-                    entry.subscriptionKey === focusedKey &&
-                      "bg-muted/60 ring-1 ring-inset ring-border",
-                  )}
-                >
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} />
-                    <span className="min-w-0">
-                      <span className="block truncate font-mono text-xs">
-                        {presenceLabel(entry)}
-                      </span>
-                      <span
-                        className={cn(
-                          "block text-xs",
-                          entry.connected
-                            ? busy && isLlmish(entry)
-                              ? "text-amber-600"
-                              : "text-emerald-600"
-                            : "text-muted-foreground/60",
-                        )}
-                      >
-                        {entry.connected
-                          ? busy && isLlmish(entry)
-                            ? "processing"
-                            : "connected"
-                          : "disconnected"}
-                      </span>
-                    </span>
-                  </span>
-                  <span className="text-right font-mono text-xs text-muted-foreground">
-                    {entry.connected ? `${fakeRtt(entry.subscriptionKey, metrics.rttNow)}ms` : "—"}
-                  </span>
-                  <span
-                    className={cn(
-                      "text-right font-mono text-xs",
-                      fakeLag(entry, busy) === "0" ? "text-muted-foreground" : "text-amber-600",
-                    )}
-                  >
-                    {entry.connected ? fakeLag(entry, busy) : "—"}
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
+        {sections.map((section) => (
+          <ProcessorEntrySection
+            key={section.title}
+            title={section.title}
+            emptyLabel={section.emptyLabel}
+            entries={section.entries}
+            busy={busy}
+            focusedKey={focusedKey}
+            metrics={metrics}
+            onFocus={onFocus}
+          />
+        ))}
       </div>
     </>
   );
 }
 
-function isLlmish(entry: AgentUiPresenceEntry): boolean {
+function ProcessorEntrySection({
+  title,
+  emptyLabel,
+  entries,
+  busy,
+  focusedKey,
+  metrics,
+  onFocus,
+}: {
+  title: string;
+  emptyLabel: string;
+  entries: readonly ProcessorPanelEntry[];
+  busy: boolean;
+  focusedKey: string | null;
+  metrics: RttMetrics;
+  onFocus: (subscriptionKey: string) => void;
+}) {
+  return (
+    <div>
+      <div className="grid grid-cols-[minmax(0,1fr)_52px_44px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+        <span>{title}</span>
+        <span className="text-right">RTT</span>
+        <span className="text-right">Lag</span>
+      </div>
+      <div className="flex flex-col">
+        {entries.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted-foreground">{emptyLabel}</p>
+        ) : (
+          entries.map((entry) => (
+            <ProcessorEntryButton
+              key={entry.subscriptionKey}
+              entry={entry}
+              busy={busy}
+              focused={entry.subscriptionKey === focusedKey}
+              metrics={metrics}
+              onFocus={onFocus}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProcessorEntryButton({
+  entry,
+  busy,
+  focused,
+  metrics,
+  onFocus,
+}: {
+  entry: ProcessorPanelEntry;
+  busy: boolean;
+  focused: boolean;
+  metrics: RttMetrics;
+  onFocus: (subscriptionKey: string) => void;
+}) {
+  const lag =
+    entry.kind === "core" ? "0" : (entry.runtimeSubscription?.lag ?? fakeLag(entry, busy));
+  return (
+    <button
+      type="button"
+      onClick={() => onFocus(entry.subscriptionKey)}
+      className={cn(
+        "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
+        focused && "bg-muted/60 ring-1 ring-inset ring-border",
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-2.5">
+        <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} />
+        <span className="min-w-0">
+          <span className="block truncate font-mono text-xs">{presenceLabel(entry)}</span>
+          <span
+            className={cn(
+              "block text-xs",
+              entry.connected
+                ? busy && isLlmish(entry)
+                  ? "text-amber-600"
+                  : "text-emerald-600"
+                : entry.subscriptionType === "configured"
+                  ? "text-muted-foreground"
+                  : "text-muted-foreground/60",
+            )}
+          >
+            {processorEntryStatus(entry, busy)}
+          </span>
+        </span>
+      </span>
+      <span className="text-right font-mono text-xs text-muted-foreground">
+        {entry.connected ? `${fakeRtt(entry.subscriptionKey, metrics.rttNow)}ms` : "—"}
+      </span>
+      <span
+        className={cn(
+          "text-right font-mono text-xs",
+          String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
+        )}
+      >
+        {entry.kind === "core" || entry.connected || entry.runtimeSubscription != null ? lag : "—"}
+      </span>
+    </button>
+  );
+}
+
+function buildProcessorPanelEntries(
+  presence: readonly AgentUiPresenceEntry[],
+  streamRuntime: StreamRuntimeDebugState | undefined,
+): ProcessorPanelEntry[] {
+  const entries = new Map<string, ProcessorPanelEntry>();
+  const coreConnections = readCoreConnections(streamRuntime?.coreProcessorState);
+  const configured = readConfiguredSubscribers(streamRuntime?.coreProcessorState);
+
+  entries.set(CORE_PROCESSOR_KEY, {
+    subscriptionKey: CORE_PROCESSOR_KEY,
+    kind: "core",
+    connected: true,
+    direction: "outbound",
+    description: CORE_PROCESSOR_ANNOUNCEMENT.description,
+    processor: CORE_PROCESSOR_ANNOUNCEMENT,
+  });
+
+  for (const entry of presence) {
+    const coreConnection = coreConnections[entry.subscriptionKey];
+    const subscriptionType = readSubscriptionType(coreConnection) ?? "ephemeral";
+    const runtimeConnection = readRuntimeRecord(
+      streamRuntime?.runtime.connections[entry.subscriptionKey],
+    );
+    entries.set(entry.subscriptionKey, {
+      ...entry,
+      kind: subscriptionType === "configured" ? "processor" : "consumer",
+      subscriptionType,
+      runtimeConnection,
+      ...(configured[entry.subscriptionKey]?.deliveryMode === undefined
+        ? {}
+        : { deliveryMode: configured[entry.subscriptionKey].deliveryMode }),
+      ...(configured[entry.subscriptionKey]?.configuredAtOffset === undefined
+        ? {}
+        : { configuredAtOffset: configured[entry.subscriptionKey].configuredAtOffset }),
+      runtimeSubscription: streamRuntime?.runtime.subscriptions[entry.subscriptionKey],
+    });
+  }
+
+  for (const [subscriptionKey, connection] of Object.entries(coreConnections)) {
+    if (entries.has(subscriptionKey)) continue;
+    const subscriber = readRuntimeRecord(connection.subscriber);
+    const announcement = readAnnouncement(subscriber?.processor);
+    const subscriptionType = readSubscriptionType(connection) ?? "ephemeral";
+    entries.set(subscriptionKey, {
+      subscriptionKey,
+      kind: subscriptionType === "configured" ? "processor" : "consumer",
+      connected: true,
+      direction: "outbound",
+      ...(typeof subscriber?.description === "string"
+        ? { description: subscriber.description }
+        : {}),
+      ...(announcement == null ? {} : { processor: announcement }),
+      subscriptionType,
+      runtimeConnection: readRuntimeRecord(streamRuntime?.runtime.connections[subscriptionKey]),
+      ...(configured[subscriptionKey]?.deliveryMode === undefined
+        ? {}
+        : { deliveryMode: configured[subscriptionKey].deliveryMode }),
+      ...(configured[subscriptionKey]?.configuredAtOffset === undefined
+        ? {}
+        : { configuredAtOffset: configured[subscriptionKey].configuredAtOffset }),
+      runtimeSubscription: streamRuntime?.runtime.subscriptions[subscriptionKey],
+    });
+  }
+
+  for (const [subscriptionKey, config] of Object.entries(configured)) {
+    const current = entries.get(subscriptionKey);
+    const runtimeSubscription = streamRuntime?.runtime.subscriptions[subscriptionKey];
+    const kind = config.deliveryMode === "wake" ? "processor" : "subscriber";
+    if (current != null) {
+      entries.set(subscriptionKey, {
+        ...current,
+        kind,
+        subscriptionType: "configured",
+        deliveryMode: config.deliveryMode,
+        configuredAtOffset: config.configuredAtOffset,
+        runtimeSubscription,
+        connected: runtimeSubscription?.connected ?? current.connected,
+      });
+      continue;
+    }
+    entries.set(subscriptionKey, {
+      subscriptionKey,
+      kind,
+      connected: runtimeSubscription?.connected ?? false,
+      direction: "outbound",
+      description:
+        config.deliveryMode === "wake"
+          ? "Durable wake processor"
+          : `Durable ${config.deliveryMode} subscriber`,
+      subscriptionType: "configured",
+      deliveryMode: config.deliveryMode,
+      configuredAtOffset: config.configuredAtOffset,
+      runtimeSubscription,
+      runtimeConnection: readRuntimeRecord(streamRuntime?.runtime.connections[subscriptionKey]),
+    });
+  }
+
+  return [...entries.values()].sort(compareProcessorEntries);
+}
+
+function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<{
+  title: string;
+  emptyLabel: string;
+  entries: ProcessorPanelEntry[];
+}> {
+  return [
+    {
+      title: "Core processor",
+      emptyLabel: "Core stream state has not loaded yet.",
+      entries: entries.filter((entry) => entry.kind === "core"),
+    },
+    {
+      title: "Durable processors",
+      emptyLabel: "No durable processors are configured on this stream.",
+      entries: entries.filter((entry) => entry.kind === "processor"),
+    },
+    {
+      title: "Durable subscribers",
+      emptyLabel: "No durable push or webhook subscribers are configured.",
+      entries: entries.filter((entry) => entry.kind === "subscriber"),
+    },
+    {
+      title: "Ephemeral consumers",
+      emptyLabel: "No ephemeral consumers have connected yet.",
+      entries: entries.filter((entry) => entry.kind === "consumer"),
+    },
+  ];
+}
+
+function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry): number {
+  const rank = { core: 0, processor: 1, subscriber: 2, consumer: 3 } satisfies Record<
+    ProcessorPanelEntry["kind"],
+    number
+  >;
+  return (
+    rank[a.kind] - rank[b.kind] ||
+    presenceLabel(a).localeCompare(presenceLabel(b)) ||
+    a.subscriptionKey.localeCompare(b.subscriptionKey)
+  );
+}
+
+function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
+  if (entry.kind === "core") return "running";
+  if (entry.connected) {
+    if (busy && isLlmish(entry)) return "processing";
+    return entry.subscriptionType === "configured" ? "connected durable" : "connected ephemeral";
+  }
+  if (entry.runtimeSubscription?.parkedAtOffset != null) {
+    return `parked at #${entry.runtimeSubscription.parkedAtOffset}`;
+  }
+  if (entry.subscriptionType === "configured") return "configured asleep";
+  return "disconnected";
+}
+
+function readCoreConnections(value: unknown): Record<string, Record<string, unknown>> {
+  const record = readRuntimeRecord(value);
+  const connections = readRuntimeRecord(record?.connectionsByKey);
+  if (connections == null) return {};
+  return Object.fromEntries(
+    Object.entries(connections).flatMap(([key, connection]) => {
+      const value = readRuntimeRecord(connection);
+      return value == null ? [] : [[key, value]];
+    }),
+  );
+}
+
+function readConfiguredSubscribers(
+  value: unknown,
+): Record<string, { deliveryMode: "wake" | "push" | "webhook"; configuredAtOffset?: number }> {
+  const record = readRuntimeRecord(value);
+  const configured = readRuntimeRecord(record?.configuredSubscribersByKey);
+  if (configured == null) return {};
+  return Object.fromEntries(
+    Object.entries(configured).flatMap(([key, entry]) => {
+      const latest = readRuntimeRecord(readRuntimeRecord(entry)?.latestConfiguredEvent);
+      const payload = readRuntimeRecord(latest?.payload);
+      const delivery = readRuntimeRecord(payload?.delivery);
+      const mode = delivery?.mode;
+      if (mode !== "wake" && mode !== "push" && mode !== "webhook") return [];
+      const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
+      return [[key, { deliveryMode: mode, configuredAtOffset }]];
+    }),
+  );
+}
+
+function readSubscriptionType(
+  value: Record<string, unknown> | undefined,
+): "configured" | "ephemeral" | undefined {
+  const subscriptionType = value?.subscriptionType;
+  return subscriptionType === "configured" || subscriptionType === "ephemeral"
+    ? subscriptionType
+    : undefined;
+}
+
+function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
+  const processor = readRuntimeRecord(value);
+  const announcement = readRuntimeRecord(processor?.announcement);
+  if (announcement == null) return null;
+  const slug = typeof announcement.slug === "string" ? announcement.slug : null;
+  const version = typeof announcement.version === "string" ? announcement.version : null;
+  const description =
+    typeof announcement.description === "string" ? announcement.description : null;
+  if (slug == null || version == null || description == null) return null;
+  const consumes = Array.isArray(announcement.consumes)
+    ? announcement.consumes.filter((item): item is string => typeof item === "string")
+    : [];
+  const emits = Array.isArray(announcement.emits)
+    ? announcement.emits.filter((item): item is string => typeof item === "string")
+    : [];
+  const ownedEvents = Array.isArray(announcement.ownedEvents)
+    ? announcement.ownedEvents.flatMap((item) => {
+        const event = readRuntimeRecord(item);
+        return typeof event?.type === "string"
+          ? [
+              {
+                type: event.type,
+                ...(typeof event.description === "string"
+                  ? { description: event.description }
+                  : {}),
+              },
+            ]
+          : [];
+      })
+    : [];
+  return { slug, version, description, consumes, emits, ownedEvents };
+}
+
+function readRuntimeRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNumber(value: unknown, key: string): number | null {
+  const record = readRuntimeRecord(value);
+  const field = record?.[key];
+  return typeof field === "number" || typeof field === "bigint" ? Number(field) : null;
+}
+
+function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
   const slug = entry.processor?.slug ?? "";
   return ["agent", "capability-host"].includes(slug);
 }
@@ -385,7 +839,7 @@ function ProcessorDetail({
   onBack,
   onClose,
 }: {
-  entry: AgentUiPresenceEntry;
+  entry: ProcessorPanelEntry;
   busy: boolean;
   runtimeStateLoad: ProcessorRuntimeStateLoad;
   onRefreshRuntimeState: () => void;
@@ -419,7 +873,7 @@ function ProcessorDetail({
               entry.connected ? "text-emerald-600" : "text-muted-foreground/60",
             )}
           >
-            {entry.connected ? "connected" : "disconnected"} · {entry.direction}
+            {processorEntryStatus(entry, busy)} · {entry.deliveryMode ?? entry.direction}
           </div>
         </div>
         <PanelCloseButton onClose={onClose} />
@@ -455,6 +909,7 @@ function ProcessorDetail({
             </div>
           </>
         )}
+        {entry.kind === "core" ? null : <SubscriptionRuntimeSummary entry={entry} />}
         <ProcessorRuntimeStateView
           runtimeStateLoad={runtimeStateLoad}
           onRefresh={onRefreshRuntimeState}
@@ -490,6 +945,7 @@ function ProcessorRuntimeStateView({
       ? null
       : Math.max(0, streamMaxOffset - snapshot.offset);
   const isAgent = processorSlug === "agent";
+  const isCore = processorSlug === "core";
 
   return (
     <div>
@@ -537,7 +993,11 @@ function ProcessorRuntimeStateView({
             <RuntimeStateStat label="offset" value={`#${snapshot.offset}`} />
             <RuntimeStateStat label="lag" value={lag === 0 ? "0" : `+${lag}`} />
           </div>
-          {showRaw || !isAgent ? (
+          {showRaw ? (
+            <SerializedObjectCodeBlock className="max-h-[28rem]" data={snapshot.state} />
+          ) : isCore ? (
+            <CorePrettyState state={snapshot.state} runtime={runtimeState.runtime} />
+          ) : !isAgent ? (
             <SerializedObjectCodeBlock className="max-h-[28rem]" data={snapshot.state} />
           ) : (
             <AgentPrettyState state={snapshot.state} />
@@ -547,6 +1007,153 @@ function ProcessorRuntimeStateView({
               <SectionHeading>Runtime</SectionHeading>
               <SerializedObjectCodeBlock className="max-h-60" data={runtimeState.runtime} />
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
+  if (
+    entry.subscriptionType == null &&
+    entry.deliveryMode == null &&
+    entry.runtimeSubscription == null &&
+    entry.configuredAtOffset == null
+  ) {
+    return null;
+  }
+  const runtime = entry.runtimeSubscription;
+  return (
+    <div>
+      <SectionHeading>Delivery</SectionHeading>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <RuntimeStateStat label="type" value={entry.subscriptionType ?? "unknown"} />
+        <RuntimeStateStat label="mode" value={entry.deliveryMode ?? runtime?.mode ?? "live"} />
+        <RuntimeStateStat label="acked" value={runtime == null ? "—" : `#${runtime.ackedOffset}`} />
+        <RuntimeStateStat label="lag" value={runtime == null ? "—" : String(runtime.lag)} />
+      </div>
+      {entry.configuredAtOffset == null && runtime?.lastError == null ? null : (
+        <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {entry.configuredAtOffset == null ? null : (
+            <div>configured at #{entry.configuredAtOffset}</div>
+          )}
+          {runtime?.parkedAtOffset == null ? null : <div>parked at #{runtime.parkedAtOffset}</div>}
+          {runtime?.nextAttemptAt == null ? null : (
+            <div>next attempt {new Date(runtime.nextAttemptAt).toLocaleString()}</div>
+          )}
+          {runtime?.lastError == null ? null : (
+            <div className="mt-1 text-destructive">{runtime.lastError}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CorePrettyState({
+  state,
+  runtime,
+}: {
+  state: unknown;
+  runtime: Record<string, unknown> | undefined;
+}) {
+  const core = asCoreState(state);
+  if (core == null) {
+    return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
+  }
+
+  const childPaths = Array.isArray(core.childPaths) ? core.childPaths : [];
+  const configured = readRuntimeRecord(core.configuredSubscribersByKey) ?? {};
+  const connections = readRuntimeRecord(core.connectionsByKey) ?? {};
+  const runtimeSubscriptions = readRuntimeRecord(runtime?.subscriptions) ?? {};
+  const paused = core.paused === true;
+  const circuitBreaker = readRuntimeRecord(core.circuitBreaker);
+  const trippedAtOffset = readNumber(circuitBreaker, "trippedAtOffset");
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <RuntimeStateStat label="head" value={`#${Number(core.maxOffset ?? 0)}`} />
+        <RuntimeStateStat label="events" value={String(core.eventCount ?? 0)} />
+        <RuntimeStateStat label="children" value={String(childPaths.length)} />
+        <RuntimeStateStat label="paused" value={paused ? "yes" : "no"} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <RuntimeStateStat label="configured" value={String(Object.keys(configured).length)} />
+        <RuntimeStateStat label="connected" value={String(Object.keys(connections).length)} />
+        <RuntimeStateStat
+          label="runtime subs"
+          value={String(Object.keys(runtimeSubscriptions).length)}
+        />
+      </div>
+
+      {core.path == null && core.projectId == null ? null : (
+        <div className="rounded-xl bg-muted/40 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Stream</div>
+          <div className="mt-1 break-all font-mono text-xs">
+            {String(core.projectId ?? "global")} {String(core.path ?? "")}
+          </div>
+          {typeof core.createdAt !== "string" ? null : (
+            <div className="mt-1 text-xs text-muted-foreground">{core.createdAt}</div>
+          )}
+        </div>
+      )}
+
+      {paused || trippedAtOffset != null ? (
+        <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          {paused ? (
+            <div>Paused{typeof core.pauseReason === "string" ? `: ${core.pauseReason}` : ""}</div>
+          ) : null}
+          {trippedAtOffset == null ? null : (
+            <div>Circuit breaker tripped at #{trippedAtOffset}</div>
+          )}
+        </div>
+      ) : null}
+
+      {Object.keys(configured).length === 0 ? null : (
+        <div>
+          <SectionHeading>Configured subscriptions</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {Object.entries(configured).map(([key, value]) => {
+              const latest = readRuntimeRecord(readRuntimeRecord(value)?.latestConfiguredEvent);
+              const payload = readRuntimeRecord(latest?.payload);
+              const delivery = readRuntimeRecord(payload?.delivery);
+              const mode = typeof delivery?.mode === "string" ? delivery.mode : "unknown";
+              const runtimeSub = readRuntimeRecord(runtimeSubscriptions[key]);
+              const lag = readNumber(runtimeSub, "lag");
+              return (
+                <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="min-w-0 truncate font-mono text-xs">{key}</div>
+                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {mode}
+                      {lag == null ? "" : ` · lag ${lag}`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {childPaths.length === 0 ? null : (
+        <div>
+          <SectionHeading>Child streams</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {childPaths.slice(0, 8).map((path) => (
+              <div
+                key={String(path)}
+                className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs"
+              >
+                {String(path)}
+              </div>
+            ))}
+          </div>
+          {childPaths.length <= 8 ? null : (
+            <div className="mt-1 text-xs text-muted-foreground">+{childPaths.length - 8} more</div>
           )}
         </div>
       )}
@@ -680,6 +1287,19 @@ function asAgentState(state: unknown): Record<string, unknown> | null {
   const record = state as Record<string, unknown>;
   // Heuristic: agent reduced state always has history + llmProvider-ish keys.
   if (!("history" in record) && !("currentRequest" in record) && !("systemPrompt" in record)) {
+    return null;
+  }
+  return record;
+}
+
+function asCoreState(state: unknown): Record<string, unknown> | null {
+  if (state == null || typeof state !== "object") return null;
+  const record = state as Record<string, unknown>;
+  if (
+    !("maxOffset" in record) &&
+    !("configuredSubscribersByKey" in record) &&
+    !("connectionsByKey" in record)
+  ) {
     return null;
   }
   return record;

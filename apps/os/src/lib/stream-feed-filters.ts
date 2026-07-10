@@ -75,9 +75,8 @@ const DOMAIN_PRESETS: { pathPrefix: string; preset: StreamFeedPreset }[] = [
 ];
 
 /**
- * Feed-items presets for Raw / Pretty+raw. FIRST is the domain default.
- * On agent streams Pretty+raw defaults to Everything so all raw lines show;
- * Raw mode still prefers the domain family first for focused debugging.
+ * Feed-items presets for Raw. FIRST is the domain default. Pretty+raw renders
+ * the raw grouped rail unfiltered, regardless of URL filter params.
  */
 export function presetsForStream(streamPath: string): StreamFeedPreset[] {
   const presets: StreamFeedPreset[] = [];
@@ -89,8 +88,8 @@ export function presetsForStream(streamPath: string): StreamFeedPreset[] {
 }
 
 /**
- * Default feed-items preset for a mode. Pretty+raw always starts unscoped
- * (Everything) so the raw rail shows the full stream; Raw uses the domain default.
+ * Default feed-items preset for a mode. Pretty+raw is unscoped (Everything)
+ * because its raw rail always shows the full stream; Raw uses the domain default.
  */
 export function defaultPresetForMode(
   streamPath: string,
@@ -111,10 +110,11 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
   const mode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
   const hasQuery = (search.q ?? "") !== "";
-  // Pretty+raw with raw rail turned off is a deliberate filter state.
-  const rawHidden = mode === "pretty-raw" && search.raw === false;
+  if (!caps.rawFeed) {
+    return caps.search && hasQuery;
+  }
 
-  if (!caps.rawFeed && !rawHidden) {
+  if (mode === "pretty-raw") {
     return caps.search && hasQuery;
   }
 
@@ -123,7 +123,6 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
     presetsForStream(streamPath).find((preset) => preset.id === search.preset) ?? defaultPreset;
 
   return (
-    rawHidden ||
     (caps.search && hasQuery) ||
     activePreset.id !== defaultPreset.id ||
     (caps.rawEventTypes && (search.types?.length ?? 0) > 0) ||
@@ -194,6 +193,16 @@ export function feedItemsFilterFromSearch(
   streamPath: string,
 ): FeedItemsFilterInput {
   const mode = streamViewMode(search, streamPath);
+  if (mode === "pretty-raw") {
+    return {
+      eventTypes: null,
+      components: null,
+      eventTypePrefix: null,
+      searchQuery: null,
+      offsetFrom: null,
+      offsetTo: null,
+    };
+  }
   const defaultPreset = defaultPresetForMode(streamPath, mode);
   const activePreset =
     presetsForStream(streamPath).find((preset) => preset.id === search.preset) ?? defaultPreset;

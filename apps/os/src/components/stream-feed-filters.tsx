@@ -22,11 +22,11 @@ import {
 /**
  * Mode-owned filter row + expandable type filter panel.
  *
- * Pretty = search only. Pretty+raw / Raw = presets, search, offsets, and a
- * large "Types" expander with two sections:
+ * Pretty and Pretty+raw = search only (Pretty+raw still shows the full grouped
+ * raw rail). Raw = presets, search, offsets, and a large "Types" expander with
+ * two sections:
  *   1) Feed item types (`components` — feed_items.component)
- *   2) Raw event types (`types`) + optional "show raw events" toggle
- *      (Pretty+raw only: `raw=false` hides the raw rail)
+ *   2) Raw event types (`types`)
  */
 export function StreamFeedFilterRow({
   activePreset,
@@ -50,10 +50,7 @@ export function StreamFeedFilterRow({
   const focusOnMount = useCallback((element: HTMLInputElement | null) => element?.focus(), []);
   const [typesOpen, setTypesOpen] = useState(false);
   const showTypePanel = caps.rawComponents || caps.rawEventTypes;
-  const typeFilterCount =
-    (search.components?.length ?? 0) +
-    (search.types?.length ?? 0) +
-    (mode === "pretty-raw" && search.raw === false ? 1 : 0);
+  const typeFilterCount = (search.components?.length ?? 0) + (search.types?.length ?? 0);
 
   return (
     <div className="flex shrink-0 flex-col gap-2 px-4 pb-1.5 pt-1">

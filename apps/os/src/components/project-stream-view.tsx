@@ -37,7 +37,10 @@ import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
-import { StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
+import {
+  StreamProcessorsPanel,
+  type StreamRuntimeDebugState,
+} from "~/components/stream-processors-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -217,6 +220,10 @@ export function ProjectStreamView({
     },
     [store],
   );
+  const getStreamRuntimeState = useCallback(
+    async (): Promise<StreamRuntimeDebugState> => store.runtimeState(),
+    [store],
+  );
 
   const connectionLabel =
     snapshot.connectionError ??
@@ -349,6 +356,7 @@ export function ProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
+      getStreamRuntimeState={getStreamRuntimeState}
     />
   );
 
