@@ -79,7 +79,11 @@ function ProjectAgentDetailContent() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1">
+      {/* Must be a flex column: the stream view sizes itself with flex-1 and
+          relies on this parent constraining it — in a block wrapper it grows
+          to content height, the feed never scrolls internally, and the
+          composer is pushed below the fold. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <ProjectStreamView
           autoFocusMessageComposer
           emptyLabel="No events on this agent stream yet."
