@@ -267,7 +267,7 @@ export function AgentFeedView({
 }
 
 /**
- * One-line token accounting for the agent, folded from the providers'
+ * One-line token accounting for the agent, folded from the agent processor's
  * token-usage-reported events: how full the context is (the last request's
  * input+output against its model window — what the next turn starts from)
  * plus lifetime in/out totals with the cached/reasoning breakdowns on hover.

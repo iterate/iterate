@@ -30,6 +30,7 @@ import {
 } from "./agent-processor-contract.ts";
 import {
   jsonCompatible,
+  normalizeLlmUsage,
   runWorkersAiAttempt,
   type WorkersAiBinding,
 } from "./workers-ai-transport.ts";
@@ -956,7 +957,8 @@ function agentInputTriggerSource(
 // Building the model-facing chat request.
 // =============================================================================
 
-/** One agent-history message as the model receives it. */
+/** One agent-history message as the model receives it: the contract's
+ * `AgentInputItem` shape plus the `system` role the request builder adds. */
 type AgentChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -1004,65 +1006,8 @@ function renderFileHintLine(file: AgentFileAttachment): string {
 }
 
 // =============================================================================
-// Token usage: vendor dialects → the one normalized token-usage-reported shape.
+// Context windows: model → the window the token-usage-reported payload claims.
 // =============================================================================
-
-/**
- * Both usage dialects the transport surfaces, in one loose shape: OpenAI
- * chat-completions (`prompt_tokens`/`completion_tokens` plus `*_details`
- * breakdowns) and OpenAI Responses (`input_tokens`/`output_tokens`). Loose
- * because vendors keep adding fields; unknown keys must not fail the parse.
- */
-const LlmUsage = z.looseObject({
-  prompt_tokens: z.number().int().nonnegative().optional(),
-  completion_tokens: z.number().int().nonnegative().optional(),
-  input_tokens: z.number().int().nonnegative().optional(),
-  output_tokens: z.number().int().nonnegative().optional(),
-  prompt_tokens_details: z
-    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
-    .optional(),
-  completion_tokens_details: z
-    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
-    .optional(),
-  input_tokens_details: z
-    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
-    .optional(),
-  output_tokens_details: z
-    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
-    .optional(),
-});
-
-/**
- * A vendor usage object as normalized token-usage-reported payload fields, or
- * undefined when the shape carries no recognizable totals (report nothing
- * rather than zeros — a zero is a claim).
- */
-export function normalizeLlmUsage(usage: unknown):
-  | {
-      inputTokens: number;
-      outputTokens: number;
-      cachedInputTokens?: number;
-      reasoningOutputTokens?: number;
-    }
-  | undefined {
-  const parsed = LlmUsage.safeParse(usage);
-  if (!parsed.success) return undefined;
-  const inputTokens = parsed.data.prompt_tokens ?? parsed.data.input_tokens;
-  const outputTokens = parsed.data.completion_tokens ?? parsed.data.output_tokens;
-  if (inputTokens === undefined || outputTokens === undefined) return undefined;
-  const cachedInputTokens =
-    parsed.data.prompt_tokens_details?.cached_tokens ??
-    parsed.data.input_tokens_details?.cached_tokens;
-  const reasoningOutputTokens =
-    parsed.data.completion_tokens_details?.reasoning_tokens ??
-    parsed.data.output_tokens_details?.reasoning_tokens;
-  return {
-    inputTokens,
-    outputTokens,
-    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
-  };
-}
 
 /**
  * Context windows per model family, longest-prefix matched so dated variants
