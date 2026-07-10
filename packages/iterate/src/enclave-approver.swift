@@ -14,21 +14,20 @@
 // fresh Touch ID check (re-enrolling biometrics invalidates the key).
 // Approving a request is a biometric act — that is the unforgeability story.
 //
-// Commands (all results are one-line JSON on stdout):
-//   generate                                mint a key
-//                                           -> {"publicKey": b64 X9.63,
-//                                               "keyBlob": b64 handle}
-//   public-key <keyBlobBase64>              read back the public point
-//                                           -> {"publicKey": b64 X9.63}
-//   sign <keyBlobBase64> <messageBase64>    Touch ID, then sign
-//                                           -> {"signatureDer": base64}
-//   approve <keyBlobBase64> <messageBase64> <requestJsonBase64>
-//                                           native dialog for one held egress
-//                                           request; approving signs in the
-//                                           same gesture
-//                                           -> {"decision":"granted","signatureDer":...}
-//                                            | {"decision":"rejected"}
-//                                            | {"decision":"ignored"}
+// Commands (results are one-line JSON on stdout; every command except
+// `generate` reads a JSON envelope from STDIN — never argv, which any local
+// process can read via ps):
+//   generate                     mint a key
+//                                -> {"publicKey": b64 X9.63, "keyBlob": b64 handle}
+//   public-key                   stdin {"keyBlob"}
+//                                -> {"publicKey": b64 X9.63}
+//   sign                         stdin {"keyBlob", "message": b64}; Touch ID, then sign
+//                                -> {"signatureDer": base64}
+//   approve                      stdin {"keyBlob", "message": b64, "request": {...}};
+//                                native dialog for one held egress request;
+//                                approving signs in the same gesture
+//                                -> {"decision":"granted","signatureDer":...}
+//                                 | {"decision":"rejected"} | {"decision":"ignored"}
 
 import AppKit
 import CryptoKit
@@ -70,7 +69,21 @@ func signMessage(blobBase64: String, message: Data, reason: String) -> Data {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-  fail("usage: enclave-approver generate | public-key <keyBlob> | sign <keyBlob> <messageBase64> | approve <keyBlob> <messageBase64> <requestJsonBase64>")
+  fail("usage: enclave-approver generate | public-key | sign | approve (inputs as JSON on stdin)")
+}
+
+/// The stdin envelope for key-holding commands: {"keyBlob", "message"?, "request"?}.
+func readStdinEnvelope() -> (keyBlob: String, message: Data?, request: [String: Any]?) {
+  let raw = FileHandle.standardInput.readDataToEndOfFile()
+  guard let envelope = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+    let keyBlob = envelope["keyBlob"] as? String
+  else { fail("stdin must be a JSON object with at least keyBlob") }
+  var message: Data?
+  if let messageBase64 = envelope["message"] as? String {
+    guard let decoded = Data(base64Encoded: messageBase64) else { fail("message is not base64") }
+    message = decoded
+  }
+  return (keyBlob, message, envelope["request"] as? [String: Any])
 }
 
 switch args[1] {
@@ -96,23 +109,24 @@ case "generate":
   }
 
 case "public-key":
-  guard args.count >= 3 else { fail("public-key needs <keyBlob>") }
-  jsonOut(["publicKey": loadKey(blobBase64: args[2]).publicKey.x963Representation.base64EncodedString()])
+  let envelope = readStdinEnvelope()
+  jsonOut([
+    "publicKey": loadKey(blobBase64: envelope.keyBlob).publicKey.x963Representation
+      .base64EncodedString()
+  ])
 
 case "sign":
-  guard args.count >= 4, let message = Data(base64Encoded: args[3]) else {
-    fail("sign needs <keyBlob> <messageBase64>")
-  }
+  let envelope = readStdinEnvelope()
+  guard let message = envelope.message else { fail("sign needs message on stdin") }
   let signature = signMessage(
-    blobBase64: args[2], message: message, reason: "sign an iterate egress approval")
+    blobBase64: envelope.keyBlob, message: message, reason: "sign an iterate egress approval")
   jsonOut(["signatureDer": signature.base64EncodedString()])
 
 case "approve":
-  guard args.count >= 5,
-    let message = Data(base64Encoded: args[3]),
-    let requestData = Data(base64Encoded: args[4]),
-    let request = try? JSONSerialization.jsonObject(with: requestData) as? [String: Any]
-  else { fail("approve needs <keyBlob> <messageBase64> <requestJsonBase64>") }
+  let envelope = readStdinEnvelope()
+  guard let message = envelope.message, let request = envelope.request else {
+    fail("approve needs message and request on stdin")
+  }
 
   // One native dialog per held request. Approving signs in the same gesture:
   // the button click leads straight into the Touch ID sheet, so what the
@@ -147,7 +161,7 @@ case "approve":
   switch response {
   case .alertFirstButtonReturn:
     let signature = signMessage(
-      blobBase64: args[2], message: message,
+      blobBase64: envelope.keyBlob, message: message,
       reason: "approve \(method) to \(URL(string: url)?.host ?? url)")
     jsonOut(["decision": "granted", "signatureDer": signature.base64EncodedString()])
   case .alertSecondButtonReturn:

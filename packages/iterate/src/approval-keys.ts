@@ -136,7 +136,10 @@ export async function signApprovalMessage(
 ): Promise<string> {
   if (key.kind === "secure-enclave") {
     const approver = await ensureEnclaveApprover();
-    const signed = await runJson(approver, ["sign", key.keyBlob, bytesToBase64(message)]);
+    const signed = await runJson(approver, ["sign"], {
+      keyBlob: key.keyBlob,
+      message: bytesToBase64(message),
+    });
     const der = z.object({ signatureDer: z.string() }).parse(signed).signatureDer;
     return bytesToBase64(derSignatureToRaw(base64ToBytes(der)));
   }
@@ -174,12 +177,11 @@ export async function promptNativeApproval(input: {
       signatureDer: z.string().optional(),
     })
     .parse(
-      await runJson(approver, [
-        "approve",
-        input.key.keyBlob,
-        bytesToBase64(input.message),
-        Buffer.from(JSON.stringify(input.request)).toString("base64"),
-      ]),
+      await runJson(approver, ["approve"], {
+        keyBlob: input.key.keyBlob,
+        message: bytesToBase64(input.message),
+        request: input.request,
+      }),
     );
   if (answer.decision !== "granted") return { decision: answer.decision };
   return {
@@ -230,8 +232,12 @@ async function ensureEnclaveApprover(): Promise<string> {
   return binaryPath;
 }
 
-async function runJson(command: string, args: string[]): Promise<unknown> {
-  const result = await run(command, args);
+/**
+ * Run an approver command. Anything key-bearing travels as a JSON envelope on
+ * STDIN — argv is world-readable via ps, so the key blob never goes there.
+ */
+async function runJson(command: string, args: string[], stdin?: object): Promise<unknown> {
+  const result = await run(command, args, stdin === undefined ? undefined : JSON.stringify(stdin));
   if (result.exitCode !== 0) {
     throw new Error(
       `${command} ${args[0]} failed (exit ${result.exitCode}): ${result.stderr.trim() || "no output"}`,
