@@ -3130,8 +3130,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * sender derives from the calling scope, so an agent asking another agent
    * does not refill the receiver's autonomous turn budget. For delegated child
    * agents, prefer `message()` and read their report from your own inputs:
-   * their prompt tells them to reply by messaging the parent, not by writing to
-   * web chat, so `ask()` can time out waiting for a chat reply.
+   * every agent-sourced message is labeled with how to reply (message the
+   * sender, whose web chat nobody watches), so `ask()` can time out waiting
+   * for a chat reply that never comes.
    */
   async ask(input: {
     message: string;
