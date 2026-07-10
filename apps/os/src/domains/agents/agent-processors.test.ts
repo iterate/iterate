@@ -1461,8 +1461,7 @@ describe("inter-agent mail", () => {
     // Child-agent-ness rides on the message: the label names the sender and
     // tells the recipient how to reply (the sender never sees this web chat).
     expect(entry.content).toContain("Message from agent /agents/main");
-    expect(entry.content).toContain('itx.agents.get("/agents/main")');
-    expect(entry.content).toContain("sender.message(text)");
+    expect(entry.content).toContain('itx.agents.get("/agents/main").message(text)');
     expect(entry.content.endsWith("status?")).toBe(true);
     // Agent mail counts against the autonomous turn budget instead of
     // refilling it — the loop breaker bounds parent↔subagent ping-pong.

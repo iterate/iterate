@@ -702,7 +702,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       // so the label spells out the reply door.
       const content =
         from.kind === "agent"
-          ? `Message from agent ${from.path} (that agent cannot see your web chat — to reply to it: const sender = await itx.agents.get(${JSON.stringify(from.path)}); await sender.message(text)):\n${event.payload.content}`
+          ? `Message from agent ${from.path} (that agent cannot see your web chat — to reply to it: await itx.agents.get(${JSON.stringify(from.path)}).message(text)):\n${event.payload.content}`
           : event.payload.content;
       return {
         ...state,
