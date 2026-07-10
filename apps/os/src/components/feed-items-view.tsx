@@ -1,8 +1,9 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { Centered } from "~/components/centered.tsx";
+import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import {
@@ -21,8 +22,8 @@ const MAX_RETAINED_ROWS = 2000;
  * per specific-renderer singleton or per collapsed run of same-type events,
  * narrowed by {@link FeedItemsFilterInput}.
  *
- * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
- * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
+ * Same virtualization scheme as the agent feed (agent-feed.tsx): the stick
+ * owns the tail (useStickToBottom; followOnAppend off), the row window is a
  * live SQL range query over dense positions, and rows are retained across
  * filter changes only when fetched under the same filter. Callers must
  * remount this component when pointing it at a different database (key it by
@@ -61,9 +62,15 @@ export function FeedItemsView({
     estimateSize: () => 44,
     getItemKey: (index) => index,
     anchorTo: "end",
-    followOnAppend: true,
+    // OFF — the stick owns tail-following in DOM truth (see agent-feed.tsx).
+    followOnAppend: false,
     scrollEndThreshold: 80,
     overscan: 16,
+    // Vertical breathing room lives here, not as wrapper padding, so the
+    // virtualizer's coordinates match the scroll element exactly — see
+    // agent-feed.tsx for the off-by-chrome tail shortfall this prevents.
+    paddingStart: 20,
+    paddingEnd: 24,
     // NOT directDomUpdates — see agent-feed.tsx: async row windows break the
     // direct-DOM path's end anchor; classic JSX-owned styles hold it.
   });
@@ -127,31 +134,26 @@ export function FeedItemsView({
     return rows;
   }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
 
-  // Open at the newest items: re-pin the end on every async data wave until
-  // the pin sticks, then hand the tail to anchorTo/followOnAppend (see
-  // agent-feed.tsx for why a one-shot mount scroll gets stranded).
+  // Scrolling at the tail is owned by the stick (see agent-feed.tsx and the
+  // hook's docs); this effect only flips the row window from tail-anchored
+  // to virtualizer-driven once the tail row's real data has rendered.
   useLayoutEffect(() => {
     if (initialPinDone || itemCount === 0) return;
-    if (rowsByIndex.has(itemCount - 1) && virtualizer.isAtEnd()) {
-      setInitialPinDone(true);
-      return;
-    }
-    virtualizer.scrollToEnd();
+    if (rowsByIndex.has(itemCount - 1) && virtualizer.isAtEnd()) setInitialPinDone(true);
   }, [initialPinDone, itemCount, rowsByIndex, virtualizer]);
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (element == null) return;
-    const takeOver = () => setInitialPinDone(true);
-    const events = ["wheel", "touchstart", "keydown"] as const;
-    for (const name of events) element.addEventListener(name, takeOver, { passive: true });
-    return () => {
-      for (const name of events) element.removeEventListener(name, takeOver);
-    };
-  }, []);
+
+  const contentRef = useRef<HTMLDivElement>(null);
+  useStickToBottom({
+    scrollElementRef: scrollRef,
+    contentElementRef: contentRef,
+    onRelease: () => setInitialPinDone(true),
+  });
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+      {/* Horizontal chrome only — vertical spacing is the virtualizer's
+          paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
+      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {countResult.status !== "ok" ? (
           <Centered>
             {countResult.status === "error"
@@ -164,6 +166,7 @@ export function FeedItemsView({
           </Centered>
         ) : null}
         <div
+          ref={contentRef}
           className="relative w-full"
           style={{ height: virtualizer.getTotalSize() }}
           data-testid="stream-feed-items"

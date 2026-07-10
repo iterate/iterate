@@ -332,11 +332,8 @@ export function ProjectStreamView({
         ) : null}
       </div>
 
-      <div className="shrink-0 px-4 pb-4 pt-2.5">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-1">
-          {caps.agentFeed && agentUiState?.tokenUsage != null ? (
-            <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
-          ) : null}
+      <div className="shrink-0 px-4 pb-2.5 pt-2.5">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
           <StreamViewComposer
             autoFocusMessage={autoFocusMessageComposer}
             {...(defaultComposerMode == null
@@ -350,6 +347,9 @@ export function ProjectStreamView({
             presence={presence}
             store={store}
           />
+          {caps.agentFeed && agentUiState?.tokenUsage != null ? (
+            <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
+          ) : null}
         </div>
       </div>
     </div>

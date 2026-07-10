@@ -1,7 +1,6 @@
 import {
   memo,
   useCallback,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -47,6 +46,7 @@ import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processo
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 /** How many rows past the virtualizer's window the tail query prefetches. */
 const TAIL_PREFETCH_ROWS = 32;
 /** Cap on rows retained across window shifts (memory bound for long feeds). */
@@ -116,11 +116,11 @@ export function AgentFeedView({
   const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
   // The live in-flight activity and the queued-messages panel are the list's
-  // trailing items, so TanStack Virtual owns ALL tail behavior natively:
-  // `followOnAppend` chases appends while the reader is pinned to the end, and
-  // end-anchored resize adjustments keep the pin as the live item grows with
-  // every streamed chunk. Rendering them outside the list would hide their
-  // height from the virtualizer and require hand-rolled scroll chasing.
+  // trailing items so they're inside the virtualizer's size model: their
+  // growth shows up in getTotalSize()/the sizer's height, which is what the
+  // stick's ResizeObserver follows and what anchorTo's mid-history
+  // compensation measures. Rendering them outside the list would hide their
+  // height from both.
   const liveCount = live == null ? 0 : 1;
   const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
   const totalCount = itemCount + liveCount + queuedCount;
@@ -145,9 +145,26 @@ export function AgentFeedView({
     estimateSize: () => 56,
     getItemKey,
     anchorTo: "end",
-    followOnAppend: true,
+    // followOnAppend stays OFF — the stick owns the tail (useStickToBottom).
+    // The library's follow cannot own it here because its gate is isAtEnd():
+    // every time the composer below this feed grows (multi-line draft,
+    // attachment chips), the viewport shrinks with NO scroll event, so
+    // distance-from-end silently accumulates — past scrollEndThreshold the
+    // library concludes the reader left the tail and stops following appends
+    // altogether. Rect changes never re-pin (observeElementRect only updates
+    // scrollRect and recalculates the range). Running follow AND the stick
+    // concurrently is two writers where follow's scroll-reconcile loop is
+    // uncancellable (TanStack/virtual#1221), so the stick is the only writer.
+    followOnAppend: false,
     scrollEndThreshold: 80,
     overscan: 16,
+    // The feed's breathing room above/below the messages lives HERE, not as
+    // wrapper padding. Vertical chrome the virtualizer can't see would shift
+    // its coordinate space off the scroll element's: every scrollToEnd /
+    // isAtEnd / followOnAppend would then resolve that many px above the real
+    // DOM bottom, leaving the newest message hidden below the fold.
+    paddingStart: 20,
+    paddingEnd: 24,
     // Deliberately NOT directDomUpdates: in that mode the virtualizer owns
     // each row's transform and the container height, and this feed's async
     // row loading (SQL windows resolving after the rows render) triggers
@@ -245,34 +262,25 @@ export function AgentFeedView({
     return rows;
   }, [rowsResult.data, rowsResult.status, filterKey, windowStart, denseWindow]);
 
-  // Open at the newest content. A single scrollToEnd on mount can't get
-  // there: the count and each row window resolve asynchronously, and a jump
-  // against estimated sizes lands short. So while the feed is opening,
-  // re-pin the end on every data wave, and stop once the pin has stuck (tail
-  // row's real data rendered and the reader is still at the end) — from then
-  // on TanStack's anchorTo/followOnAppend own the tail natively. A reader
-  // who starts scrolling during the load takes over immediately (listeners
-  // below).
+  // All SCROLLING at the tail is owned by the stick (see the hook's docs):
+  // it opens the feed at the newest content, holds the bottom through async
+  // row loads AND viewport resizes (the composer below has variable height),
+  // and releases on real user input. This effect only governs which rows we
+  // FETCH while opening — it flips the row window from tail-anchored to
+  // virtualizer-driven once the tail row's real data has rendered (or the
+  // reader released the stick and took over, via onRelease below).
   useLayoutEffect(() => {
     if (initialPinDone || totalCount === 0) return;
     const tailRowLoaded = itemCount === 0 || itemsByIndex.has(itemCount - 1);
-    if (tailRowLoaded && virtualizer.isAtEnd()) {
-      setInitialPinDone(true);
-      return;
-    }
-    virtualizer.scrollToEnd();
+    if (tailRowLoaded && virtualizer.isAtEnd()) setInitialPinDone(true);
   }, [initialPinDone, totalCount, itemCount, itemsByIndex, virtualizer]);
 
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (element == null) return;
-    const takeOver = () => setInitialPinDone(true);
-    const events = ["wheel", "touchstart", "keydown"] as const;
-    for (const name of events) element.addEventListener(name, takeOver, { passive: true });
-    return () => {
-      for (const name of events) element.removeEventListener(name, takeOver);
-    };
-  }, []);
+  const contentRef = useRef<HTMLDivElement>(null);
+  useStickToBottom({
+    scrollElementRef: scrollRef,
+    contentElementRef: contentRef,
+    onRelease: () => setInitialPinDone(true),
+  });
 
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.
@@ -287,7 +295,9 @@ export function AgentFeedView({
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+      {/* Horizontal chrome only — vertical spacing is the virtualizer's
+          paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
+      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {totalCount === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
@@ -297,7 +307,11 @@ export function AgentFeedView({
             </EmptyHeader>
           </Empty>
         ) : null}
-        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        <div
+          ref={contentRef}
+          className="relative w-full"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
             const isLiveItem = live != null && index === itemCount;
@@ -371,7 +385,9 @@ export function AgentTokenUsageStrip({ tokenUsage }: { tokenUsage: AgentUiTokenU
   return (
     <div
       title={breakdown}
-      className="flex shrink-0 items-center justify-end gap-3 font-mono text-[11px] text-muted-foreground"
+      // Sits under the composer pill; the horizontal padding keeps the strip's
+      // edges inside the pill's rounded-3xl corner radius.
+      className="flex shrink-0 items-center justify-end gap-3 px-4 font-mono text-[11px] text-muted-foreground"
     >
       <span className={contextPercent >= 80 ? "text-destructive" : undefined}>
         context {formatTokens(contextTokens)}/{formatTokens(last.maxContextTokens)} (
