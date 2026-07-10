@@ -1112,11 +1112,9 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * a no-op.
    */
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
-    const defaultModel = parseConfig(env).defaultAgentModel;
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
-      ...(defaultModel === undefined ? {} : { defaultModel }),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
