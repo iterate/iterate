@@ -59,14 +59,6 @@ it("does not add SaaS catch-all routes to preview zones without SSL-for-SaaS quo
   });
 });
 
-it("pins newborn agents to an account-safe default model outside production", () => {
-  expect(config.env.prd.vars?.APP_CONFIG_DEFAULT_AGENT_MODEL).toBeUndefined();
-  expect(config.env.preview_2.vars?.APP_CONFIG_DEFAULT_AGENT_MODEL).toBe(
-    "@cf/moonshotai/kimi-k2.7-code",
-  );
-  expect(config.vars?.APP_CONFIG_DEFAULT_AGENT_MODEL).toBe("@cf/moonshotai/kimi-k2.7-code");
-});
-
 // One container class per Cloudflare instance type, with the instance type
 // as its own wrangler `instance_type` — the whole point of the per-type
 // class split (instance-types.ts). Deploy-time quota is validated per

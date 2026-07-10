@@ -7,12 +7,10 @@ const PROJECT_ID = "prj_defaults_test";
 function defaultsFor(
   agentPath: string,
   overrides?: Parameters<typeof agentDefaultsForPath>[0]["overrides"],
-  defaultModel?: string,
 ) {
   return agentDefaultsForPath({
     agentPath,
     projectId: PROJECT_ID,
-    ...(defaultModel === undefined ? {} : { defaultModel }),
     ...(overrides === undefined ? {} : { overrides }),
   });
 }
@@ -65,22 +63,6 @@ describe("agentDefaultsForPath", () => {
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );
     expect(provider?.payload).toMatchObject({ model: "openai/gpt-5.5" });
-  });
-
-  it("uses the deployment default model unless the caller overrides it", () => {
-    const defaults = defaultsFor("/agents/demo", undefined, "@cf/moonshotai/kimi-k2.7-code");
-    expect(defaults.model).toBe("@cf/moonshotai/kimi-k2.7-code");
-    const provider = defaults.events.find(
-      (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
-    );
-    expect(provider?.payload).toMatchObject({ model: "@cf/moonshotai/kimi-k2.7-code" });
-
-    const override = defaultsFor(
-      "/agents/demo",
-      { model: "openai/gpt-5.5" },
-      "@cf/moonshotai/kimi-k2.7-code",
-    );
-    expect(override.model).toBe("openai/gpt-5.5");
   });
 
   it("keys every event on (projectId, agentPath) so re-appends dedupe", () => {
