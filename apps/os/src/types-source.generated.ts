@@ -307,7 +307,7 @@ export interface CfBrowserCapability {
  * model code write the natural one-liners over the script lane (\`env.ITX\`
  * loopback):
  *
- *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get("researcher").message(task);
  *   await itx.agents.get(path).someTool(args);
  *   await itx.agents.get(path).capabilityHost.someTool(args);
  *

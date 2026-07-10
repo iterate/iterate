@@ -5,7 +5,7 @@
  * Model-authored scripts run in dynamic workers whose `itx` is a workerd RPC
  * stub (`env.ITX` loopback), and models write the natural one-liners:
  *
- *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get("researcher").message(task);   // child agent, relative path
  *   await itx.agents.get(path).someTool(args);
  *   await itx.capabilityHosts.get(path).runScript(code);
  *
@@ -145,7 +145,7 @@ test(
 );
 
 test(
-  "the subagent one-liner pipelines from an agent scope (relative path + message)",
+  "the child-agent delegation one-liner pipelines from an agent scope (relative path + message)",
   { timeout: 120_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "handle-pipeline-rel" });
@@ -158,7 +158,7 @@ test(
     using parentHost = itx.capabilityHosts.get(parentPath);
     const run = await parentHost.runScript(`
       async (itx) => {
-        const sent = await itx.agents.get("subagents/researcher")
+        const sent = await itx.agents.get("researcher")
           .message("pipelined delegation");
         return { offset: sent.offset, from: sent.payload.from, path: sent.path };
       }
@@ -166,7 +166,7 @@ test(
 
     expect(run.result).toMatchObject({
       // Relative resolution against the calling scope…
-      path: `${parentPath}/subagents/researcher`,
+      path: `${parentPath}/researcher`,
       // …and the sender stamped as the parent agent, because the calling
       // scope is an agent path.
       from: { kind: "agent", path: parentPath },
