@@ -1,8 +1,9 @@
-import { memo, useLayoutEffect, useMemo, useRef } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { Centered } from "~/components/centered.tsx";
+import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import {
@@ -13,14 +14,16 @@ import {
 
 /** How many rows past the virtualizer's window the tail query prefetches. */
 const TAIL_PREFETCH_ROWS = 32;
+/** Cap on rows retained across window shifts (memory bound for long feeds). */
+const MAX_RETAINED_ROWS = 2000;
 
 /**
  * Renders the browser-event-feed processor's `feed_items` collection: one row
  * per specific-renderer singleton or per collapsed run of same-type events,
  * narrowed by {@link FeedItemsFilterInput}.
  *
- * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
- * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
+ * Same virtualization scheme as the agent feed (agent-feed.tsx): the stick
+ * owns the tail (useStickToBottom; followOnAppend off), the row window is a
  * live SQL range query over dense positions, and rows are retained across
  * filter changes only when fetched under the same filter. Callers must
  * remount this component when pointing it at a different database (key it by
@@ -59,27 +62,34 @@ export function FeedItemsView({
     estimateSize: () => 44,
     getItemKey: (index) => index,
     anchorTo: "end",
-    followOnAppend: true,
+    // OFF — the stick owns tail-following in DOM truth (see agent-feed.tsx).
+    followOnAppend: false,
     scrollEndThreshold: 80,
     overscan: 16,
-    directDomUpdates: true,
+    // Vertical breathing room lives here, not as wrapper padding, so the
+    // virtualizer's coordinates match the scroll element exactly — see
+    // agent-feed.tsx for the off-by-chrome tail shortfall this prevents.
+    paddingStart: 20,
+    paddingEnd: 24,
+    // NOT directDomUpdates — see agent-feed.tsx: async row windows break the
+    // direct-DOM path's end anchor; classic JSX-owned styles hold it.
   });
-
-  // Open at the newest items; later appends are followOnAppend's job (see
-  // agent-feed.tsx for why the initial position is set explicitly).
-  useLayoutEffect(() => {
-    virtualizer.scrollToEnd();
-  }, [virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
   const last = virtualItems.at(-1)?.index ?? -1;
+  // While the view is opening (initial end-pin below), anchor the row window
+  // to the tail so the opening jump lands on rows with real measured sizes —
+  // see agent-feed.tsx for the stranding failure mode this prevents.
+  const [initialPinDone, setInitialPinDone] = useState(false);
+  const virtualWindowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
+  const windowFirst = initialPinDone ? first : Math.max(0, itemCount - virtualWindowSize);
   // Fetch one row before the window (when there is one) so the topmost visible
   // row has its predecessor available for the colour-coded time delta — the
-  // window's `first` row would otherwise never see index `first - 1`.
-  const prefetchBefore = first > 0 ? 1 : 0;
-  const queryOffset = first - prefetchBefore;
-  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first) + prefetchBefore;
+  // window's first row would otherwise never see the index before it.
+  const prefetchBefore = windowFirst > 0 ? 1 : 0;
+  const queryOffset = windowFirst - prefetchBefore;
+  const windowSize = virtualWindowSize + prefetchBefore;
   // Dense ascending local_index means OFFSET/LIMIT over the ordered (and
   // possibly filtered) collection IS the virtualizer's row window.
   const rowsResult = useStreamQuery(
@@ -89,31 +99,61 @@ export function FeedItemsView({
      ORDER BY local_index ASC LIMIT ? OFFSET ?`,
     [...params, windowSize, queryOffset],
   );
-  // Retain the last committed rows across range re-queries so a shifting
-  // window doesn't blank already-visible rows to skeletons. The retained rows
-  // are only valid for the filter they were fetched under (see agent-feed).
+  // Retain rows across range re-queries by MERGING each resolved window into
+  // the previously-loaded rows: forgetting off-window rows would re-render
+  // them as skeletons on the way back, and the skeleton's measurement would
+  // overwrite the row's real size (see agent-feed.tsx for the end-anchor
+  // failure this causes). Off-window group rows can go briefly stale (their
+  // event_count grows in place) until the window query for their range
+  // resolves again. The retained rows are only valid for the filter they
+  // were fetched under.
   const lastRowsRef = useRef<{ where: string; rows: Map<number, Record<string, unknown>> } | null>(
     null,
   );
   const retainKey = `${where}:${params.join(" ")}`;
   const rowsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") {
-      const retained = lastRowsRef.current;
-      return retained?.where === retainKey
-        ? retained.rows
+    const retained =
+      lastRowsRef.current?.where === retainKey
+        ? lastRowsRef.current.rows
         : new Map<number, Record<string, unknown>>();
-    }
-    const rows = new Map<number, Record<string, unknown>>();
+    if (rowsResult.status !== "ok") return retained;
+    const rows = new Map(retained);
     rowsResult.data.forEach((row, position) => {
       rows.set(queryOffset + position, row);
     });
+    if (rows.size > MAX_RETAINED_ROWS) {
+      const excess = rows.size - MAX_RETAINED_ROWS;
+      let dropped = 0;
+      for (const key of rows.keys()) {
+        if (dropped >= excess) break;
+        rows.delete(key);
+        dropped++;
+      }
+    }
     lastRowsRef.current = { where: retainKey, rows };
     return rows;
   }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
 
+  // Scrolling at the tail is owned by the stick (see agent-feed.tsx and the
+  // hook's docs); this effect only flips the row window from tail-anchored
+  // to virtualizer-driven once the tail row's real data has rendered.
+  useLayoutEffect(() => {
+    if (initialPinDone || itemCount === 0) return;
+    if (rowsByIndex.has(itemCount - 1) && virtualizer.isAtEnd()) setInitialPinDone(true);
+  }, [initialPinDone, itemCount, rowsByIndex, virtualizer]);
+
+  const contentRef = useRef<HTMLDivElement>(null);
+  useStickToBottom({
+    scrollElementRef: scrollRef,
+    contentElementRef: contentRef,
+    onRelease: () => setInitialPinDone(true),
+  });
+
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+      {/* Horizontal chrome only — vertical spacing is the virtualizer's
+          paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
+      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {countResult.status !== "ok" ? (
           <Centered>
             {countResult.status === "error"
@@ -126,6 +166,7 @@ export function FeedItemsView({
           </Centered>
         ) : null}
         <div
+          ref={contentRef}
           className="relative w-full"
           style={{ height: virtualizer.getTotalSize() }}
           data-testid="stream-feed-items"
@@ -141,7 +182,12 @@ export function FeedItemsView({
                 style={{ transform: `translateY(${item.start}px)` }}
               >
                 {row == null ? (
-                  <div className="h-8 bg-muted/30" />
+                  // Must measure exactly estimateSize (44px) — see the
+                  // agent-feed skeleton for why smaller placeholders break
+                  // the end anchor during the initial jump.
+                  <div className="h-11 py-1.5">
+                    <div className="h-full bg-muted/30" />
+                  </div>
                 ) : (
                   <FeedItemRow
                     row={row}

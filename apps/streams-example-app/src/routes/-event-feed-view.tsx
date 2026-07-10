@@ -248,7 +248,11 @@ function FeedItemRows({
             </span>
           </div>
         ) : (
-          <div className="relative w-full flex-1" style={{ minHeight: virtualizer.getTotalSize() }}>
+          // directDomUpdates contract: the virtualizer owns this container's
+          // height (containerRef) and each row's translate — JSX must not
+          // write either. flex-1 still lets it grow past the content height
+          // so the sticky composer stays pinned to the viewport bottom.
+          <div ref={virtualizer.containerRef} className="relative w-full flex-1">
             <FeedItemWindow
               expandedLocalIndexes={expandedLocalIndexes}
               itemCount={itemCount}
@@ -404,8 +408,9 @@ function FeedItemWindow({
         data-index={virtualItem.index}
         data-testid="virtual-row"
         key={virtualItem.key}
-        ref={row === undefined ? undefined : measureElement}
-        style={{ transform: `translateY(${virtualItem.start}px)` }}
+        // Unconditional: directDomUpdates positions rows through the
+        // measurement cache, so unmeasured pending rows would never be placed.
+        ref={measureElement}
       >
         {row === undefined ? (
           <article
