@@ -6,6 +6,8 @@
 // SSE response, guessing assistant text/usage out of the shapes Workers AI
 // models actually return, and capping the whole attempt's lifetime.
 
+import { z } from "zod";
+
 /** The `env.AI` surface one attempt needs. */
 export type WorkersAiBinding = { run(model: string, body: unknown): Promise<unknown> };
 
@@ -223,6 +225,63 @@ function extractChunkText(chunk: unknown): string {
 
 function extractUsage(raw: unknown): unknown | undefined {
   return typeof raw === "object" && raw !== null && "usage" in raw ? raw.usage : undefined;
+}
+
+/**
+ * Both usage dialects Workers AI models return, in one loose shape: OpenAI
+ * chat-completions (`prompt_tokens`/`completion_tokens` plus `*_details`
+ * breakdowns) and OpenAI Responses (`input_tokens`/`output_tokens`). Loose
+ * because vendors keep adding fields; unknown keys must not fail the parse.
+ */
+const LlmUsage = z.looseObject({
+  prompt_tokens: z.number().int().nonnegative().optional(),
+  completion_tokens: z.number().int().nonnegative().optional(),
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  prompt_tokens_details: z
+    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  completion_tokens_details: z
+    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  input_tokens_details: z
+    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  output_tokens_details: z
+    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+});
+
+/**
+ * A vendor usage object as the normalized token-usage-reported payload
+ * fields, or undefined when the shape carries no recognizable totals (report
+ * nothing rather than zeros — a zero is a claim).
+ */
+export function normalizeLlmUsage(usage: unknown):
+  | {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens?: number;
+      reasoningOutputTokens?: number;
+    }
+  | undefined {
+  const parsed = LlmUsage.safeParse(usage);
+  if (!parsed.success) return undefined;
+  const inputTokens = parsed.data.prompt_tokens ?? parsed.data.input_tokens;
+  const outputTokens = parsed.data.completion_tokens ?? parsed.data.output_tokens;
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  const cachedInputTokens =
+    parsed.data.prompt_tokens_details?.cached_tokens ??
+    parsed.data.input_tokens_details?.cached_tokens;
+  const reasoningOutputTokens =
+    parsed.data.completion_tokens_details?.reasoning_tokens ??
+    parsed.data.output_tokens_details?.reasoning_tokens;
+  return {
+    inputTokens,
+    outputTokens,
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
+  };
 }
 
 /** JSON round-trip so journaled evidence can never carry live references. */

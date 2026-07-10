@@ -33,7 +33,7 @@ import {
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import { AgentFeedView } from "~/components/agent-feed.tsx";
+import { AgentFeedView, AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
 import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
@@ -326,6 +326,9 @@ export function ProjectStreamView({
         ) : null}
       </div>
 
+      {caps.agentFeed && agentUiState?.tokenUsage != null ? (
+        <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
+      ) : null}
       <div className="shrink-0 px-4 pb-4 pt-2.5">
         <StreamViewComposer
           autoFocusMessage={autoFocusMessageComposer}

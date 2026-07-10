@@ -1693,6 +1693,12 @@ export type AgentProcessorState = {
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
   subagents: { path: string; spawnedAt: string }[];
+  tokenUsage: {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCachedInputTokens: number;
+    totalReasoningOutputTokens: number;
+  };
 };
 
 /**
