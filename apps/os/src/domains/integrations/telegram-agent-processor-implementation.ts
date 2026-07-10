@@ -165,11 +165,30 @@ export class TelegramAgentProcessor extends StreamProcessor<
               payload: { text: TELEGRAM_NEW_SESSION_ACK_TEXT },
             });
           }
+          // The unified inbound message event: a Telegram update is a message
+          // FROM its sender, `from` carries the facts (see agents/message-received).
+          // The sender's location depends on the update kind: messages carry
+          // message.from, button presses callback_query.from, edits
+          // edited_message.from.
+          const update = readRecord(event.payload.body);
+          const sender =
+            readRecord(readRecord(update?.message)?.from) ??
+            readRecord(readRecord(update?.callback_query)?.from) ??
+            readRecord(readRecord(update?.edited_message)?.from);
+          const senderId = sender?.id;
+          const senderUsername = readString(sender?.username);
           await append({
-            type: "events.iterate.com/agent/input-added",
+            type: "events.iterate.com/agents/message-received",
             idempotencyKey: `telegram-agent:webhook-to-agent-input:${event.offset}`,
             payload: {
               content: telegramWebhookAgentInput(event.payload, { newCommand }),
+              from: {
+                kind: "telegram",
+                ...(typeof senderId === "number" || typeof senderId === "string"
+                  ? { userId: String(senderId) }
+                  : {}),
+                ...(senderUsername == null ? {} : { username: senderUsername }),
+              },
               ...(triggers ? {} : { llmRequestPolicy: { behaviour: "dont-trigger-request" } }),
             },
           });

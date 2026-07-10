@@ -92,13 +92,16 @@ const Search = StreamViewSearch.extend({
 });
 
 const STREAM_VIEW_SEARCH_RESET = {
+  components: undefined,
   event: undefined,
   filter: undefined,
   from: undefined,
+  mode: undefined,
   panel: undefined,
   preset: undefined,
   processor: undefined,
   q: undefined,
+  raw: undefined,
   tab: undefined,
   to: undefined,
   types: undefined,

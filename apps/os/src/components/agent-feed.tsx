@@ -62,10 +62,14 @@ const TAIL_PREFETCH_ROWS = 32;
  * database (key it by the database identity): the virtualizer's measurement
  * and scroll state are only valid for one stream's history.
  */
+/** Agent-ui item kinds hidden in Pretty mode (shown when showDebug is true). */
+const DEBUG_KINDS_SQL = `kind NOT IN ('stream-woken')`;
+
 export function AgentFeedView({
   database,
   liveState,
   search = "",
+  showDebug = false,
   emptyLabel = "No messages yet.",
   isPending = false,
   isInterruptingQueuedMessages = false,
@@ -75,6 +79,8 @@ export function AgentFeedView({
   database: StreamBrowserDatabase;
   liveState: AgentUiState | null;
   search?: string;
+  /** When false (Pretty), hide debug-only rows like stream-woken. */
+  showDebug?: boolean;
   emptyLabel?: string;
   isPending?: boolean;
   isInterruptingQueuedMessages?: boolean;
@@ -82,12 +88,18 @@ export function AgentFeedView({
   projectSlug?: string;
 }) {
   const query = search.trim().toLowerCase();
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (!showDebug) clauses.push(DEBUG_KINDS_SQL);
+  if (query !== "") {
+    clauses.push(`json(data) LIKE ?`);
+    params.push(`%${query}%`);
+  }
+  const whereSql = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
   const countResult = useStreamQuery(
     database,
-    query === ""
-      ? `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE}`
-      : `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE} WHERE json(data) LIKE ?`,
-    query === "" ? [] : [`%${query}%`],
+    `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE}${whereSql}`,
+    params,
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = liveState?.live ?? null;
@@ -138,46 +150,52 @@ export function AgentFeedView({
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
   const last = virtualItems.at(-1)?.index ?? -1;
-  // The window extends TAIL_PREFETCH_ROWS past the virtualizer's range so rows
-  // appended while pinned to the tail are already in this snapshot when the
-  // count query grows: the live→settled handoff commits in one frame instead
-  // of flashing a skeleton where the new message lands.
+  // Dense virtual indices (search and/or Pretty debug filter) use LIMIT/OFFSET;
+  // the unfiltered Pretty+debug path can address rows by local_index directly.
+  const denseWindow = query !== "" || !showDebug;
+  const windowLimit = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
+  const rowClauses: string[] = [];
+  const rowParams: Array<string | number> = [];
+  if (!showDebug) rowClauses.push(DEBUG_KINDS_SQL);
+  if (query !== "") {
+    rowClauses.push(`json(data) LIKE ?`);
+    rowParams.push(`%${query}%`);
+  }
   const rowsResult = useStreamQuery(
     database,
-    query === ""
+    denseWindow
       ? `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
-         WHERE local_index >= ? AND local_index < ?
-         ORDER BY local_index ASC`
-      : `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
-         WHERE json(data) LIKE ?
+         ${rowClauses.length === 0 ? "" : `WHERE ${rowClauses.join(" AND ")}`}
          ORDER BY local_index ASC
-         LIMIT ? OFFSET ?`,
-    query === ""
-      ? [first, last + 1 + TAIL_PREFETCH_ROWS]
-      : [`%${query}%`, Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first), first],
+         LIMIT ? OFFSET ?`
+      : `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
+         WHERE local_index >= ? AND local_index < ?
+         ORDER BY local_index ASC`,
+    denseWindow ? [...rowParams, windowLimit, first] : [first, last + 1 + TAIL_PREFETCH_ROWS],
   );
   // Retain the last committed rows across range re-queries so already-visible
   // rows don't flash to skeletons while the shifted window's SQL runs. The
-  // retained rows are only valid for the search they were fetched under —
+  // retained rows are only valid for the filter they were fetched under —
   // reusing them across a filter change would briefly show unfiltered rows.
-  const lastRowsRef = useRef<{ query: string; rows: Map<number, AgentUiItem> } | null>(null);
+  const filterKey = `${showDebug ? "debug" : "pretty"}:${query}`;
+  const lastRowsRef = useRef<{ filterKey: string; rows: Map<number, AgentUiItem> } | null>(null);
   const itemsByIndex = useMemo(() => {
     if (rowsResult.status !== "ok") {
       const retained = lastRowsRef.current;
-      return retained?.query === query ? retained.rows : new Map<number, AgentUiItem>();
+      return retained?.filterKey === filterKey ? retained.rows : new Map<number, AgentUiItem>();
     }
     const rows = new Map<number, AgentUiItem>();
     rowsResult.data.forEach((row, position) => {
-      const index = query === "" ? Number(row.local_index) : first + position;
+      const index = denseWindow ? first + position : Number(row.local_index);
       try {
         rows.set(index, JSON.parse(String(row.data)) as AgentUiItem);
       } catch {
         // Skip unparseable rows; the row stays a skeleton.
       }
     });
-    lastRowsRef.current = { query, rows };
+    lastRowsRef.current = { filterKey, rows };
     return rows;
-  }, [rowsResult.data, rowsResult.status, query, first]);
+  }, [rowsResult.data, rowsResult.status, filterKey, first, denseWindow]);
 
   // Stable identity so the memoized settled rows skip the per-chunk re-renders
   // driven by the live streaming state.

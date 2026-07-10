@@ -40,8 +40,8 @@ function ProjectStreamDetailContent() {
 
   async function submitMessage(message: string) {
     await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: message, origin: "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: message, from: { kind: "user", origin: "web" } },
     });
   }
 

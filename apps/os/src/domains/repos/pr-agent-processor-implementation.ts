@@ -84,14 +84,23 @@ export class PrAgentProcessor extends StreamProcessor<PrAgentProcessorContract> 
         const mentioned = AGENT_MENTION_PATTERN.test(mentionTextFromWebhookBody(body, action));
         const triggers = mentioned && !senderIsBot && TRIGGERING_ACTIONS.has(action);
 
-        // Durable obligation: the input is the webhook's only path to the
-        // LLM, so a failed append must hold the checkpoint and replay.
+        // Durable obligation: the message is the webhook's only path to the
+        // LLM, so a failed append must hold the checkpoint and replay. It is
+        // the unified inbound message event — a PR webhook is a message FROM
+        // its GitHub sender.
+        const senderLogin = sender === null ? null : readString(sender.login);
+        const senderType = sender === null ? null : readString(sender.type);
         blockProcessorWhile(async () => {
           await append({
-            type: "events.iterate.com/agent/input-added",
+            type: "events.iterate.com/agents/message-received",
             idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: pullRequestWebhookAgentInput(event.payload, body, state),
+              from: {
+                kind: "github" as const,
+                ...(senderLogin == null ? {} : { login: senderLogin }),
+                ...(senderType == null ? {} : { senderType }),
+              },
               ...(triggers
                 ? {}
                 : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),

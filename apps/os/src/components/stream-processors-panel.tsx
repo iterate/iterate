@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -62,6 +63,8 @@ type ProcessorRuntimeStateResult = {
 };
 
 export function StreamProcessorsPanel({
+  open,
+  onOpenChange,
   presence,
   metrics,
   eventCount,
@@ -73,6 +76,8 @@ export function StreamProcessorsPanel({
   onClearClientDatabase,
   getProcessorRuntimeState,
 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   presence: readonly AgentUiPresenceEntry[];
   metrics: RttMetrics;
   eventCount: number;
@@ -149,29 +154,38 @@ export function StreamProcessorsPanel({
   }, [focusedConnected, focusedSubscriptionKey, getProcessorRuntimeState, refreshKey]);
 
   return (
-    <aside className="absolute inset-y-0 right-0 z-30 flex w-full max-w-sm flex-col rounded-tl-2xl bg-background shadow-2xl">
-      {focused == null ? (
-        <ProcessorsOverview
-          presence={presence}
-          metrics={metrics}
-          eventCount={eventCount}
-          busy={busy}
-          focusedKey={focusedKey}
-          onFocus={onFocus}
-          onClose={onClose}
-          onClearClientDatabase={onClearClientDatabase}
-        />
-      ) : (
-        <ProcessorDetail
-          entry={focused}
-          busy={busy}
-          runtimeStateLoad={focusedRuntimeStateLoad}
-          onRefreshRuntimeState={() => setRefreshKey((key) => key + 1)}
-          onBack={onBack}
-          onClose={onClose}
-        />
-      )}
-    </aside>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="flex h-full w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[min(92vw,48rem)] data-[side=right]:sm:max-w-[min(92vw,55vw)]"
+      >
+        <SheetTitle className="sr-only">
+          {focused == null ? "Processors" : `Processor ${presenceLabel(focused)}`}
+        </SheetTitle>
+        {focused == null ? (
+          <ProcessorsOverview
+            presence={presence}
+            metrics={metrics}
+            eventCount={eventCount}
+            busy={busy}
+            focusedKey={focusedKey}
+            onFocus={onFocus}
+            onClose={onClose}
+            onClearClientDatabase={onClearClientDatabase}
+          />
+        ) : (
+          <ProcessorDetail
+            entry={focused}
+            busy={busy}
+            runtimeStateLoad={focusedRuntimeStateLoad}
+            onRefreshRuntimeState={() => setRefreshKey((key) => key + 1)}
+            onBack={onBack}
+            onClose={onClose}
+          />
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -444,6 +458,7 @@ function ProcessorDetail({
         <ProcessorRuntimeStateView
           runtimeStateLoad={runtimeStateLoad}
           onRefresh={onRefreshRuntimeState}
+          processorSlug={processor?.slug}
         />
         <div>
           <SectionHeading>Subscription</SectionHeading>
@@ -459,10 +474,13 @@ function ProcessorDetail({
 function ProcessorRuntimeStateView({
   runtimeStateLoad,
   onRefresh,
+  processorSlug,
 }: {
   runtimeStateLoad: ProcessorRuntimeStateLoad;
   onRefresh: () => void;
+  processorSlug?: string;
 }) {
+  const [showRaw, setShowRaw] = useState(false);
   const runtimeState = runtimeStateLoad.status === "loaded" ? runtimeStateLoad.runtimeState : null;
   const streamMaxOffset =
     runtimeStateLoad.status === "loaded" ? runtimeStateLoad.streamMaxOffset : null;
@@ -471,23 +489,37 @@ function ProcessorRuntimeStateView({
     snapshot == null || streamMaxOffset == null
       ? null
       : Math.max(0, streamMaxOffset - snapshot.offset);
+  const isAgent = processorSlug === "agent";
 
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <SectionHeading>Reduced state</SectionHeading>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="Refresh reduced state"
-          disabled={runtimeStateLoad.status === "loading"}
-          onClick={onRefresh}
-          className="size-6 text-muted-foreground"
-        >
-          <RefreshCwIcon
-            className={cn("size-3.5", runtimeStateLoad.status === "loading" && "animate-spin")}
-          />
-        </Button>
+        <div className="flex items-center gap-1">
+          {snapshot == null ? null : (
+            <Button
+              variant="ghost"
+              size="sm"
+              title={showRaw ? "Show pretty state" : "Show raw YAML/JSON"}
+              onClick={() => setShowRaw((value) => !value)}
+              className="h-6 px-2 text-[10px] text-muted-foreground"
+            >
+              {showRaw ? "Pretty" : "Raw"}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Refresh reduced state"
+            disabled={runtimeStateLoad.status === "loading"}
+            onClick={onRefresh}
+            className="size-6 text-muted-foreground"
+          >
+            <RefreshCwIcon
+              className={cn("size-3.5", runtimeStateLoad.status === "loading" && "animate-spin")}
+            />
+          </Button>
+        </div>
       </div>
       {runtimeStateLoad.status === "loading" || runtimeStateLoad.status === "idle" ? (
         <RuntimeStateMessage>Loading reduced state…</RuntimeStateMessage>
@@ -505,7 +537,11 @@ function ProcessorRuntimeStateView({
             <RuntimeStateStat label="offset" value={`#${snapshot.offset}`} />
             <RuntimeStateStat label="lag" value={lag === 0 ? "0" : `+${lag}`} />
           </div>
-          <SerializedObjectCodeBlock className="max-h-80" data={snapshot.state} />
+          {showRaw || !isAgent ? (
+            <SerializedObjectCodeBlock className="max-h-[28rem]" data={snapshot.state} />
+          ) : (
+            <AgentPrettyState state={snapshot.state} />
+          )}
           {runtimeState.runtime == null ? null : (
             <div>
               <SectionHeading>Runtime</SectionHeading>
@@ -516,6 +552,158 @@ function ProcessorRuntimeStateView({
       )}
     </div>
   );
+}
+
+/** Pretty renderer for the agent processor reduced state (status machine). */
+function AgentPrettyState({ state }: { state: unknown }) {
+  const agent = asAgentState(state);
+  if (agent == null) {
+    return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
+  }
+
+  const currentRequest =
+    agent.currentRequest != null && typeof agent.currentRequest === "object"
+      ? (agent.currentRequest as Record<string, unknown>)
+      : null;
+  const phase =
+    currentRequest == null
+      ? "idle"
+      : currentRequest.phase === "scheduled"
+        ? "scheduled"
+        : "requested";
+  const history = Array.isArray(agent.history) ? agent.history : [];
+  const lastMessage = history.length > 0 ? history[history.length - 1] : null;
+  const lastPreview =
+    lastMessage != null && typeof lastMessage === "object" && lastMessage !== null
+      ? previewChatMessage(lastMessage as Record<string, unknown>)
+      : null;
+  const scripts = Array.isArray(agent.inProgressScriptExecutions)
+    ? agent.inProgressScriptExecutions
+    : [];
+  const systemPrompt = typeof agent.systemPrompt === "string" ? agent.systemPrompt : "";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <RuntimeStateStat label="phase" value={phase} />
+        <RuntimeStateStat label="provider" value={String(agent.llmProvider ?? "—")} />
+        <RuntimeStateStat
+          label="model"
+          value={String(
+            agent.llmConfig != null &&
+              typeof agent.llmConfig === "object" &&
+              "model" in agent.llmConfig
+              ? (agent.llmConfig as { model?: unknown }).model
+              : "—",
+          )}
+        />
+        <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
+      </div>
+
+      {currentRequest == null ? null : (
+        <div className="rounded-xl bg-muted/40 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+            Current request
+          </div>
+          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(currentRequest)}</div>
+        </div>
+      )}
+
+      {scripts.length === 0 ? null : (
+        <div>
+          <SectionHeading>In-progress scripts</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {scripts.map((script, index) => {
+              const row =
+                script != null && typeof script === "object"
+                  ? (script as Record<string, unknown>)
+                  : {};
+              return (
+                <div
+                  key={String(row.executionId ?? index)}
+                  className="rounded-xl bg-muted/40 px-3 py-2"
+                >
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    {String(row.executionId ?? "script")}
+                  </div>
+                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/80">
+                    {String(row.code ?? "").slice(0, 400)}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl bg-muted/40 px-3 py-2">
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+            History
+          </div>
+          <div className="font-mono text-xs text-muted-foreground">{history.length} messages</div>
+        </div>
+        {lastPreview == null ? (
+          <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
+        ) : (
+          <div className="mt-1 text-xs text-foreground/80">
+            <span className="font-medium text-muted-foreground">{lastPreview.role}: </span>
+            {lastPreview.text}
+          </div>
+        )}
+        <div className="mt-1 text-[10px] text-muted-foreground/70">
+          Full history is in Raw view (and in the Pretty feed).
+        </div>
+      </div>
+
+      {systemPrompt === "" ? null : (
+        <details className="rounded-xl bg-muted/40 px-3 py-2">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
+            System prompt
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
+            {systemPrompt}
+          </pre>
+        </details>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <RuntimeStateStat label="autonomous turns" value={String(agent.autonomousTurnCount ?? 0)} />
+        <RuntimeStateStat label="request gen" value={String(agent.requestGeneration ?? 0)} />
+      </div>
+    </div>
+  );
+}
+
+function asAgentState(state: unknown): Record<string, unknown> | null {
+  if (state == null || typeof state !== "object") return null;
+  const record = state as Record<string, unknown>;
+  // Heuristic: agent reduced state always has history + llmProvider-ish keys.
+  if (!("history" in record) && !("currentRequest" in record) && !("systemPrompt" in record)) {
+    return null;
+  }
+  return record;
+}
+
+function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {
+  const role = String(message.role ?? message.kind ?? "message");
+  const content = message.content ?? message.text ?? message;
+  let text = "";
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    text = content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part != null && typeof part === "object" && "text" in part) {
+          return String((part as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .join("");
+  } else text = JSON.stringify(content);
+  text = text.replace(/\s+/g, " ").trim();
+  if (text.length > 160) text = `${text.slice(0, 157)}…`;
+  return { role, text: text || "(empty)" };
 }
 
 function RuntimeStateMessage({

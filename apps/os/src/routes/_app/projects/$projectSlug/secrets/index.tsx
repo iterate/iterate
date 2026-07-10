@@ -27,7 +27,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useLiveState } from "~/itx/itx-react.tsx";
@@ -332,7 +332,7 @@ function ProjectSecretsIndexContent() {
                     <span className="truncate">{secretNameFromPath(secret.path)}</span>
                   </Link>
                   <div className="truncate text-xs text-muted-foreground">
-                    {secret.path} · Created {formatRelativeTime(secret.createdAt)}
+                    {secret.path} · Created {formatTimeAgo(secret.createdAt)}
                   </div>
                 </div>
               </div>

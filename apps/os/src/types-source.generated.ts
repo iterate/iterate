@@ -307,17 +307,51 @@ export interface Agent {
   stream: Stream;
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  sendMessage(message: string): Promise<StreamEvent>;
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's \`from\` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * \`{ kind: "agent", path }\` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent>;
+  /**
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * that already ran (a plain last-write-wins update) AND on a path that has
+   * never existed — the append births the agent with the full default policy
+   * plus these overrides, and the batch claims the same idempotency keys the
+   * project worker's defaults lane uses, so whichever lane runs second
+   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
+   * keeps the subagent contract: the "you are a subagent" suffix is appended
+   * after it (agents/agent-defaults.ts).
+   */
+  configure(input: AgentDefaultsOverrides): Promise<void>;
+  /**
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like \`message\`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget. NOT the tool for
+   * SUBAGENTS: they are prompted to report by messaging their parent (its
+   * inputs), never web chat, so an ask() at a subagent times out — use
+   * \`message()\` and read the report from your own inputs.
    */
   ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
@@ -442,7 +476,7 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (\`"/agents/<name>"\`). */
+  /** The agent control surface at a path (\`"/agents/<name>"\`, or relative to the calling scope — \`".."\` climbs). */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
@@ -1093,14 +1127,13 @@ export interface Secret {
  * read-only, always-fresh materialization of the config repo's main branch.
  * Every other workspace is an OVERLAY over the root: reads see latest main
  * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. \`git\` publishes
- * the overlay as snapshot commits on the workspace's own branch in the
- * config repo (\`workspaces/<path>\`), never to main.
+ * there is no clone — a new workspace is usable instantly. \`git.commit\`
+ * commits the overlay's changes straight to the config repo's MAIN branch
+ * (the same lane as \`itx.repo.commitFiles\`, so the project worker/website
+ * redeploys automatically), then the overlay resets to mirror the new main.
  *
  * Constraints: the \`.git\` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
- * branches are for durability and handoff, not worker builds: point worker
- * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
+ * are fine (past ~1.5MB they are stored in R2 transparently).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
@@ -1115,8 +1148,8 @@ export interface Workspace {
   /**
    * Wipe the workspace back to pristine: the local layer and every deletion
    * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Unpublished work is LOST (published snapshots survive
-   * on the workspace branch).
+   * re-materializes). Uncommitted work is LOST (committed changes live on
+   * main).
    */
   reset(): Promise<void>;
   /**
@@ -1199,24 +1232,23 @@ export interface CfVideosCapability {
 }
 
 /**
- * The publish surface of an overlay workspace. There is no staging area and
- * no separate push: \`commit({ message })\` snapshots the whole merged view
- * (latest main + the local layer, minus deletions and \`.gitignore\`d paths)
- * as ONE commit force-pushed to the workspace's own branch in the project
- * repo. Push credentials are injected inside the workspace Durable Object
- * (from the config repo's \`gitAccess()\`), so no token ever rides this
- * surface.
+ * The commit surface of an overlay workspace. There is no staging area, no
+ * branch, and no separate push: \`commit({ message })\` turns the workspace's
+ * changes (local files minus \`.gitignore\`d paths, plus deletions) into ONE
+ * ordinary commit on the config repo's MAIN branch — the same lane as
+ * \`itx.repo.commitFiles\`, so the project worker/website redeploys
+ * automatically. Credentials are internal; no token rides this surface.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
   /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
   status(): Promise<WorkspaceChange[]>;
-  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
+  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
   }): Promise<WorkspacePublishResult>;
-  /** Published snapshots of this workspace, newest first. */
+  /** The config repo's main-branch history, newest first. */
   log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
 }
 
@@ -1616,11 +1648,21 @@ export type AgentProcessorState = {
   autonomousTurnCount: number;
   requestGeneration: number;
   consecutiveLlmFailures: number;
+  lastLlmFailureRateLimited: boolean;
   llmRequests: Record<
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
+  subagents: { path: string; spawnedAt: string }[];
 };
+
+/**
+ * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
+ * base64 (optionally a full \`data:\` URL) — that is what Workers AI image
+ * models return, and the whole point of accepting strings is piping
+ * \`itx.ai.run\` output straight into storage.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
 export type StreamEvent = {
   type: string;
@@ -1654,13 +1696,11 @@ export type StreamEvent = {
   path: string;
 };
 
-/**
- * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
- * base64 (optionally a full \`data:\` URL) — that is what Workers AI image
- * models return, and the whole point of accepting strings is piping
- * \`itx.ai.run\` output straight into storage.
- */
-export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
+};
 
 export type AgentFileAttachment = {
   contentType: string;
@@ -2197,12 +2237,6 @@ export type FlattenedCapabilityInvocation = {
 /** One step of an {@link ItxExpression}: a property read, or a \`[method, ...args]\` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 
-/** Caller-supplied policy overrides, baked into the returned events. */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
-
 /** The default policy for one agent path: the named pieces plus the exact
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
@@ -2516,15 +2550,16 @@ export type WorkspaceChange = {
   path: string;
 };
 
-/** Result of \`WorkspaceGit.commit\` — the published snapshot. */
+/** Result of \`WorkspaceGit.commit\` — the commit landed on the config repo's main. */
 export type WorkspacePublishResult = {
+  /** The repo branch the commit landed on — the config repo's default (main). */
   branch: string;
   /** Paths committed (after .gitignore filtering) plus deletions applied. */
   changedPaths: string[];
   commitOid: string;
 };
 
-/** One commit returned by \`WorkspaceGit.log\` (the workspace branch's history). */
+/** One commit returned by \`WorkspaceGit.log\` (the config repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;

@@ -70,7 +70,11 @@ test(
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
 
-    // Force a known Workers AI model for the assertion.
+    // Force a known Workers AI model for the assertion. What this test proves
+    // is the explicit-selection MECHANISM (llm-provider-selected wins over
+    // defaults), so it must name a CF-HOSTED model: openai/* partner models
+    // only run on the prd account — on a preview slot they answer
+    // "2021: Invalid User Credentials" and this test can never pass.
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
       // The contract requires a model; a model-less

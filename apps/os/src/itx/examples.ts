@@ -413,9 +413,9 @@ return {
   },
   {
     id: "workspace-edit-and-push",
-    title: "Edit files in a workspace, then publish its branch",
+    title: "Edit files in a workspace, then commit them to main",
     description:
-      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) publishes the whole overlay as ONE snapshot commit on the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) — which commits them straight to the config repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and resets the overlay to mirror the new main.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -435,17 +435,18 @@ const edited = await workspace.edit({
   newString: "status: reviewed",
 });
 
-// What changed vs main, and one-call publish to the workspace's own branch
-// (a snapshot commit — no add/push dance, .gitignored files are skipped).
+// What changed vs main, then one call ships it: commit() lands the changes
+// on the config repo's MAIN branch — the project worker/website redeploys
+// automatically (no add/push dance, .gitignored files are skipped).
 const changes = await workspace.git.status();
-const published = await workspace.git.commit({ message: "Workspace example note" });
+const committed = await workspace.git.commit({ message: "Workspace example note" });
 
 return {
   readmePresent: readme !== null,
   edited,
   changes,
-  commitOid: published.commitOid,
-  publishedBranch: published.branch,
+  commitOid: committed.commitOid,
+  committedTo: committed.branch,
 };
 `.trim(),
   },
@@ -698,7 +699,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     id: "agent-send-message",
     title: "Send a message to an agent",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). sendMessage appends the user-message event to the agent's stream and returns it; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured).",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured).",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -706,7 +707,7 @@ const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 
 // The returned value is the committed stream event — the durable record the
 // agent loop reduces into its history.
-const sent = await agent.sendMessage(vars.message ?? "Hello from the examples catalogue");
+const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
 return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
@@ -1375,7 +1376,10 @@ const view = await itx.scheduler.set({
     // A fixed path = one long-lived agent accumulating context. For a fresh
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
-    await itx.agents.get("/agents/checkin").sendMessage(
+    // Await the get() before calling methods on it — chaining the two calls
+    // in one expression fails on the script lane.
+    const agent = await itx.agents.get("/agents/checkin");
+    await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );
   }\`,

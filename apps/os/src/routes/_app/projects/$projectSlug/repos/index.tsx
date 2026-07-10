@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -23,11 +23,12 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { AddRepoFromGithub } from "~/components/add-repo-from-github.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -183,6 +184,26 @@ function ProjectReposIndexContent() {
               )}
             </form.Subscribe>
           </form>
+
+          {/* Only appears when the project has a GitHub connection; suspends
+              on the connections read, so it pops in without blocking the page. */}
+          <Suspense fallback={null}>
+            <AddRepoFromGithub
+              projectId={project.id}
+              existingRepoPaths={repos?.map((repo) => repo.path)}
+              onAdded={(path) => {
+                void navigate({
+                  to: "/projects/$projectSlug/repos/$",
+                  params: {
+                    projectSlug: params.projectSlug,
+                    _splat: repoPathToSplat(path),
+                  },
+                  // Fresh view state on the new repo's page.
+                  search: {},
+                });
+              }}
+            />
+          </Suspense>
         </div>
 
         <div className="flex w-full flex-col gap-2 md:flex-row">
@@ -271,7 +292,7 @@ function ProjectReposIndexContent() {
                           </Link>
                         </TableCell>
                         <TableCell className="w-40 text-muted-foreground">
-                          {formatRelativeTime(repo.createdAt)}
+                          {formatTimeAgo(repo.createdAt)}
                         </TableCell>
                         <TableCell className="w-32">
                           {artifactDashboardUrl ? (

@@ -15,9 +15,9 @@ describe("createAgentFeedModel", () => {
     const model = createAgentFeedModel();
 
     const changed = model.applyEvents([
-      event("events.iterate.com/agents/user-message-received", {
+      event("events.iterate.com/agents/message-received", {
         content: "hello agent",
-        origin: "web",
+        from: { kind: "user", origin: "web" },
       }),
       event("events.iterate.com/agent/llm-request-requested", { model: "gpt-test" }),
     ]);
@@ -70,7 +70,10 @@ describe("createAgentFeedModel", () => {
 
   test("ignores replayed events at or below the folded offset", () => {
     const model = createAgentFeedModel();
-    const first = event("events.iterate.com/agents/user-message-received", { content: "one" });
+    const first = event("events.iterate.com/agents/message-received", {
+      content: "one",
+      from: { kind: "user", origin: "web" },
+    });
     model.applyEvents([first]);
     expect(model.snapshot().lastOffset).toBe(first.offset);
 
