@@ -77,10 +77,15 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
 for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   // Cold isolates and a dynamic-worker load per call make these the slowest
-  // tests in the suite.
+  // tests in the suite. The budget is case-driven, NOT the blanket heavy
+  // ceiling: the first runtime pays the example's cold path
+  // (completionTimeoutMs — e.g. a sandbox container boot), later runtimes
+  // reuse it warm. A blanket 240s meant one stuck example burned
+  // 240s + 240s retry and the lane died by watchdog instead of reporting
+  // WHICH example was stuck (marathons j3tqdhncb6/rhhms9q9pv, 2026-07-10).
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
-    { timeout: 240_000 },
+    { timeout: (exampleCase.completionTimeoutMs ?? 90_000) + 30_000 },
     async () => {
       const { projectId } = await ensureMatrixProject();
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
