@@ -349,20 +349,32 @@ export class ProjectDurableObject extends DurableObject<Env> {
       body: bodyBytes as BodyInit | null,
       redirect: request.redirect,
     });
+    // Settling is bookkeeping about the outcome and must never CHANGE the
+    // outcome: a failed append logs, but the caller still gets whatever
+    // upstream truly returned (or the true upstream error).
     const settle = (payload: { status?: number; error?: string }) =>
-      stream.append({
-        type: "events.iterate.com/project/human-approval-settled",
-        idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}`,
-        payload: { approvalRequestEventOffset, ...payload },
-      });
+      stream
+        .append({
+          type: "events.iterate.com/project/human-approval-settled",
+          idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}`,
+          payload: { approvalRequestEventOffset, ...payload },
+        })
+        .catch((error: unknown) => {
+          console.warn("egress approval: settle append failed", {
+            approvalRequestEventOffset,
+            error,
+            projectId: this.#name.projectId,
+          });
+        });
+    let response: Response;
     try {
-      const response = await this.#egress(released);
-      await settle({ status: response.status });
-      return response;
+      response = await this.#egress(released);
     } catch (error) {
       await settle({ error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
+    await settle({ status: response.status });
+    return response;
   }
 
   /**
