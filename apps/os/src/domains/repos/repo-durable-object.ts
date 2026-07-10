@@ -749,10 +749,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     // destroyed state the old delete+import lane could leave behind): the
     // transfer force-pushes the whole adopted history, so a brand-new empty
     // artifact is a fine starting point. A recreated artifact invalidates any
-    // token minted against its predecessor — drop the cache so the transfer
-    // re-mints.
-    await this.getOrCreateArtifact(this.artifactName());
-    this.#artifactTokenPromise = undefined;
+    // token minted against its predecessor — drop the cache (only then; the
+    // usual already-exists case keeps the one-token-per-isolate economy).
+    const artifact = await this.getOrCreateArtifact(this.artifactName());
+    if (artifact.created) this.#artifactTokenPromise = undefined;
     await this.#transferGithubHistoryInProcess({ branch, depth: input.depth, link, token });
 
     // The adopted head is recorded for read-your-write, then the head cache
@@ -1000,17 +1000,19 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async getOrCreateArtifact(name: string) {
+  private async getOrCreateArtifact(name: string): Promise<{ created: boolean }> {
     try {
-      return await this.requireArtifacts().create(name, {
+      await this.requireArtifacts().create(name, {
         setDefaultBranch: REPO_DEFAULT_BRANCH,
       });
+      return { created: true };
     } catch (error) {
       // Only the race we mean to tolerate. The old blind catch masked real
       // failures (an INTERNAL_ERROR here fell through to get(), which then
       // reported a misleading NOT_FOUND).
       if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      return await this.requireArtifacts().get(name);
+      await this.requireArtifacts().get(name);
+      return { created: false };
     }
   }
 
