@@ -16,7 +16,7 @@
 
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import { subagentParentPath } from "../../lib/subagent-paths.ts";
+import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import {
   slackConnectionFromAgentPath,
@@ -170,31 +170,15 @@ const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
-/**
- * A subagent's reply door is its PARENT: nobody watches its web chat, and it
- * must not inherit a thread agent's reply door either. The suffix rides AFTER
- * whatever base prompt the subagent gets — including a caller-supplied
- * override — so a custom persona still keeps the subagent contract.
- */
-function subagentSystemPromptSuffix(parentAgentPath: string): string {
-  return [
-    `YOU ARE A SUBAGENT. Your parent agent lives at ${parentAgentPath}; it delegated work to you, and its messages arrive as your inputs ("Message from agent ${parentAgentPath}: ...").`,
-    `Nobody is watching your web chat — do NOT use itx.chat.sendMessage. Report to your parent with await itx.agents.get(${JSON.stringify(parentAgentPath)}).message(text).`,
-    "Work across as many script turns as you need, then report ONCE with a complete, self-contained result. No acknowledgements, no progress chatter — your parent's messages need no reply unless they ask for one.",
-    "You may delegate further: await itx.agents.get('subagents/<name>').message(task) births a subagent under your own path (relative paths resolve against your path), and its reports arrive as your inputs.",
-  ].join("\n");
-}
-
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
  * agents reply via their connection's Slack Web API, Telegram chat agents via
  * their connection's Bot API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string): string {
-  // Subagents FIRST: the thread-agent predicates below are shape-loose
-  // (Slack matches any >=6-segment path under its connection, email matches
-  // by prefix), so a subagent nested under a thread agent would otherwise
-  // inherit the parent's transcriber prompt and reply door.
-  if (subagentParentPath(agentPath) !== null) return DEFAULT_AGENT_SYSTEM_PROMPT;
+  // Child-agent paths FIRST: the routed-agent predicates below are shape-loose
+  // (Slack matches any >=6-segment path under its connection, email matches by
+  // prefix), so a child under a routed agent must not inherit its transcriber.
+  if (childAgentParentPath(agentPath) !== null) return DEFAULT_AGENT_SYSTEM_PROMPT;
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   const slackConnection = slackConnectionFromAgentPath(agentPath);
   if (slackConnection !== null) {
@@ -214,7 +198,9 @@ function agentSystemPromptForPath(agentPath: string): string {
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
-/** Caller-supplied policy overrides, baked into the returned events. */
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the path's platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
   model?: string;
@@ -249,12 +235,11 @@ export function agentDefaultsForPath(input: {
 }): AgentDefaultPolicy {
   const { agentPath, projectId } = input;
   const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
-  const parentAgentPath = subagentParentPath(agentPath);
-  const basePrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
-  const systemPrompt =
-    parentAgentPath === null
-      ? basePrompt
-      : `${basePrompt}\n\n${subagentSystemPromptSuffix(parentAgentPath)}`;
+  // An override replaces the path prompt wholesale. There is no baked-in
+  // child-agent prompt either: child-agent-ness rides on the parent's MESSAGE
+  // (the fold labels agent-sourced messages with the sender's path and how to
+  // reply — see reduceAgentEvent's message-received arm).
+  const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
 
   const events: AgentPolicyEventInput[] = [
     {
@@ -298,7 +283,7 @@ export function agentDefaultsForPath(input: {
           '- The project\'s config repo is at repo path "/repos/config" (itx.repo) — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (the WHOLE seeded worker in one file: a static homepage + router as the default export, the example apps as named exports — HelloApp (stateless), CounterApp (a stateful counter page with live WebSocket updates at /ws) — and the userspace invokeCapability walk that makes dotted itx.worker.<getter> calls one RPC), package.json (npm deps, installed at worker build time; platform capability types come from its `iterate` devDependency — import type { ... } from "iterate/sdk"), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>, Telegram chat agents under /agents/telegram/<connection>/chat-<chatId>; secrets under /secrets/**.",
-          "- Message another agent with await itx.agents.get(path).message(text) — sent from your agent scope it arrives as that agent's input labeled with your path, and replies land in your inputs. Paths without a leading / resolve relative to your own path with filesystem semantics ('..' climbs). To delegate work, message a SUBAGENT into existence: await itx.agents.get('subagents/researcher').message(task) — the first message births an ordinary agent at <your path>/subagents/researcher that knows you are its parent, and its reports arrive back as your inputs. Customize one with itx.agents.get(path).configure({ systemPrompt, model }) (works before its first message too).",
+          "- Message another agent with await itx.agents.get(path).message(text) — sent from your agent scope it arrives as that agent's input labeled with your path and how to reply to you, and replies land in your inputs. Paths without a leading / resolve relative to your own path with filesystem semantics ('..' climbs). To delegate work, message a CHILD AGENT into existence: await itx.agents.get('researcher').message(task) — the first message births an ordinary agent at <your path>/researcher. Put EVERYTHING the child needs in the message (role, task, how to report back); after delegating, end your turn — its report arrives as your input and wakes you. Pick its model with await itx.agents.get(path).configure({ model }); configure({ systemPrompt }) REPLACES the agent's entire platform prompt including how it acts, so leave it alone unless you mean exactly that.",
           "- GIVE an agent tools by mounting capabilities on its scope: await itx.agents.get(path).provideCapability({ path: ['toolName'], type: 'itx-expression', expression: [...], instructions: '...' }) — durable, survives your session. The receiving agent calls it as itx.toolName(...) in its own scripts, and from YOUR side it dispatches directly on the fetched handle: await itx.agents.get(path).toolName(args) (equivalently .capabilityHost.toolName(args)).",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',

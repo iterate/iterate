@@ -1044,7 +1044,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("subagents/researcher") from an agent script addresses a subagent, get("../..") from a subagent addresses its parent. list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
         get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
@@ -3084,9 +3084,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
     const defaults = agentDefaultsForPath({
@@ -3123,10 +3124,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like `message`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report by messaging their parent (its
-   * inputs), never web chat, so an ask() at a subagent times out — use
-   * `message()` and read the report from your own inputs.
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer `message()` and read their report from your own inputs:
+   * every agent-sourced message is labeled with how to reply (message the
+   * sender, whose web chat nobody watches), so `ask()` can time out waiting
+   * for a chat reply that never comes.
    */
   async ask(input: {
     message: string;
@@ -4158,7 +4160,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       projectId: this.#props.projectId,
       // The "current actor": this itx's own scope path. Relative agent paths
       // resolve against it, and message() stamps it as the sender when the
-      // scope is an agent — how a subagent's report knows who it is from.
+      // scope is an agent — how delegated reports know who they are from.
       sourceScopePath: this.#props.capabilityHost.path,
     });
   }
@@ -5146,9 +5148,15 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
-// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
-// it gives every project web search with zero setup.
+// Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
+// free pool exhausts fast); pre-connecting it gives every project web search
+// with zero setup. When the deployment has a first-party Exa key
+// (config.integrations.exa), it rides as a bearer placeholder substituted at
+// the egress door — raw key bytes never enter the MCP client.
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+const EXA_PLATFORM_KEY_HEADER = {
+  authorization: 'Bearer getSecret({ platform: "integrations.exa.apiKey" })',
+};
 
 class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
@@ -5179,8 +5187,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
    */
   get exa(): McpClientRpc {
+    const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL },
+      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
       {
         description: {
           instructions:
