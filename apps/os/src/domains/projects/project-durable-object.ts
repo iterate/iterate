@@ -31,6 +31,14 @@ import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
+import {
+  buildApprovalMessage,
+  matchEgressRule,
+  sha256Hex,
+  verifyApprovalSignature,
+  type EgressRule,
+  type HumanApprovalRequestedPayload,
+} from "./egress-approvals.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
@@ -211,7 +219,252 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // receive raw secret material, only getSecret(...) placeholders.
       return await this.#egressInterceptor.value(request);
     }
+    return this.#egressWithApprovalGate(request);
+  }
 
+  /**
+   * The human-approval gate in front of the egress lanes. Requests matching a
+   * `hold` rule park HERE — the caller's fetch promise stays open — until a
+   * grant/rejection lands on the project stream or the rule's timeout
+   * auto-rejects. Everything the gate sees and records is placeholder form:
+   * it runs before secret substitution, so approval events (and the approval
+   * UI reading them) can honestly say "this request spends /secrets/x"
+   * without material ever leaving the platform.
+   */
+  async #egressWithApprovalGate(request: Request): Promise<Response> {
+    const rules = await this.#egressRules();
+    if (rules.length === 0) return this.#egress(request);
+
+    // Secret references also feed rule matching (match.secretPaths); a
+    // malformed reference set is not this gate's error to report — the
+    // egress lanes below produce the canonical error response.
+    let secretPaths: string[] = [];
+    try {
+      secretPaths = secretReferencePathsFromRequest(request);
+    } catch {
+      return this.#egress(request);
+    }
+
+    const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
+    if (rule === undefined) return this.#egress(request);
+    if (rule.verdict === "deny") {
+      return approvalGateResponse({
+        code: "egress_denied",
+        detail: `Egress rule "${rule.ruleKey}" denies this request.`,
+        ruleKey: rule.ruleKey,
+      });
+    }
+    return this.#holdForHumanApproval({ request, rule, secretPaths });
+  }
+
+  /** The project's egress rules, from reduced state (folded before first read). */
+  async #egressRules(): Promise<readonly EgressRule[]> {
+    if (!this.#projectProcessor.isLoaded) {
+      await this.#processorHost.catchUp(ProjectProcessorContract.slug);
+    }
+    return this.#projectProcessor.currentState.egressRules;
+  }
+
+  /**
+   * Park one held request: append `human-approval-requested`, then live-tail
+   * the project stream for a resolution referencing that event's offset (the
+   * held request's identity — no minted ids). The wait is chunked so no
+   * single cross-DO call stays open longer than ~25s; the deadline spans the
+   * chunks. A Durable Object restart mid-hold fails the caller's fetch — the
+   * requested event survives and the audit trail stays truthful, but the
+   * MVP deliberately has no reconciler re-executing approved requests.
+   */
+  async #holdForHumanApproval(input: {
+    request: Request;
+    rule: EgressRule;
+    secretPaths: string[];
+  }): Promise<Response> {
+    const { request, rule } = input;
+    // Buffer the body up front: hashing consumes the stream, and the released
+    // request is re-built from these bytes after the human answers.
+    const bodyBytes = request.body === null ? null : new Uint8Array(await request.arrayBuffer());
+    const requestedPayload: HumanApprovalRequestedPayload = {
+      method: request.method,
+      url: request.url,
+      headers: Object.fromEntries(request.headers),
+      bodySha256: bodyBytes === null ? null : await sha256Hex(bodyBytes),
+      bodyPreview: bodyBytes === null ? null : utf8Preview(bodyBytes),
+      secretPaths: input.secretPaths,
+      ruleKey: rule.ruleKey,
+      expiresAt: new Date(Date.now() + rule.approvalTimeoutMs).toISOString(),
+    };
+
+    const stream = this.#ownStream();
+    const [requested] = await stream.append({
+      type: "events.iterate.com/project/human-approval-requested",
+      payload: requestedPayload,
+    });
+    const approvalRequestEventOffset = requested!.offset;
+
+    const resolution = await this.#awaitApprovalResolution({
+      approvalRequestEventOffset,
+      deadline: Date.now() + rule.approvalTimeoutMs,
+      requestedPayload,
+    });
+
+    if (resolution === "expired") {
+      await stream.append({
+        type: "events.iterate.com/project/human-approval-rejected",
+        idempotencyKey: `human-approval-expired:${approvalRequestEventOffset}`,
+        payload: { approvalRequestEventOffset, reason: "expired" },
+      });
+      return approvalGateResponse({
+        approvalRequestEventOffset,
+        code: "approval_expired",
+        detail: `No human answered within ${rule.approvalTimeoutMs}ms (rule "${rule.ruleKey}").`,
+        ruleKey: rule.ruleKey,
+      });
+    }
+    if (resolution === "rejected") {
+      return approvalGateResponse({
+        approvalRequestEventOffset,
+        code: "approval_rejected",
+        detail: `A human rejected this request (rule "${rule.ruleKey}").`,
+        ruleKey: rule.ruleKey,
+      });
+    }
+
+    // Granted: release the buffered request through the ordinary egress
+    // lanes, then record what actually happened — approval and outcome are
+    // separate facts.
+    const released = new Request(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: bodyBytes as BodyInit | null,
+      redirect: request.redirect,
+    });
+    const settle = (payload: { status?: number; error?: string }) =>
+      stream.append({
+        type: "events.iterate.com/project/human-approval-settled",
+        idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}`,
+        payload: { approvalRequestEventOffset, ...payload },
+      });
+    try {
+      const response = await this.#egress(released);
+      await settle({ status: response.status });
+      return response;
+    } catch (error) {
+      await settle({ error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  /**
+   * Live-tail resolutions for one held request. Grants verify against the
+   * enrolled key set: once ANY active approval key exists, an unsigned or
+   * badly-signed grant is ignored (the hold keeps waiting) — deny stays
+   * cheap, forging an approval requires the enrolled private key.
+   */
+  async #awaitApprovalResolution(input: {
+    approvalRequestEventOffset: number;
+    deadline: number;
+    requestedPayload: HumanApprovalRequestedPayload;
+  }): Promise<"granted" | "rejected" | "expired"> {
+    const stream = this.#ownStream();
+    let cursor = input.approvalRequestEventOffset;
+    while (true) {
+      const remaining = input.deadline - Date.now();
+      if (remaining <= 0) return "expired";
+      let event;
+      try {
+        event = await stream.waitForEvent({
+          afterOffset: cursor,
+          eventTypes: [
+            "events.iterate.com/project/human-approval-granted",
+            "events.iterate.com/project/human-approval-rejected",
+          ],
+          timeoutMs: Math.min(remaining, 25_000),
+        });
+      } catch (error) {
+        // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
+        // (and transient stream restarts) just re-arm from the same cursor.
+        if (
+          error instanceof Error &&
+          error.message.includes("Timed out waiting for stream event")
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      cursor = event.offset;
+
+      if (event.type === "events.iterate.com/project/human-approval-rejected") {
+        let payload;
+        try {
+          payload = ProjectProcessorContract.parseEvent(
+            "events.iterate.com/project/human-approval-rejected",
+            event,
+          ).payload;
+        } catch {
+          continue;
+        }
+        if (payload.approvalRequestEventOffset !== input.approvalRequestEventOffset) continue;
+        return "rejected";
+      }
+
+      let payload;
+      try {
+        payload = ProjectProcessorContract.parseEvent(
+          "events.iterate.com/project/human-approval-granted",
+          event,
+        ).payload;
+      } catch {
+        continue;
+      }
+      if (payload.approvalRequestEventOffset !== input.approvalRequestEventOffset) continue;
+
+      const activeKeys = this.#projectProcessor.currentState.humanApprovalKeys.filter(
+        (key) => key.revokedAt === null,
+      );
+      if (activeKeys.length === 0) return "granted";
+
+      const key = activeKeys.find((candidate) => candidate.keyId === payload.keyId);
+      if (key === undefined || payload.signature === undefined) {
+        console.warn("egress approval: unsigned or unknown-key grant ignored", {
+          approvalRequestEventOffset: input.approvalRequestEventOffset,
+          keyId: payload.keyId,
+          projectId: this.#name.projectId,
+        });
+        continue;
+      }
+      const verified = await verifyApprovalSignature({
+        publicKey: key.publicKey,
+        signature: payload.signature,
+        message: buildApprovalMessage({
+          projectId: this.#name.projectId,
+          approvalRequestEventOffset: input.approvalRequestEventOffset,
+          requested: input.requestedPayload,
+          decision: "granted",
+        }),
+      });
+      if (!verified) {
+        console.warn("egress approval: invalid grant signature ignored", {
+          approvalRequestEventOffset: input.approvalRequestEventOffset,
+          keyId: payload.keyId,
+          projectId: this.#name.projectId,
+        });
+        continue;
+      }
+      return "granted";
+    }
+  }
+
+  /** This Durable Object's own stream (the project stream for the "/" egress instance). */
+  #ownStream() {
+    return new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    });
+  }
+
+  /** The egress lanes proper: platform references, secret substitution, bare fetch. */
+  async #egress(request: Request): Promise<Response> {
     let secretPaths: string[];
     try {
       // Placeholders live in the request envelope: headers, or the URL for
@@ -269,5 +522,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
         this.#egressInterceptor = undefined;
       },
     });
+  }
+}
+
+/** The approval gate's terminal responses: denied, rejected, or expired — never released. */
+function approvalGateResponse(body: {
+  approvalRequestEventOffset?: number;
+  code: "egress_denied" | "approval_rejected" | "approval_expired";
+  detail: string;
+  ruleKey: string;
+}): Response {
+  return Response.json({ error: body.code, ...body }, { status: 403 });
+}
+
+/** First 2KB of a body as UTF-8 for the approval UI; null when it does not decode. */
+function utf8Preview(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(0, 2048));
+  } catch {
+    return null;
   }
 }
