@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent ⇄ LLM Provider Processors — Interactive Guide</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#2d3648; --text:#dbe2ec; --dim:#8b96a8;
+    --agent:#a78bfa; --cf:#f59e0b; --oa:#34d399; --cap:#22d3ee; --door:#60a5fa; --stream:#9ca3af;
+    --blocking:#f87171; --background:#fbbf24; --settle:#c084fc;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--door);text-decoration:none} a:hover{text-decoration:underline}
+  header{position:sticky;top:0;z-index:50;background:rgba(13,17,23,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);padding:10px 24px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;white-space:nowrap}
+  nav{display:flex;gap:4px;flex-wrap:wrap}
+  nav a{padding:4px 10px;border-radius:6px;color:var(--dim);font-size:13px}
+  nav a:hover{background:var(--panel2);color:var(--text);text-decoration:none}
+  main{max-width:1200px;margin:0 auto;padding:24px}
+  section{margin:38px 0}
+  h2{font-size:22px;border-bottom:1px solid var(--border);padding-bottom:8px;margin:0 0 6px}
+  h3{font-size:16px;margin:22px 0 8px}
+  .sub{color:var(--dim);margin:0 0 16px;font-size:14px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin:12px 0}
+  .cols{display:grid;gap:14px}
+  @media(min-width:900px){.cols-2{grid-template-columns:1fr 1fr}.cols-3{grid-template-columns:1fr 1fr 1fr}}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  code{background:var(--panel2);padding:1px 5px;border-radius:4px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .chip{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11.5px;font-weight:600;font-family:var(--mono);white-space:nowrap;border:1px solid transparent}
+  .chip.agent{background:#a78bfa22;color:var(--agent);border-color:#a78bfa44}
+  .chip.cf{background:#f59e0b22;color:var(--cf);border-color:#f59e0b44}
+  .chip.oa{background:#34d39922;color:var(--oa);border-color:#34d39944}
+  .chip.cap{background:#22d3ee22;color:var(--cap);border-color:#22d3ee44}
+  .chip.door{background:#60a5fa22;color:var(--door);border-color:#60a5fa44}
+  .chip.stream{background:#9ca3af22;color:var(--stream);border-color:#9ca3af44}
+  .lane{display:inline-block;padding:1px 8px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:.03em}
+  .lane.blocking{background:#f8717122;color:var(--blocking)}
+  .lane.background{background:#fbbf2422;color:var(--background)}
+  .lane.settle{background:#c084fc22;color:var(--settle)}
+  .lane.reduce{background:#60a5fa22;color:var(--door)}
+  .evt{font-family:var(--mono);font-size:12.5px;cursor:pointer;border-bottom:1px dotted var(--dim)}
+  .evt:hover{color:#fff}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px;margin:10px 0}
+  /* flow */
+  .flow{display:flex;flex-direction:column;gap:0;margin:14px 0}
+  .fstep{display:grid;grid-template-columns:34px 190px 1fr;gap:12px;align-items:start;padding:9px 6px;border-left:2px solid var(--border);margin-left:16px;position:relative}
+  .fstep .n{width:26px;height:26px;border-radius:50%;background:var(--panel2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;position:absolute;left:-15px;top:8px}
+  .fstep .who{padding-left:22px}
+  .fstep .what{font-size:14px}
+  .fstep .what .d{color:var(--dim);font-size:13px}
+  /* catalog */
+  .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
+  .filters input{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px;min-width:240px}
+  .fbtn{background:var(--panel2);border:1px solid var(--border);color:var(--dim);border-radius:6px;padding:5px 10px;font-size:12.5px;cursor:pointer}
+  .fbtn.on{color:var(--text);border-color:#5b6b85;background:#242e40}
+  .ecard{background:var(--panel);border:1px solid var(--border);border-left-width:4px;border-radius:8px;padding:12px 16px;margin:10px 0}
+  .ecard h4{margin:0 0 4px;font-family:var(--mono);font-size:13px;font-weight:600}
+  .ecard .desc{font-size:13.5px;color:var(--text);margin:2px 0 8px}
+  .ecard .meta{font-size:12.5px;color:var(--dim);margin:6px 0}
+  .ecard table{font-size:12.5px;margin:6px 0}
+  .ecard.fam-agent{border-left-color:var(--agent)} .ecard.fam-cf{border-left-color:var(--cf)}
+  .ecard.fam-oa{border-left-color:var(--oa)} .ecard.fam-cap{border-left-color:var(--cap)}
+  /* simulator */
+  .simwrap{display:grid;gap:14px}
+  @media(min-width:1000px){.simwrap{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}}
+  .simbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .simbar select{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13.5px;max-width:420px}
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 14px;font-size:13.5px;cursor:pointer}
+  .btn:hover{border-color:#5b6b85}
+  .btn:disabled{opacity:.4;cursor:default}
+  #simblurb{font-size:13.5px;color:var(--dim);margin:4px 0 10px}
+  #simlog{max-height:560px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:8px}
+  .lrow{border-radius:8px;padding:7px 10px;margin:3px 0;border:1px solid transparent}
+  .lrow.cur{border-color:#5b6b85;background:var(--panel2)}
+  .lrow .top{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+  .lrow .off{font-family:var(--mono);color:var(--dim);font-size:11.5px;min-width:34px}
+  .lrow .ty{font-family:var(--mono);font-size:12.5px;font-weight:600}
+  .lrow .pl{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin:3px 0 0 42px;white-space:pre-wrap;word-break:break-word}
+  .lrow .fx{margin:5px 0 0 42px;display:flex;flex-direction:column;gap:3px}
+  .lrow .fx div{font-size:12.5px;color:var(--dim)}
+  .lrow.notestep{background:#2a1e1e55;border-color:#7f1d1d88}
+  .lrow.notestep .ty{color:#fca5a5;font-family:inherit}
+  .statebox{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+  .statebox h4{margin:0 0 8px;font-size:13px;display:flex;gap:8px;align-items:center}
+  .kv{font-family:var(--mono);font-size:12px;line-height:1.7}
+  .kv .k{color:var(--dim)}
+  .kv .row{padding:0 6px;border-radius:4px}
+  .kv .row.chg{background:#f59e0b1c;outline:1px solid #f59e0b44}
+  #simnarr{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:13.5px;min-height:52px;margin-bottom:10px}
+  .fail-grid{display:grid;gap:12px}
+  @media(min-width:900px){.fail-grid{grid-template-columns:1fr 1fr}}
+  .fail-grid .card h4{margin:0 0 6px;font-size:14.5px}
+  .fail-grid .card p{margin:5px 0;font-size:13.5px}
+  .fail-grid .card .where{color:var(--dim);font-size:12px;font-family:var(--mono)}
+  ol.imp li{margin:10px 0;font-size:14px}
+  ol.imp li b{color:#fff}
+  .pill-sev{font-size:10.5px;font-weight:800;border-radius:4px;padding:1px 6px;vertical-align:middle;margin-left:6px}
+  .sev-hi{background:#f8717126;color:#f87171}.sev-md{background:#fbbf2426;color:#fbbf24}.sev-lo{background:#60a5fa26;color:#60a5fa}
+  .smgraph{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;margin:10px 0}
+  .smnode{border:1.5px solid var(--agent);border-radius:8px;padding:6px 14px;font-family:var(--mono);font-size:12.5px;background:#a78bfa14}
+  .smarrow{color:var(--dim);font-size:12px;text-align:center}
+  .smarrow .mono{display:block;color:var(--settle)}
+  details{margin:8px 0}
+  summary{cursor:pointer;color:var(--dim);font-size:13px}
+  .footer{color:var(--dim);font-size:12.5px;border-top:1px solid var(--border);margin-top:40px;padding-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 Agent ⇄ LLM provider processors</h1>
+  <nav>
+    <a href="#overview">Overview</a><a href="#flow">One turn</a><a href="#catalog">Event catalog</a>
+    <a href="#state">Reduced state</a><a href="#effects">Side effects</a><a href="#sim">Simulator</a>
+    <a href="#failures">Failure &amp; recovery</a><a href="#improve">Improvement notes</a>
+  </nav>
+</header>
+<main>
+
+<section id="overview">
+  <h2>Overview</h2>
+  <p class="sub">How <code>apps/os</code> turns a chat message into an LLM turn — three stream processors co-hosted on one agent stream.</p>
+  <div class="card">
+    <p>Every agent lives on <b>one event stream</b> (e.g. <code>/agents/web/main</code>). A single <code>AgentDurableObject</code> per stream (<span class="mono">agent-durable-object.ts</span>) hosts several <code>StreamProcessor</code> subclasses that all watch that same stream. Processors never call each other directly — <b>the stream is the only bus</b>. Each processor:</p>
+    <ul>
+      <li><b>reduces</b> consumed events into its own durable state (a pure fold, checkpointed per batch), and</li>
+      <li>runs <b>side effects</b> that append <i>new</i> events back onto the stream — which the other processors then consume.</li>
+    </ul>
+    <p>The three actors in the LLM loop (plus two supporting ones):</p>
+    <table>
+      <tr><th>Actor</th><th>Contract slug</th><th>Job</th><th>Hosted in</th></tr>
+      <tr><td><span class="chip agent">agent</span></td><td><code>agent</code> v0.3.1</td><td>Owns model-visible history + the request lifecycle state machine. Renders doors' events into <code>input-added</code>, decides when to schedule an LLM request, extracts <code>```js</code> snippets from outputs into script executions, renders script results &amp; failures back into history.</td><td>AgentDurableObject</td></tr>
+      <tr><td><span class="chip cf">cloudflare-ai</span></td><td><code>cloudflare-ai</code> v0.1.0</td><td>LLM provider #1: executes a request via the <code>env.AI</code> binding (<code>AI.run(model, {messages, stream:true})</code>). Default provider, default model <code>@cf/moonshotai/kimi-k2.7-code</code>.</td><td>AgentDurableObject</td></tr>
+      <tr><td><span class="chip oa">openai-ws</span></td><td><code>openai-ws</code> v0.1.0</td><td>LLM provider #2: executes a request over a shared OpenAI Responses <b>WebSocket</b> (default model <code>gpt-5.5</code>), with continuation via <code>previous_response_id</code>, a 10-min deadline, and an orphan-recovery sweep.</td><td>AgentDurableObject</td></tr>
+      <tr><td><span class="chip cap">capability-host</span></td><td><code>capability-host</code></td><td>Executes the agent's <code>```js async (itx) =&gt; …```</code> scripts (codemode "tool calls") and journals the result. Lives in its own DO, subscribed to the same stream.</td><td>CapabilityHostDurableObject</td></tr>
+      <tr><td><span class="chip door">doors</span></td><td>—</td><td>Web chat / MCP / Slack / email / PR surfaces. They append raw inbound events (<code>user-message-received</code>) and outbound records (<code>web-message-sent</code> when a script calls <code>itx.chat.sendMessage</code>).</td><td>various</td></tr>
+    </table>
+    <p><b>Provider selection</b> is data: the agent's state carries <code>llmProvider</code> + <code>llmConfig.model</code> (set by <code>llm-provider-selected</code>, e.g. from project agent-defaults). Both providers consume the same <code>agent/llm-request-requested</code> event and each ignores it unless <code>payload.provider</code> equals its own slug. <b>Requests travel by reference</b>: the requested event carries no prompt body — the provider re-reads the stream and re-folds agent state up to the request's offset to rebuild <code>system + history</code> deterministically. The request's identity <i>is</i> the event's offset (<code>llmRequestId = offset</code>).</p>
+  </div>
+
+  <h3>The two side-effect lanes (and the third, hidden one)</h3>
+  <div class="card">
+    <p>Hooks get two schedulers from the framework (<span class="mono">stream-processor.ts</span>); how a side effect is scheduled decides its crash behaviour:</p>
+    <table>
+      <tr><th>Lane</th><th>Semantics</th><th>On failure / crash</th></tr>
+      <tr><td><span class="lane blocking">BLOCKING</span> <code>blockProcessorWhile(work)</code></td><td>The batch's checkpoint (and <b>every later batch</b>) waits for the work. Runs under the host keep-alive.</td><td>Batch not checkpointed → host re-handshakes and the stream <b>redelivers the batch</b>; idempotency keys dedupe the retry. Exactly-once <i>effect</i>, at-least-once <i>execution</i>.</td></tr>
+      <tr><td><span class="lane background">BACKGROUND</span> <code>runInBackground(work)</code></td><td>Fire-and-forget (keep-alive backed). Checkpoint advances immediately.</td><td>Failure is only logged. Because the checkpoint already moved past the triggering event, it is <b>never redelivered</b> — lost work needs its own recovery mechanism (or wedges).</td></tr>
+      <tr><td><span class="lane settle">BATCH-SETTLE</span> awaited in <code>processEventBatch</code></td><td>Derived from the <b>whole-batch reduced state</b>, once per batch, after all per-event hooks. Awaited directly, so it blocks the checkpoint like blocking work.</td><td>Same as blocking: batch retries. Used where a per-event decision would be wrong because earlier same-batch appends are invisible.</td></tr>
+    </table>
+    <p class="sub" style="margin-top:8px">Rule of thumb in this codebase: <b>appends that keep history consistent are blocking</b>; <b>anything that waits on wall-clock or a network call is background</b> — and every background execution needs a story for "the DO died mid-way" (that story is where the two providers differ, see <a href="#improve">improvement notes</a>).</p>
+  </div>
+
+  <h3>The <code>currentRequest</code> state machine (agent state)</h3>
+  <div class="card">
+    <div class="smgraph">
+      <div class="smnode">null</div>
+      <div class="smarrow">llm-request-scheduled<span class="mono">(settle: pending trigger &amp; no request)</span>→</div>
+      <div class="smnode">{phase:"scheduled",<br>requestId, scheduledOffset}</div>
+      <div class="smarrow">llm-request-requested<span class="mono">(debounce timer · or settle recovery)</span>→</div>
+      <div class="smnode">{phase:"requested",<br>llmRequestId:offset}</div>
+      <div class="smarrow">llm-request-completed / -cancelled<span class="mono">(requestGeneration++)</span>→</div>
+      <div class="smnode">null</div>
+    </div>
+    <p class="sub">Cancellation also exits from <i>scheduled</i>. Every exit increments <code>requestGeneration</code>, which keys the idempotency of the <i>next</i> <code>llm-request-scheduled</code> — so however many inputs arrive between two request lifecycles, exactly one scheduling event survives the append-dedup layer.</p>
+  </div>
+</section>
+
+<section id="flow">
+  <h2>Anatomy of one turn</h2>
+  <p class="sub">The happy path: user message → LLM → codemode script → script result → next LLM turn. Every arrow is an event appended to the one stream. Click any event name to jump to its catalog entry.</p>
+  <div class="flow" id="flowsteps"></div>
+  <div class="legend">
+    <span class="chip door">door</span><span class="chip agent">agent</span><span class="chip cf">cloudflare-ai</span><span class="chip oa">openai-ws</span><span class="chip cap">capability-host</span>
+    <span style="margin-left:12px"></span>
+    <span class="lane blocking">BLOCKING</span><span class="lane background">BACKGROUND</span><span class="lane settle">BATCH-SETTLE</span><span class="lane reduce">REDUCE</span>
+  </div>
+  <div class="card">
+    <p><b>How the loop ends.</b> A script that returns <code>undefined</code> (and doesn't throw) produces no rendered input → no pending trigger → no next request. A response with no code block adds history but triggers nothing. Hard stops: the <b>circuit breaker</b> (<code>loop-stopped</code> after 20 consecutive agent-loop turns) and the <b>failure cap</b> (after 3 consecutive LLM failures the error input stops auto-retrying).</p>
+  </div>
+</section>
+
+<section id="catalog">
+  <h2>Event catalog</h2>
+  <p class="sub">Every event type the three processors consume or emit, with payloads, reducer effects and side effects. <code>llmRequestId</code> always equals the offset of the <code>llm-request-requested</code> event.</p>
+  <div class="filters">
+    <input id="catsearch" type="search" placeholder="filter events… (e.g. cancelled, chunk, script)">
+    <button class="fbtn on" data-fam="agent">agent</button>
+    <button class="fbtn on" data-fam="cf">cloudflare-ai</button>
+    <button class="fbtn on" data-fam="oa">openai-ws</button>
+    <button class="fbtn on" data-fam="cap">capability-host</button>
+  </div>
+  <div id="catlist"></div>
+</section>
+
+<section id="state">
+  <h2>Reduced state</h2>
+  <p class="sub">What each processor durably folds out of the stream (checkpointed atomically per batch as <code>{offset, state}</code>). Plus the in-memory state that does <b>not</b> survive a DO restart — the source of every recovery mechanism.</p>
+  <div id="statecards"></div>
+</section>
+
+<section id="effects">
+  <h2>Side effects — blocking vs background</h2>
+  <p class="sub">The complete side-effect inventory across the three processors, with the lane each runs in and why.</p>
+  <div class="card" style="overflow-x:auto"><table id="fxtable"></table></div>
+</section>
+
+<section id="sim">
+  <h2>Interactive simulator</h2>
+  <p class="sub">Step through real event sequences. The right panel shows the <b>actual reduced state</b> (computed by a faithful port of the reducers) — changed fields highlight orange. Use ←/→ keys.</p>
+  <div class="simbar">
+    <select id="scenario"></select>
+    <button class="btn" id="prev">◀ back</button>
+    <button class="btn" id="next">step ▶</button>
+    <button class="btn" id="play">▶▶ play</button>
+    <button class="btn" id="reset">reset</button>
+    <input id="scrub" type="range" min="0" value="0" step="1" style="flex:1;min-width:120px;accent-color:#a78bfa">
+    <span id="stepcount" class="sub"></span>
+  </div>
+  <div id="simblurb"></div>
+  <div class="simwrap">
+    <div>
+      <div id="simnarr"></div>
+      <div id="simlog"></div>
+    </div>
+    <div id="simstate"></div>
+  </div>
+</section>
+
+<section id="failures">
+  <h2>Failure &amp; recovery mechanisms</h2>
+  <p class="sub">Every deliberate guard in the three processors — what breaks, what catches it.</p>
+  <div class="fail-grid" id="failcards"></div>
+</section>
+
+<section id="improve">
+  <h2>Improvement notes</h2>
+  <p class="sub">Observations from reading the code — asymmetries, hot spots, and known bugs to consider when making this better.</p>
+  <ol class="imp" id="implist"></ol>
+</section>
+
+<div class="footer">
+  Generated 2026-07-09 from <code>apps/os/src/domains/agents/</code> (agent-processor-{contract,implementation}.ts, cloudflare-ai-processor-*.ts, openai-ws-processor-*.ts, agent-durable-object.ts) and <code>apps/os/src/domains/streams/stream-processor.ts</code>. Single self-contained file, no dependencies.
+</div>
+</main>
+<script>
+"use strict";
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const FAM={agent:["agent","agent"],cf:["cf","cloudflare-ai"],oa:["oa","openai-ws"],cap:["cap","capability-host"],door:["door","door"],stream:["stream","stream"]};
+const chip=f=>`<span class="chip ${FAM[f][0]}">${FAM[f][1]}</span>`;
+const lane=l=>`<span class="lane ${l}">${l.toUpperCase().replace("SETTLE","BATCH-SETTLE")}</span>`;
+const ev=t=>`<span class="evt" onclick="jumpEvt('${t}')">${t}</span>`;
+function jumpEvt(t){const el=document.getElementById("ev-"+t.replace(/[/]/g,"_"));if(!el)return;el.scrollIntoView({behavior:"smooth",block:"center"});el.style.outline="2px solid #f59e0b";setTimeout(()=>el.style.outline="",1600);}
+
+// ---------------------------------------------------------------- flow steps
+const FLOW=[
+ ["door","agents/user-message-received","The web/MCP door appends the raw user message.",[]],
+ ["agent","agent/input-added","Renders the message into model-visible history (policy <code>after-current-request</code>). Reduce: history+1, sets <code>pendingTriggerOffset</code>, resets <code>autonomousTurnCount</code>.",[["blocking","append the render"]]],
+ ["agent","agent/llm-request-scheduled","End-of-batch settle: pending trigger + no current request ⇒ schedule, idempotency-keyed on <code>requestGeneration</code>. Reduce: <code>currentRequest = scheduled</code>.",[["settle","derive from whole-batch state"]]],
+ ["agent","agent/llm-request-requested","A 250&nbsp;ms debounce timer fires and promotes the request. The event's <b>offset becomes the llmRequestId</b>. Reduce: <code>currentRequest = requested</code>.",[["background","debounce timer"]]],
+ ["cf","cloudflare-ai/llm-request-started","The selected provider picks up <code>llm-request-requested</code> (matching <code>payload.provider</code>) and starts executing <b>in the background</b>: re-reads the stream, folds agent state up to the request offset, rebuilds <code>system + history</code>.",[["background","whole execution"]]],
+ ["cf","cloudflare-ai/llm-response-chunk","Every streamed provider frame is appended verbatim (sequence-numbered) so UIs can render tokens/reasoning live. Nothing reduces these.",[["background","inside the execution"]]],
+ ["cf","agent/output-added","Full assistant text, appended only if the request is <b>still current</b> (guards against interrupts). Agent reduce: history+1 (assistant).",[["background","inside the execution"]]],
+ ["agent","capability-host/script-execution-requested","The agent extracts the <code>```js async (itx)=>…```</code> snippet from the output and requests execution (<code>executionId = agent-output:&lt;offset&gt;</code>).",[["blocking","snippet extraction + append"]]],
+ ["cf","agent/llm-request-completed","Terminal pair: <code>cloudflare-ai/llm-request-completed</code> + <code>agent/llm-request-completed</code> (success or failure). Agent reduce: <code>currentRequest=null</code>, <code>requestGeneration++</code>.",[["background","inside the execution"]]],
+ ["cap","capability-host/script-execution-completed","The capability host runs the script against the itx surface; a mid-script <code>itx.chat.sendMessage</code> already appended <code>agents/web-message-sent</code> (which the agent reflects into history, no trigger). Then the result/error is journaled.",[["background","script execution (in its own DO)"]]],
+ ["agent","agent/input-added","The \"tool result\": <code>Your script returned: …</code> rendered into history (results &gt;30k chars spill to a workspace file first — a durable write inside the blocking section). Trigger source <b>agent-loop</b> ⇒ <code>autonomousTurnCount++</code> on the next schedule.",[["blocking","render (may wait on workspace clone)"]]],
+ ["agent","agent/llm-request-scheduled","Settle again: the loop continues — model looks at the data, acts, until a script returns nothing (turn over), or the circuit breaker / failure cap stops it.",[["settle","next generation"]]],
+];
+$("#flowsteps").innerHTML=FLOW.map((s,i)=>`<div class="fstep"><div class="n">${i+1}</div><div class="who">${chip(s[0])}</div><div class="what">${ev(s[1])}${s[3].map(f=>" "+lane(f[0])).join("")}<div class="d">${s[2]}</div></div></div>`).join("");
+
+// ---------------------------------------------------------------- event catalog
+// P = payload rows [field, type, note]
+const EVENTS=[
+{t:"events.iterate.com/agents/user-message-received",fam:"agent",d:"A user message reached the agent — from the web UI or an MCP client acting for the project owner.",
+ p:[["content","string",""],["origin","\"web\" | \"mcp\"",""]],
+ by:["door"],cons:["agent"],red:"— (not reduced; only a side-effect trigger)",
+ fx:[["blocking","agent","re-append as agent/input-added (policy after-current-request)"]]},
+{t:"events.iterate.com/agents/web-message-sent",fam:"agent",d:"A visible agent message left through the web-chat door (the script called itx.chat.sendMessage). Files the agent attached ride along.",
+ p:[["message","string",""],["files?","AgentFileAttachment[]","{contentType, filename, path, size, url(signed)}"]],
+ by:["door"],cons:["agent"],red:"—",
+ fx:[["blocking","agent","reflect into history as input-added: “The assistant sent this visible web-chat message: …” with policy dont-trigger-request — so the model SEES what it sent (incl. its own images) without re-triggering itself"]]},
+{t:"events.iterate.com/agent/config-updated",fam:"agent",d:"Project-authored agent setup (from templates / agent-defaults birth policy).",
+ p:[["systemPrompt?","string",""]],
+ by:["door"],cons:["agent"],red:"—",
+ fx:[["blocking","agent","if systemPrompt present, append agent/system-prompt-updated"]]},
+{t:"events.iterate.com/agent/system-prompt-updated",fam:"agent",d:"Updates the system prompt used for future LLM requests.",
+ p:[["systemPrompt","string",""]],
+ by:["agent"],cons:["agent"],red:"state.systemPrompt = payload.systemPrompt",fx:[]},
+{t:"events.iterate.com/agent/llm-provider-selected",fam:"agent",d:"Selects provider + model for future requests. ifUnset makes it a default that respects earlier explicit choices.",
+ p:[["provider","\"cloudflare-ai\" | \"openai-ws\"",""],["model","string",""],["ifUnset?","boolean","no-op if llmProviderConfigured already true"]],
+ by:["door"],cons:["agent"],red:"llmConfig.model, llmProvider, llmProviderConfigured=true",fx:[]},
+{t:"events.iterate.com/agent/input-added",fam:"agent",d:"A normalized model-visible input (user role). THE fan-in point: user messages, script results, LLM-failure notices, reflections and file drops all become this.",
+ p:[["content","string",""],["files?","AgentFileAttachment[]",""],["llmRequestPolicy","{behaviour}","dont-trigger-request | interrupt-current-request | after-current-request (default)"]],
+ by:["agent","door"],cons:["agent"],
+ red:"history += {role:user}; unless dont-trigger: pendingTriggerOffset=offset, pendingTriggerSource = idempotencyKey∈{render-script-result@, render-llm-failure@} ? \"agent-loop\" : \"user\"; user source resets autonomousTurnCount=0",
+ fx:[["blocking","agent","interrupt-current-request only: append llm-request-cancelled for the in-flight scheduled/requested request"],["settle","agent","(end of batch) pending trigger + currentRequest=null ⇒ append llm-request-scheduled — or loop-stopped at the autonomous-turn cap"]]},
+{t:"events.iterate.com/agent/output-added",fam:"agent",d:"The LLM provider produced assistant output (the full text of one response).",
+ p:[["content","string",""],["llmRequestId?","int","offset of the requested event"]],
+ by:["cf","oa"],cons:["agent"],red:"history += {role:assistant}",
+ fx:[["blocking","agent","extract fenced ```js async(itx)=>…``` snippet; if present, append capability-host/script-execution-requested with executionId agent-output:<offset>"]]},
+{t:"events.iterate.com/agent/llm-request-scheduled",fam:"agent",d:"An LLM request was scheduled after a trigger. Idempotency key agent/llm-request-scheduled@generation:<requestGeneration> collapses every re-derivation into one event.",
+ p:[["requestId","string","llm-request:gen-<generation>"],["provider","enum",""],["model","string",""],["debounceMs","int","250 default"]],
+ by:["agent"],cons:["agent"],
+ red:"currentRequest={phase:scheduled, requestId, scheduledOffset:offset}; clear pendingTrigger*; autonomousTurnCount = (pendingTriggerSource was agent-loop) ? +1 : 0",
+ fx:[["background","agent","setTimeout(debounceMs) then append llm-request-requested; live timers tracked in-memory (#scheduledRequestsWithActiveTimers)"],["settle","agent","recovery: state shows scheduled but no live timer (DO restarted) ⇒ append llm-request-requested immediately"]]},
+{t:"events.iterate.com/agent/llm-request-requested",fam:"agent",d:"The prepared request. Carries NO body — providers rebuild the prompt from history up to this event's offset. offset = llmRequestId.",
+ p:[["requestId","string",""],["provider","enum","which provider must pick it up"],["model","string",""]],
+ by:["agent"],cons:["agent","cf","oa"],
+ red:"agent: (guard: matches scheduled requestId) currentRequest={phase:requested, llmRequestId:offset} · openai-ws: requests[offset]={status:requested} (pre-execution, feeds the orphan sweep) · cloudflare-ai: not reduced",
+ fx:[["background","cf","provider match + not completed ⇒ run the whole execution (started → AI.run → chunks → output → completion pair)"],["background","oa","provider match ⇒ register in #liveExecutions (sync), queue on #executionChain (one shared socket), run execution"]]},
+{t:"events.iterate.com/agent/llm-request-completed",fam:"agent",d:"A provider finished a request — the agent-facing half of the terminal pair. Success or failure.",
+ p:[["llmRequestId","int",""],["provider","enum",""],["durationMs","int",""],["result","{status:success, rawResponse?, usage?} | {status:failure, error:{message}}",""]],
+ by:["cf","oa"],cons:["agent"],
+ red:"(guard: currentRequest is requested with matching id, else IGNORED as stale) currentRequest=null; requestGeneration++; consecutiveLlmFailures = failure ? +1 : 0",
+ fx:[["blocking","agent","failure only (and only if not stale): render error input-added “Your LLM request failed …”. Policy after-current-request while consecutiveLlmFailures < 3 (auto-retry), dont-trigger-request at the cap"]]},
+{t:"events.iterate.com/agent/llm-request-cancelled",fam:"agent",d:"The current scheduled/requested request was cancelled (reason: interrupted-by-user-input).",
+ p:[["phase","\"scheduled\" | \"requested\"",""],["requestId / llmRequestId","","matching identity for the phase"]],
+ by:["agent"],cons:["agent"],
+ red:"(guard: matches currentRequest) currentRequest=null; requestGeneration++ — the in-flight provider execution is NOT aborted; its later output-added is dropped by the isRequestStillCurrent check and its completion is ignored as stale",fx:[]},
+{t:"events.iterate.com/agent/loop-stopped",fam:"agent",d:"Circuit breaker: an autonomous tool-result loop hit the cap (20 turns) and was stopped without pausing the stream.",
+ p:[["maxAutonomousTurns","int","20"],["reason","string",""],["triggerOffset","int","the input that would have triggered turn 21"]],
+ by:["agent"],cons:["agent"],red:"clear pendingTriggerOffset/Source (the trigger is consumed; the next USER input resets the count and resumes)",fx:[]},
+{t:"events.iterate.com/capability-host/script-execution-requested",fam:"cap",d:"A script should run in this capability scope. The agent emits these for its own outputs; other tools journal theirs on the same stream.",
+ p:[["code","string","the async (itx)=>… snippet"],["executionId","string","agent-output:<output offset> for agent-requested runs"]],
+ by:["agent","cap"],cons:["agent","cap"],
+ red:"agent: inProgressScriptExecutions += {code, executionId, requestedOffset, startedAt}",
+ fx:[["background","cap","capability host executes the script against the itx surface (its own DO, own contract)"]]},
+{t:"events.iterate.com/capability-host/script-execution-completed",fam:"cap",d:"A script finished. result is whatever the function returned (undefined = the agent chose to end its turn); error is the thrown message.",
+ p:[["executionId","string",""],["result?","unknown",""],["error?","string",""]],
+ by:["cap"],cons:["agent","cap"],
+ red:"agent: remove from inProgressScriptExecutions; scriptExecutionsCompleted += executionId",
+ fx:[["blocking","agent","only for executionId prefix agent-output: — render the tool-result input-added: thrown ⇒ “Your script threw: …” · returned value ⇒ “Your script returned: …” (>30k chars: write full text to workspace /script-results/<id>.json FIRST — inside the blocking section, may wait on the first-use repo clone — then append a truncated preview + read-it-back recipe) · returned undefined ⇒ nothing (turn ends)"]]},
+{t:"events.iterate.com/cloudflare-ai/llm-request-started",fam:"cf",d:"The Cloudflare AI processor started executing an agent LLM request.",
+ p:[["llmRequestId","int",""],["model","string",""]],
+ by:["cf"],cons:["cf"],red:"cf: requests[id]={status:started}",fx:[]},
+{t:"events.iterate.com/cloudflare-ai/llm-response-chunk",fam:"cf",d:"One streamed chunk from the AI binding (SSE frame, JSON-parsed). Not consumed by any of the three — it exists for live UIs.",
+ p:[["chunk","unknown",""],["llmRequestId","int",""],["sequence","int","0-based"]],
+ by:["cf"],cons:[],red:"—",fx:[]},
+{t:"events.iterate.com/cloudflare-ai/llm-request-completed",fam:"cf",d:"Provider-side half of the terminal pair (appended atomically together with agent/llm-request-completed).",
+ p:[["llmRequestId","int",""],["durationMs","int",""],["result","success | failure",""]],
+ by:["cf"],cons:["cf"],red:"cf: requests[id]={status:completed}",fx:[]},
+{t:"events.iterate.com/openai-ws/llm-request-started",fam:"oa",d:"The OpenAI WebSocket processor started an agent LLM request.",
+ p:[["llmRequestId","int",""],["model","string",""]],
+ by:["oa"],cons:["oa"],red:"oa: requests[id]={status:started}",fx:[]},
+{t:"events.iterate.com/openai-ws/llm-response-chunk",fam:"oa",d:"One raw frame from the Responses WebSocket (output_text deltas, reasoning summary deltas, lifecycle frames). UI-only.",
+ p:[["chunk","unknown",""],["llmRequestId","int",""],["sequence","int",""]],
+ by:["oa"],cons:[],red:"—",fx:[]},
+{t:"events.iterate.com/openai-ws/llm-request-completed",fam:"oa",d:"Provider-side half of the terminal pair. The orphan sweep emits the SAME event with the SAME idempotency key, so a race between sweep and a live execution collapses to one durable outcome.",
+ p:[["llmRequestId","int",""],["durationMs","int",""],["result","success | failure",""]],
+ by:["oa"],cons:["oa"],red:"oa: requests[id]={status:completed}",fx:[]},
+];
+function renderCatalog(){
+  const q=($("#catsearch").value||"").toLowerCase();
+  const fams=new Set($$(".fbtn.on").map(b=>b.dataset.fam));
+  $("#catlist").innerHTML=EVENTS.filter(e=>fams.has(e.fam)&&(q===""||e.t.toLowerCase().includes(q)||e.d.toLowerCase().includes(q))).map(e=>`
+   <div class="ecard fam-${e.fam}" id="ev-${e.t.replace(/[/]/g,"_")}">
+    <h4>${e.t}</h4><div class="desc">${e.d}</div>
+    <table><tr><th>payload field</th><th>type</th><th>notes</th></tr>${e.p.map(r=>`<tr><td class="mono">${esc(r[0])}</td><td class="mono">${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join("")||"<tr><td colspan=3>—</td></tr>"}</table>
+    <div class="meta">emitted by ${e.by.map(chip).join(" ")||"—"} &nbsp;·&nbsp; consumed by ${e.cons.map(chip).join(" ")||"<i>nobody (UI-only)</i>"}</div>
+    <div class="meta"><span class="lane reduce">REDUCE</span> ${esc(e.red)}</div>
+    ${e.fx.map(f=>`<div class="meta">${lane(f[0])} ${chip(f[1])} ${f[2]}</div>`).join("")}
+   </div>`).join("");
+}
+$("#catsearch").addEventListener("input",renderCatalog);
+$$(".fbtn").forEach(b=>b.addEventListener("click",()=>{b.classList.toggle("on");renderCatalog();}));
+renderCatalog();
+
+// ---------------------------------------------------------------- reduced state cards
+const STATE=[
+{fam:"agent",title:"agent — durable state (stateSchema v0.3.1)",rows:[
+ ["systemPrompt","string","the default codemode prompt","written by system-prompt-updated; read at prompt-build time by BOTH providers"],
+ ["history","ChatMessage[] {role:user|assistant, content, files?}","[]","the model-visible transcript. user rows come from input-added, assistant rows from output-added. Grows forever; providers replay it wholesale every request"],
+ ["llmConfig","{model}","@cf/moonshotai/kimi-k2.7-code","set by llm-provider-selected; copied into each scheduled/requested event"],
+ ["llmProvider","cloudflare-ai | openai-ws","cloudflare-ai","routes llm-request-requested to exactly one provider"],
+ ["llmProviderConfigured","boolean","false","makes llm-provider-selected{ifUnset:true} a soft default"],
+ ["currentRequest","null | {phase:scheduled, requestId, scheduledOffset} | {phase:requested, llmRequestId}","null","THE request-lifecycle lock: while non-null, new triggers wait (settle no-ops). Cleared only by completed/cancelled — which is why an orphaned request wedges the agent"],
+ ["pendingTriggerOffset / pendingTriggerSource","int? / user|agent-loop","null","set by trigger-eligible input-added; consumed by the settle step into a scheduled event (or loop-stopped)"],
+ ["autonomousTurnCount","int","0","consecutive agent-loop turns (script results, failure retries). Reset by any user-source input. ≥20 at settle ⇒ loop-stopped"],
+ ["requestGeneration","int","0","finished request lifecycles (completed OR cancelled). Keys llm-request-scheduled idempotency so re-derivations collapse to one event"],
+ ["consecutiveLlmFailures","int","0","failed completions since last success; <3 ⇒ error input auto-retries, at 3 ⇒ error input sits untriggered"],
+ ["inProgressScriptExecutions","{code, executionId, requestedOffset, startedAt}[]","[]","scripts requested but not completed (UI: the “running script” spinner)"],
+ ["scriptExecutionsCompleted","string[]","[]","completed executionIds (append-only)"]]},
+{fam:"cf",title:"cloudflare-ai — durable state",rows:[
+ ["requests","Record<llmRequestId, {status: started | completed}>","{}","execution dedup: processEvent skips if completed. ⚠️ NO “requested” status is folded (unlike openai-ws) — a request that died between requested and started leaves no durable trace here"]]},
+{fam:"oa",title:"openai-ws — durable state",rows:[
+ ["requests","Record<llmRequestId, {status: requested | started | completed}>","{}","“requested” is folded from agent/llm-request-requested BEFORE any execution work, precisely so an execution that died at ANY point is visible to the next incarnation's orphan sweep as a non-completed entry"]]},
+{fam:"oa",title:"openai-ws — in-memory only (lost on DO restart → drives recovery)",rows:[
+ ["#connection","shared Responses WebSocket + frame iterator","lazy","one socket per DO incarnation; dropped on iterator death, send failure, or deadline timeout"],
+ ["#previousResponseId","string?","null","provider-side continuation: with it, only messages after the last assistant turn are sent (+previous_response_id). Cleared on socket death & response.failed; “Previous response not found” triggers one full-history retry"],
+ ["#executionChain","promise chain","resolved","serializes executions — two concurrent requests would steal each other's frames off the one socket iterator"],
+ ["#liveExecutions","Set<llmRequestId>","{}","registered synchronously at processEvent; the orphan sweep fails any state.requests entry NOT in this set"]]},
+{fam:"agent",title:"agent — in-memory only",rows:[
+ ["#scheduledRequestsWithActiveTimers","Set<requestId>","{}","live debounce timers. Settle uses it to detect a scheduled request whose timer died with the previous incarnation, and promotes it immediately"]]},
+];
+$("#statecards").innerHTML=STATE.map(c=>`<div class="card"><h3 style="margin-top:0">${chip(c.fam)} ${esc(c.title)}</h3>
+ <table><tr><th>field</th><th>type</th><th>default</th><th>role</th></tr>
+ ${c.rows.map(r=>`<tr><td class="mono">${esc(r[0])}</td><td class="mono">${esc(r[1])}</td><td class="mono">${esc(r[2])}</td><td>${esc(r[3])}</td></tr>`).join("")}</table></div>`).join("");
+
+// ---------------------------------------------------------------- side-effect inventory
+const FX=[
+["agent","config-updated (with systemPrompt)","append system-prompt-updated","blocking","history consistency: config must be folded before later events","batch retries (idempotent)"],
+["agent","user-message-received","append input-added (after-current-request)","blocking","the render must land before the checkpoint so no message is ever lost","batch retries"],
+["agent","web-message-sent","append reflection input-added (dont-trigger)","blocking","same — the model must reliably see what it said","batch retries"],
+["agent","input-added with interrupt-current-request","append llm-request-cancelled for the in-flight request","blocking","cancellation must be durable before anything later is processed","batch retries"],
+["agent","output-added","extract ```js``` snippet → append script-execution-requested","blocking","the codemode tool call must never be dropped","batch retries"],
+["agent","script-execution-completed (agent-output:*)","render result → (maybe spill >30k chars to workspace file) → append input-added","blocking","the input references the spill file — the file must exist before the event lands. May wait on the workspace's first-use repo clone","batch retries; spill failure falls back to inline truncation"],
+["agent","llm-request-completed (failure, non-stale)","render error input-added (retry / dont-trigger at cap 3)","blocking","failure must become model-visible exactly once","batch retries"],
+["agent","llm-request-scheduled","debounce 250 ms → append llm-request-requested","background","a blocking sleep would freeze the checkpoint and every later batch (interrupts could never land)","timer lost on restart ⇒ settle recovery promotes immediately"],
+["agent","(whole batch) settle","derive scheduling from reduced state: llm-request-scheduled · loop-stopped · lost-timer promotion","settle","per-event decisions can't see appends made earlier in the same batch; generation-keyed idempotency dedupes every re-derivation","batch retries"],
+["cf","llm-request-requested (provider match)","ENTIRE execution: append started → AI.run(stream) → append chunk per SSE frame → append output-added (if still current) → append completion pair","background","an LLM call takes seconds-to-minutes; blocking would wedge the stream","⚠️ NONE — no orphan sweep, no deadline. Eviction mid-execution leaves currentRequest=requested forever (manual unwedge: hand-append a failure completion)"],
+["oa","llm-request-requested (provider match)","register #liveExecutions (sync) → queue on #executionChain → execution: append started → ws response.create → append chunk per frame → append output-added (if still current) → append completion pair","background","same; plus executions serialize on the one socket","10-min deadline drops a wedged socket; orphan sweep (below) catches death"],
+["oa","(whole batch) orphan sweep","fail every state.requests entry that is not completed and not in #liveExecutions: append failure completion pairs (normal idempotency keys)","blocking","recovery MUST be durable before the checkpoint — it is the only thing standing between an evicted execution and a forever-wedged agent","batch retries; races with a live completion collapse at the append-dedup layer"],
+["cap","script-execution-requested","execute the snippet against the itx surface → append script-execution-completed","background","scripts run arbitrarily long (they are the agent's hands)","its own contract's concern (not covered here)"],
+];
+$("#fxtable").innerHTML=`<tr><th>processor</th><th>trigger</th><th>effect</th><th>lane</th><th>why this lane</th><th>crash / failure story</th></tr>`+
+ FX.map(r=>`<tr><td>${chip(r[0])}</td><td class="mono" style="font-size:12px">${esc(r[1])}</td><td>${esc(r[2])}</td><td>${lane(r[3])}</td><td>${esc(r[4])}</td><td>${esc(r[5])}</td></tr>`).join("");
+
+// ---------------------------------------------------------------- failure cards
+const FAILS=[
+["Interrupt (user barges in)","An input-added with interrupt-current-request arrives while a request is scheduled/requested.","Blocking append of llm-request-cancelled → reducer frees currentRequest & bumps the generation → settle schedules the new turn. The provider execution is NOT aborted: it runs to completion, its output-added is suppressed by isRequestStillCurrent (a fresh re-read + re-fold of agent state), and its completion pair is ignored as stale by the reducer guard.","agent-processor-implementation.ts · cancelEventForCurrentRequest / #isRequestStillCurrent"],
+["Stale completion","A completion (or output) for a request that is no longer currentRequest — cancelled, or already swept.","Reducer guard: llm-request-completed only folds when currentRequest.llmRequestId matches; the failure-render side effect checks the same guard on previousState so no error input is rendered for a ghost.","agent reduce · llm-request-completed case"],
+["Provider failure → bounded retry","AI.run throws / WS response.failed / no API key / deadline hit.","Provider appends a failure completion pair. Agent renders the error message as a model-visible input: while consecutiveLlmFailures < 3 it triggers a retry turn (the model can adapt); at 3 it lands with dont-trigger-request and waits for the next user message (which resets the loop). Any success resets the counter.","MAX_CONSECUTIVE_LLM_FAILURES = 3"],
+["Orphaned request (openai-ws)","The DO incarnation executing a request is evicted (deploy/hibernation) or its socket wedges. Because executions are background, the checkpoint already advanced — the requested event will never redeliver.","Fold “requested” pre-execution + in-memory #liveExecutions + per-batch sweep: any non-completed folded request with no live execution gets a failure completion pair, with the SAME idempotency keys as the normal path. Next trigger reschedules. (This was the 2026-07-07 prd email-thread wedge.)","openai-ws processEventBatch orphan sweep"],
+["Orphaned request (cloudflare-ai)","Same eviction scenario on the default provider.","⚠️ NO EQUIVALENT. cloudflare-ai folds no “requested” status and has no sweep — currentRequest stays occupied forever; every later input queues behind it. Manual unwedge: append agent/llm-request-completed{status:failure} by hand.","gap — see improvement notes"],
+["Wedged socket / runaway response","The Responses WebSocket stops yielding frames; the DO stays alive on keep-alive.","10-minute wall-clock deadline per response; on timeout the cached connection is dropped (next request re-dials) and the execution fails into the normal failure path.","OPENAI_WS_REQUEST_DEADLINE_MS"],
+["Lost debounce timer","DO restarts between llm-request-scheduled and its 250 ms timer firing — the timer was in-memory.","Settle recovery: state shows phase:scheduled but #scheduledRequestsWithActiveTimers has no live timer ⇒ append llm-request-requested immediately. Idempotency key (keyed on scheduledOffset) makes a concurrent late timer harmless.","#settleLlmRequestScheduling, second branch"],
+["Runaway autonomous loop","Script results always re-trigger; a model that never stops returning values would loop forever, burning tokens.","autonomousTurnCount increments per agent-loop-triggered schedule and resets on any user input; at 20 the settle step appends loop-stopped instead of scheduling (trigger consumed, stream NOT paused).","DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20"],
+["Lost provider continuation","openai-ws sends previous_response_id but OpenAI no longer has it (expiry, socket moved).","Detected by error-message match (“Previous response … not found”) → clear #previousResponseId → single retry sending the FULL history, with a distinct chunk idempotency scope so both attempts' frames coexist on the stream.","isPreviousResponseNotFoundError"],
+["Oversized script result","A script returns more than 30,000 chars of JSON.","Full text is written to the agent's own workspace at /script-results/<executionId>.json (plus a nested .gitignore so spills never ride into workspace commits) INSIDE the blocking section; the input carries a truncated preview + a ready-made itx.workspace.readFile recipe. If the write fails, fall back to inline truncation — never lose the result.","scriptResultAgentInput / spillScriptResult"],
+["Non-ingestible attachments","HEIC image, PDF, or a local-dev http:// URL that OpenAI's fetcher can't reach — one bad image part 400s the WHOLE request.","Only {jpeg,png,gif,webp} with https URLs ride as input_image parts (openai-ws, user-role only). Everything else flattens to a hint line: filename, size, and the exact itx.files/toMarkdown calls to read or convert it. cloudflare-ai flattens ALL files to hint lines (text-only chat body).","OPENAI_INPUT_IMAGE_CONTENT_TYPES / renderFileHintLine"],
+["Malformed event on the stream","Streams accept raw appends by design — an event of a consumed type can fail the contract's schema.","The framework skips it (never wedging the checkpoint on it) and durably records the skip as a stream/error-occurred event, appended in the background AFTER the checkpoint commits.","stream-processor.ts #reduceRawEvent / parseFailures"],
+];
+$("#failcards").innerHTML=FAILS.map(f=>`<div class="card"><h4>${esc(f[0])}</h4><p><b>Breaks:</b> ${esc(f[1])}</p><p><b>Caught by:</b> ${f[2]}</p><p class="where">${esc(f[3])}</p></div>`).join("");
+
+// ---------------------------------------------------------------- improvement notes
+const IMPROVE=[
+["hi","cloudflare-ai has no orphan recovery — the sibling gap.","openai-ws grew a “requested” fold + #liveExecutions + per-batch sweep + 10-min deadline after the 2026-07-07 prd wedge; cloudflare-ai (the DEFAULT provider) got none of it. An eviction between requested and completed wedges currentRequest forever and every later input queues behind it. The files even declare themselves deliberate siblings (“when you fix something here, check whether the sibling needs the same fix”). Porting the sweep is mechanical."],
+["hi","Cancellation doesn't reach the provider execution.","llm-request-cancelled only frees agent state. The doomed execution still runs to completion — and on openai-ws the NEXT request queues behind it on #executionChain (one socket), so an interrupt can make the follow-up turn SLOWER, up to the 10-min deadline in the worst case. Consider an abort signal into the execution (close the socket / stop consuming) keyed off the cancel event."],
+["hi","Known bug: fence extraction truncates scripts containing ``` in string literals.","extractAsyncJsSnippet uses a non-greedy ```…``` regex, so a script that embeds triple-backticks inside a string is cut short → syntax error at execution, even though the LLM response was complete. Fix: greedy or line-anchored fence matching. (Observed in prd 2026-07-09, unfixed.)"],
+["md","Every request re-reads and re-folds the whole stream — twice.","buildAgentLlmRequestBody reads all agent-consumed events from offset 0 (paged 500) and re-reduces; isRequestStillCurrent does a SECOND full read + fold just to check one field. The hosting DO already maintains the checkpointed agent fold next door. O(history) per turn, growing forever; long-lived agents will feel this. Cheap wins: share the host's fold, or an offset-bounded snapshot; the still-current check needs only currentRequest."],
+["md","History is unbounded with no compaction.","state.history replays wholesale into every prompt (modulo openai-ws continuation, which only helps while previous_response_id survives). The 30k spill only guards single script results. No summarization/windowing story yet — the eventual context-window failure arrives as a provider 400, which at least lands in the failure-retry path."],
+["md","Chunk write amplification.","Every provider frame (including reasoning deltas) is one awaited stream append inside the execution — a chatty response is hundreds of sequential writes, each waking every subscriber, and the events are consumed by nobody (UI-only). Batching frames, sampling, or a side-channel for live tokens would cut stream load substantially."],
+["lo","Failure-retry turns re-send the failing prompt verbatim.","Below the cap, the error input triggers a retry whose prompt differs only by the appended error text — for deterministic failures (context too long, bad image) the 3 attempts are pure cost. Classifying obviously-permanent errors to skip straight to dont-trigger would save two turns."],
+["lo","Fixed 250 ms debounce.","DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS is a constant; the scheduled event carries debounceMs, so making it policy (per agent, or 0 for script-result triggers where nothing coalesces) is already wire-compatible."],
+["lo","usage is folded nowhere.","Both providers ship result.usage as unknown on completions, but no processor reduces it — no per-agent token accounting exists yet. A tiny fold on llm-request-completed (tokens in/out per generation) would light up cost dashboards for free."],
+["lo","loop-stopped clears the pending trigger silently.","The circuit breaker consumes the trigger but nothing renders a user-visible notice; the chat just goes quiet mid-loop. A rendered input (dont-trigger) or door-side surface would make the stop legible — today only the raw stream shows why."],
+];
+$("#implist").innerHTML=IMPROVE.map(i=>`<li><b>${esc(i[1])}</b><span class="pill-sev sev-${i[0]}">${i[0]==="hi"?"HIGH":i[0]==="md"?"MED":"LOW"}</span><br>${esc(i[2])}</li>`).join("");
+</script>
+<script>
+"use strict";
+// ================================================================ simulator
+// Faithful ports of the reducers (agent-processor-implementation.ts reduceAgentEvent,
+// cloudflare-ai / openai-ws reduce). Short event types = full type minus "events.iterate.com/".
+function initAgent(){return{systemPrompt:"(default codemode prompt)",history:[],llmConfig:{model:"@cf/moonshotai/kimi-k2.7-code"},llmProvider:"cloudflare-ai",llmProviderConfigured:false,currentRequest:null,pendingTriggerOffset:null,pendingTriggerSource:null,autonomousTurnCount:0,requestGeneration:0,consecutiveLlmFailures:0,inProgressScriptExecutions:[],scriptExecutionsCompleted:[]};}
+function triggerSource(e){
+  if(e.payload.llmRequestPolicy?.behaviour==="dont-trigger-request")return null;
+  return ["agent/render-script-result@","agent/render-llm-failure@"].some(p=>e.ik?.startsWith(p))?"agent-loop":"user";
+}
+function reduceAgent(s,e){const p=e.payload;switch(e.type){
+ case "agent/system-prompt-updated":return{...s,systemPrompt:p.systemPrompt};
+ case "agent/input-added":{const src=triggerSource(e);return{...s,history:[...s.history,{role:"user",content:p.content}],
+   pendingTriggerOffset:src===null?s.pendingTriggerOffset:e.off,pendingTriggerSource:src===null?s.pendingTriggerSource:src,
+   autonomousTurnCount:src==="user"?0:s.autonomousTurnCount};}
+ case "agent/output-added":return{...s,history:[...s.history,{role:"assistant",content:p.content}]};
+ case "agent/llm-provider-selected":if(p.ifUnset&&s.llmProviderConfigured)return s;
+   return{...s,llmConfig:{model:p.model},llmProvider:p.provider,llmProviderConfigured:true};
+ case "agent/llm-request-scheduled":return{...s,currentRequest:{phase:"scheduled",requestId:p.requestId,scheduledOffset:e.off},
+   pendingTriggerOffset:null,pendingTriggerSource:null,
+   autonomousTurnCount:s.pendingTriggerSource==="agent-loop"?s.autonomousTurnCount+1:0};
+ case "agent/llm-request-requested":if(s.currentRequest?.phase!=="scheduled"||s.currentRequest.requestId!==p.requestId)return s;
+   return{...s,currentRequest:{phase:"requested",llmRequestId:e.off},pendingTriggerOffset:null};
+ case "agent/llm-request-completed":if(s.currentRequest?.phase!=="requested"||s.currentRequest.llmRequestId!==p.llmRequestId)return s;
+   return{...s,consecutiveLlmFailures:p.result.status==="failure"?s.consecutiveLlmFailures+1:0,currentRequest:null,requestGeneration:s.requestGeneration+1};
+ case "agent/llm-request-cancelled":
+   if(p.phase==="scheduled"&&s.currentRequest?.phase==="scheduled"&&s.currentRequest.requestId===p.requestId)
+     return{...s,currentRequest:null,requestGeneration:s.requestGeneration+1};
+   if(p.phase==="requested"&&s.currentRequest?.phase==="requested"&&s.currentRequest.llmRequestId===p.llmRequestId)
+     return{...s,currentRequest:null,requestGeneration:s.requestGeneration+1};
+   return s;
+ case "agent/loop-stopped":return{...s,pendingTriggerOffset:null,pendingTriggerSource:null};
+ case "capability-host/script-execution-requested":return{...s,inProgressScriptExecutions:[...s.inProgressScriptExecutions.filter(x=>x.executionId!==p.executionId),{executionId:p.executionId,requestedOffset:e.off}]};
+ case "capability-host/script-execution-completed":return{...s,inProgressScriptExecutions:s.inProgressScriptExecutions.filter(x=>x.executionId!==p.executionId),scriptExecutionsCompleted:[...s.scriptExecutionsCompleted,p.executionId]};
+ default:return s;}}
+function reduceCf(s,e){const p=e.payload;switch(e.type){
+ case "cloudflare-ai/llm-request-started":return{requests:{...s.requests,[p.llmRequestId]:{status:"started"}}};
+ case "cloudflare-ai/llm-request-completed":return{requests:{...s.requests,[p.llmRequestId]:{status:"completed"}}};
+ default:return s;}}
+function reduceOa(s,e){const p=e.payload;switch(e.type){
+ case "agent/llm-request-requested":if(p.provider!=="openai-ws"||s.requests[e.off]?.status==="completed")return s;
+   return{requests:{...s.requests,[e.off]:{status:"requested"}}};
+ case "openai-ws/llm-request-started":return{requests:{...s.requests,[p.llmRequestId]:{status:"started"}}};
+ case "openai-ws/llm-request-completed":return{requests:{...s.requests,[p.llmRequestId]:{status:"completed"}}};
+ default:return s;}}
+
+// scenario builder: e(type,payload,meta) appends an event step and returns its offset
+function scen(id,title,blurb,init,build){const st=[];let off=0;
+  const e=(type,payload,meta={})=>{off++;st.push({kind:"ev",off,type,payload,...meta});return off;};
+  const n=(title2,text,meta={})=>st.push({kind:"note",title:title2,text,...meta});
+  build(e,n);return{id,title,blurb,init,steps:st};}
+const KIMI="@cf/moonshotai/kimi-k2.7-code";
+const OAINIT={agent:{llmProvider:"openai-ws",llmConfig:{model:"gpt-5.5"},llmProviderConfigured:true}};
+const SCENARIOS=[
+
+scen("happy","1 · Happy turn + codemode loop (cloudflare-ai)",
+ "The full default-provider loop: user message → debounced request → streamed response → ```js``` snippet → script execution → tool-result input → second turn → agent ends its own turn by returning nothing.",
+ null,(e,n)=>{
+ e("agents/user-message-received",{content:"What's in my inbox?",origin:"web"},{actor:"door",
+   fx:[["blocking","agent","append agent/input-added (after-current-request)"]],
+   narr:"The web door appends the raw user message. The agent processor consumes it and — blocking the checkpoint — renders it into model-visible form."});
+ e("agent/input-added",{content:"What's in my inbox?",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@1",
+   fx:[["settle","agent","pending trigger + currentRequest=null ⇒ append llm-request-scheduled (generation 0)"]],
+   narr:"Reduce: history +1 (user), pendingTriggerOffset=2, source=user (resets autonomousTurnCount). At end of batch the settle step derives the scheduling decision from the whole-batch fold."});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-0",provider:"cloudflare-ai",model:KIMI,debounceMs:250},{actor:"agent",ik:"agent/llm-request-scheduled@generation:0",
+   fx:[["background","agent","setTimeout(250ms) → append llm-request-requested"]],rt:{timers:["llm-request:gen-0"]},
+   narr:"currentRequest locks to phase:scheduled and the trigger is consumed. A 250ms in-memory debounce timer starts — more inputs arriving right now would coalesce into this same generation (idempotency key = generation)."});
+ e("agent/llm-request-requested",{requestId:"llm-request:gen-0",provider:"cloudflare-ai",model:KIMI},{actor:"agent",ik:"agent/llm-request-requested@3",rt:{timers:[]},
+   fx:[["background","cf","provider match ⇒ execute: append started, re-read stream, fold agent state up to offset 4, AI.run(model,{messages,stream:true})"]],
+   narr:"The timer fired. THIS EVENT'S OFFSET (4) IS the llmRequestId. cloudflare-ai picks it up (payload.provider matches); openai-ws ignores it. The event carries no prompt — the provider rebuilds it from the stream."});
+ e("cloudflare-ai/llm-request-started",{llmRequestId:4,model:KIMI},{actor:"cf",narr:"The provider's own fold marks request 4 started (execution dedup)."});
+ e("cloudflare-ai/llm-response-chunk",{llmRequestId:4,sequence:0,chunk:"{response:'```js\\nasync (itx'}"},{actor:"cf",narr:"Each SSE frame is appended verbatim, sequence-numbered. No processor consumes chunks — they exist so UIs can stream tokens live."});
+ e("cloudflare-ai/llm-response-chunk",{llmRequestId:4,sequence:1,chunk:"{response:') => { … }\\n```'}"},{actor:"cf"});
+ e("agent/output-added",{llmRequestId:4,content:"```js\nasync (itx) => {\n  const [, inbox] = await Promise.all([\n    itx.chat.sendMessage(\"Checking your email now...\"),\n    itx.integrations.google[\"jonas\"].gmail.request({ path: \"/users/me/messages\", query: { maxResults: 10 } }),\n  ]);\n  return inbox.data;\n}\n```"},{actor:"cf",
+   fx:[["blocking","agent","extract the ```js``` snippet → append script-execution-requested (executionId agent-output:8)"]],
+   narr:"The full assistant text — appended only after isRequestStillCurrent (a fresh stream re-read + fold) confirmed request 4 wasn't cancelled. Agent reduce: history +1 (assistant). The fenced snippet is codemode's tool call."});
+ e("capability-host/script-execution-requested",{executionId:"agent-output:8",code:"async (itx) => { … }"},{actor:"agent",ik:"itx/script-execution-requested@8",
+   fx:[["background","cap","capability host executes the script against the itx surface"]],
+   narr:"Agent reduce: inProgressScriptExecutions +1. The capability-host DO (subscribed to the same stream) picks this up and runs the script."});
+ e("cloudflare-ai/llm-request-completed",{llmRequestId:4,durationMs:2140,result:{status:"success"}},{actor:"cf",narr:"First half of the terminal pair (both appended in ONE stream.append call)."});
+ e("agent/llm-request-completed",{llmRequestId:4,provider:"cloudflare-ai",durationMs:2140,result:{status:"success"}},{actor:"cf",
+   narr:"Agent reduce: currentRequest=null, requestGeneration 0→1, consecutiveLlmFailures=0. The REQUEST lifecycle is over — but the script is still running."});
+ e("agents/web-message-sent",{message:"Checking your email now..."},{actor:"door",
+   fx:[["blocking","agent","reflect into history as input-added (dont-trigger-request)"]],
+   narr:"Mid-script, itx.chat.sendMessage delivered to the user's chat AND journaled here by the chat door."});
+ e("agent/input-added",{content:"The assistant sent this visible web-chat message: Checking your email now...",llmRequestPolicy:{behaviour:"dont-trigger-request"}},{actor:"agent",ik:"agent/render-web-response@12",
+   narr:"The reflection: model-visible on later turns (the model remembers what it said), but dont-trigger — pendingTrigger stays untouched."});
+ e("capability-host/script-execution-completed",{executionId:"agent-output:8",result:"{ messages: [ …10 items… ] }"},{actor:"cap",
+   fx:[["blocking","agent","render tool result → append input-added; a result >30,000 chars would first spill to workspace /script-results/agent-output-8.json (inside the blocking section)"]],
+   narr:"The script RETURNED data — codemode's tool result. Agent reduce: execution moves from in-progress to completed."});
+ e("agent/input-added",{content:"Your script returned:\n```json\n{ messages: […] }\n```",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-script-result@14",
+   fx:[["settle","agent","pending agent-loop trigger + no request ⇒ schedule generation 1"]],
+   narr:"Trigger source is AGENT-LOOP (recognized by the idempotency-key prefix render-script-result@) — it will increment autonomousTurnCount instead of resetting it. The loop turns."});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-1",provider:"cloudflare-ai",model:KIMI,debounceMs:250},{actor:"agent",ik:"agent/llm-request-scheduled@generation:1",rt:{timers:["llm-request:gen-1"]},
+   fx:[["background","agent","debounce → llm-request-requested"]],narr:"autonomousTurnCount 0→1 (agent-loop trigger). 19 more before the circuit breaker."});
+ e("agent/llm-request-requested",{requestId:"llm-request:gen-1",provider:"cloudflare-ai",model:KIMI},{actor:"agent",ik:"agent/llm-request-requested@16",rt:{timers:[]},
+   fx:[["background","cf","execute request 17 (history now includes the script result)"]],narr:"llmRequestId=17. The rebuilt prompt now contains the inbox data — the model gets to LOOK at what it fetched."});
+ e("cloudflare-ai/llm-request-started",{llmRequestId:17,model:KIMI},{actor:"cf"});
+ e("agent/output-added",{llmRequestId:17,content:"```js\nasync (itx) => {\n  await itx.chat.sendMessage(\"You have 10 messages — 2 look important: …\");\n}\n```"},{actor:"cf",
+   fx:[["blocking","agent","extract snippet → script-execution-requested (agent-output:19)"]],
+   narr:"Second turn: the model acts on the data. Note: NO return statement — this script will end the turn."});
+ e("capability-host/script-execution-requested",{executionId:"agent-output:19",code:"async (itx) => { … }"},{actor:"agent",ik:"itx/script-execution-requested@19",
+   fx:[["background","cap","execute"]]});
+ e("cloudflare-ai/llm-request-completed",{llmRequestId:17,durationMs:1480,result:{status:"success"}},{actor:"cf"});
+ e("agent/llm-request-completed",{llmRequestId:17,provider:"cloudflare-ai",durationMs:1480,result:{status:"success"}},{actor:"cf",narr:"Generation 1→2."});
+ e("agents/web-message-sent",{message:"You have 10 messages — 2 look important: …"},{actor:"door",fx:[["blocking","agent","reflect (dont-trigger)"]]});
+ e("agent/input-added",{content:"The assistant sent this visible web-chat message: You have 10 messages — 2 look important: …",llmRequestPolicy:{behaviour:"dont-trigger-request"}},{actor:"agent",ik:"agent/render-web-response@23"});
+ e("capability-host/script-execution-completed",{executionId:"agent-output:19"},{actor:"cap",
+   fx:[["blocking","agent","result is undefined and nothing threw ⇒ render NOTHING"]],
+   narr:"Returning no value is how an agent ends its turn: no rendered input, no trigger, no next request. The stream idles until the next user message. Turn complete. 🎉"});
+}),
+
+scen("interrupt","2 · User interrupt mid-request (openai-ws)",
+ "A user barges in while a request is streaming. Cancellation frees the agent's state machine instantly — but watch what happens to the doomed provider execution, and what the next request has to queue behind.",
+ OAINIT,(e,n)=>{
+ e("agents/user-message-received",{content:"Write me a long report on Q3",origin:"web"},{actor:"door",fx:[["blocking","agent","render input-added"]]});
+ e("agent/input-added",{content:"Write me a long report on Q3",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@1",fx:[["settle","agent","schedule generation 0"]]});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-0",provider:"openai-ws",model:"gpt-5.5",debounceMs:250},{actor:"agent",ik:"agent/llm-request-scheduled@generation:0",rt:{timers:["llm-request:gen-0"]},fx:[["background","agent","debounce"]]});
+ e("agent/llm-request-requested",{requestId:"llm-request:gen-0",provider:"openai-ws",model:"gpt-5.5"},{actor:"agent",ik:"agent/llm-request-requested@3",rt:{timers:[],oaLive:[4],oaConn:"dialing…"},
+   fx:[["background","oa","register #liveExecutions{4} synchronously, queue on #executionChain, execute over the shared socket"]],
+   narr:"openai-ws also REDUCES this event: requests[4]=requested lands in the durable fold BEFORE any execution work — that pre-registration is what the orphan sweep (scenario 4) keys on."});
+ e("openai-ws/llm-request-started",{llmRequestId:4,model:"gpt-5.5"},{actor:"oa",rt:{oaConn:"open"},narr:"Socket dialed (wss://api.openai.com/v1/responses), response.create sent with the rebuilt history."});
+ e("openai-ws/llm-response-chunk",{llmRequestId:4,sequence:0,chunk:'{type:"response.created"}'},{actor:"oa"});
+ e("openai-ws/llm-response-chunk",{llmRequestId:4,sequence:1,chunk:'{type:"response.output_text.delta",delta:"Q3 was"}'},{actor:"oa",narr:"Deltas stream. The report will take a while…"});
+ e("agent/input-added",{content:"Stop — just give me one bullet.",llmRequestPolicy:{behaviour:"interrupt-current-request"}},{actor:"door",
+   fx:[["blocking","agent","currentRequest in flight ⇒ append llm-request-cancelled(requested, 4)"]],
+   narr:"An interrupt input (e.g. via itx.agent). Reduce: history +1, pendingTrigger=8 (user). Side effect: durably cancel the in-flight request. Note settle can't schedule yet — currentRequest is still occupied until the cancel event FOLDS (next batch)."});
+ e("agent/llm-request-cancelled",{phase:"requested",llmRequestId:4,reason:"interrupted-by-user-input"},{actor:"agent",ik:"agent/llm-request-cancelled@requested:4",
+   fx:[["settle","agent","currentRequest now free + trigger 8 pending ⇒ schedule generation 1"]],
+   narr:"Reduce: currentRequest=null, generation 0→1. ⚠️ The provider execution is NOT aborted — request 4 keeps consuming the socket."});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-1",provider:"openai-ws",model:"gpt-5.5",debounceMs:250},{actor:"agent",ik:"agent/llm-request-scheduled@generation:1",rt:{timers:["llm-request:gen-1"]},fx:[["background","agent","debounce"]]});
+ e("agent/llm-request-requested",{requestId:"llm-request:gen-1",provider:"openai-ws",model:"gpt-5.5"},{actor:"agent",ik:"agent/llm-request-requested@10",rt:{timers:[],oaLive:[4,11]},
+   fx:[["background","oa","register live{4,11} — but the execution QUEUES on #executionChain behind doomed request 4 (one shared socket iterator)"]],
+   narr:"⚠️ The interrupt's own request (llmRequestId=11) cannot start until the doomed one finishes — worst case the 10-minute deadline. See improvement notes #2."});
+ n("Doomed request 4 keeps streaming","Nothing aborts it; its frames keep landing as chunks on the stream.");
+ e("openai-ws/llm-response-chunk",{llmRequestId:4,sequence:2,chunk:'{type:"response.output_text.delta",delta:" a strong quarter…"}'},{actor:"oa"});
+ n("Output suppressed","Request 4's response completes, but isRequestStillCurrent re-reads the stream, folds agent state, and finds currentRequest.llmRequestId ≠ 4 ⇒ NO agent/output-added is appended. The long report is discarded. #previousResponseId is not updated either.");
+ e("openai-ws/llm-request-completed",{llmRequestId:4,durationMs:8400,result:{status:"success"}},{actor:"oa",rt:{oaLive:[11]},narr:"Provider-side record of the discarded request (fold: 4→completed)."});
+ e("agent/llm-request-completed",{llmRequestId:4,provider:"openai-ws",durationMs:8400,result:{status:"success"}},{actor:"oa",
+   narr:"STALE: the reducer guard sees currentRequest.llmRequestId=11 ≠ 4 and IGNORES it — watch the state panel: nothing changes. (The failure-render side effect checks the same guard, so a stale FAILURE wouldn't render an error either.)"});
+ e("openai-ws/llm-request-started",{llmRequestId:11,model:"gpt-5.5"},{actor:"oa",narr:"The chain frees; the interrupt's request finally executes with history including both user messages."});
+ e("openai-ws/llm-response-chunk",{llmRequestId:11,sequence:0,chunk:'{type:"response.output_text.delta",delta:"```js…"}'},{actor:"oa"});
+ e("agent/output-added",{llmRequestId:11,content:"```js\nasync (itx) => {\n  await itx.chat.sendMessage(\"• Q3: revenue +18%, the rest is noise.\");\n}\n```"},{actor:"oa",fx:[["blocking","agent","extract snippet → script-execution-requested"]],narr:"Still current ⇒ appended. #previousResponseId is saved for continuation."});
+ e("openai-ws/llm-request-completed",{llmRequestId:11,durationMs:2100,result:{status:"success"}},{actor:"oa",rt:{oaLive:[],oaPrev:"resp_8f3a…"}});
+ e("agent/llm-request-completed",{llmRequestId:11,provider:"openai-ws",durationMs:2100,result:{status:"success"}},{actor:"oa",narr:"Clean finish: generation 1→2. (The script/tool-result loop continues as in scenario 1.)"});
+}),
+
+scen("failcap","3 · Provider failure → bounded auto-retry (openai-ws, no API key)",
+ "A deterministic provider failure. Watch consecutiveLlmFailures climb: each failure becomes a model-visible input that auto-retries — until the cap (3), where the error lands with dont-trigger-request and the agent waits for a human.",
+ OAINIT,(e,n)=>{
+ const turn=(gen,count)=>{
+  e("agent/llm-request-scheduled",{requestId:`llm-request:gen-${gen}`,provider:"openai-ws",model:"gpt-5.5",debounceMs:250},{actor:"agent",ik:`agent/llm-request-scheduled@generation:${gen}`,rt:{timers:[`llm-request:gen-${gen}`]},fx:[["background","agent","debounce"]],
+    narr:gen===0?undefined:`Failure retry turn: autonomousTurnCount → ${count} (agent-loop trigger — retries burn the autonomous budget too).`});
+  const req=e("agent/llm-request-requested",{requestId:`llm-request:gen-${gen}`,provider:"openai-ws",model:"gpt-5.5"},{actor:"agent",rt:{timers:[]},fx:[["background","oa","execute"]]});
+  e("openai-ws/llm-request-started",{llmRequestId:req,model:"gpt-5.5"},{actor:"oa"});
+  e("openai-ws/llm-request-completed",{llmRequestId:req,durationMs:12,result:{status:"failure",error:{message:"OpenAI API key is not configured on this deployment (AppConfig openAiApiKey)."}}},{actor:"oa",
+    narr:"The execution throws before ever dialing — deps.apiKey is null. Failure completion pair, exactly like any other error."});
+  return req;
+ };
+ e("agents/user-message-received",{content:"Hi!",origin:"web"},{actor:"door",fx:[["blocking","agent","render input-added"]]});
+ e("agent/input-added",{content:"Hi!",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@1",fx:[["settle","agent","schedule generation 0"]]});
+ let req=turn(0,0);
+ e("agent/llm-request-completed",{llmRequestId:req,provider:"openai-ws",durationMs:12,result:{status:"failure",error:{message:"OpenAI API key is not configured…"}}},{actor:"oa",
+   fx:[["blocking","agent","non-stale failure ⇒ render error input (consecutiveLlmFailures 1 < 3 ⇒ policy after-current-request = auto-retry)"]],
+   narr:"Reduce: currentRequest=null, generation++, consecutiveLlmFailures 0→1."});
+ e("agent/input-added",{content:"Your LLM request failed (openai-ws):\n```\nOpenAI API key is not configured…\n```",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-llm-failure@7",fx:[["settle","agent","agent-loop trigger ⇒ schedule generation 1"]],
+   narr:"The error is IN CONTEXT — on a transient failure the model could adapt (fix its request, tell the user). Here it's deterministic, so the retry will fail identically."});
+ req=turn(1,1);
+ e("agent/llm-request-completed",{llmRequestId:req,provider:"openai-ws",durationMs:11,result:{status:"failure",error:{message:"OpenAI API key is not configured…"}}},{actor:"oa",fx:[["blocking","agent","render error input (2 < 3 ⇒ retry)"]],narr:"consecutiveLlmFailures 1→2."});
+ e("agent/input-added",{content:"Your LLM request failed (openai-ws):\n```\nOpenAI API key is not configured…\n```",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-llm-failure@13",fx:[["settle","agent","schedule generation 2"]]});
+ req=turn(2,2);
+ e("agent/llm-request-completed",{llmRequestId:req,provider:"openai-ws",durationMs:13,result:{status:"failure",error:{message:"OpenAI API key is not configured…"}}},{actor:"oa",
+   fx:[["blocking","agent","consecutiveLlmFailures hits the cap (3) ⇒ render error input with dont-trigger-request"]],
+   narr:"consecutiveLlmFailures 2→3. A persistent failure (bad key, outage) must not retry-loop forever."});
+ e("agent/input-added",{content:"Your LLM request failed (openai-ws):\n```\nOpenAI API key is not configured…\n```\nConsecutive failure 3 — automatic retries stopped; this stays in your context for the next turn.",llmRequestPolicy:{behaviour:"dont-trigger-request"}},{actor:"agent",ik:"agent/render-llm-failure@19",
+   narr:"No trigger ⇒ settle schedules nothing. The agent idles with the errors in context; the next USER message triggers normally, and any SUCCESS resets the counter to 0."});
+}),
+
+scen("orphan","4 · Orphaned request → recovery sweep (openai-ws)",
+ "The DO incarnation dies mid-execution. Because executions are BACKGROUND work, the checkpoint already advanced — the requested event never redelivers. This is the 2026-07-07 prd wedge, and the sweep that fixes it. (cloudflare-ai has NO equivalent — see improvement notes #1.)",
+ OAINIT,(e,n)=>{
+ e("agents/user-message-received",{content:"Summarize this thread",origin:"web"},{actor:"door",fx:[["blocking","agent","render input-added"]]});
+ e("agent/input-added",{content:"Summarize this thread",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@1",fx:[["settle","agent","schedule generation 0"]]});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-0",provider:"openai-ws",model:"gpt-5.5",debounceMs:250},{actor:"agent",rt:{timers:["llm-request:gen-0"]},fx:[["background","agent","debounce"]]});
+ e("agent/llm-request-requested",{requestId:"llm-request:gen-0",provider:"openai-ws",model:"gpt-5.5"},{actor:"agent",rt:{timers:[],oaLive:[4],oaConn:"dialing…"},
+   fx:[["background","oa","register live{4}, execute"]],
+   narr:"openai-ws folds requests[4]=requested BEFORE executing. Durable. Remember this."});
+ e("openai-ws/llm-request-started",{llmRequestId:4,model:"gpt-5.5"},{actor:"oa",rt:{oaConn:"open"},narr:"Execution underway…"});
+ n("💥 Incarnation evicted","A deploy (or hibernation) kills the DO mid-execution. The execution was runInBackground, so the checkpoint had ALREADY advanced past offset 4 — the stream will never redeliver llm-request-requested. Durable fold still says requests[4]=started; currentRequest is still phase:requested. Everything in-memory — #liveExecutions, the socket, timers — is gone.",{rt:{oaLive:[],oaConn:"✖ gone",timers:[],oaPrev:"—"}});
+ e("agents/user-message-received",{content:"…hello? are you there?",origin:"web"},{actor:"door",fx:[["blocking","agent","render input-added"]],
+   narr:"Later, a new message wakes a FRESH incarnation. It loads durable checkpoints (agent: currentRequest=requested(4); openai-ws: requests[4]=started) and processes a new batch."});
+ e("agent/input-added",{content:"…hello? are you there?",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@6",
+   fx:[["settle","agent","currentRequest is STILL phase:requested(4) ⇒ scheduling no-ops — the agent looks wedged"],["blocking","oa","orphan sweep: requests[4] not completed AND 4 ∉ #liveExecutions (empty in this incarnation) ⇒ append failure completion pair"]],
+   narr:"Same batch, two processors: the agent can't schedule (state machine locked by the ghost request) — but openai-ws's per-batch sweep spots the orphan. Without the sweep, this conversation is dead forever (the old prd wedge; manual fix was hand-appending a failure completion)."});
+ e("openai-ws/llm-request-completed",{llmRequestId:4,durationMs:0,result:{status:"failure",error:{message:"LLM request orphaned: the incarnation executing it went away before completing (eviction or wedged socket). Failed by the recovery sweep; the agent's next trigger reschedules."}}},{actor:"oa",ik:"openai-ws/provider-completed@4",
+   narr:"The sweep uses the EXACT idempotency keys of the normal completion path — if the old execution somehow raced a completion in, only one durable outcome survives."});
+ e("agent/llm-request-completed",{llmRequestId:4,provider:"openai-ws",durationMs:0,result:{status:"failure",error:{message:"LLM request orphaned: …"}}},{actor:"oa",ik:"openai-ws/agent-completed@4",
+   fx:[["blocking","agent","render failure input (1 < 3 ⇒ retry)"]],
+   narr:"currentRequest frees, generation++, consecutiveLlmFailures=1."});
+ e("agent/input-added",{content:"Your LLM request failed (openai-ws):\n```\nLLM request orphaned: …\n```",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-llm-failure@9",
+   fx:[["settle","agent","schedule generation 1"]],
+   narr:"The retry's prompt will contain the user's original ask, the new “hello?”, and the orphan notice — the model can apologize and answer."});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-1",provider:"openai-ws",model:"gpt-5.5",debounceMs:250},{actor:"agent",rt:{timers:["llm-request:gen-1"]},fx:[["background","agent","debounce"]],narr:"Recovered. From here the turn proceeds normally."});
+}),
+
+scen("breaker","5 · Autonomous-loop circuit breaker",
+ "We join a run already 20 script-turns deep (initial state below is pre-seeded: autonomousTurnCount=20, requestGeneration=21). One more agent-loop trigger arrives — and the breaker trips instead of scheduling turn 21.",
+ {agent:{autonomousTurnCount:20,requestGeneration:21,pendingTriggerSource:null,inProgressScriptExecutions:[{executionId:"agent-output:400",requestedOffset:400}]}},(e,n)=>{
+ e("capability-host/script-execution-completed",{executionId:"agent-output:400",result:"{ page: 21, moreData: … }"},{actor:"cap",
+   fx:[["blocking","agent","render tool result → input-added"]],
+   narr:"Turn 20's script returned yet more data — the model keeps finding reasons to continue (script results ALWAYS re-trigger; exits are model-dependent)."});
+ e("agent/input-added",{content:"Your script returned:\n```json\n{ page: 21, … }\n```",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-script-result@1",
+   fx:[["settle","agent","pending AGENT-LOOP trigger + autonomousTurnCount 20 ≥ 20 ⇒ append loop-stopped INSTEAD of scheduling"]],
+   narr:"The settle step's first check is the breaker: this would be consecutive autonomous turn 21."});
+ e("agent/loop-stopped",{maxAutonomousTurns:20,reason:"Agent circuit breaker stopped after 20 consecutive autonomous turns.",triggerOffset:2},{actor:"agent",ik:"agent/autonomous-turn-limit:2",
+   narr:"Reduce: the pending trigger is consumed. The stream is NOT paused, no error is raised — but note nothing tells the USER either; the chat just goes quiet (improvement notes #9). The result input stays in context."});
+ e("agents/user-message-received",{content:"keep going!",origin:"web"},{actor:"door",fx:[["blocking","agent","render input-added"]]});
+ e("agent/input-added",{content:"keep going!",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@4",
+   fx:[["settle","agent","USER trigger ⇒ schedule (and reset the budget)"]],
+   narr:"A USER-source input resets autonomousTurnCount to 0 — human attention refills the autonomous budget."});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-21",provider:"cloudflare-ai",model:KIMI,debounceMs:250},{actor:"agent",rt:{timers:["llm-request:gen-21"]},fx:[["background","agent","debounce"]],
+   narr:"Business as usual — the loop may run another 20."});
+}),
+
+scen("debounce","6 · Lost debounce timer → settle recovery",
+ "The 250ms debounce timer is in-memory only. If the DO dies between scheduling and firing, the durable state says 'scheduled' but nobody will ever promote it — until the next batch's settle step notices.",
+ null,(e,n)=>{
+ e("agents/user-message-received",{content:"ping",origin:"web"},{actor:"door",fx:[["blocking","agent","render input-added"]]});
+ e("agent/input-added",{content:"ping",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@1",fx:[["settle","agent","schedule generation 0"]]});
+ e("agent/llm-request-scheduled",{requestId:"llm-request:gen-0",provider:"cloudflare-ai",model:KIMI,debounceMs:250},{actor:"agent",rt:{timers:["llm-request:gen-0"]},fx:[["background","agent","debounce timer armed (in-memory)…"]],
+   narr:"currentRequest=scheduled, timer ticking."});
+ n("💥 DO restarts","…and the timer dies with the incarnation, 180ms in. Durable state still says currentRequest={phase:scheduled}. Nothing is coming.",{rt:{timers:[]}});
+ e("agents/user-message-received",{content:"you there?",origin:"web"},{actor:"door",
+   fx:[["blocking","agent","render input-added"],["settle","agent","currentRequest is phase:scheduled but #scheduledRequestsWithActiveTimers has NO live timer ⇒ append llm-request-requested IMMEDIATELY (skip the debounce)"]],
+   narr:"Any next event wakes a fresh incarnation and runs a batch; the settle step's second branch is the recovery."});
+ e("agent/input-added",{content:"you there?",llmRequestPolicy:{behaviour:"after-current-request"}},{actor:"agent",ik:"agent/render-web-message@4",
+   narr:"The new message coalesces into the still-scheduled request — pendingTrigger is set, but a request is already in the pipe."});
+ e("agent/llm-request-requested",{requestId:"llm-request:gen-0",provider:"cloudflare-ai",model:KIMI},{actor:"agent",ik:"agent/llm-request-requested@3",
+   narr:"Idempotency-keyed on the scheduledOffset (3) — identical to what the ghost timer would have appended, so even a concurrent late timer is harmless. llmRequestId=6; the provider takes over as usual, and the prompt includes BOTH messages."});
+}),
+];
+
+// ---------------------------------------------------------------- engine
+let SC=SCENARIOS[0],POS=0,TIMER=null;
+function computeAt(pos){
+  let a=initAgent();if(SC.init?.agent)a={...a,...structuredClone(SC.init.agent)};
+  let cf={requests:{}},oa={requests:{}};
+  const rt={timers:[],oaLive:[],oaConn:"—",oaPrev:"—"};
+  for(let i=0;i<pos;i++){const s=SC.steps[i];
+    if(s.kind==="ev"){a=reduceAgent(a,s);cf=reduceCf(cf,s);oa=reduceOa(oa,s);}
+    if(s.rt)Object.assign(rt,structuredClone(s.rt));}
+  return{a,cf,oa,rt};
+}
+const trunc=(s,n)=>{s=String(s);return s.length>n?s.slice(0,n)+"…":s;};
+function plPreview(p){return trunc(JSON.stringify(p,(k,v)=>typeof v==="string"&&v.length>90?v.slice(0,90)+"…":v),220);}
+function fmtVal(k,v){
+  if(k==="history")return v.length===0?"[]":`[${v.length}] last: ${v[v.length-1].role} “${trunc(v[v.length-1].content.replace(/\n/g,"⏎"),46)}”`;
+  if(k==="inProgressScriptExecutions")return v.length===0?"[]":`[${v.map(x=>x.executionId).join(", ")}]`;
+  if(k==="scriptExecutionsCompleted")return v.length===0?"[]":`[${v.join(", ")}]`;
+  if(k==="systemPrompt")return trunc(v,40);
+  return JSON.stringify(v);
+}
+function kvRows(obj,prev,keys){
+  return keys.map(k=>{
+    const cur=fmtVal(k,obj[k]),chg=prev!==null&&JSON.stringify(obj[k])!==JSON.stringify(prev[k]);
+    return`<div class="row${chg?" chg":""}"><span class="k">${k}:</span> ${esc(cur)}</div>`;}).join("");
+}
+const AGENT_KEYS=["currentRequest","pendingTriggerOffset","pendingTriggerSource","autonomousTurnCount","requestGeneration","consecutiveLlmFailures","history","inProgressScriptExecutions","scriptExecutionsCompleted","llmProvider","llmConfig","llmProviderConfigured","systemPrompt"];
+function render(){
+  const cur=computeAt(POS),prev=POS>0?computeAt(POS-1):null;
+  // log
+  $("#simlog").innerHTML=SC.steps.slice(0,POS).map((s,i)=>{
+    const isCur=i===POS-1;
+    if(s.kind==="note")return`<div class="lrow notestep${isCur?" cur":""}"><div class="top"><span class="off">—</span><span class="ty">${esc(s.title)}</span></div><div class="pl" style="font-family:inherit">${esc(s.text)}</div></div>`;
+    return`<div class="lrow${isCur?" cur":""}"><div class="top"><span class="off">#${s.off}</span>${chip(s.actor)}<span class="ty evt" onclick="jumpEvt('events.iterate.com/${s.type}')">${esc(s.type)}</span></div>
+      <div class="pl">${esc(plPreview(s.payload))}${s.ik?`<br><span style="opacity:.65">idem: ${esc(s.ik)}</span>`:""}</div>
+      ${s.fx?`<div class="fx">${s.fx.map(f=>`<div>${lane(f[0])} ${chip(f[1])} ${esc(f[2])}</div>`).join("")}</div>`:""}</div>`;
+  }).join("")||`<div class="lrow"><div class="pl" style="margin-left:0">stream empty — press <b>step ▶</b></div></div>`;
+  const curEl=$("#simlog .lrow.cur");if(curEl)curEl.scrollIntoView({block:"nearest"});
+  // narration
+  const st=SC.steps[POS-1];
+  $("#simnarr").innerHTML=POS===0?`<b>${esc(SC.title)}</b> — ${SC.blurb}${SC.init?.agent?`<br><span class="sub">initial agent state overrides: <code>${esc(JSON.stringify(SC.init.agent))}</code></span>`:""}`
+    :(st.kind==="note"?`<b>${esc(st.title)}</b> — ${esc(st.text)}`:(st.narr?esc(st.narr):`<span class="sub">event #${st.off} appended.</span>`));
+  // state
+  $("#simstate").innerHTML=`
+   <div class="statebox"><h4>${chip("agent")} reduced state <span class="sub" style="font-weight:400">(durable, checkpointed)</span></h4><div class="kv">${kvRows(cur.a,prev?.a??null,AGENT_KEYS)}</div></div>
+   <div class="statebox"><h4>${chip("cf")} reduced state</h4><div class="kv">${kvRows(cur.cf,prev?.cf??null,["requests"])}</div></div>
+   <div class="statebox"><h4>${chip("oa")} reduced state</h4><div class="kv">${kvRows(cur.oa,prev?.oa??null,["requests"])}</div></div>
+   <div class="statebox"><h4>⚡ in-memory (lost on DO restart)</h4><div class="kv">
+     <div class="row"><span class="k">agent #activeDebounceTimers:</span> ${esc(JSON.stringify(cur.rt.timers))}</div>
+     <div class="row"><span class="k">openai-ws #liveExecutions:</span> ${esc(JSON.stringify(cur.rt.oaLive))}</div>
+     <div class="row"><span class="k">openai-ws #connection:</span> ${esc(cur.rt.oaConn)}</div>
+     <div class="row"><span class="k">openai-ws #previousResponseId:</span> ${esc(cur.rt.oaPrev)}</div></div></div>`;
+  $("#stepcount").textContent=`step ${POS} / ${SC.steps.length}`;
+  $("#prev").disabled=POS===0;$("#next").disabled=POS>=SC.steps.length;
+  $("#scrub").max=SC.steps.length;$("#scrub").value=POS;
+}
+$("#scrub").addEventListener("input",()=>{stopPlay();POS=Number($("#scrub").value);render();});
+function stopPlay(){if(TIMER){clearInterval(TIMER);TIMER=null;$("#play").textContent="▶▶ play";}}
+$("#next").onclick=()=>{if(POS<SC.steps.length){POS++;render();}else stopPlay();};
+$("#prev").onclick=()=>{stopPlay();if(POS>0){POS--;render();}};
+$("#reset").onclick=()=>{stopPlay();POS=0;render();};
+$("#play").onclick=()=>{if(TIMER)return stopPlay();$("#play").textContent="⏸ pause";TIMER=setInterval(()=>{if(POS>=SC.steps.length)return stopPlay();POS++;render();},1500);};
+document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;
+  if(e.key==="ArrowRight"){$("#next").click();e.preventDefault();}if(e.key==="ArrowLeft"){$("#prev").click();e.preventDefault();}});
+const sel=$("#scenario");
+sel.innerHTML=SCENARIOS.map((s,i)=>`<option value="${i}">${esc(s.title)}</option>`).join("");
+sel.onchange=()=>{stopPlay();SC=SCENARIOS[Number(sel.value)];POS=0;$("#simblurb").textContent="";render();};
+render();
+</script>
+</body>
+</html>
