@@ -687,9 +687,9 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/history-reset": {
       description:
-        "Replaces the agent's model-visible history and system prompt wholesale. Anything may " +
-        "append this — the platform never does; it exists for userspace history management " +
-        "such as compaction (summarize-then-reset).",
+        "Replaces the agent's model-visible history and system prompt wholesale. The " +
+        "processor's compaction lane appends it when a turn's context crosses the window " +
+        "threshold; anything else may append one too (userspace history management).",
       payloadSchema: z.object({
         systemPrompt: z.string(),
         history: z.array(AgentInputItem),

@@ -301,7 +301,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         );
         if (contextTokens < thresholdTokens) return;
         runInBackground(() =>
-          this.#compactHistory({ contextTokens, thresholdTokens, triggerOffset: event.offset }),
+          this.#compactHistory({
+            contextTokens,
+            llmRequestOffset: usage.llmRequestOffset,
+            thresholdTokens,
+            triggerOffset: event.offset,
+          }),
         );
         return;
       }
@@ -310,10 +315,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
   }
 
-  /** Serializes compaction attempts on this incarnation, so a second trigger
-   * waits for the first run's history-reset to land and then sees it in the
-   * staleness guard instead of racing a parallel summary. */
-  #compactionChain: Promise<unknown> = Promise.resolve();
+  /** True while this incarnation has a summary in flight. Skip, don't queue:
+   * the lane is best-effort and the next over-threshold report re-triggers,
+   * so a second concurrent trigger has nothing to add. */
+  #compactionInFlight = false;
 
   /**
    * One compaction attempt: summarize the whole model-visible conversation
@@ -322,29 +327,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * Best-effort by design — every early return leaves the journal untouched
    * and a later over-threshold report retries:
    *
-   * - already ran for this trigger (redelivery) → skip before the AI call
-   * - a newer history-reset exists → this trigger is stale
+   * - a reset landed since the measured prompt was built → the trigger is
+   *   stale. This one check also covers redelivery: a re-run of an already
+   *   compacted trigger finds its own earlier reset.
    * - history was rewritten mid-run (concurrent reset) → drop the summary
    * - the summary call itself fails → nothing durable changed; the base's
    *   runInBackground catch logs the error
    */
   async #compactHistory(input: {
     contextTokens: number;
+    llmRequestOffset: number;
     thresholdTokens: number;
     triggerOffset: number;
   }): Promise<void> {
-    const { contextTokens, thresholdTokens, triggerOffset } = input;
-    const run = this.#compactionChain.then(async () => {
-      const ai = this.deps.ai;
-      if (ai === undefined) return;
-      const resetKey = this.idempotencyKey(`history-reset@${triggerOffset}`);
-      if ((await this.stream.getEvent({ idempotencyKey: resetKey })) !== undefined) return;
-      const newerResets = await this.stream.getEvents({
-        afterOffset: triggerOffset,
+    const { contextTokens, llmRequestOffset, thresholdTokens, triggerOffset } = input;
+    const ai = this.deps.ai;
+    if (ai === undefined) return;
+    if (this.#compactionInFlight) return;
+    this.#compactionInFlight = true;
+    try {
+      // The report measured the prompt built at llmRequestOffset; any reset
+      // after that point means the measurement describes a history that is
+      // already gone (including this trigger's own reset, on redelivery).
+      const resetsSinceMeasurement = await this.stream.getEvents({
+        afterOffset: llmRequestOffset,
         eventTypes: ["events.iterate.com/agent/history-reset"],
         limit: 1,
       });
-      if (newerResets.length > 0) return;
+      if (resetsSinceMeasurement.length > 0) return;
 
       const state = reduceAgentEvents(await this.#readConsumedEvents());
       if (state.history.length === 0) return;
@@ -375,7 +385,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       const carriedForward = stateNow.history.slice(state.history.length);
       await this.append({
         type: "events.iterate.com/agent/history-reset",
-        idempotencyKey: resetKey,
+        idempotencyKey: this.idempotencyKey(`history-reset@${triggerOffset}`),
         payload: {
           systemPrompt: stateNow.systemPrompt,
           history: [
@@ -388,12 +398,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
         },
       });
-    });
-    // The chain absorbs failures (a rejected run must not wedge later
-    // attempts), but the attempt itself still rejects so the base's
-    // runInBackground catch-and-log records what went wrong.
-    this.#compactionChain = run.catch(() => {});
-    await run;
+    } finally {
+      this.#compactionInFlight = false;
+    }
   }
 
   // ---------------------------------------------------------------------------

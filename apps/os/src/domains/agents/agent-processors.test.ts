@@ -1721,14 +1721,14 @@ describe("token usage and history reset", () => {
       type: "events.iterate.com/agents/message-received",
       payload: { content: "remember: I like teal", from: { kind: "user", origin: "web" } },
     });
-    await deliver();
-    await deliver();
-    await deliver();
+    await deliver(); // message -> schedule
+    await deliver(); // schedule starts debounce timer
+    await deliver(); // (timer fires the requested event in the background)
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
       timeoutMs: 2_000,
     });
-    await deliver();
+    await deliver(); // requested -> AI call -> output + completion + usage report
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
