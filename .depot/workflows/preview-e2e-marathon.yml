@@ -25,7 +25,7 @@ on:
       pull-request-number:
         description: PR whose preview slot to marathon
         required: false
-        default: "1824"
+        default: "1836"
       runs:
         description: consecutive green runs required
         required: false
@@ -67,7 +67,7 @@ jobs:
           # flake-hunt-loop.sh's `pnpm preview deploy/test` default their token
           # to GITHUB_TOKEN (resolveGithubToken in preview.ts).
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          PR_NUMBER: ${{ inputs.pull-request-number || '1824' }}
+          PR_NUMBER: ${{ inputs.pull-request-number || '1836' }}
           RUNS: ${{ inputs.runs || '50' }}
           WARMUP_RUNS: ${{ inputs.warmup-runs || '1' }}
           LOG_DIR: /tmp/marathon
