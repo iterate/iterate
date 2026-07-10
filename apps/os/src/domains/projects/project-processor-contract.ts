@@ -7,9 +7,11 @@ import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { StreamListItem } from "../streams/schemas.ts";
 import {
   EgressRule,
+  HumanApprovalGrantedPayload,
   HumanApprovalKey,
+  HumanApprovalRejectedPayload,
   HumanApprovalRequestedPayload,
-  HumanApprovalResolutionPayload,
+  HumanApprovalSettledPayload,
 } from "./egress-approvals.ts";
 
 const ProjectCustomDomainStatus = z.enum([
@@ -369,10 +371,7 @@ export const ProjectProcessorContract = defineProcessorContract({
         "A human approved a held egress request. When the project has active approval keys, " +
         "`keyId` + `signature` (raw 64-byte r‖s ECDSA P-256 over the canonical approval.v1 " +
         "message, base64) are required and verified before the request is released.",
-      payloadSchema: HumanApprovalResolutionPayload.extend({
-        keyId: z.string().optional(),
-        signature: z.string().optional(),
-      }),
+      payloadSchema: HumanApprovalGrantedPayload,
       examples: [
         {
           description: "A signed grant from an enrolled Secure Enclave key releases the request.",
@@ -389,10 +388,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "A held egress request was refused — by a human, or automatically when its hold expired. " +
         "Rejections are deliberately unsigned: deny is the fail-safe direction.",
-      payloadSchema: HumanApprovalResolutionPayload.extend({
-        reason: z.enum(["human", "expired"]),
-        note: z.string().optional(),
-      }),
+      payloadSchema: HumanApprovalRejectedPayload,
       examples: [
         {
           description: "A human refused the request from the approval CLI.",
@@ -415,10 +411,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       description:
         "What actually happened after a granted request was released: the upstream status, or the " +
         "delivery failure. Approval and outcome are separate facts — audits want both.",
-      payloadSchema: HumanApprovalResolutionPayload.extend({
-        status: z.number().int().optional(),
-        error: z.string().optional(),
-      }),
+      payloadSchema: HumanApprovalSettledPayload,
       examples: [
         {
           description: "The released Stripe transfer succeeded.",

@@ -33,9 +33,11 @@ import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
+  evaluateGrant,
+  HumanApprovalGrantedPayload,
+  HumanApprovalRejectedPayload,
   matchEgressRule,
   sha256Hex,
-  verifyApprovalSignature,
   type EgressRule,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
@@ -392,84 +394,58 @@ export class ProjectDurableObject extends DurableObject<Env> {
         throw error;
       }
 
-      // Grants must judge the signature requirement against FRESH key state:
-      // push delivery to this processor can lag the stream, so an unsigned
-      // grant must not slip through while a human-approval-key-added event is
-      // committed but not yet folded. Catch up BEFORE advancing the cursor —
-      // a failed catch-up retries this same event instead of dropping it
-      // (bounded by the hold's deadline).
-      if (event.type === "events.iterate.com/project/human-approval-granted") {
-        try {
-          await this.#processorHost.catchUp(ProjectProcessorContract.slug);
-        } catch (error) {
-          console.warn("egress approval: catch-up before grant key check failed", {
-            approvalRequestEventOffset: input.approvalRequestEventOffset,
-            error,
-            projectId: this.#name.projectId,
-          });
-          continue;
-        }
-      }
       cursor = event.offset;
 
       if (event.type === "events.iterate.com/project/human-approval-rejected") {
-        let payload;
-        try {
-          payload = ProjectProcessorContract.parseEvent(
-            "events.iterate.com/project/human-approval-rejected",
-            event,
-          ).payload;
-        } catch {
-          continue;
+        const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+        if (
+          rejection.success &&
+          rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
+        ) {
+          return "rejected";
         }
-        if (payload.approvalRequestEventOffset !== input.approvalRequestEventOffset) continue;
-        return "rejected";
-      }
-
-      let payload;
-      try {
-        payload = ProjectProcessorContract.parseEvent(
-          "events.iterate.com/project/human-approval-granted",
-          event,
-        ).payload;
-      } catch {
         continue;
       }
-      if (payload.approvalRequestEventOffset !== input.approvalRequestEventOffset) continue;
 
-      const activeKeys = this.#projectProcessor.currentState.humanApprovalKeys.filter(
-        (key) => key.revokedAt === null,
-      );
-      if (activeKeys.length === 0) return "granted";
-
-      const key = activeKeys.find((candidate) => candidate.keyId === payload.keyId);
-      if (key === undefined || payload.signature === undefined) {
-        console.warn("egress approval: unsigned or unknown-key grant ignored", {
-          approvalRequestEventOffset: input.approvalRequestEventOffset,
-          keyId: payload.keyId,
-          projectId: this.#name.projectId,
-        });
+      const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
+      if (
+        !grant.success ||
+        grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset
+      ) {
         continue;
       }
-      const verified = await verifyApprovalSignature({
-        publicKey: key.publicKey,
-        signature: payload.signature,
-        message: buildApprovalMessage({
-          projectId: this.#name.projectId,
-          approvalRequestEventOffset: input.approvalRequestEventOffset,
-          requested: input.requestedPayload,
-          decision: "granted",
-        }),
+
+      // Judge the grant against FRESH key state: push delivery to this
+      // processor can lag the stream, so an unsigned grant must not slip
+      // through while a human-approval-key-added event is committed but not
+      // yet folded. A grant we cannot judge (catch-up failed) or that
+      // evaluateGrant refuses is IGNORED, never fatal: the hold keeps
+      // waiting for a good grant, a human rejection, or expiry.
+      const verdict = await this.#processorHost
+        .catchUp(ProjectProcessorContract.slug)
+        .then(() =>
+          evaluateGrant({
+            grant: grant.data,
+            keys: this.#projectProcessor.currentState.humanApprovalKeys,
+            message: buildApprovalMessage({
+              projectId: this.#name.projectId,
+              approvalRequestEventOffset: input.approvalRequestEventOffset,
+              requested: input.requestedPayload,
+              decision: "granted",
+            }),
+          }),
+        )
+        .catch((error: unknown) => ({
+          accepted: false as const,
+          reason: `key state catch-up failed: ${error instanceof Error ? error.message : String(error)}`,
+        }));
+      if (verdict.accepted) return "granted";
+      console.warn("egress approval: grant ignored", {
+        approvalRequestEventOffset: input.approvalRequestEventOffset,
+        keyId: grant.data.keyId,
+        projectId: this.#name.projectId,
+        reason: verdict.reason,
       });
-      if (!verified) {
-        console.warn("egress approval: invalid grant signature ignored", {
-          approvalRequestEventOffset: input.approvalRequestEventOffset,
-          keyId: payload.keyId,
-          projectId: this.#name.projectId,
-        });
-        continue;
-      }
-      return "granted";
     }
   }
 

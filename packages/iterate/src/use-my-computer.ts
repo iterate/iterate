@@ -16,7 +16,6 @@
 // (b) keeping the socket alive so agents can reach it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { spawn } from "node:child_process";
 import { hostname } from "node:os";
 
 import * as prompts from "@clack/prompts";
@@ -24,6 +23,7 @@ import type { RpcStub } from "capnweb";
 
 import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import type { ItxAuthCredentials, Project } from "./itx-api.generated.ts";
+import { run } from "./run-command.ts";
 
 /**
  * The object we lend to the project. Each method becomes callable by agents as
@@ -175,21 +175,6 @@ export async function shareMyComputer(input: {
 }
 
 // ── tiny local helpers ───────────────────────────────────────────────────────
-
-/** Spawn a command, optionally feed it stdin, and collect its result. */
-function run(command: string, args: string[], stdin?: string) {
-  return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-    const child = spawn(command, args);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
-    child.on("error", reject);
-    // A signal-killed child reports a null code; surface that as a failure, not 0.
-    child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
-    if (stdin !== undefined) child.stdin.end(stdin);
-  });
-}
 
 /** Run an AppleScript snippet, throwing if osascript reports failure (e.g. the human cancels). */
 async function osascript(script: string) {

@@ -5,9 +5,11 @@ import {
   bytesToBase64,
   canonicalJson,
   derSignatureToRaw,
+  evaluateGrant,
   matchEgressRule,
   verifyApprovalSignature,
   type EgressRule,
+  type HumanApprovalKey,
 } from "./egress-approvals.ts";
 
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
@@ -181,6 +183,54 @@ describe("verifyApprovalSignature", () => {
     await expect(verifyApprovalSignature({ publicKey: "AAAA", signature, message })).resolves.toBe(
       false,
     );
+  });
+
+  test("evaluateGrant: plain grants pass only until a key is enrolled; revoked keys don't count", async () => {
+    const alice = await keypair();
+    const enrolled: HumanApprovalKey = {
+      keyId: "alice",
+      publicKey: alice.publicKey,
+      label: "",
+      addedAt: "2026-01-01T00:00:00.000Z",
+      revokedAt: null,
+    };
+    const signature = await alice.sign(message);
+
+    // Phase 1 — nothing enrolled: a plain grant is accepted.
+    await expect(evaluateGrant({ grant: {}, keys: [], message })).resolves.toEqual({
+      accepted: true,
+    });
+    // Only revoked keys = nothing enrolled.
+    await expect(
+      evaluateGrant({
+        grant: {},
+        keys: [{ ...enrolled, revokedAt: "2026-01-02T00:00:00.000Z" }],
+        message,
+      }),
+    ).resolves.toEqual({ accepted: true });
+
+    // Phase 2 — a key is enrolled: unsigned/unknown/bad grants are refused...
+    await expect(evaluateGrant({ grant: {}, keys: [enrolled], message })).resolves.toMatchObject({
+      accepted: false,
+    });
+    await expect(
+      evaluateGrant({ grant: { keyId: "mallory", signature }, keys: [enrolled], message }),
+    ).resolves.toMatchObject({ accepted: false });
+    await expect(
+      evaluateGrant({ grant: { keyId: "alice" }, keys: [enrolled], message }),
+    ).resolves.toMatchObject({ accepted: false });
+    // ...a revoked key's own valid signature is refused...
+    await expect(
+      evaluateGrant({
+        grant: { keyId: "alice", signature },
+        keys: [{ ...enrolled, revokedAt: "2026-01-02T00:00:00.000Z" }],
+        message,
+      }),
+    ).resolves.toEqual({ accepted: true }); // revoked-only ⇒ back to phase 1
+    // ...and a valid signature from the enrolled key releases.
+    await expect(
+      evaluateGrant({ grant: { keyId: "alice", signature }, keys: [enrolled], message }),
+    ).resolves.toEqual({ accepted: true });
   });
 
   test("verifies a DER signature (the Secure Enclave shape) after derSignatureToRaw", async () => {

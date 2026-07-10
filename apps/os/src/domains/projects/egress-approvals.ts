@@ -3,25 +3,26 @@ import { z } from "zod";
 // =============================================================================
 // Human-in-the-loop egress approvals.
 //
-// Pure policy + crypto helpers for the egress approval gate in
-// project-durable-object.ts. Two artifacts live here:
+// The whole idea: egress rules are project state; a held request is an open
+// fetch promise plus a `human-approval-requested` event; that event's OFFSET
+// is the held request's identity; humans answer by appending events; and
+// once approval keys are enrolled, a grant is unforgeable without the
+// enrolled private key. The lifecycle:
 //
-// 1. Egress rules — project-state data (set wholesale via
-//    `project/egress-rules-configured`) matched against every outbound
-//    request at the Project DO's egress decision point. A matched `hold`
-//    rule parks the request until a human grants or rejects it on the
-//    project stream; `deny` refuses it outright.
+//   requested ──(signed grant)──▶ granted ──▶ released ──▶ settled
+//        │
+//        ├──(human)────▶ rejected (reason: human)
+//        └──(timeout)──▶ rejected (reason: expired)
 //
-// 2. The approval signature scheme — a grant may carry an ECDSA P-256
-//    signature over a canonical message reconstructable by BOTH signer and
-//    verifier from the `human-approval-requested` event alone. Once a
-//    project has enrolled approval keys, grants MUST verify; rejections
-//    never require a signature (deny is the fail-safe direction).
+// This file is the pure half — rule matching and the signature scheme — used
+// by the gate in project-durable-object.ts (orchestration) and the
+// `iterate approve` CLI (the human's signer).
 //
-// The signature is computed over the canonical JSON bytes (not a detached
-// digest): WebCrypto's ECDSA and the Secure Enclave's
-// `ecdsaSignatureMessageX962SHA256` both hash the message internally, so
-// signer and verifier only ever exchange the raw 64-byte r‖s signature.
+// The signature covers canonical JSON bytes reconstructable by BOTH sides
+// from the requested event alone (no detached digest): WebCrypto's ECDSA and
+// the Secure Enclave's `ecdsaSignatureMessageX962SHA256` both hash the
+// message internally, so signer and verifier only ever exchange the raw
+// 64-byte r‖s signature.
 // =============================================================================
 
 /** Matchers of one egress rule. Absent fields match everything. */
@@ -90,8 +91,24 @@ export const HumanApprovalRequestedPayload = z.object({
 export type HumanApprovalRequestedPayload = z.output<typeof HumanApprovalRequestedPayload>;
 
 /** A held request's identity is the offset of its requested event — no minted ids. */
-export const HumanApprovalResolutionPayload = z.object({
+const HumanApprovalResolutionPayload = z.object({
   approvalRequestEventOffset: z.number().int().nonnegative(),
+});
+
+export const HumanApprovalGrantedPayload = HumanApprovalResolutionPayload.extend({
+  keyId: z.string().optional(),
+  /** Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval message. */
+  signature: z.string().optional(),
+});
+
+export const HumanApprovalRejectedPayload = HumanApprovalResolutionPayload.extend({
+  reason: z.enum(["human", "expired"]),
+  note: z.string().optional(),
+});
+
+export const HumanApprovalSettledPayload = HumanApprovalResolutionPayload.extend({
+  status: z.number().int().optional(),
+  error: z.string().optional(),
 });
 
 // -----------------------------------------------------------------------------
@@ -200,6 +217,31 @@ export function buildApprovalMessage(input: {
 // -----------------------------------------------------------------------------
 // Signature verification (WebCrypto, P-256, raw 64-byte r‖s signatures).
 // -----------------------------------------------------------------------------
+
+/**
+ * THE grant-acceptance policy, in one place: with no active keys enrolled a
+ * plain grant is accepted (phase 1); once any active key exists, a grant is
+ * accepted only with a valid signature from one of them. Everything else is
+ * ignored — never rejected — so a bad grant can't kill a hold that a good
+ * one (or a human rejection) would settle.
+ */
+export async function evaluateGrant(input: {
+  grant: { keyId?: string; signature?: string };
+  keys: readonly HumanApprovalKey[];
+  message: Uint8Array;
+}): Promise<{ accepted: true } | { accepted: false; reason: string }> {
+  const activeKeys = input.keys.filter((key) => key.revokedAt === null);
+  if (activeKeys.length === 0) return { accepted: true };
+  const key = activeKeys.find((candidate) => candidate.keyId === input.grant.keyId);
+  if (key === undefined) return { accepted: false, reason: "unknown or missing keyId" };
+  if (input.grant.signature === undefined) return { accepted: false, reason: "missing signature" };
+  const verified = await verifyApprovalSignature({
+    publicKey: key.publicKey,
+    signature: input.grant.signature,
+    message: input.message,
+  });
+  return verified ? { accepted: true } : { accepted: false, reason: "invalid signature" };
+}
 
 /** Verify a raw r‖s ECDSA-P256-SHA256 signature over the canonical message bytes. */
 export async function verifyApprovalSignature(input: {

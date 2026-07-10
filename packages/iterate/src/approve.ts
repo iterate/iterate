@@ -18,7 +18,10 @@ import * as prompts from "@clack/prompts";
 import type { RpcStub } from "capnweb";
 
 import { connectItx } from "../../../apps/os/src/itx-client.ts";
-import { buildApprovalMessage } from "../../../apps/os/src/domains/projects/egress-approvals.ts";
+import {
+  buildApprovalMessage,
+  type HumanApprovalRequestedPayload,
+} from "../../../apps/os/src/domains/projects/egress-approvals.ts";
 import type { ItxAuthCredentials, Project, Stream, StreamEvent } from "./itx-api.generated.ts";
 import {
   createApprovalKey,
@@ -30,19 +33,8 @@ import {
 const REQUESTED = "events.iterate.com/project/human-approval-requested";
 const GRANTED = "events.iterate.com/project/human-approval-granted";
 const REJECTED = "events.iterate.com/project/human-approval-rejected";
+const SETTLED = "events.iterate.com/project/human-approval-settled";
 const KEY_ADDED = "events.iterate.com/project/human-approval-key-added";
-
-/** The requested payload fields this UI renders and signs over. */
-type RequestedPayload = {
-  method: string;
-  url: string;
-  headers: Record<string, string>;
-  bodySha256: string | null;
-  bodyPreview: string | null;
-  secretPaths: string[];
-  ruleKey: string;
-  expiresAt: string;
-};
 
 export async function runApprovalCli(input: {
   auth: ItxAuthCredentials;
@@ -98,7 +90,7 @@ export async function runApprovalCli(input: {
       throw error;
     }
     cursor = event.offset;
-    const payload = event.payload as RequestedPayload;
+    const payload = event.payload as HumanApprovalRequestedPayload;
 
     if (Date.parse(payload.expiresAt) <= Date.now()) {
       prompts.log.warn(`Skipping #${event.offset} ${payload.method} ${payload.url} — expired.`);
@@ -141,7 +133,9 @@ export async function runApprovalCli(input: {
         }
       }
       await stream.append({ type: GRANTED, payload: grant });
-      prompts.log.success(`Granted #${event.offset} — request released.`);
+      // Granting is a claim, not a fact — the egress door verifies the
+      // signature and settles the request. Report what actually happened.
+      await reportSettlement({ approvalRequestEventOffset: event.offset, stream });
     } else {
       await stream.append({
         type: REJECTED,
@@ -149,6 +143,46 @@ export async function runApprovalCli(input: {
       });
       prompts.log.warn(`Rejected #${event.offset}.`);
     }
+  }
+}
+
+/**
+ * Watch for the held request's settlement and report the truth: released
+ * with an upstream status, failed delivery, rejected meanwhile, or — if
+ * nothing lands in time — that the platform hasn't accepted the grant (an
+ * unverifiable signature is silently ignored server-side by design).
+ */
+async function reportSettlement(input: {
+  approvalRequestEventOffset: number;
+  stream: RpcStub<Stream>;
+}): Promise<void> {
+  const spinner = prompts.spinner();
+  spinner.start("Waiting for the egress door to settle the request...");
+  try {
+    const settled = await input.stream.waitForEvent({
+      afterOffset: input.approvalRequestEventOffset,
+      eventTypes: [SETTLED, REJECTED],
+      predicate: (candidate) =>
+        (candidate.payload as { approvalRequestEventOffset?: number })
+          .approvalRequestEventOffset === input.approvalRequestEventOffset,
+      timeoutMs: 30_000,
+    });
+    const outcome = settled.payload as { status?: number; error?: string; reason?: string };
+    if (settled.type === SETTLED && outcome.error === undefined) {
+      spinner.stop(`Released #${input.approvalRequestEventOffset} — upstream ${outcome.status}.`);
+    } else if (settled.type === SETTLED) {
+      spinner.stop(
+        `Released #${input.approvalRequestEventOffset} but delivery failed: ${outcome.error}`,
+      );
+    } else {
+      spinner.stop(
+        `#${input.approvalRequestEventOffset} was rejected (${outcome.reason}) before the grant landed.`,
+      );
+    }
+  } catch {
+    spinner.stop(
+      `Grant appended, but #${input.approvalRequestEventOffset} has not settled — the egress door may have ignored an unverifiable signature, or the hold already expired.`,
+    );
   }
 }
 

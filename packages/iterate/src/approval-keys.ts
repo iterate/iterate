@@ -19,7 +19,6 @@
 // enclave emits DER, converted here before anything leaves the machine.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +29,7 @@ import {
   bytesToBase64,
   derSignatureToRaw,
 } from "../../../apps/os/src/domains/projects/egress-approvals.ts";
+import { run } from "./run-command.ts";
 
 const APPROVAL_KEYS_DIR = join(
   process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
@@ -191,18 +191,6 @@ async function runJson(command: string, args: string[]): Promise<unknown> {
     );
   }
   return JSON.parse(result.stdout);
-}
-
-function run(command: string, args: string[]) {
-  return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-    const child = spawn(command, args);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (data) => (stdout += data));
-    child.stderr.on("data", (data) => (stderr += data));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
-  });
 }
 
 /**
