@@ -129,6 +129,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "GOTCHAS:",
   "- Some handles must be awaited before you call through them: if `itx.x.get(...).method(...)` fails oddly, split it — `const h = await itx.x.get(...); await h.method(...)`.",
   "- Never tell the user you lack access before checking: `await itx.integrations.list()` shows connections (Gmail, GitHub, Slack, ...); mounted capabilities appear in `itx.docs.search` and `itx.__describe()`.",
+  '- Project-specific tools and data live in MOUNTED CAPABILITIES and integrations, not in the repo\'s files — when hunting for "something this project can do", search docs and __describe before reading worker.ts.',
   '- To do something later or on a schedule: `itx.scheduler` — start from `await itx.docs.get({ name: "scheduler-basics" })`.',
 ].join("\n");
 
