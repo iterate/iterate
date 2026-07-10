@@ -76,10 +76,6 @@ overrides:
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
-  # Pre-release build of iterate/middlewright#3 (videoMode trimStart default +
-  # the upstreamed spinner-waiter multi-match fix, so the local patch is gone).
-  # Swap for a real published version once that PR lands.
-  middlewright: https://pkg.pr.new/middlewright@3670e49
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
