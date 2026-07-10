@@ -55,16 +55,19 @@ func loadKey(blobBase64: String, context: LAContext? = nil) -> SecureEnclave.P25
 }
 
 /// Touch ID happens HERE: the key's access control demands a fresh biometric
-/// check for every signature, presented with `reason`.
-func signMessage(blobBase64: String, message: Data, reason: String) -> Data {
+/// check for every signature, presented with `reason`. Throws so callers can
+/// tell a cancelled sheet from a structural failure.
+func signMessage(blobBase64: String, message: Data, reason: String) throws -> Data {
   let context = LAContext()
   context.localizedReason = reason
   let key = loadKey(blobBase64: blobBase64, context: context)
-  do {
-    return try key.signature(for: message).derRepresentation
-  } catch {
-    fail("signing failed: \(error)")
-  }
+  return try key.signature(for: message).derRepresentation
+}
+
+/// LAError.userCancel and friends surface wrapped by CryptoKit; match on the
+/// description rather than unwrapping every layering variant.
+func isCancellation(_ error: Error) -> Bool {
+  return "\(error)".lowercased().contains("cancel")
 }
 
 let args = CommandLine.arguments
@@ -118,9 +121,13 @@ case "public-key":
 case "sign":
   let envelope = readStdinEnvelope()
   guard let message = envelope.message else { fail("sign needs message on stdin") }
-  let signature = signMessage(
-    blobBase64: envelope.keyBlob, message: message, reason: "sign an iterate egress approval")
-  jsonOut(["signatureDer": signature.base64EncodedString()])
+  do {
+    let signature = try signMessage(
+      blobBase64: envelope.keyBlob, message: message, reason: "sign an iterate egress approval")
+    jsonOut(["signatureDer": signature.base64EncodedString()])
+  } catch {
+    fail("signing failed: \(error)")
+  }
 
 case "approve":
   let envelope = readStdinEnvelope()
@@ -160,10 +167,20 @@ case "approve":
 
   switch response {
   case .alertFirstButtonReturn:
-    let signature = signMessage(
-      blobBase64: envelope.keyBlob, message: message,
-      reason: "approve \(method) to \(URL(string: url)?.host ?? url)")
-    jsonOut(["decision": "granted", "signatureDer": signature.base64EncodedString()])
+    do {
+      let signature = try signMessage(
+        blobBase64: envelope.keyBlob, message: message,
+        reason: "approve \(method) to \(URL(string: url)?.host ?? url)")
+      jsonOut(["decision": "granted", "signatureDer": signature.base64EncodedString()])
+    } catch {
+      // A cancelled Touch ID sheet is the human changing their mind — Ignore.
+      // Anything else is structural and must fail loudly, not loop silently.
+      if isCancellation(error) {
+        jsonOut(["decision": "ignored"])
+      } else {
+        fail("signing failed: \(error)")
+      }
+    }
   case .alertSecondButtonReturn:
     jsonOut(["decision": "rejected"])
   default:

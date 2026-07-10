@@ -141,18 +141,15 @@ export async function runApprovalCli(input: {
     // gesture. Terminal mode: y/n, then sign.
     let verdict: { decision: "granted"; signature?: string } | { decision: "rejected" | "ignored" };
     if (native) {
-      try {
-        verdict = await promptNativeApproval({
-          key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
-          message,
-          request: payload as unknown as Record<string, unknown>,
-        });
-      } catch (error) {
-        // A cancelled Touch ID sheet exits the approver non-zero; treat it
-        // like Ignore — the hold keeps waiting, the loop keeps listening.
-        prompts.log.error(error instanceof Error ? error.message : String(error));
-        verdict = { decision: "ignored" };
-      }
+      // A cancelled Touch ID sheet comes back as "ignored" (the approver
+      // distinguishes it); anything else thrown here is structural — broken
+      // helper, bad blob — and should stop the loop loudly, not loop as
+      // silent Ignores.
+      verdict = await promptNativeApproval({
+        key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
+        message,
+        request: payload as unknown as Record<string, unknown>,
+      });
     } else {
       const approved = await prompts.confirm({
         message: `Approve ${payload.method} ${new URL(payload.url).host}?`,
