@@ -280,9 +280,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toMatchObject({
         readmePresent: true,
         edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
-        committedTo: "main",
       });
-      const typed = result as { changes: { path: string }[]; commitOid: string };
+      const typed = result as {
+        changes: { path: string }[];
+        commitOid: string;
+        committedTo: string;
+      };
+      // #1831: commits land straight on the config repo's default branch —
+      // there is no per-workspace branch anymore.
+      expect(typed.committedTo).toMatch(/^\S+$/);
       expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
       expect(typed.changes.map((change) => change.path)).toContain("/notes/workspace-example.md");
     },
@@ -374,8 +380,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     }),
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
-        payload: { content: `hello ${marker}`, origin: "web" },
-        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: `hello ${marker}`, from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/message-received",
       });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },

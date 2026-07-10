@@ -49,7 +49,7 @@ import { timedStep } from "./lib/step-timing.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
-import { normalizeAgentPath } from "./domains/agents/utils.ts";
+import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -1041,9 +1041,9 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface; list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("subagents/researcher") from an agent script addresses a subagent, get("../..") from a subagent addresses its parent. list() the known agent streams.',
       children: {
-        get: "One agent by path.",
+        get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
         defaults: "The platform's default agent policy, as data (forPath).",
       },
@@ -1051,23 +1051,41 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      /**
+       * The scope path of the itx this collection was reached through — the
+       * "current actor". Relative `get()` paths resolve against it, and
+       * `message()` on the returned agents stamps it as the sender when it
+       * is an agent path. Captured at itx mint time (itxForScope), so it is
+       * a property of the tree, not of per-call auth.
+       */
+      sourceScopePath?: string;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The agent control surface at a path (`"/agents/<name>"`). */
+  /** The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope — `".."` climbs). */
   get(path: string): AgentRpcTarget {
+    const resolved = resolveAgentPath(path, this.props.sourceScopePath);
     return new AgentRpcTarget({
       auth: this.props.auth,
       capabilityHost: new CapabilityHostRpcTarget({
         auth: this.props.auth,
         ctx: this.props.ctx,
-        path: normalizeAgentPath(path),
+        path: resolved,
         projectId: this.props.projectId,
       }),
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      ...(this.props.sourceScopePath === undefined
+        ? {}
+        : { sourceScopePath: this.props.sourceScopePath }),
     });
   }
 
@@ -1112,9 +1130,11 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * a no-op.
    */
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+    const defaultModel = parseConfig(env).defaultAgentModel;
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
@@ -2864,6 +2884,8 @@ type AgentRpcTargetProps = {
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
   projectId: string;
+  /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
+  sourceScopePath?: string;
 };
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
@@ -2935,31 +2957,125 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  async sendMessage(message: string): Promise<StreamEvent> {
+  /**
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's `from` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  async message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent> {
+    const { message, files: fileInputs } =
+      typeof input === "string"
+        ? { message: input, files: undefined }
+        : { message: input.message, files: input.files };
+    const from = this.#messageFrom();
+    const files =
+      fileInputs === undefined || fileInputs.length === 0
+        ? undefined
+        : await storeAgentFileAttachments({
+            agentPath: from.kind === "agent" ? from.path : this.#path,
+            config: parseConfig(env),
+            files: fileInputs,
+            projectId: this.#props.projectId,
+          });
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: message, origin: "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: message,
+        from,
+        ...(files === undefined ? {} : { files }),
+      },
     });
     return event;
   }
 
+  /** WHO a message() through this handle is from: the calling scope when it is an agent, else a user. */
+  #messageFrom(): { kind: "agent"; path: string } | { kind: "user"; origin: "web" } {
+    const source = this.#props.sourceScopePath;
+    return source !== undefined && source.startsWith("/agents/")
+      ? { kind: "agent", path: source }
+      : { kind: "user", origin: "web" };
+  }
+
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * that already ran (a plain last-write-wins update) AND on a path that has
+   * never existed — the append births the agent with the full default policy
+   * plus these overrides, and the batch claims the same idempotency keys the
+   * project worker's defaults lane uses, so whichever lane runs second
+   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
+   * keeps the subagent contract: the "you are a subagent" suffix is appended
+   * after it (agents/agent-defaults.ts).
+   */
+  async configure(input: AgentDefaultsOverrides): Promise<void> {
+    const defaultModel = parseConfig(env).defaultAgentModel;
+    const defaults = agentDefaultsForPath({
+      agentPath: this.#path,
+      projectId: this.#props.projectId,
+      overrides: input,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
+    });
+    // The defaults batch (fixed keys) establishes policy on a fresh agent and
+    // dedupes away on an existing one; the keyless events are the last word
+    // when the agent already had policy applied.
+    const events: Array<{
+      type: string;
+      idempotencyKey?: string;
+      payload: Record<string, unknown>;
+    }> = [...defaults.events];
+    if (input.systemPrompt !== undefined) {
+      events.push({
+        type: "events.iterate.com/agent/config-updated",
+        payload: { systemPrompt: defaults.systemPrompt },
+      });
+    }
+    if (input.model !== undefined) {
+      events.push({
+        type: "events.iterate.com/agent/llm-provider-selected",
+        payload: { model: defaults.model },
+      });
+    }
+    await this.stream.append(...events);
+  }
+
+  /**
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like `message`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget. NOT the tool for
+   * SUBAGENTS: they are prompted to report by messaging their parent (its
+   * inputs), never web chat, so an ask() at a subagent times out — use
+   * `message()` and read the report from your own inputs.
    */
   async ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
   }): Promise<StreamEvent> {
+    const from = this.#messageFrom();
     const [sent] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: input.message, origin: input.origin ?? "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: input.message,
+        from: from.kind === "user" ? { kind: "user", origin: input.origin ?? "web" } : from,
+      },
     });
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
@@ -3021,11 +3137,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         ask: "Send a message and wait for the agent's next chat reply.",
         capabilityHost: "This agent scope's durable capability table.",
         chat: "The agent's web-chat door (sendMessage).",
+        configure:
+          "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
         kill: "Abort this Agent Durable Object incarnation; the next request boots it again.",
+        message:
+          "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
         processor: "The agent stream processor (snapshot/state).",
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
-        sendMessage: "Append a user message to the agent stream.",
         stream: "The agent's own event stream.",
       },
       parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
@@ -3974,6 +4093,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#props.projectId,
+      // The "current actor": this itx's own scope path. Relative agent paths
+      // resolve against it, and message() stamps it as the sender when the
+      // scope is an agent — how a subagent's report knows who it is from.
+      sourceScopePath: this.#props.capabilityHost.path,
     });
   }
 

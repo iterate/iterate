@@ -430,7 +430,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -445,7 +445,7 @@ describe("TelegramAgentProcessor", () => {
     ]);
     expect(calls).toEqual([
       "append:events.iterate.com/telegram/webhook-received", // the test's own seed
-      "append:events.iterate.com/agent/input-added",
+      "append:events.iterate.com/agents/message-received",
       "telegram:sendChatAction",
     ]);
 
@@ -465,7 +465,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(telegramCalls).toHaveLength(0);
   });
@@ -481,7 +481,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -518,12 +518,19 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload as {
+      content: string;
+      from?: unknown;
+      llmRequestPolicy?: unknown;
+    };
     expect(payload.content).toContain("approve");
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+    // The sender is the button PRESSER (callback_query.from), never the
+    // bot that authored the embedded message.
+    expect(payload.from).toEqual({ kind: "telegram", userId: "7" });
   });
 
   it("transcribes media as bracketed placeholders", async () => {
@@ -538,7 +545,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect((inputs[0]!.payload as { content: string }).content).toContain("[photo]");
@@ -603,7 +610,7 @@ describe("TelegramAgentProcessor", () => {
     // Durable lanes ran: the message reached the agent, and the reply was
     // delivered (its journal marker is absent on this first pass).
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(1);
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: "an old reply" }]);
     // But NO typing ack (arrival OR "still working") on a stale replay.
@@ -805,7 +812,7 @@ describe("TelegramAgentProcessor", () => {
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
     // …and the transcript records the /new WITHOUT waking the agent.
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -828,7 +835,7 @@ describe("TelegramAgentProcessor", () => {
 
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -839,7 +846,7 @@ describe("TelegramAgentProcessor", () => {
     // acknowledgement lands in the chat before the agent's answer.
     const types = stream.events.map((event) => event.type);
     expect(types.indexOf("events.iterate.com/telegram/send-requested")).toBeLessThan(
-      types.indexOf("events.iterate.com/agent/input-added"),
+      types.indexOf("events.iterate.com/agents/message-received"),
     );
   });
 
@@ -872,7 +879,7 @@ describe("TelegramAgentProcessor", () => {
     expect(code).toContain("…truncated");
     // No LLM turn and no agent input — the command IS the whole handling.
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
   });
 
@@ -891,7 +898,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const content = (inputs[0]!.payload as { content: string }).content;

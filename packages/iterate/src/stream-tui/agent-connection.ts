@@ -128,7 +128,7 @@ export function connectAgentFeed(input: {
   return {
     async sendMessage(text) {
       if (agent === undefined) throw new Error("not connected");
-      await agent.sendMessage(text);
+      await agent.message(text);
     },
     dispose() {
       disposed = true;

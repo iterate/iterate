@@ -16,6 +16,7 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -80,10 +81,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   /** Retry spacing after n consecutive LLM failures: 0 for a fresh turn, then
    * base × 2^(n-1) capped at 6× base (10s, 20s, 60s at the default base) — see
    * AGENT_LLM_RETRY_BACKOFF_BASE_MS for why instant retries are worse than
-   * none. Pure in the fold's terms, so re-derived schedules agree. */
+   * none. A REPEATED rate-limited failure jumps straight to the cap: the
+   * vendor's quota refills on a time window (Workers AI 3021 is per-minute),
+   * so once one cheap retry has confirmed the window is still hot, the
+   * ladder's middle rung would burn the last attempt inside the same minute.
+   * The first retry stays at the ladder (the failure may have been the tail
+   * of a window), so attempts land at ~t0/t10/t70 — the third in a fresh
+   * minute, still inside every 120s wait budget. Pure in the fold's terms,
+   * so re-derived schedules agree. */
   #llmRetryBackoffMs(state: AgentState): number {
     if (state.consecutiveLlmFailures <= 0) return 0;
     const base = this.deps.llmRetryBackoffBaseMs ?? AGENT_LLM_RETRY_BACKOFF_BASE_MS;
+    if (state.lastLlmFailureRateLimited && state.consecutiveLlmFailures >= 2) return base * 6;
     return Math.min(base * 2 ** (state.consecutiveLlmFailures - 1), base * 6);
   }
 
@@ -127,18 +136,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         );
         return;
       }
-      case "events.iterate.com/agents/user-message-received":
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: this.idempotencyKey("render-web-message", event),
-            payload: {
-              content: event.payload.content,
-              llmRequestPolicy: { behaviour: "after-current-request" },
-            },
-          }),
-        );
+      case "events.iterate.com/agents/message-received": {
+        // The reducer folds the message straight into history (no input-added
+        // reflection hop); the only per-event side effect is honoring an
+        // interrupt policy, exactly like input-added below.
+        if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
+        const interruptedRequest = previousState.currentRequest;
+        if (interruptedRequest === null) return;
+        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interruptedRequest)));
         return;
+      }
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
         // so the model SEES what it sent (vision) on later turns.
@@ -262,7 +269,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         }
         const retry =
           state.consecutiveLlmFailures <
-          (isRateLimitFailure(result.error.message)
+          (isRateLimitErrorMessage(result.error.message)
             ? MAX_CONSECUTIVE_RATE_LIMITED_LLM_FAILURES
             : MAX_CONSECUTIVE_LLM_FAILURES);
         blockProcessorWhile(() =>
@@ -661,6 +668,39 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
+    case "events.iterate.com/agents/message-received": {
+      // Inbound messages fold straight into history. The trigger source keys
+      // on WHO sent it: humans (web, MCP, Slack, email, GitHub) refill the
+      // autonomous turn budget; another AGENT's mail counts against it — the
+      // same breaker that stops script self-loops bounds parent↔subagent
+      // reply ping-pong, because neither side's messages reset the other.
+      const from = event.payload.from;
+      const files = event.payload.files;
+      const triggerSource =
+        event.payload.llmRequestPolicy.behaviour === "dont-trigger-request"
+          ? null
+          : from.kind === "agent"
+            ? ("agent-loop" as const)
+            : ("user" as const);
+      const content =
+        from.kind === "agent"
+          ? `Message from agent ${from.path}:\n${event.payload.content}`
+          : event.payload.content;
+      return {
+        ...state,
+        history: [
+          ...state.history,
+          {
+            role: "user",
+            content,
+            ...(files === undefined || files.length === 0 ? {} : { files }),
+          },
+        ],
+        pendingTriggerOffset: triggerSource === null ? state.pendingTriggerOffset : event.offset,
+        pendingTriggerSource: triggerSource === null ? state.pendingTriggerSource : triggerSource,
+        autonomousTurnCount: triggerSource === "user" ? 0 : state.autonomousTurnCount,
+      };
+    }
     case "events.iterate.com/agent/input-added": {
       const triggerSource = agentInputTriggerSource(event);
       const files = event.payload.files;
@@ -762,10 +802,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return next;
       }
+      const result = event.payload.result;
       return {
         ...next,
-        consecutiveLlmFailures:
-          event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        consecutiveLlmFailures: result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        lastLlmFailureRateLimited:
+          result.status === "failure" ? isRateLimitErrorMessage(result.error.message) : false,
         currentRequest: null,
         requestGeneration: state.requestGeneration + 1,
       };
@@ -815,6 +857,18 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
       };
+    case "events.iterate.com/stream/child-stream-created": {
+      // Every descendant stream announces its FULL path to every ancestor;
+      // this agent's subagents are the announcements whose parent-agent path
+      // is exactly this stream (event.path), so grandchildren stay out.
+      const childPath = event.payload.childPath;
+      if (subagentParentPath(childPath) !== event.path) return state;
+      if (state.subagents.some((subagent) => subagent.path === childPath)) return state;
+      return {
+        ...state,
+        subagents: [...state.subagents, { path: childPath, spawnedAt: event.createdAt }],
+      };
+    }
     default:
       return state;
   }
@@ -924,21 +978,26 @@ const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 
 /**
  * Rate-limited failures get a longer runway: they are provider weather, not
- * anything a fresh prompt fixes, and the per-attempt backoff (10s, 20s, then
- * 60s steps — see AGENT_LLM_RETRY_BACKOFF_BASE_MS) means seven attempts span
- * ~4.5 minutes — enough to clear a saturated per-minute window. Observed live
- * 2026-07-10 on the preview account: Workers AI `3021: rate limiting` bursts
- * while several preview slots run agent e2e concurrently killed turns at 3
- * strikes inside ~30s, while sequential traffic moments later sailed through.
+ * anything a fresh prompt fixes, and with repeat rate-limits jumping to the
+ * backoff cap (see #llmRetryBackoffMs) seven attempts span ~5 minutes —
+ * enough to clear a saturated per-minute window. Observed live 2026-07-10
+ * on the preview account: Workers AI `3021: rate limiting` bursts while
+ * several preview slots ran agent e2e concurrently killed turns at 3
+ * strikes inside ~30s, while sequential traffic moments later sailed
+ * through.
  */
 const MAX_CONSECUTIVE_RATE_LIMITED_LLM_FAILURES = 7;
 
-/** Rate-limit classification by message: Workers AI surfaces `3021: rate
- * limiting: inference request per min rate reached`; match conservatively so
- * only genuinely retry-later failures get the longer runway. Derived from
- * fold data only (the failure event's message), so refolds agree. */
-function isRateLimitFailure(message: string): boolean {
-  return /rate limit/i.test(message) || message.includes("3021");
+/**
+ * Whether an LLM failure message is the vendor telling us to slow down.
+ * Matched on the message because the transport surfaces vendor errors as
+ * text; Workers AI's shape is "3021: rate limiting: inference request per
+ * min rate reached". Drives the backoff floor in #llmRetryBackoffMs and the
+ * longer retry runway above. Derived from fold data only (the failure
+ * event's message), so refolds agree.
+ */
+function isRateLimitErrorMessage(message: string): boolean {
+  return /\b3021\b|rate.?limit/i.test(message);
 }
 
 function extractAsyncJsSnippet(content: string): string | null {
