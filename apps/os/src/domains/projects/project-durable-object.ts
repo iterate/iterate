@@ -391,6 +391,25 @@ export class ProjectDurableObject extends DurableObject<Env> {
         }
         throw error;
       }
+
+      // Grants must judge the signature requirement against FRESH key state:
+      // push delivery to this processor can lag the stream, so an unsigned
+      // grant must not slip through while a human-approval-key-added event is
+      // committed but not yet folded. Catch up BEFORE advancing the cursor —
+      // a failed catch-up retries this same event instead of dropping it
+      // (bounded by the hold's deadline).
+      if (event.type === "events.iterate.com/project/human-approval-granted") {
+        try {
+          await this.#processorHost.catchUp(ProjectProcessorContract.slug);
+        } catch (error) {
+          console.warn("egress approval: catch-up before grant key check failed", {
+            approvalRequestEventOffset: input.approvalRequestEventOffset,
+            error,
+            projectId: this.#name.projectId,
+          });
+          continue;
+        }
+      }
       cursor = event.offset;
 
       if (event.type === "events.iterate.com/project/human-approval-rejected") {

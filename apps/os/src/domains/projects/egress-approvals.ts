@@ -89,8 +89,6 @@ export const HumanApprovalRequestedPayload = z.object({
 
 export type HumanApprovalRequestedPayload = z.output<typeof HumanApprovalRequestedPayload>;
 
-type ApprovalDecision = "granted" | "rejected";
-
 /** A held request's identity is the offset of its requested event — no minted ids. */
 export const HumanApprovalResolutionPayload = z.object({
   approvalRequestEventOffset: z.number().int().nonnegative(),
@@ -182,7 +180,7 @@ export function buildApprovalMessage(input: {
     HumanApprovalRequestedPayload,
     "method" | "url" | "headers" | "bodySha256" | "secretPaths"
   >;
-  decision: ApprovalDecision;
+  decision: "granted" | "rejected";
 }): Uint8Array {
   return new TextEncoder().encode(
     canonicalJson({
