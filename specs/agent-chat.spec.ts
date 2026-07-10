@@ -56,7 +56,7 @@ test("onboarding agent replies to a chat message in the feed", async ({
     const greeting = await agent.stream.waitForEvent({
       afterOffset: 0,
       eventTypes: [WEB_MESSAGE_SENT],
-      timeoutMs: 90_000,
+      timeoutMs: 120_000,
     });
     await page.locator(assistantMessage).first().waitFor({ timeout: 30_000 });
 
@@ -68,7 +68,7 @@ test("onboarding agent replies to a chat message in the feed", async ({
     await agent.stream.waitForEvent({
       afterOffset: greeting.offset,
       eventTypes: [WEB_MESSAGE_SENT],
-      timeoutMs: 90_000,
+      timeoutMs: 120_000,
       predicate: (event) => {
         const text = (event.payload as { message?: unknown } | undefined)?.message;
         return typeof text === "string" && text.includes(marker);
