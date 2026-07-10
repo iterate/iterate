@@ -141,10 +141,12 @@ describe("itx", () => {
       const instructions = "Call search_docs on the mounted MCP docs capability.";
       const types =
         "export type Capability = { search_docs(input: { query: string }): Promise<unknown> };";
+      // "docs" itself is a builtin (the docs door), so the mount must live
+      // under a free name — provide-time collision rejection covers the rest.
       using _provision = await project.provideCapability({
         expression: ["mcp", ["connect", { headers, url: mcp.url }]],
         instructions,
-        path: ["docs"],
+        path: ["cloudflareDocs"],
         type: "itx-expression",
         types,
       });
@@ -153,7 +155,7 @@ describe("itx", () => {
         expect.arrayContaining([
           expect.objectContaining({
             instructions,
-            path: ["docs"],
+            path: ["cloudflareDocs"],
             type: "itx-expression",
             types,
           }),
@@ -161,7 +163,7 @@ describe("itx", () => {
       );
       await expect(
         // @ts-expect-error - mounted MCP capability root.
-        project.docs.search_docs({ query: "Durable Objects" }),
+        project.cloudflareDocs.search_docs({ query: "Durable Objects" }),
       ).resolves.toEqual({ answer: "docs:Durable Objects" });
 
       if (mcp.methods.length > 0) {
