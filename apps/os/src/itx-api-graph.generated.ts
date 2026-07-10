@@ -190,7 +190,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Ai",
     kind: "interface",
     sourceText:
-      '/** Workers AI binding exposed through ITX as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`). */\n  run(model: string, body: unknown): Promise<unknown>;\n  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */\n  toMarkdown(\n    ...args: CfMarkdownConversionArgs\n  ): Promise<\n    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]\n  >;\n}',
+      '/** Workers AI binding exposed through ITX as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * The optional third argument is the binding\'s own options object — e.g.\n   * `{ gateway: { id: "default", skipCache: true } }` — passed through to\n   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */\n  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;\n  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */\n  toMarkdown(\n    ...args: CfMarkdownConversionArgs\n  ): Promise<\n    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]\n  >;\n}',
     summary: "Workers AI binding exposed through ITX as a project/agent capability.",
     memberSummaries: {
       models: "List the Workers AI model catalog.",
@@ -200,6 +200,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     },
     referencedTypeNames: [
       "Description",
+      "CfAiRunOptions",
       "CfMarkdownConversionArgs",
       "CfMarkdownSupportedFormat",
       "CfMarkdownConversionResult",
@@ -1027,6 +1028,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "/** One row of the streams index: a stream and its activity, for the ⌘K list and recency sort. */\nexport type StreamIndexRow = {\n  path: string;\n  /** First time we saw the stream (its earliest observed activity). */\n  createdAt: string;\n  /** Most recent activity — the recency sort key. Monotonic (never moves backwards). */\n  lastActivityAt: string;\n  /** Type of the most recent event. */\n  lastType: string;\n  /** How many events we've observed on the stream. */\n  eventCount: number;\n};",
     summary:
       "One row of the streams index: a stream and its activity, for the ⌘K list and recency sort.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfAiRunOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** The Workers AI binding's per-call options (`env.AI.run`'s third argument),\n * published structurally so itx callers can route a call through a specific\n * AI Gateway configuration — e.g. `{ gateway: { id: \"default\", skipCache: true } }`. */\nexport type CfAiRunOptions = {\n  gateway?: {\n    id: string;\n    cacheKey?: string;\n    cacheTtl?: number;\n    skipCache?: boolean;\n    metadata?: Record<string, number | string | boolean | null>;\n    collectLog?: boolean;\n  };\n  returnRawResponse?: boolean;\n};",
+    summary:
+      "The Workers AI binding's per-call options (`env.AI.run`'s third argument), published structurally so itx callers can route a call through a specific AI Gateway configuration — e.g.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

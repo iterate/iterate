@@ -143,9 +143,11 @@ export const envs = {
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
-    // Unified billing for now; flipping prd to BYOK (still without the
-    // response cache) is a deliberate follow-up once previews have soaked.
-    cloudflareAiGatewayTransport: "unified",
+    // BYOK, like every other env: unified billing meters OpenAI-prompt-cached
+    // tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
+    // latency-neutral-or-better. NO response cache here — that knob stays
+    // preview/dev-only; a real user must never receive a cached agent reply.
+    cloudflareAiGatewayTransport: "byok",
     resources: {
       projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
       workerBuildCacheKvId: "43306c224d364c7aa804c3ff762c4d08",

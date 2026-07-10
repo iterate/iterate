@@ -43,6 +43,21 @@ export type CfMarkdownConversionArgs =
   | []
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
 
+/** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
+ * published structurally so itx callers can route a call through a specific
+ * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
+export type CfAiRunOptions = {
+  gateway?: {
+    id: string;
+    cacheKey?: string;
+    cacheTtl?: number;
+    skipCache?: boolean;
+    metadata?: Record<string, number | string | boolean | null>;
+    collectLog?: boolean;
+  };
+  returnRawResponse?: boolean;
+};
+
 export type CfBrowserQuickAction =
   | "content"
   | "screenshot"

@@ -210,6 +210,9 @@ describe("the BYOK gateway lane", () => {
     const request = fake.requests[0]!;
     expect(request.headers).not.toHaveProperty("cf-aig-cache-ttl");
     expect(request.headers).not.toHaveProperty("cf-aig-cache-key");
+    // ...and the gateway's dashboard-level cache default is explicitly
+    // opted out of: no-TTL deployments must never serve a cached reply.
+    expect(request.headers["cf-aig-skip-cache"]).toBe("true");
     // No header on the response either -> no cache-status claim in evidence.
     expect(completion.rawResponse).not.toHaveProperty("cloudflareAiGatewayResponseCacheStatus");
   });
