@@ -1050,10 +1050,27 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
   );
 }
 
-/** Amber-tinted block the response/code streams into, character by character. */
+/** Amber-tinted block the response/code streams into, character by character.
+ * Clamped to the same height as settled code and tail-pinned so the newest
+ * tokens stay visible: a long codemode turn (minutes, thousands of chunks)
+ * otherwise grows to fill the viewport and reads as one never-ending code
+ * block. Scrolling up unpins; returning to the bottom re-pins. */
 function StreamingCodeBlock({ code }: { code: string }) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const pinnedRef = useRef(true);
+  useLayoutEffect(() => {
+    const el = preRef.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [code]);
   return (
-    <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20">
+    <pre
+      ref={preRef}
+      onScroll={(event) => {
+        const el = event.currentTarget;
+        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
+    >
       {code}
       <StreamingCursor className="bg-amber-600" />
     </pre>
