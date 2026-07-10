@@ -853,6 +853,72 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 266]);
   });
 
+  it("rate-limited failures keep retrying past the generic three-strike cap", async () => {
+    const stream = new MemoryStream();
+    let attempts = 0;
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          attempts += 1;
+          throw new Error("3021: rate limiting: inference request per min rate reached");
+        },
+      },
+      // Milliseconds instead of the production 10s base (see the three-strike
+      // test above) so the backoffs run inside the test deadline.
+      llmRetryBackoffBaseMs: 8,
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "hello",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+
+    // Drive failing turns until scheduling stops advancing.
+    // Idle threshold sits well above one debounce+backoff cycle (~300ms at
+    // the shrunken test base) so a pending retry never reads as "stopped".
+    const deadline = Date.now() + 10_000;
+    let lastScheduledCount = 0;
+    let idleRounds = 0;
+    while (Date.now() < deadline && idleRounds < 60) {
+      await deliverNewEvents({ processor: agent, stream, cursors });
+      const scheduledCount = stream.events.filter(
+        (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+      ).length;
+      idleRounds = scheduledCount === lastScheduledCount ? idleRounds + 1 : 0;
+      lastScheduledCount = scheduledCount;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const errorInputs = stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        String(event.payload?.content).includes("Your LLM request failed"),
+    );
+    // Seven strikes for rate limits (vs three generic): six auto-retries, and
+    // only the seventh failure stops the loop.
+    expect(errorInputs).toHaveLength(7);
+    expect(
+      errorInputs.map(
+        (event) =>
+          (event.payload as { llmRequestPolicy: { behaviour: string } }).llmRequestPolicy.behaviour,
+      ),
+    ).toEqual([
+      ...Array.from({ length: 6 }, () => "after-current-request"),
+      "dont-trigger-request",
+    ]);
+    expect(errorInputs[6]!.payload).toMatchObject({
+      content: expect.stringContaining("automatic retries stopped"),
+    });
+    expect(attempts).toBe(7);
+  });
+
   it("repeated rate-limited failures jump the retry backoff to the ladder cap", async () => {
     // The quota refills on a time window: the first retry stays cheap (the
     // failure may have been the tail of a hot minute), but once it confirms
@@ -880,7 +946,7 @@ describe("minimal web-chat agent processors", () => {
       },
     });
 
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       await deliverNewEvents({ processor: agent, stream, cursors });
       const stopped = stream.events.some(
@@ -895,9 +961,14 @@ describe("minimal web-chat agent processors", () => {
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
     );
-    // Seed at the plain debounce, first retry on the ladder (8×1), second at
-    // the cap (8×6) instead of the exponential middle rung (266).
-    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 298]);
+    // Seed at the plain debounce, first retry on the ladder (8×1), every
+    // later retry at the cap (8×6 = 298) instead of the exponential middle
+    // rungs — across the rate-limit runway's six retries.
+    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([
+      250,
+      258,
+      ...Array.from({ length: 5 }, () => 298),
+    ]);
   });
 
   it("resets the consecutive failure counter after a successful request", async () => {
