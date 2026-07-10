@@ -853,6 +853,53 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 266]);
   });
 
+  it("rate-limited failures floor the retry backoff at the ladder cap", async () => {
+    // The quota refills on a time window, so retrying on the ladder's early
+    // rungs burns the whole budget inside the same hot minute — every retry
+    // after a rate-limit failure waits the full cap (base × 6).
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          throw new Error("3021: rate limiting: inference request per min rate reached");
+        },
+      },
+      llmRetryBackoffBaseMs: 8,
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "hello",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      await deliver();
+      const stopped = stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agent/input-added" &&
+          String(event.payload?.content).includes("automatic retries stopped"),
+      );
+      if (stopped) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    // Seed at the plain debounce, then both retries at debounce + cap (8×6)
+    // instead of the exponential rungs (258, 266).
+    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 298, 298]);
+  });
+
   it("resets the consecutive failure counter after a successful request", async () => {
     const failureTurn = (base: number, result: unknown): StreamEventInput[] => [
       {

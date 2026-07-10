@@ -242,7 +242,7 @@ const LlmRequestResult = z.discriminatedUnion("status", [
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.6.0",
+  version: "0.6.1",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
@@ -292,6 +292,14 @@ export const AgentProcessorContract = defineProcessorContract({
      * not retry-loop forever.
      */
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
+    /**
+     * Whether the most recent LLM failure was the vendor's rate limit
+     * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
+     * per-minute window — so the retry backoff floors at the ladder cap
+     * instead of burning attempts inside the same hot minute. Cleared by any
+     * success (with consecutiveLlmFailures).
+     */
+    lastLlmFailureRateLimited: z.boolean().default(false),
     /**
      * Open LLM obligations: every request that has not reached a terminal
      * event, keyed by the llm-request-requested event's offset (as a string).

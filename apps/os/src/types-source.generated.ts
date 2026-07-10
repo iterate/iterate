@@ -1648,6 +1648,7 @@ export type AgentProcessorState = {
   autonomousTurnCount: number;
   requestGeneration: number;
   consecutiveLlmFailures: number;
+  lastLlmFailureRateLimited: boolean;
   llmRequests: Record<
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }

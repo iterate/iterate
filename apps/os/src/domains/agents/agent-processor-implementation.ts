@@ -81,10 +81,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   /** Retry spacing after n consecutive LLM failures: 0 for a fresh turn, then
    * base × 2^(n-1) capped at 6× base (10s, 20s, 60s at the default base) — see
    * AGENT_LLM_RETRY_BACKOFF_BASE_MS for why instant retries are worse than
-   * none. Pure in the fold's terms, so re-derived schedules agree. */
+   * none. A RATE-LIMITED failure floors at the cap immediately: the vendor's
+   * quota refills on a time window (Workers AI 3021 is per-minute), so the
+   * ladder's early rungs would burn the whole retry budget inside the same
+   * hot minute. Pure in the fold's terms, so re-derived schedules agree. */
   #llmRetryBackoffMs(state: AgentState): number {
     if (state.consecutiveLlmFailures <= 0) return 0;
     const base = this.deps.llmRetryBackoffBaseMs ?? AGENT_LLM_RETRY_BACKOFF_BASE_MS;
+    if (state.lastLlmFailureRateLimited) return base * 6;
     return Math.min(base * 2 ** (state.consecutiveLlmFailures - 1), base * 6);
   }
 
@@ -790,10 +794,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return next;
       }
+      const result = event.payload.result;
       return {
         ...next,
-        consecutiveLlmFailures:
-          event.payload.result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        consecutiveLlmFailures: result.status === "failure" ? state.consecutiveLlmFailures + 1 : 0,
+        lastLlmFailureRateLimited:
+          result.status === "failure" ? isRateLimitErrorMessage(result.error.message) : false,
         currentRequest: null,
         requestGeneration: state.requestGeneration + 1,
       };
@@ -961,6 +967,16 @@ const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
  * for the user.
  */
 const MAX_CONSECUTIVE_LLM_FAILURES = 3;
+
+/**
+ * Whether an LLM failure message is the vendor telling us to slow down.
+ * Matched on the message because the transport surfaces vendor errors as
+ * text; Workers AI's shape is "3021: rate limiting: inference request per
+ * min rate reached". Drives the backoff floor in #llmRetryBackoffMs.
+ */
+function isRateLimitErrorMessage(message: string): boolean {
+  return /\b3021\b|rate.?limit/i.test(message);
+}
 
 function extractAsyncJsSnippet(content: string): string | null {
   // Fences count only at line starts: scripts legitimately carry ``` inside
