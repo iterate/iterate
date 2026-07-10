@@ -251,7 +251,7 @@ test("event feed view starts at the bottom on first visit while replay fills the
 
   const freshContext = await browser.newContext();
   const page = await freshContext.newPage();
-  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
   await expect(page.getByTestId("feed-item-count")).not.toHaveText(/^0 feed items$/, {
     timeout: 30_000,
   });
@@ -823,21 +823,21 @@ test("reset discards stale local rows and shows a fresh stream", async ({ page }
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 });
 
-// The event-feed view hosts the browser-event-feed processor: specific-renderer events
-// (created/woken) render as their own rows; consecutive events of the same type collapse
-// into one group row. A new type always starts a fresh row.
+// The event-feed view hosts the unified browser-feed processor: specific-renderer events
+// (created/woken) render as their own raw.* rows; consecutive events of the same type
+// collapse into one raw.group row. A new type always starts a fresh row.
 test("event-feed view renders specific renderers as singletons and groups by type", async ({
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
 
   await expect(
-    page.locator("[data-testid='feed-item'][data-component='stream.created']"),
+    page.locator("[data-testid='feed-item'][data-kind='raw.stream.created']"),
   ).toHaveCount(1);
-  await expect(
-    page.locator("[data-testid='feed-item'][data-component='stream.woken']"),
-  ).toHaveCount(1);
+  await expect(page.locator("[data-testid='feed-item'][data-kind='raw.stream.woken']")).toHaveCount(
+    1,
+  );
   await expect(
     page.locator("[data-testid='feed-lifecycle-marker'][data-kind='created']"),
   ).toContainText("Durable object created");
@@ -894,8 +894,8 @@ test("view switcher navigates between the three views", async ({ page }) => {
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
-  await page.getByTestId("view-link-browser-event-feed").click();
-  await expect(page).toHaveURL(/view=browser-event-feed/);
+  await page.getByTestId("view-link-browser-feed").click();
+  await expect(page).toHaveURL(/view=browser-feed/);
   await expect(page.getByTestId("feed-item-count")).toBeVisible();
 
   await page.getByTestId("view-link-browser-state").click();

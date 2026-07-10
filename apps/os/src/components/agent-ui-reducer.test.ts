@@ -1,4 +1,4 @@
-// Reducer coverage for the browser-side agent UI processor: a full simulated
+// Reducer coverage for the browser-side agent UI fold: a full simulated
 // turn — user message, LLM request with streamed thinking + response deltas,
 // code execution, completion, assistant reply — must reduce into the chat
 // items and live active-work tail the agent feed renders.
@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   initialAgentUiState,
-  planAgentUiOps,
+  reduceAgentUi,
+  type AgentUiItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {
@@ -22,10 +23,17 @@ function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unkn
       ...partial,
     } as unknown as Event;
   });
-  const { endState, ops } = planAgentUiOps(initialAgentUiState(), fullEvents);
-  // Settled items live in SQLite rows (one op per dense local_index); tests
-  // assert over the materialized list the virtualizer would render.
-  return { ...endState, items: ops.map((op) => op.item) };
+  let state = initialAgentUiState();
+  // Settled items live in SQLite feed_items rows (positions allocated by the
+  // browser-feed projector); tests assert over the materialized list the
+  // virtualizer would render.
+  const items: AgentUiItem[] = [];
+  for (const event of fullEvents) {
+    const step = reduceAgentUi(state, event);
+    state = step.endState;
+    items.push(...step.items);
+  }
+  return { ...state, items };
 }
 
 describe("agent-ui reducer", () => {

@@ -1,5 +1,5 @@
 // Dedupes concurrent schema migrations per SqlClient. Used by browser processor
-// implementations that own OPFS SQLite tables (browser-raw-events, browser-event-feed).
+// implementations that own OPFS SQLite tables (browser-raw-events, browser-feed).
 
 import type { SqlClient } from "./stream-browser-db.ts";
 

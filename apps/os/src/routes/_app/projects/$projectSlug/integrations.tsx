@@ -101,8 +101,6 @@ const STREAM_VIEW_SEARCH_RESET = {
   preset: undefined,
   processor: undefined,
   q: undefined,
-  raw: undefined,
-  tab: undefined,
   to: undefined,
   types: undefined,
 } satisfies Partial<z.infer<typeof StreamViewSearch>>;

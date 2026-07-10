@@ -56,7 +56,7 @@ function HydratedStreamPage({ streamView }: { streamView: StreamViewSearch }) {
 
   return (
     <StreamViewShell sidebarRuntime={sidebarRuntime} streamView={streamView}>
-      {streamView.view === "browser-event-feed" ? (
+      {streamView.view === "browser-feed" ? (
         <EventFeedView streamView={streamView} />
       ) : streamView.view === "browser-state" ? (
         <StreamStateView streamView={streamView} />

@@ -5,17 +5,17 @@ import type { Event } from "./types.ts";
 //
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
 // requests · 7.4 s") → assistant message, with quiet stream wake dividers.
-// SETTLED items are emitted as ops that the agent-ui processor writes into
-// the `agent_feed_items` SQLite table (the TanStack virtual list reads those
-// rows); the reduced state holds only what is still in flight — the live
-// activity with partially streamed thinking/response text, the presence
-// roster, and the next dense row index. The live part renders as one element
-// below the list, straight from this state, and exists only while work is
-// active.
+// SETTLED items are emitted in order; the browser-feed projector
+// (apps/os .../processors/browser-feed) interleaves them with raw feed rows
+// and allocates each one a `feed_items.local_index`. The reduced state holds
+// only what is still in flight — the live activity with partially streamed
+// thinking/response text and the presence roster. The live part renders as
+// one element below the list, straight from this state, and exists only
+// while work is active.
 //
-// Mirrors `browser-event-feed`'s planFeedOps contract: `reduce` advances
-// state one event at a time, `processEventBatch` plans the whole batch from
-// the same entry state to produce one idempotent SQLite transaction.
+// `reduce` advances state one event at a time; `processEventBatch` plans the
+// whole batch from the same entry state to produce one idempotent SQLite
+// transaction.
 // ---------------------------------------------------------------------------
 
 export type AgentUiLlmStep = {
@@ -172,8 +172,6 @@ export type AgentUiState = {
   eventCount: number;
   /** Connection roster reduced from subscriber-connected/disconnected facts. */
   presence: AgentUiPresenceEntry[];
-  /** Dense, monotonically increasing next agent_feed_items local_index. */
-  nextLocalIndex: number;
   /** Lifetime token totals + the latest report (context fullness). */
   tokenUsage: AgentUiTokenUsage;
 };
@@ -184,33 +182,29 @@ export function initialAgentUiState(): AgentUiState {
     queuedUserMessages: [],
     eventCount: 0,
     presence: [],
-    nextLocalIndex: 0,
     tokenUsage: initialAgentUiTokenUsage(),
   };
 }
 
-/** One settled item to upsert at a dense list position. */
-export type AgentUiOp = { localIndex: number; item: AgentUiItem };
-
 /**
- * Fold a batch of events into settled-item ops + the resulting state.
- * Idempotent by construction: replaying the same events from the same entry
- * state yields the same ops, and the processor upserts by local_index.
+ * Fold ONE event into settled items + the resulting state. Items are appended
+ * to `items` in emission order; the caller (the browser-feed projector) owns
+ * list positions. Idempotent by construction: replaying the same event from
+ * the same entry state yields the same items.
  */
-export function planAgentUiOps(
+export function reduceAgentUi(
   start: AgentUiState,
-  events: readonly Event[],
-): { endState: AgentUiState; ops: AgentUiOp[] } {
-  const ops: AgentUiOp[] = [];
-  let state = start;
-  for (const event of events) state = reduceAgentUiEvent(state, event, ops);
-  return { endState: state, ops };
+  event: Event,
+): { endState: AgentUiState; items: AgentUiItem[] } {
+  const items: AgentUiItem[] = [];
+  const endState = reduceAgentUiEvent(start, event, items);
+  return { endState, items };
 }
 
-/** Append a settled item op at the next dense position. */
-function emitItem(state: AgentUiState, ops: AgentUiOp[], item: AgentUiItem): AgentUiState {
-  ops.push({ localIndex: state.nextLocalIndex, item });
-  return { ...state, nextLocalIndex: state.nextLocalIndex + 1 };
+/** Append a settled item in emission order. */
+function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem): AgentUiState {
+  items.push(item);
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +250,11 @@ const STREAM_WAKE_LABEL = "Stream durable object woke";
 // Reducer
 // ---------------------------------------------------------------------------
 
-function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp[]): AgentUiState {
+function reduceAgentUiEvent(
+  previous: AgentUiState,
+  event: Event,
+  items: AgentUiItem[],
+): AgentUiState {
   const state: AgentUiState = {
     ...previous,
     queuedUserMessages: previous.queuedUserMessages ?? [],
@@ -282,7 +280,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const files = readFileAttachments(event);
       if (kind === "agent") {
         const sender = typeof from?.path === "string" ? from.path : undefined;
-        return emitUserMessageItem(state, ops, {
+        return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text,
@@ -303,7 +301,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
                 ? from?.address
                 : from?.login;
         const sender = typeof senderValue === "string" ? senderValue : undefined;
-        return emitUserMessageItem(state, ops, {
+        return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text: rendersFromRawEvent ? "" : text,
@@ -312,7 +310,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           via: { service: kind, ...(sender === undefined ? {} : { sender }) },
         });
       }
-      return emitUserMessageItem(state, ops, {
+      return emitUserMessageItem(state, items, {
         kind: "user",
         id: `user-${event.offset}`,
         text,
@@ -338,7 +336,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const isLegacySlackInput = event.idempotencyKey?.startsWith(
         "slack-agent:webhook-to-agent-input:",
       );
-      return emitUserMessageItem(state, ops, {
+      return emitUserMessageItem(state, items, {
         kind: "user",
         id: `user-file-${event.offset}`,
         text: isLegacySlackInput ? "" : text,
@@ -360,14 +358,14 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
-      return emitItem(state, ops, item);
+      return emitItem(state, items, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
       const base =
         state.queuedUserMessages.length === 0
           ? state
-          : flushQueuedUserMessages(settleLiveIfIdle(state, timestampMs, ops), ops);
+          : flushQueuedUserMessages(settleLiveIfIdle(state, timestampMs, items), items);
       const live = ensureLive(base, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
@@ -482,7 +480,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
               },
         ),
         timestampMs,
-        ops,
+        items,
       );
     }
 
@@ -496,7 +494,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           outcome: "cancelled",
         })),
         timestampMs,
-        ops,
+        items,
       );
     }
 
@@ -532,12 +530,12 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       if (step == null || step.kind !== "code") return state;
       steps[index] = { ...step, status: "done", ...outcome };
       const next = { ...state, live: { ...state.live, steps } };
-      return settleLiveIfIdle(next, timestampMs, ops);
+      return settleLiveIfIdle(next, timestampMs, items);
     }
 
     case AGENT_STATUS_UPDATED: {
       if (readString(event, "status") !== "idle") return state;
-      return settleLiveIfIdle(state, timestampMs, ops);
+      return settleLiveIfIdle(state, timestampMs, items);
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {
@@ -587,8 +585,8 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // they emit directly like web-message-sent; humans and third-party bots
       // queue while steps are running, like web user messages.
       return message.kind === "assistant"
-        ? emitItem(state, ops, item)
-        : emitUserMessageItem(state, ops, item);
+        ? emitItem(state, items, item)
+        : emitUserMessageItem(state, items, item);
     }
 
     case TELEGRAM_WEBHOOK_RECEIVED: {
@@ -596,7 +594,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // through the webhook (the outbound side renders from send-requested).
       const message = readTelegramWebhookMessage(event);
       if (message == null) return state;
-      return emitUserMessageItem(state, ops, {
+      return emitUserMessageItem(state, items, {
         kind: "user",
         id: `telegram-${event.offset}`,
         text: message.text,
@@ -615,7 +613,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // mid-turn, from inside a code step or the processor's /new ack.
       const text = readString(event, "text");
       if (text == null || text === "") return state;
-      return emitItem(state, ops, {
+      return emitItem(state, items, {
         kind: "assistant",
         id: `telegram-send-${event.offset}`,
         text,
@@ -675,7 +673,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         ),
       };
       if (isInitialStreamWake(event)) return next;
-      return emitItem(next, ops, {
+      return emitItem(next, items, {
         kind: "stream-woken",
         id: `stream-woken-${event.offset}`,
         text: STREAM_WAKE_LABEL,
@@ -686,7 +684,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case STREAM_CHILD_STREAM_CREATED: {
       const childPath = readString(event, "childPath");
       if (childPath == null) return state;
-      return emitItem(state, ops, {
+      return emitItem(state, items, {
         kind: "child-stream-created",
         id: `child-stream-created-${event.offset}`,
         childPath,
@@ -695,7 +693,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     }
 
     case STREAM_PAUSED:
-      return emitItem(state, ops, {
+      return emitItem(state, items, {
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
         text: "Agent paused",
@@ -704,7 +702,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       });
 
     case STREAM_RESUMED:
-      return emitItem(state, ops, {
+      return emitItem(state, items, {
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
         text: "Agent resumed",
@@ -742,13 +740,17 @@ function liveHasRunningStep(live: AgentUiActivity | null): boolean {
   return live?.steps.some((step) => step.status === "running") ?? false;
 }
 
-function settleLiveIfIdle(state: AgentUiState, endedAtMs: number, ops: AgentUiOp[]): AgentUiState {
+function settleLiveIfIdle(
+  state: AgentUiState,
+  endedAtMs: number,
+  items: AgentUiItem[],
+): AgentUiState {
   if (liveHasRunningStep(state.live)) return state;
-  return settleLive(state, endedAtMs, ops);
+  return settleLive(state, endedAtMs, items);
 }
 
 /** Closes the live activity (if any) and emits it as a settled item. */
-function settleLive(state: AgentUiState, endedAtMs: number, ops: AgentUiOp[]): AgentUiState {
+function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]): AgentUiState {
   if (state.live == null) return state;
   if (state.live.steps.length === 0) return { ...state, live: null };
   const settled: AgentUiActivity = {
@@ -759,13 +761,13 @@ function settleLive(state: AgentUiState, endedAtMs: number, ops: AgentUiOp[]): A
       step.status === "running" ? ({ ...step, status: "done" } as AgentUiStep) : step,
     ),
   };
-  return emitItem({ ...state, live: null }, ops, settled);
+  return emitItem({ ...state, live: null }, items, settled);
 }
 
-function flushQueuedUserMessages(state: AgentUiState, ops: AgentUiOp[]): AgentUiState {
+function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
   let next: AgentUiState = { ...state, queuedUserMessages: [] };
   for (const item of state.queuedUserMessages) {
-    next = emitItem(next, ops, item);
+    next = emitItem(next, items, item);
   }
   return next;
 }
@@ -776,13 +778,13 @@ function flushQueuedUserMessages(state: AgentUiState, ops: AgentUiOp[]): AgentUi
 // inputs.
 function emitUserMessageItem(
   state: AgentUiState,
-  ops: AgentUiOp[],
+  items: AgentUiItem[],
   item: AgentUiMessageItem,
 ): AgentUiState {
   if (liveHasRunningStep(state.live)) {
     return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
   }
-  return emitItem(state, ops, item);
+  return emitItem(state, items, item);
 }
 
 function updateLlmStep(
