@@ -5,9 +5,9 @@ import {
   buildAgentLlmRequestBody,
   contextWindowTokens,
   flattenMessageToText,
-  normalizeLlmUsage,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
+import { normalizeLlmUsage } from "./workers-ai-transport.ts";
 import {
   AgentProcessorContract,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
@@ -1418,19 +1418,19 @@ describe("token usage and history reset", () => {
       type: "events.iterate.com/agents/message-received",
       payload: { content: "hello", from: { kind: "user", origin: "web" } },
     });
-    await deliver();
-    await deliver();
-    await deliver();
+    await deliver(); // message -> schedule
+    await deliver(); // schedule starts debounce timer
+    await deliver(); // (timer fires the requested event in the background)
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
       timeoutMs: 2_000,
     });
-    await deliver();
+    await deliver(); // requested -> AI call -> output + completion + usage report
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
-    await deliver();
+    await deliver(); // deliver the settled turn (folds the usage tally)
 
     const report = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/token-usage-reported",
@@ -1478,25 +1478,27 @@ describe("token usage and history reset", () => {
       type: "events.iterate.com/agents/message-received",
       payload: { content: "hello", from: { kind: "user", origin: "web" } },
     });
-    await deliver();
-    await deliver();
-    await deliver();
+    await deliver(); // message -> schedule
+    await deliver(); // schedule starts debounce timer
+    await deliver(); // (timer fires the requested event in the background)
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
       timeoutMs: 2_000,
     });
-    await deliver();
+    await deliver(); // requested -> AI call -> output + completion + usage report
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
-    await deliver();
+    await deliver(); // deliver the settled turn (folds the usage tally)
 
     fail = true;
     await stream.append({
       type: "events.iterate.com/agents/message-received",
       payload: { content: "again", from: { kind: "user", origin: "web" } },
     });
+    // Pump the failed turn through its retry ladder: completion -> error
+    // input -> retry schedule -> requested -> failed completion, twice over.
     for (let i = 0; i < 6; i += 1) await deliver();
 
     const completions = stream.events.filter(

@@ -926,13 +926,15 @@ describe("agent-ui reducer", () => {
   });
 
   it("tallies token-usage reports and tracks the latest as context fullness", () => {
+    // Payload shapes mirror the contract's payloads exactly — the reducer
+    // reads by key, so made-up fields would pass silently and never catch
+    // drift.
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/token-usage-reported",
         payload: {
-          llmRequestId: 3,
-          provider: "openai-ws",
-          model: "gpt-5.5",
+          llmRequestOffset: 3,
+          model: "openai/gpt-5.5",
           maxContextTokens: 272_000,
           inputTokens: 1_000,
           outputTokens: 50,
@@ -940,12 +942,11 @@ describe("agent-ui reducer", () => {
           reasoningOutputTokens: 10,
         },
       },
-      // A provider without the cache/reasoning breakdown still tallies.
+      // A model without the cache/reasoning breakdown still tallies.
       {
         type: "events.iterate.com/agent/token-usage-reported",
         payload: {
-          llmRequestId: 7,
-          provider: "cloudflare-ai",
+          llmRequestOffset: 7,
           model: "@cf/moonshotai/kimi-k2.7-code",
           maxContextTokens: 256_000,
           inputTokens: 2_000,
@@ -968,5 +969,38 @@ describe("agent-ui reducer", () => {
     });
     // Usage reports render in the strip, not as feed rows.
     expect(state.items).toHaveLength(0);
+  });
+
+  it("a history-reset clears the context-fullness reading but keeps lifetime totals", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/token-usage-reported",
+        payload: {
+          llmRequestOffset: 3,
+          model: "openai/gpt-5.5",
+          maxContextTokens: 272_000,
+          inputTokens: 140_000,
+          outputTokens: 500,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/history-reset",
+        payload: {
+          systemPrompt: "You are a helpful assistant.",
+          history: [{ role: "user", content: "[Compacted summary.]" }],
+          reason: "compaction@3",
+        },
+      },
+    ]);
+
+    // The meter must not keep showing the pre-reset fullness after the
+    // conversation it measured is gone; totals are lifetime, so they stay.
+    expect(state.tokenUsage).toEqual({
+      totalInputTokens: 140_000,
+      totalOutputTokens: 500,
+      totalCachedInputTokens: 0,
+      totalReasoningOutputTokens: 0,
+      lastReport: null,
+    });
   });
 });
