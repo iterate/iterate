@@ -291,6 +291,23 @@ export function createInvokeCapabilityPathProxy(
  * The deliberate trade-off: a dynamic capability can never shadow a built-in name —
  * the built-in always wins. If we find we need shadowable built-ins a lot, we'd move
  * resolution behind the DO and pay that round trip; for now this keeps the hot path free.
+ *
+ * HARD RULE — never return the wrapped target FROM A METHOD callers pipeline on.
+ * Over workerd RPC (the `env.ITX` loopback lane every script isolate uses), a
+ * method call's RESULT is classified for promise pipelining by native brand
+ * checks that a JS Proxy can never pass (`serializeJsValueWithPipeline` in
+ * workerd's worker-rpc.c++ falls through to `NonPipelinable`), so EVERY
+ * pipelined call on it fails with "The RPC receiver does not implement the
+ * method ..." even though the awaited stub works. Proxies reached by property
+ * PATH TRAVERSAL are fine (workerd's `tryGetProperty` special-cases them) —
+ * the root itx, `itx.integrations`, and `agent.capabilityHost` are getters,
+ * so their wrapping never meets the classifier. AgentRpcTarget is
+ * deliberately NOT wrapped for exactly this reason (see its class comment);
+ * its dynamic door is `agent.capabilityHost.<name>(...)`. Other wrapped
+ * targets that ARE method results (`capabilityHosts.get`, `workers.get`,
+ * `projects.get`, `mcp.connect`) carry the same latent trap on the script
+ * lane — await the stub before calling, or unwrap them the same way when
+ * they start biting.
  */
 export function withInvokeCapabilityFallback<T extends object>(
   target: T,
