@@ -11,7 +11,7 @@ merge altered) and summarized in §0.
 Produced by a review workflow — 14 whole-tree lens critics (layering, collapse,
 duplication, path-tracing ×3, state, config, types, failure semantics, docs drift,
 dead code, test shape, narrative), 12 subsystem deep-readers, and a dedup pass —
-roughly 9M tokens of subagent reading across resumes. The adversarial-verification
+roughly 9M tokens of agent reading across resumes. The adversarial-verification
 and completeness stages were curtailed by account quota partway through, so the
 findings below are **not** machine-verified end to end; instead **every `file:line`
 cited was hand-checked against the merged tree by the reviewer** before inclusion.
