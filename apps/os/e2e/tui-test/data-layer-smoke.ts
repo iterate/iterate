@@ -24,6 +24,14 @@ const startedAt = Date.now();
 const project = await createTestProject({ slugPrefix: "tui-smoke" });
 log(`created project ${project.project.id} at ${project.baseUrl}`);
 
+// The onboarding agent births lazily on first use (the dashboard's chat page
+// does this same configure({}) when it opens); without it there is no
+// unprompted greeting to fold.
+{
+  using agent = project.agent(AGENT_PATH);
+  await agent.configure({});
+}
+
 const model = createAgentFeedModel();
 let notifyChange = () => {};
 

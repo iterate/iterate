@@ -7,7 +7,7 @@ import { ProjectCreationProgress } from "~/components/project-creation-progress.
 import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -50,18 +50,15 @@ function ProjectHomePage() {
     [],
   );
   const created = lifecycle.value?.created ?? false;
-  // Onboarding phase: the onboarding agent exists and it has not appended its
-  // completion event yet. This can happen before `project/created` now that the
-  // agent is born during project/create-requested.
-  const agents = lifecycle.value?.agents ?? [];
-  const inOnboarding =
-    lifecycle.value === undefined
-      ? false
-      : hasActiveOnboardingAgent({ agents, onboardingActive: lifecycle.value.onboardingActive });
+  // Onboarding phase: the completion event has not been appended yet. The
+  // agent itself may not exist — it births lazily when its chat page is first
+  // opened — so this keys off the phase marker alone.
+  const inOnboarding = lifecycle.value === undefined ? false : isOnboardingActive(lifecycle.value);
   const handOffToOnboarding = welcome === true && inOnboarding;
 
-  // The welcome handoff: arrived here from an older create/root redirect, so as
-  // soon as the onboarding agent exists, continue into that agent.
+  // The welcome handoff: arrived here from an older create/root redirect, so
+  // as soon as the state confirms the onboarding phase, continue into the
+  // agent page (which births the agent on open).
   useEffect(() => {
     if (!handOffToOnboarding) return;
     void navigate({
