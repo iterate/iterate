@@ -19,6 +19,7 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
+  AGENT_COMPACTION_TRIGGER_FRACTION,
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AgentProcessorContract,
@@ -304,8 +305,113 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         );
         return;
       }
+      // Compaction: a turn's usage report says how full the context ran. Past
+      // the threshold, STOP THE WORLD and summarize the conversation into a
+      // history-reset: blockProcessorWhile holds the checkpoint and every
+      // later delivery until the reset lands, so no turn can start against
+      // the history being replaced. A slow summary just means the agent
+      // pauses — the same trade every stop-the-world compactor makes.
+      case "events.iterate.com/agent/token-usage-reported": {
+        const usage = event.payload;
+        const contextTokens = usage.inputTokens + usage.outputTokens;
+        const thresholdTokens = Math.floor(
+          usage.maxContextTokens * AGENT_COMPACTION_TRIGGER_FRACTION,
+        );
+        if (contextTokens < thresholdTokens) return;
+        blockProcessorWhile(() =>
+          this.#compactHistory({
+            contextTokens,
+            llmRequestOffset: usage.llmRequestOffset,
+            state,
+            thresholdTokens,
+            triggerOffset: event.offset,
+          }),
+        );
+        return;
+      }
       default:
         return;
+    }
+  }
+
+  /** True while this incarnation has a summary in flight. Blocking work
+   * registered by one batch runs concurrently (the base gathers it in a
+   * Promise.all), so a batch carrying two over-threshold reports would
+   * otherwise summarize twice; one compaction per batch is plenty. */
+  #compactionInFlight = false;
+
+  /**
+   * One stop-the-world compaction: summarize the model-visible conversation
+   * (the fold at the triggering report) with the agent's own model, then
+   * replace history with the summary. Messages that landed while the summary
+   * ran are carried forward verbatim behind it — queued input, processed
+   * after compaction. Best-effort: every early return (and the catch) leaves
+   * the journal untouched and releases the world; the next over-threshold
+   * report retries. The one durable guard handles redelivery and recovery: a
+   * reset anywhere after the measured prompt means this trigger describes a
+   * history that is already gone.
+   */
+  async #compactHistory(input: {
+    contextTokens: number;
+    llmRequestOffset: number;
+    state: AgentState;
+    thresholdTokens: number;
+    triggerOffset: number;
+  }): Promise<void> {
+    const { contextTokens, llmRequestOffset, state, thresholdTokens, triggerOffset } = input;
+    const ai = this.deps.ai;
+    if (ai === undefined || state.history.length === 0) return;
+    if (this.#compactionInFlight) return;
+    this.#compactionInFlight = true;
+    try {
+      const resetsSinceMeasurement = await this.stream.getEvents({
+        afterOffset: llmRequestOffset,
+        eventTypes: ["events.iterate.com/agent/history-reset"],
+        limit: 1,
+      });
+      if (resetsSinceMeasurement.length > 0) return;
+
+      const transcript = state.history
+        .map(
+          (message) =>
+            `${message.role === "user" ? "User" : "Assistant"}:\n${flattenMessageToText(message)}`,
+        )
+        .join("\n\n");
+      const summary = await runWorkersAiAttempt({
+        ai,
+        deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
+        messages: [
+          { role: "system", content: AGENT_COMPACTION_PROMPT },
+          { role: "user", content: transcript },
+        ],
+        model: state.llmConfig.model,
+        onChunk: async () => {},
+      });
+
+      const stateNow = reduceAgentEvents(await this.#readConsumedEvents());
+      const carriedForward = stateNow.history.slice(state.history.length);
+      await this.append({
+        type: "events.iterate.com/agent/history-reset",
+        idempotencyKey: this.idempotencyKey(`history-reset@${triggerOffset}`),
+        payload: {
+          systemPrompt: state.systemPrompt,
+          history: [
+            {
+              role: "user" as const,
+              content: `[Earlier conversation history was compacted. Summary:]\n\n${summary.text}`,
+            },
+            ...carriedForward,
+          ],
+          reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
+        },
+      });
+    } catch {
+      // A throw here would fail the whole batch into redelivery and stall the
+      // agent behind delivery backoff — for a best-effort lane, releasing the
+      // world and letting the next over-threshold report retry is strictly
+      // better than blocking everything on a flaky summary.
+    } finally {
+      this.#compactionInFlight = false;
     }
   }
 
@@ -1013,6 +1119,28 @@ function renderFileHintLine(file: AgentFileAttachment): string {
     `convert: itx.ai.toMarkdown; public url: ${file.url}]`
   );
 }
+
+// =============================================================================
+// Compaction: over-threshold usage reports → a summarizing history-reset.
+// =============================================================================
+
+/**
+ * System prompt for the summary turn. The summary becomes the agent's ENTIRE
+ * memory of everything before the reset, so it optimizes for retrieval keys —
+ * names, paths, ids, decisions — over narrative flow.
+ */
+const AGENT_COMPACTION_PROMPT = [
+  "You are compacting an AI agent's conversation history because it is close to overflowing the model's context window. Write a summary that will REPLACE the transcript below as the agent's only memory of it.",
+  "",
+  "Preserve, with their exact spellings:",
+  "- who the user is, what they are trying to achieve, and their standing preferences or instructions",
+  "- decisions made and the reasons for them",
+  "- open tasks, promises, and anything the agent said it would do",
+  "- names, file paths, URLs, ids, and other exact strings the agent may need to reference again (including itx.files paths from attachment hint lines — files do not survive compaction except through your summary)",
+  "- key results of work already done, so it is not redone",
+  "",
+  "Write dense prose. No preamble, no headings about the summarization itself — output only the summary.",
+].join("\n");
 
 // =============================================================================
 // Context windows: model → the window the token-usage-reported payload claims.
