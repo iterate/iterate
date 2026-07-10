@@ -73,6 +73,16 @@ export type ExampleCase = {
    * tens of seconds; that is expected latency, not a hang.
    */
   completionTimeoutMs?: number;
+  /**
+   * Post-assertion teardown, run by every runner with a project-scoped itx.
+   * For examples that create real slot-level resources (sandbox containers):
+   * back-to-back e2e runs otherwise accumulate instances until Cloudflare's
+   * container provisioning throttles the whole slot into multi-minute boot
+   * stalls (every 2026-07-10 marathon died on this around run 4-6, while
+   * spaced-out PR runs never saw it). Best-effort — a cleanup failure logs,
+   * never fails the test.
+   */
+  cleanup?: (itx: unknown, ctx: ExampleRunContext) => Promise<void>;
 };
 
 /** Example ids that intentionally have no matrix case (see header). */
@@ -264,6 +274,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     vars: ({ attemptSalt }) => ({ sandboxName: `example-${attemptSalt}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
+    },
+    cleanup: async (itx, ctx) => {
+      const project = itx as {
+        sandboxes: { get(path: string): Promise<{ destroy(): Promise<unknown> }> };
+      };
+      const sandbox = await project.sandboxes.get(`/sandboxes/example-${ctx.attemptSalt}`);
+      await sandbox.destroy();
     },
   },
   "workspace-edit-and-push": {

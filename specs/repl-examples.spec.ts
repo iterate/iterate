@@ -3,6 +3,7 @@ import { spinnerWaiter } from "middlewright";
 import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
@@ -16,7 +17,7 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
 
 test.describe("itx REPL catalogue examples", () => {
   for (const { example, exampleCase } of REPL_EXAMPLES) {
-    test(`runs "${example.id}" through the project REPL`, async ({ helpers, page }) => {
+    test(`runs "${example.id}" through the project REPL`, async ({ baseURL, helpers, page }) => {
       // Cold-path examples declare their own completion budget (see
       // ExampleCase.completionTimeoutMs); the playwright test timeout must
       // not undercut it.
@@ -96,6 +97,18 @@ test.describe("itx REPL catalogue examples", () => {
       exampleCase.assert(result, ctx, expect as never);
       const visibleResult = entry.getByTestId("itx-repl-visible-result");
       await visibleResult.locator(".cm-SerializedObjectCodeBlock .cm-content").waitFor();
+
+      if (exampleCase.cleanup) {
+        // Best-effort slot hygiene (e.g. destroy the example's sandbox
+        // container) — never turns a green spec red.
+        try {
+          using admin = await connectAdminItx(baseURL!);
+          using project = admin.projects.get(fixture.project.id);
+          await exampleCase.cleanup(project, ctx);
+        } catch (error) {
+          console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
+        }
+      }
     });
   }
 });

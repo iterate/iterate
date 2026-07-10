@@ -14,8 +14,8 @@
 
 import { expect, test as baseTest } from "vitest";
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
-import { connectGlobal } from "./e2e-env.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
+import { connectGlobal, connectProject } from "./e2e-env.ts";
 import { bakeProjectWorkerRunner, MATRIX_RUNTIMES, runExampleCode } from "./example-matrix.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -153,6 +153,15 @@ for (const example of MATRIX_EXAMPLES) {
             }`,
             { cause: error },
           );
+        }
+      }
+      if (exampleCase.cleanup) {
+        // Best-effort: slot hygiene must never turn a green example red.
+        try {
+          using project = connectProject(projectId);
+          await exampleCase.cleanup(project, { attemptSalt, marker: "cleanup", projectId });
+        } catch (error) {
+          console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
         }
       }
     },
