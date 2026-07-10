@@ -23,6 +23,7 @@ import type {
   Stream,
 } from "./itx-api.generated.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
+import { runApprovalCli } from "./approve.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -1100,6 +1101,75 @@ const launcherProcedures = {
         projectId,
         headers: headersRecord(auth.requestHeaders),
         name: input.name,
+      });
+    }),
+
+  approve: os
+    .input(
+      z.object({
+        project: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe(
+            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+          ),
+        enroll: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Generate this machine's approval key (Secure Enclave when available) and enroll it before listening.",
+          ),
+        softwareKey: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("With --enroll: force a software P-256 key instead of the Secure Enclave."),
+      }),
+    )
+    .meta({
+      description:
+        "Be the human in the loop for a project's egress: watch held outbound requests and approve or reject each one (Touch-ID-signed when an enclave key is enrolled). Runs until Ctrl-C.",
+    })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+
+      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
+      // the stored `iterate login` session, kicking off a browser login if none.
+      const envAuth = osAuthFromEnvironment();
+      let authHeaders: OsAuthHeaders | undefined;
+      if (!envAuth) {
+        try {
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        } catch (error) {
+          if (!shouldAutoLoginForChat(error)) throw error;
+          console.error(
+            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
+          );
+          await loginToResolvedConfig(resolved);
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        }
+      }
+      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
+
+      const projectId = await resolveChatProject({
+        auth,
+        baseUrl: resolved.config.osBaseUrl,
+        configName: resolved.name,
+        configPath: CONFIG_PATH,
+        configuredDefaultProject: resolved.config.defaultProject,
+        explicitProject: input.project,
+      });
+
+      await runApprovalCli({
+        auth: auth.credentials,
+        baseUrl: resolved.config.osBaseUrl,
+        projectId,
+        headers: headersRecord(auth.requestHeaders),
+        enroll: input.enroll,
+        softwareKey: input.softwareKey,
       });
     }),
 
