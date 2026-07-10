@@ -1314,32 +1314,6 @@ describe("file attachments in the LLM request", () => {
   });
 });
 
-describe("subagents in reduced state", () => {
-  const announced = (childPath: string, offset: number) => ({
-    type: "events.iterate.com/stream/child-stream-created",
-    payload: { childPath },
-    offset,
-    createdAt: "2026-07-09T00:00:00.000Z",
-    path: "/agents/main",
-  });
-
-  it("folds immediate subagent births from child-stream-created announcements", () => {
-    const state = reduceAgentEvents([
-      announced("/agents/main/researcher", 1),
-      // A grandchild announces to every ancestor too — it belongs to the
-      // subagent's own fold, not this one.
-      announced("/agents/main/researcher/helper", 2),
-      // Duplicate announcements dedupe.
-      announced("/agents/main/researcher", 3),
-      // A non-subagent child stream is not a subagent.
-      announced("/repos/config/branch", 4),
-    ]);
-    expect(state.subagents).toMatchObject([
-      { path: "/agents/main/researcher", spawnedAt: "2026-07-09T00:00:00.000Z" },
-    ]);
-  });
-});
-
 describe("inter-agent mail", () => {
   const mail = (payload: Record<string, unknown>, offset: number) => ({
     type: "events.iterate.com/agents/message-received",
@@ -1357,7 +1331,7 @@ describe("inter-agent mail", () => {
       { role: "user", content: "Message from agent /agents/main:\nstatus?" },
     ]);
     // Agent mail counts against the autonomous turn budget instead of
-    // refilling it — the loop breaker bounds parent↔subagent ping-pong.
+    // refilling it — the loop breaker bounds agent↔agent ping-pong.
     expect(state.pendingTriggerSource).toBe("agent-loop");
     expect(state.pendingTriggerOffset).toBe(1);
   });

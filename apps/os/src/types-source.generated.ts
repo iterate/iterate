@@ -334,8 +334,8 @@ export interface Agent {
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
    * dedupes instead of clobbering. On a child-agent path a custom
-   * systemPrompt keeps the subagent contract: the "you are a subagent" suffix
-   * is appended after it (agents/agent-defaults.ts).
+   * systemPrompt keeps the parent-reporting guidance appended after it
+   * (agents/agent-defaults.ts).
    */
   configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
@@ -344,10 +344,10 @@ export interface Agent {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like \`message\`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report by messaging their parent (its
-   * inputs), never web chat, so an ask() at a subagent times out — use
-   * \`message()\` and read the report from your own inputs.
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer \`message()\` and read their report from your own inputs:
+   * their prompt tells them to reply by messaging the parent, not by writing to
+   * web chat, so \`ask()\` can time out waiting for a chat reply.
    */
   ask(input: {
     message: string;
@@ -1653,7 +1653,6 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
-  subagents: { path: string; spawnedAt: string }[];
 };
 
 /**

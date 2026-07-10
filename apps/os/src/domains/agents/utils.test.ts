@@ -14,7 +14,7 @@ describe("resolveAgentPath", () => {
     );
   });
 
-  it('".." climbs — a subagent reaches its parent with one segment', () => {
+  it('".." climbs — a child agent reaches its parent with one segment', () => {
     expect(resolveAgentPath("..", "/agents/main/researcher")).toBe("/agents/main");
     expect(resolveAgentPath("..", "/agents/a/b/c")).toBe("/agents/a/b");
     expect(resolveAgentPath("../..", "/agents/a/b/c")).toBe("/agents/a");

@@ -1,30 +1,25 @@
-// Subagents are ordinary agents whose streams are direct descendants of their
-// parent agent's path: `<parentAgentPath>/<name>`. Being a subagent is a
-// property of WHERE the stream sits — this module is the one path predicate
-// everything derives it from (birth mechanics, default policy, the RPC doors,
-// the UI). It lives in lib/ (not domains/agents/utils.ts) so client routes can
-// import it without pulling server config into the browser bundle.
+// Agent paths are durable stream paths under /agents/**. The only hierarchy
+// mechanics live here: resolving whether one agent should receive parent-agent
+// prompt guidance when addressed below another agent path.
 
 const PLATFORM_AGENT_NAMESPACES = new Set(["email", "mcp", "repos", "slack", "telegram"]);
 
 /**
- * The parent agent path of a subagent path, or null when the path is not a
- * subagent. A subagent lives at `<parentAgentPath>/<name>`, so the immediate
- * path parent decides ownership and nesting recurses (the parent of
- * `/agents/a/b/c` is `/agents/a/b`). The parent must itself be an agent path,
- * so `/agents/x` — whose parent would be the `/agents` directory — is not a
- * subagent.
+ * The parent agent path for a child agent path, or null when the path is a
+ * root-level agent or a platform-routed leaf agent. A manually addressed child
+ * lives at `<parentAgentPath>/<name>`, so the immediate path parent decides
+ * ownership and nesting recurses (`/agents/a/b/c` reports to `/agents/a/b`).
  *
- * Platform-owned routed agents also live under `/agents/**` (Slack threads,
- * Telegram chats, email threads, PRs, MCP sessions). Those route leaves are
- * not subagents, but descendants beneath a route leaf are: a Slack thread at
- * `/agents/slack/main/C1/ts-1` can delegate to `/agents/slack/main/C1/ts-1/helper`.
+ * Platform-routed agents also live under `/agents/**` (Slack threads, Telegram
+ * chats, email threads, PRs, MCP sessions). Their route leaves are first-class
+ * agents, not children of intermediate route segments; descendants beneath a
+ * route leaf are ordinary child agents.
  *
- * A multi-segment relative path implies intermediate streams (spawning
- * `team/researcher` announces `/agents/main/team` too), and those
- * intermediates are subagents by this rule. Addresses are paths, not names.
+ * This is intentionally not a listing mechanism. The only agent catalog is
+ * `itx.agents.list()`; this helper is for prompt selection and avoiding
+ * platform-route processors on child paths.
  */
-export function subagentParentPath(agentPath: string): string | null {
+export function childAgentParentPath(agentPath: string): string | null {
   const segments = agentPath.split("/").filter(Boolean);
   if (segments[0] !== "agents" || segments.length < 3) return null;
   if (isPlatformRouteLeaf(segments)) return null;
