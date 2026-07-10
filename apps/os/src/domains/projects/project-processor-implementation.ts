@@ -3,7 +3,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
-import { subagentParentPath } from "../../lib/subagent-paths.ts";
+import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -234,21 +234,21 @@ export class ProjectProcessor extends StreamProcessor<
             // config-repo-template/worker.ts and agents/agent-defaults.ts).
             // Slack/Telegram-agent wiring requires the full routed-path shape
             // — the connection segment is what replies authenticate with.
-            // Subagents are checked FIRST: the thread predicates are
-            // shape-loose (Slack matches any >=6-segment path under its
-            // connection, email matches by prefix), and a subagent nested
-            // under a thread agent must not inherit its transcriber.
-            const isSubagent = subagentParentPath(childPath) !== null;
-            const isSlack = !isSubagent && slackConnectionFromAgentPath(childPath) !== null;
-            const isTelegram = !isSubagent && telegramConnectionFromAgentPath(childPath) !== null;
+            // Child-agent paths are checked FIRST: the routed-agent predicates
+            // are shape-loose (Slack matches any >=6-segment path under its
+            // connection, email matches by prefix), and a child under a routed
+            // agent must not inherit its transcriber.
+            const isChildAgent = childAgentParentPath(childPath) !== null;
+            const isSlack = !isChildAgent && slackConnectionFromAgentPath(childPath) !== null;
+            const isTelegram = !isChildAgent && telegramConnectionFromAgentPath(childPath) !== null;
             await appendTo(
               childPath,
               // Stable idempotency keys: retried deliveries and re-created
               // child streams collapse into one durable subscription set.
               ...agentSubscriptionEvents({
                 childPath,
-                email: !isSubagent && isEmailAgentPath(childPath),
-                githubPr: !isSubagent && isPrAgentPath(childPath),
+                email: !isChildAgent && isEmailAgentPath(childPath),
+                githubPr: !isChildAgent && isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
                 telegram: isTelegram,

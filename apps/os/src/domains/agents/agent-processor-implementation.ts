@@ -16,7 +16,6 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -218,13 +217,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
-          const code = extractAsyncJsSnippet(event.payload.content);
-          if (code === null) return;
+          const extraction = extractAsyncJsSnippet(event.payload.content);
+          if (extraction.kind === "none") return;
+          if (extraction.kind === "multiple") {
+            // Corrective feedback, same lane as a thrown script: the model
+            // reads why nothing ran and resends. after-current-request so the
+            // retry turn fires without a user nudge.
+            await append({
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: this.idempotencyKey("multi-snippet-rejected", event),
+              payload: {
+                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`js block.`,
+                llmRequestPolicy: { behaviour: "after-current-request" },
+              },
+            });
+            return;
+          }
           await append({
             type: "events.iterate.com/capability-host/script-execution-requested",
             idempotencyKey: this.idempotencyKey("script-execution-requested", event),
             payload: {
-              code,
+              code: extraction.code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
               expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
             },
@@ -693,8 +706,8 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       // Inbound messages fold straight into history. The trigger source keys
       // on WHO sent it: humans (web, MCP, Slack, email, GitHub) refill the
       // autonomous turn budget; another AGENT's mail counts against it — the
-      // same breaker that stops script self-loops bounds parent↔subagent
-      // reply ping-pong, because neither side's messages reset the other.
+      // same breaker that stops script self-loops bounds agent↔agent reply
+      // ping-pong, because neither side's messages reset the other.
       const from = event.payload.from;
       const files = event.payload.files;
       const triggerSource =
@@ -703,9 +716,13 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           : from.kind === "agent"
             ? ("agent-loop" as const)
             : ("user" as const);
+      // Child-agent-ness is not a birth-time prompt: everything an agent
+      // needs to know about talking to the sender rides on the message
+      // itself. The sender agent never sees this chat's sendMessage output,
+      // so the label spells out the reply door.
       const content =
         from.kind === "agent"
-          ? `Message from agent ${from.path}:\n${event.payload.content}`
+          ? `Message from agent ${from.path} (that agent cannot see your web chat — to reply to it: await itx.agents.get(${JSON.stringify(from.path)}).message(text)):\n${event.payload.content}`
           : event.payload.content;
       return {
         ...state,
@@ -902,18 +919,6 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
       };
-    case "events.iterate.com/stream/child-stream-created": {
-      // Every descendant stream announces its FULL path to every ancestor;
-      // this agent's subagents are the announcements whose parent-agent path
-      // is exactly this stream (event.path), so grandchildren stay out.
-      const childPath = event.payload.childPath;
-      if (subagentParentPath(childPath) !== event.path) return state;
-      if (state.subagents.some((subagent) => subagent.path === childPath)) return state;
-      return {
-        ...state,
-        subagents: [...state.subagents, { path: childPath, spawnedAt: event.createdAt }],
-      };
-    }
     default:
       return state;
   }
@@ -1077,18 +1082,32 @@ function isRateLimitErrorMessage(message: string): boolean {
   return /\b3021\b|rate.?limit/i.test(message);
 }
 
-function extractAsyncJsSnippet(content: string): string | null {
+const FENCED_SNIPPET_RE =
+  /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+
+type SnippetExtraction =
+  | { kind: "script"; code: string }
+  // The model queued several scripts in one response (planning ahead).
+  // Executing only the first and dropping the rest silently is the worst
+  // option — the model believes everything it wrote will run — so the caller
+  // rejects the whole output with corrective feedback instead.
+  | { kind: "multiple"; count: number }
+  | { kind: "none" };
+
+function extractAsyncJsSnippet(content: string): SnippetExtraction {
   // Fences count only at line starts: scripts legitimately carry ``` inside
   // string literals (chat messages formatted as markdown), and in valid JS
   // those always sit mid-line — a raw newline cannot appear in a string
   // literal, and an unescaped ``` would terminate a template literal. A fence
   // match anywhere used to cut the script at the first embedded ``` and
   // execute an unparseable prefix (unclosed string literal).
-  const fenced = content.match(
-    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
-  );
+  const blocks = content.match(new RegExp(FENCED_SNIPPET_RE, "gim")) ?? [];
+  if (blocks.length > 1) return { kind: "multiple", count: blocks.length };
+  const fenced = content.match(FENCED_SNIPPET_RE);
   const code = (fenced?.[1] ?? content).trim();
-  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
+  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)
+    ? { kind: "script", code }
+    : { kind: "none" };
 }
 
 // The "tool result" half of the codemode loop: a finished script execution

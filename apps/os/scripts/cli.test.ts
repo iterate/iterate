@@ -72,6 +72,32 @@ it("prefers the configured canonical MCP URL", async () => {
   void info;
 });
 
+it("can opt into the assistant MCP tool with a URL parameter", async () => {
+  using env = temporaryEnv({
+    APP_CONFIG_ADMIN_API_SECRET: "secret",
+    APP_CONFIG_MCP__BASE_URL: "https://mcp.iterate.com",
+  });
+  using fetch = temporaryGlobal(
+    "fetch",
+    vi.fn(async () => new Response("event: message\ndata: {}\n\n", { status: 200 })),
+  );
+  using info = temporaryConsoleInfo();
+
+  await claudeMcp({ withAgent: true });
+
+  expect(fetch.fn).toHaveBeenCalledWith(
+    "https://mcp.iterate.com/?withAgent=true",
+    expect.objectContaining({
+      headers: expect.objectContaining({
+        Authorization: "Bearer secret",
+      }),
+    }),
+  );
+  expect(info.lines.join("\n")).toContain('"url":"https://mcp.iterate.com/?withAgent=true"');
+
+  void env;
+});
+
 it("rejects 401 with an admin token hint", async () => {
   using env = temporaryEnv({
     APP_CONFIG_ADMIN_API_SECRET: "wrong",

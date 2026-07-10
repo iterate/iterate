@@ -1,8 +1,7 @@
 import { useEffect } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
-import { subagentParentPath } from "~/lib/subagent-paths.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
@@ -107,23 +106,8 @@ function ProjectAgentDetailContent() {
     });
   }
 
-  const parentPath = subagentParentPath(streamPath);
-
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {parentPath === null ? null : (
-        <div className="border-b px-4 py-1.5 text-xs text-muted-foreground">
-          subagent of{" "}
-          <Link
-            to="/projects/$projectSlug/agents/streams/$"
-            params={{ projectSlug: project.slug, _splat: parentPath }}
-            search={{}}
-            className="font-mono underline underline-offset-2 hover:text-foreground"
-          >
-            {parentPath}
-          </Link>
-        </div>
-      )}
       <div className="min-h-0 flex-1">
         <ProjectStreamView
           autoFocusMessageComposer

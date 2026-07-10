@@ -371,9 +371,10 @@ export interface Agent {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
    */
   configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
@@ -382,10 +383,11 @@ export interface Agent {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like \`message\`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report by messaging their parent (its
-   * inputs), never web chat, so an ask() at a subagent times out — use
-   * \`message()\` and read the report from your own inputs.
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer \`message()\` and read their report from your own inputs:
+   * every agent-sourced message is labeled with how to reply (message the
+   * sender, whose web chat nobody watches), so \`ask()\` can time out waiting
+   * for a chat reply that never comes.
    */
   ask(input: {
     message: string;
@@ -1681,7 +1683,6 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
-  subagents: { path: string; spawnedAt: string }[];
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -1730,7 +1731,9 @@ export type StreamEvent = {
   path: string;
 };
 
-/** Caller-supplied policy overrides, baked into the returned events. */
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the path's platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
   model?: string;
