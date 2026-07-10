@@ -91,8 +91,15 @@ for (const example of MATRIX_EXAMPLES) {
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
       expect(runtimes.length).toBeGreaterThan(0);
 
+      // Fresh per attempt, shared across this attempt's runtimes — see
+      // ExampleRunContext.attemptSalt.
+      const attemptSalt = crypto.randomUUID().slice(0, 8);
       for (const runtime of runtimes) {
-        const ctx = { marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`, projectId };
+        const ctx = {
+          attemptSalt,
+          marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
+          projectId,
+        };
         const vars = exampleCase.vars?.(ctx) ?? {};
         try {
           const result = await runExampleCode(runtime, {

@@ -51,6 +51,16 @@
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
+  /**
+   * Unique per test ATTEMPT, shared across the runtimes within it. For
+   * resources where the attempt should share one instance (the first runtime
+   * pays the cold path, the rest reuse it warm) but a RETRY must get a fresh
+   * one — a vitest retry that reuses the previous attempt's stuck resource
+   * can never recover (the sandbox container stall, marathons of
+   * 2026-07-10: the REPL spec's retry healed on a fresh placement while the
+   * matrix retry waited on the same stuck container).
+   */
+  attemptSalt: string;
   projectId: string;
 };
 
@@ -242,7 +252,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "sandbox-exec": {
     // One shared sandbox name for the whole matrix: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
-    // (the example's get-or-create makes reuse natural). No marker on
+    // (the example's get-or-create makes reuse natural), and the retry's
+    // attemptSalt re-rolls the container placement. No marker on
     // purpose. 150s: a healthy cold boot is well under a minute; a boot
     // past this is a container stuck provisioning on a bad placement, and
     // the retry's FRESH attempt re-rolls placement and typically lands in
@@ -250,7 +261,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
     // stalled the spec AND examples-matrix; the retry passed in 14.8s).
     completionTimeoutMs: 150_000,
-    vars: () => ({ sandboxName: "example-matrix" }),
+    vars: ({ attemptSalt }) => ({ sandboxName: `example-${attemptSalt}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
     },
