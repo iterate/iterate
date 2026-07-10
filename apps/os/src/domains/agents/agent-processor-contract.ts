@@ -179,7 +179,13 @@ export const AgentFileAttachment = z.object({
 });
 export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
 
-const ChatMessage = z.object({
+/**
+ * One model-visible history item as the LLM turn receives it: a user or
+ * assistant turn, plus any file attachments. `history-reset` payloads are
+ * arrays of these, so a reset can rebuild any history shape — summary-only,
+ * or summary plus recent turns kept verbatim.
+ */
+const AgentInputItem = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   files: z.array(AgentFileAttachment).optional(),
@@ -242,12 +248,12 @@ const LlmRequestResult = z.discriminatedUnion("status", [
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.6.2",
+  version: "0.7.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
     systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
-    history: z.array(ChatMessage).default([]),
+    history: z.array(AgentInputItem).default([]),
     llmConfig: z
       .object({
         model: z.string().min(1),
@@ -321,6 +327,20 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /**
+     * Lifetime token totals, folded from token-usage-reported. Cost/observability
+     * data, not loop-control state: nothing in the agent loop branches on it.
+     * The compaction trigger reads each report's own payload instead (the
+     * report carries `maxContextTokens` for exactly that).
+     */
+    tokenUsage: z
+      .object({
+        totalInputTokens: z.number().int().nonnegative().default(0),
+        totalOutputTokens: z.number().int().nonnegative().default(0),
+        totalCachedInputTokens: z.number().int().nonnegative().default(0),
+        totalReasoningOutputTokens: z.number().int().nonnegative().default(0),
+      })
+      .prefault({}),
   }),
   events: {
     "events.iterate.com/agent/config-updated": {
@@ -592,6 +612,82 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/agent/token-usage-reported": {
+      description:
+        "Normalized token counts and the model's context window for a successfully completed " +
+        "LLM request. The processor translates vendor usage dialects (input_tokens vs " +
+        "prompt_tokens) at source, so consumers — the state tally, cost views, and compaction — " +
+        "see one shape.",
+      payloadSchema: z.object({
+        /** The llm-request-requested event this request ran under — the same
+         * handle the lifecycle events carry. */
+        llmRequestOffset: z.number().int().positive(),
+        model: z.string().min(1),
+        /** The model's context window, so a consumer can judge fullness from the event alone. */
+        maxContextTokens: z.number().int().positive(),
+        /** Total input tokens, including cached ones. */
+        inputTokens: z.number().int().nonnegative(),
+        /** Total output tokens, including reasoning ones. */
+        outputTokens: z.number().int().nonnegative(),
+        /** Prompt-cache hits, where the model reports them. */
+        cachedInputTokens: z.number().int().nonnegative().optional(),
+        /** Reasoning/thinking tokens, where the model reports them. */
+        reasoningOutputTokens: z.number().int().nonnegative().optional(),
+      }),
+      examples: [
+        {
+          description:
+            "An OpenAI model reports a mostly-cache-hit request at about a tenth of the model's window.",
+          payload: {
+            llmRequestOffset: 57,
+            model: "openai/gpt-5.5",
+            maxContextTokens: 272000,
+            inputTokens: 29295,
+            outputTokens: 111,
+            cachedInputTokens: 28416,
+            reasoningOutputTokens: 0,
+          },
+        },
+        {
+          description: "A Workers AI model reports totals only — no cache/reasoning breakdown.",
+          payload: {
+            llmRequestOffset: 61,
+            model: "@cf/moonshotai/kimi-k2.7-code",
+            maxContextTokens: 256000,
+            inputTokens: 4096,
+            outputTokens: 118,
+          },
+        },
+      ],
+    },
+    "events.iterate.com/agent/history-reset": {
+      description:
+        "Replaces the agent's model-visible history and system prompt wholesale. Anything may " +
+        "append this — the platform never does; it exists for userspace history management " +
+        "such as compaction (summarize-then-reset).",
+      payloadSchema: z.object({
+        systemPrompt: z.string(),
+        history: z.array(AgentInputItem),
+        reason: z.string().optional(),
+      }),
+      examples: [
+        {
+          description:
+            "A userspace compaction reaction replaces a near-full history with a summary; the offset in the reason is the token-usage-reported event that triggered it.",
+          payload: {
+            systemPrompt: "You are a helpful assistant.",
+            history: [
+              {
+                role: "user",
+                content:
+                  "[Earlier conversation history was compacted. Summary:]\n\nThe user is debugging a failing deploy...",
+              },
+            ],
+            reason: "compaction@1042: ~180000 tokens > 136000",
+          },
+        },
+      ],
+    },
     "events.iterate.com/agent/llm-request-cancelled": {
       description: "The current scheduled or requested LLM request was cancelled.",
       payloadSchema: z.discriminatedUnion("phase", [
@@ -668,6 +764,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/token-usage-reported",
+    "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-completed",
@@ -680,6 +778,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-response-chunk",
     "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",

@@ -79,16 +79,12 @@ type BrowserStreamConnectionConfig = {
 };
 
 /**
- * What `runtimeState()` returns on itx: `coreProcessorState` is
- * deliberately `unknown` on the public `Stream` capability (the full core state
- * is server internals). The runtime parses the slice it needs through
- * `parseBrowserCoreProcessorState`.
+ * The browser-hosted runtime only depends on the stream core state. The public
+ * `Stream.runtimeState()` also returns server-side runtime diagnostics, but
+ * browser processors should not type or depend on that debug payload.
  */
 export type StreamRuntimeState = {
   coreProcessorState: unknown;
-  runtime: {
-    connections: Record<string, unknown>;
-  };
 };
 
 /**

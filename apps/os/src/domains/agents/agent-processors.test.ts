@@ -3,9 +3,11 @@ import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   AgentProcessor,
   buildAgentLlmRequestBody,
+  contextWindowTokens,
   flattenMessageToText,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
+import { normalizeLlmUsage } from "./workers-ai-transport.ts";
 import {
   AgentProcessorContract,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
@@ -1429,5 +1431,307 @@ describe("inter-agent mail", () => {
     ]);
     expect(state.history).toHaveLength(1);
     expect(state.pendingTriggerOffset).toBeNull();
+  });
+});
+
+describe("token usage and history reset", () => {
+  it("reports normalized usage alongside a successful completion, and the fold tallies it", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          return {
+            response: "hello!",
+            usage: {
+              prompt_tokens: 2900,
+              completion_tokens: 111,
+              total_tokens: 3011,
+              prompt_tokens_details: { cached_tokens: 128 },
+              completion_tokens_details: { reasoning_tokens: 2 },
+            },
+          };
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "hello", from: { kind: "user", origin: "web" } },
+    });
+    await deliver(); // message -> schedule
+    await deliver(); // schedule starts debounce timer
+    await deliver(); // (timer fires the requested event in the background)
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
+    });
+    await deliver(); // requested -> AI call -> output + completion + usage report
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    await deliver(); // deliver the settled turn (folds the usage tally)
+
+    const report = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/token-usage-reported",
+    );
+    const requested = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/llm-request-requested",
+    );
+    expect(report?.payload).toEqual({
+      llmRequestOffset: requested!.offset,
+      model: "openai/gpt-5.5",
+      maxContextTokens: 272_000,
+      inputTokens: 2900,
+      outputTokens: 111,
+      cachedInputTokens: 128,
+      reasoningOutputTokens: 2,
+    });
+
+    const state = reduceAgentEvents(stream.events);
+    expect(state.tokenUsage).toEqual({
+      totalInputTokens: 2900,
+      totalOutputTokens: 111,
+      totalCachedInputTokens: 128,
+      totalReasoningOutputTokens: 2,
+    });
+  });
+
+  it("skips the report when the vendor sent no parseable usage, and on failures", async () => {
+    const stream = new MemoryStream();
+    let fail = false;
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          if (fail) throw new Error("vendor exploded");
+          return { response: "no usage here" };
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "hello", from: { kind: "user", origin: "web" } },
+    });
+    await deliver(); // message -> schedule
+    await deliver(); // schedule starts debounce timer
+    await deliver(); // (timer fires the requested event in the background)
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
+    });
+    await deliver(); // requested -> AI call -> output + completion + usage report
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    await deliver(); // deliver the settled turn (folds the usage tally)
+
+    fail = true;
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "again", from: { kind: "user", origin: "web" } },
+    });
+    // Pump the failed turn through its retry ladder: completion -> error
+    // input -> retry schedule -> requested -> failed completion, twice over.
+    for (let i = 0; i < 6; i += 1) await deliver();
+
+    const completions = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+    );
+    expect(completions.length).toBeGreaterThanOrEqual(1);
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/token-usage-reported"),
+    ).toBe(false);
+  });
+
+  it("normalizes both vendor usage dialects and rejects shapes without totals", () => {
+    // OpenAI Responses dialect.
+    expect(
+      normalizeLlmUsage({
+        input_tokens: 29_295,
+        output_tokens: 111,
+        input_tokens_details: { cached_tokens: 28_416 },
+        output_tokens_details: { reasoning_tokens: 0 },
+      }),
+    ).toEqual({
+      inputTokens: 29_295,
+      outputTokens: 111,
+      cachedInputTokens: 28_416,
+      reasoningOutputTokens: 0,
+    });
+    // Workers-AI-native totals-only.
+    expect(normalizeLlmUsage({ prompt_tokens: 4096, completion_tokens: 118 })).toEqual({
+      inputTokens: 4096,
+      outputTokens: 118,
+    });
+    expect(normalizeLlmUsage(undefined)).toBeUndefined();
+    expect(normalizeLlmUsage({ total_tokens: 5000 })).toBeUndefined();
+  });
+
+  it("longest-prefix matches context windows, with a conservative default", () => {
+    expect(contextWindowTokens("openai/gpt-5.5")).toBe(272_000);
+    expect(contextWindowTokens("openai/gpt-5.5-2026-01-15")).toBe(272_000);
+    expect(contextWindowTokens("@cf/moonshotai/kimi-k2.7-code")).toBe(256_000);
+    expect(contextWindowTokens("@cf/qwen/qwen3-coder-plus")).toBe(128_000);
+  });
+
+  it("history-reset replaces history and system prompt wholesale; the next request body shrinks", () => {
+    const event = (input: { type: string; payload: Record<string, unknown> }, offset: number) => ({
+      createdAt: "2026-07-09T00:00:00.000Z",
+      path: "/agents/main",
+      offset,
+      ...input,
+    });
+    const before = [
+      event(
+        {
+          type: "events.iterate.com/agents/message-received",
+          payload: { content: "long question one", from: { kind: "user", origin: "web" } },
+        },
+        1,
+      ),
+      event(
+        {
+          type: "events.iterate.com/agent/output-added",
+          payload: { content: "long answer one" },
+        },
+        2,
+      ),
+      event(
+        {
+          type: "events.iterate.com/agents/message-received",
+          payload: { content: "long question two", from: { kind: "user", origin: "web" } },
+        },
+        3,
+      ),
+    ];
+    const reset = event(
+      {
+        type: "events.iterate.com/agent/history-reset",
+        payload: {
+          systemPrompt: "You are terse.",
+          history: [{ role: "user", content: "[Compacted summary: user asks long questions.]" }],
+          reason: "compaction@3",
+        },
+      },
+      4,
+    );
+    const after = event(
+      {
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "and now?", from: { kind: "user", origin: "web" } },
+      },
+      5,
+    );
+
+    const state = reduceAgentEvents([...before, reset, after]);
+    expect(state.systemPrompt).toBe("You are terse.");
+    expect(state.history).toEqual([
+      { role: "user", content: "[Compacted summary: user asks long questions.]" },
+      { role: "user", content: "and now?" },
+    ]);
+
+    const body = buildAgentLlmRequestBody({
+      events: [...before, reset, after],
+      llmRequestOffset: 6,
+    });
+    expect(body.messages).toEqual([
+      { role: "system", content: "You are terse." },
+      { role: "user", content: "[Compacted summary: user asks long questions.]" },
+      { role: "user", content: "and now?" },
+    ]);
+  });
+
+  it("a context-length vendor error turns into a completed failure the reset can then clear", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      llmRetryBackoffBaseMs: 1,
+      ai: {
+        async run(_model, body) {
+          const chars = JSON.stringify(body).length;
+          if (chars > 5_000) {
+            throw new Error("3020: prompt too long: context length exceeded");
+          }
+          return { response: "ok", usage: { prompt_tokens: 40, completion_tokens: 3 } };
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "x".repeat(8_000), from: { kind: "user", origin: "web" } },
+    });
+
+    // The oversized turn fails and auto-retries (1ms backoff) until the
+    // consecutive-failure cap; drain the whole ladder so no late retry can
+    // race the reset below and succeed against the compacted history.
+    const failures = () =>
+      stream.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-completed" &&
+          (event.payload?.result as { status?: string } | undefined)?.status === "failure",
+      );
+    for (let i = 0; i < 200 && failures().length < 3; i += 1) {
+      await deliver();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(failures().length).toBe(3);
+    expect(failures()[0]!.payload?.result).toMatchObject({
+      status: "failure",
+      error: { message: expect.stringContaining("context length exceeded") },
+    });
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/token-usage-reported"),
+    ).toBe(false);
+
+    // Userspace compaction appends a reset; the next turn's body is small
+    // (the reset also replaced the huge system prompt) and the same vendor
+    // now accepts it.
+    await stream.append({
+      type: "events.iterate.com/agent/history-reset",
+      payload: {
+        systemPrompt: "You are terse.",
+        history: [{ role: "user", content: "[Compacted summary.]" }],
+        reason: "compaction@1",
+      },
+    });
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "short follow-up", from: { kind: "user", origin: "web" } },
+    });
+    const successes = () =>
+      stream.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-completed" &&
+          (event.payload?.result as { status?: string } | undefined)?.status === "success",
+      );
+    for (let i = 0; i < 200 && successes().length === 0; i += 1) {
+      await deliver();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await deliver();
+
+    expect(successes()).toHaveLength(1);
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/agent/token-usage-reported",
+      ),
+    ).toHaveLength(1);
   });
 });
