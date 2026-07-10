@@ -170,15 +170,10 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const workerSource = await project.repo.readFile({ path: "worker.ts" });
   expect(workerSource?.content).toContain("const APPS");
   const tree = await project.repo.listFiles();
-  expect(tree.paths).toEqual(
-    expect.arrayContaining([
-      "worker.ts",
-      "sdk.ts",
-      "apps/hello/worker.ts",
-      "apps/counter/worker.ts",
-      "package.json",
-    ]),
-  );
+  expect(tree.paths).toEqual(expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]));
+  // The seed is ONE worker file — the example apps are named exports of it.
+  expect(tree.paths).not.toContain("sdk.ts");
+  expect(tree.paths.some((path: string) => path.startsWith("apps/"))).toBe(false);
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.

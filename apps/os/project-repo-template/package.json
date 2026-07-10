@@ -4,9 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "description": "Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. The iterate/sdk types are a devDependency: worker code only `import type`s from it, so the build pipeline never needs it — it's for typechecking and editor support after `npm install`.",
-  "dependencies": {
-    "@slack/web-api": "^7.14.1"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",

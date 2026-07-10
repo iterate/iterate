@@ -7,13 +7,16 @@
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
 
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
  * Telegram is excluded: it connects by bot-token paste (`connectTelegram`),
- * with no redirect and no signed state. */
-export type OAuthProviderSlug = Exclude<BuiltinIntegrationSlug, "telegram">;
+ * with no redirect and no signed state. Waitrose is excluded too: it connects
+ * by writing the connection secret (username/password plus the
+ * `waitrose-session` refresh strategy) — the Secret DO logs in itself on
+ * first use. */
+export type OAuthProviderSlug = Exclude<BuiltinIntegrationSlug, "telegram" | "waitrose">;
 
 /** Input to `itx.integrations.google["<connection>"].gmail.request(...)` — a
  * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the

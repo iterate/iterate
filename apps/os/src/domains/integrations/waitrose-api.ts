@@ -1,43 +1,36 @@
-/**
- * Vendored Waitrose client — the wire shapes of the reverse-engineered
- * Android app against `https://www.waitrose.com`, pared down to the
- * operations this integration uses: shopping context, trolley reads and
- * writes (GraphQL), and product search (REST).
- *
- * Sessions are handled by the PLATFORM, not by this client: the connection
- * secret at `/secrets/integrations/waitrose/<connection>/session` holds the
- * account's `username`/`password` and is configured with the
- * `waitrose-session` refresh strategy, so the secret's own Durable Object runs
- * {@link NEW_SESSION_MUTATION} whenever the stored session is missing (first
- * use) or a request answers 401 (Waitrose has no refresh grant — re-login IS
- * the refresh). This client only ever sends a `getSecret(...)` placeholder as
- * its bearer; project egress substitutes the real token en route, so
- * integration code never holds credentials. See ./README.md for setup.
- */
+// Waitrose access for itx: the vendored wire shapes of the reverse-engineered
+// Android app against `https://www.waitrose.com`, pared down to the
+// operations the integration uses — shopping context, trolley reads and
+// writes (GraphQL), and product search (REST).
+//
+// Sessions are handled by the SECRET SYSTEM, not by this client: the
+// connection secret at `/secrets/integrations/waitrose/<connection>/session`
+// holds the account's `username`/`password` and is configured with the
+// `waitrose-session` refresh strategy, so the secret's own Durable Object
+// re-runs the vendor's NewSession login mutation (its copy lives with the
+// strategy in secrets/secret-durable-object.ts) whenever the stored session
+// is missing (first use) or a request answers 401 (Waitrose has no refresh grant —
+// re-login IS the refresh). This client only ever sends a `getSecret(...)`
+// placeholder as its bearer; project egress substitutes the real token en
+// route, so no isolate outside the Secret DO ever holds credentials.
 
-/** The real Waitrose origin. Override `baseUrl` only for test stand-ins. */
-export const WAITROSE_BASE_URL = "https://www.waitrose.com";
+import { itxEnv } from "../../env.ts";
+import { projectStub } from "../projects/egress.ts";
+import { waitroseSessionSecretPath } from "./utils.ts";
 
-/** The live GraphQL endpoint's path — appended to the base URL verbatim, so a
- * stand-in only has to swap the origin. */
-export const WAITROSE_GRAPHQL_PATH = "/api/graphql-prod/graph/live";
+/** The real Waitrose origin. */
+const WAITROSE_BASE_URL = "https://www.waitrose.com";
+
+/** The live GraphQL endpoint's path — appended to the base URL verbatim. */
+const WAITROSE_GRAPHQL_PATH = "/api/graphql-prod/graph/live";
 
 /** The product search/browse REST base — same origin, same bearer. */
-export const WAITROSE_SEARCH_PATH = "/api/content-prod/v2/cms/publish/productcontent";
+const WAITROSE_SEARCH_PATH = "/api/content-prod/v2/cms/publish/productcontent";
 
 /** Waitrose's edge answers UA-less requests with HTTP 520; the Android app's
  * UA is the known-good request shape. Sent on every call, mint included (the
- * platform's waitrose-session strategy carries the same value). */
-export const WAITROSE_USER_AGENT = "Waitrose/3.9.1 (Android)";
-
-/**
- * The Android app's login mutation, verbatim — FOR REFERENCE ONLY. The
- * platform's `waitrose-session` refresh strategy carries this same string and
- * performs it inside the connection secret's Durable Object; client code never
- * logs in and never sees an accessToken.
- */
-export const NEW_SESSION_MUTATION =
-  "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
+ * `waitrose-session` strategy carries the same value). */
+const WAITROSE_USER_AGENT = "Waitrose/3.9.1 (Android)";
 
 const GET_SHOPPING_CONTEXT_QUERY =
   "query GetShoppingContext { shoppingContext { customerId customerOrderId customerOrderState defaultBranchId } }";
@@ -54,25 +47,21 @@ const UPDATE_TROLLEY_ITEMS_MUTATION =
 
 /** What `GetShoppingContext` reports: the account's customer id and its
  * current (pending) order. `customerOrderId` is what the trolley belongs to. */
-export type WaitroseShoppingContext = {
+type WaitroseShoppingContext = {
   customerId: string;
   customerOrderId: string;
   customerOrderState: string;
   defaultBranchId: string;
 };
 
-/** One trolley line for `updateTrolleyItems`: quantity 0 removes the line.
- * `uom` "C62" means "each". */
-export type WaitroseTrolleyItemInput = {
-  canSubstitute?: boolean;
-  lineNumber: string;
-  noteToShopper?: string;
-  quantity: { amount: number; uom: string };
-};
+/** How to drive the Waitrose built-in: a named connection, then a client
+ * method. The single source of truth for the dispatch guard (rpc-targets). */
+export const WAITROSE_CALL_GRAMMAR =
+  'itx.integrations.waitrose expected `<connection>.<method>` (e.g. itx.integrations.waitrose["mum"].searchProducts("oat milk", { size: 5 })); use itx.integrations.list() to see connections.';
 
 /** A search hit, trimmed to what picking-something-to-buy needs. `lineNumber`
  * is the id `addToTrolley` takes. */
-export type WaitroseSearchProduct = {
+type WaitroseSearchProduct = {
   displayPrice?: string;
   lineNumber: string;
   name: string;
@@ -82,28 +71,37 @@ export type WaitroseSearchProduct = {
 /**
  * A connection-scoped Waitrose client. `authorization` is the full header
  * value — by convention a `Bearer getSecret(...)` placeholder, never a real
- * token. A 401 normally never reaches this code (the secret's Durable Object
- * re-logins and retries en route); one that does means the re-login itself was
- * refused, e.g. a wrong password in the connection secret's material.
+ * token; `fetcher` is where requests go (the project egress door for the
+ * built-in). A 401 normally never reaches this code (the secret's Durable
+ * Object re-logins and retries en route); one that does means the re-login
+ * itself was refused, e.g. a wrong password in the connection secret's
+ * material.
  */
-export function waitroseClient(options: { authorization: string; baseUrl?: string }) {
+function waitroseClient(options: {
+  authorization: string;
+  baseUrl?: string;
+  fetcher?: (request: Request) => Promise<Response>;
+}) {
   const { authorization } = options;
+  const doFetch = options.fetcher ?? ((request: Request) => fetch(request));
   const origin = (options.baseUrl ?? WAITROSE_BASE_URL).replace(/\/+$/, "");
   const url = `${origin}${WAITROSE_GRAPHQL_PATH}`;
   async function call<T>(input: {
     query: string;
     variables?: Record<string, unknown>;
   }): Promise<T> {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization,
-        "content-type": "application/json",
-        "user-agent": WAITROSE_USER_AGENT,
-      },
-      body: JSON.stringify({ query: input.query, variables: input.variables ?? {} }),
-    });
+    const response = await doFetch(
+      new Request(url, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          authorization,
+          "content-type": "application/json",
+          "user-agent": WAITROSE_USER_AGENT,
+        },
+        body: JSON.stringify({ query: input.query, variables: input.variables ?? {} }),
+      }),
+    );
     if (!response.ok) throw new Error(`waitrose graphql answered HTTP ${response.status}`);
     const body = (await response.json()) as {
       data?: T;
@@ -125,8 +123,15 @@ export function waitroseClient(options: { authorization: string; baseUrl?: strin
     return data.shoppingContext;
   }
 
+  // One trolley line per item: quantity 0 removes the line; `uom` "C62"
+  // means "each".
   async function updateTrolleyItems(
-    items: WaitroseTrolleyItemInput[],
+    items: Array<{
+      canSubstitute?: boolean;
+      lineNumber: string;
+      noteToShopper?: string;
+      quantity: { amount: number; uom: string };
+    }>,
     orderId?: string,
   ): Promise<Record<string, unknown>> {
     // The trolley belongs to the account's pending order; resolve it when the
@@ -163,9 +168,8 @@ export function waitroseClient(options: { authorization: string; baseUrl?: strin
       searchTerm: string,
       options: { size?: number; sortBy?: string; start?: number } = {},
     ): Promise<{ products: WaitroseSearchProduct[]; totalMatches: number }> {
-      const response = await fetch(
-        `${origin}${WAITROSE_SEARCH_PATH}/search/-1?clientType=WEB_APP`,
-        {
+      const response = await doFetch(
+        new Request(`${origin}${WAITROSE_SEARCH_PATH}/search/-1?clientType=WEB_APP`, {
           method: "POST",
           headers: {
             accept: "application/json",
@@ -183,7 +187,7 @@ export function waitroseClient(options: { authorization: string; baseUrl?: strin
               },
             },
           }),
-        },
+        }),
       );
       if (!response.ok) throw new Error(`waitrose search answered HTTP ${response.status}`);
       const raw = (await response.json()) as {
@@ -212,4 +216,24 @@ export function waitroseClient(options: { authorization: string; baseUrl?: strin
     /** Batch add/update/remove; the low-level verb the helpers above wrap. */
     updateTrolleyItems,
   };
+}
+
+/**
+ * The Waitrose client for one named connection whose transport rides the
+ * project egress door — the session token stays in its Secret DO (a
+ * `getSecret(...)` placeholder in the Authorization header, substituted
+ * downstream; the `waitrose-session` strategy mints on first use and
+ * re-logins on 401). The itx caller surface
+ * `itx.integrations.waitrose["<connection>"]` replays the caller's method
+ * path straight onto this instance.
+ */
+export function connectionWaitroseClient(input: {
+  connection: string;
+  projectId: string;
+}): ReturnType<typeof waitroseClient> {
+  const stub = projectStub(itxEnv.PROJECT, input.projectId);
+  return waitroseClient({
+    authorization: `Bearer getSecret({ path: "${waitroseSessionSecretPath(input.connection)}", field: "accessToken" })`,
+    fetcher: (request) => stub.fetch(request),
+  });
 }
