@@ -55,33 +55,22 @@ describe("minimal web-chat agent processors", () => {
       "The block must contain a single async arrow function",
     );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(message)");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
-    // The verbatim type surface rides along so the agent knows what it holds.
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Project>");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Project {");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface CapabilityHost {");
-    // Tool-call stance: small data-first snippets, parallel fan-out, explicit
-    // loop-ending rule, and the built-in discovery surfaces.
+    // Tool-call stance: small data-first snippets, parallel fan-out, and the
+    // explicit loop-ending rule.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Promise.all");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("`return;` with no value");
+    // Discovery is the prompt's centerpiece: the docs door (search with many
+    // words, fetch by name, e2e-tested examples first), not a capability tour
+    // or an embedded type surface (the budget test bans the blob).
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.search");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.get");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("MANY related words");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("working example scripts");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      'itx.integrations.google["<connection>"].gmail.request',
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("CONFIG REPO EDITS");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      'const repo = itx.repos.get(vars.repoPath ?? "/repos/config")',
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      "repo.edit({ path, message, oldString, newString })",
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-read-file");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-edit-file");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("__describe()");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Never tell the user you lack access");
   });
 
   it("feeds a returned script result back as input and schedules another turn", async () => {
@@ -421,6 +410,49 @@ describe("minimal web-chat agent processors", () => {
     expect(corrective?.payload).toMatchObject({
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
+  });
+
+  it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    // Models habitually open code with a comment line; the block used to die
+    // in total silence (kind "none"), which reads as the platform hanging.
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: "```js\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    const requested = stream.events.filter(
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(requested).toHaveLength(0);
+    const corrective = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("must START with `async`"),
+    );
+    expect(corrective?.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
+
+    // Plain prose with no fence stays a deliberate no-op turn (no feedback).
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: "Just thinking out loud, nothing to run." },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    const feedbackEvents = stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("must START with"),
+    );
+    expect(feedbackEvents).toHaveLength(1);
   });
 
   it("treats MCP-origin messages like any other inbound user message", async () => {

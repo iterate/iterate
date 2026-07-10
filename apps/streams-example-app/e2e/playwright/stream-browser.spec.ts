@@ -583,9 +583,9 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
 });
 
 // Known failing regression: tail row expansion currently grows underneath the sticky composer.
-// Leave this as a failing test for now. The rest of the stream uses TanStack Virtual's native
-// chat behavior (`anchorTo: "end"` + `followOnAppend`) and we do not want custom scroll
-// bookkeeping just to paper over this edge case.
+// Leave this as a failing test for now. Clicking the row is leaving-the-tail intent (the
+// bottom stick releases on pointerdown, so an expansion is readable without being yanked),
+// which means nothing re-pins the expanded JSON above the sticky composer.
 test("expanding the tail event row at stream end stays above the composer", async ({ page }) => {
   test.fail(true, "Known regression: expanded tail rows can grow under the sticky composer.");
 
@@ -1009,10 +1009,10 @@ async function expectComposerAtScrollerBottom(page: Page) {
 }
 
 // The scroll helpers below move the viewport with direct `scrollTop` writes (deterministic,
-// frame-addressable), but the page's initial tail pin deliberately releases only on user
-// *input* events — programmatic scroll deltas are indistinguishable from the virtualizer's
-// own convergence writes (see use-initial-tail-scroll.ts). Each helper therefore dispatches
-// a wheel event first: the same signal a real user reading older rows would produce.
+// frame-addressable), but the page's bottom stick deliberately releases only on user
+// *input* events — programmatic scroll deltas are indistinguishable from the stick's own
+// re-pin writes (see use-stick-to-bottom.ts). Each helper therefore dispatches an upward
+// wheel event first: the same signal a real user reading older rows would produce.
 async function scrollStreamBy(page: Page, delta: number) {
   await page.getByTestId("stream-events").evaluate((element, scrollDelta) => {
     if (!(element instanceof HTMLElement))

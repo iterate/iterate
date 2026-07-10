@@ -393,7 +393,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
     >
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
+        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
         showCloseButton={false}
       >
         <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>

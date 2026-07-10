@@ -278,7 +278,7 @@ export function StreamProcessorsPanel({
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="flex h-full w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[min(92vw,48rem)] data-[side=right]:sm:max-w-[min(92vw,55vw)]"
+        className="flex h-full w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
       >
         <SheetTitle className="sr-only">
           {focused == null ? "Processors" : `Processor ${presenceLabel(focused)}`}

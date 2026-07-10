@@ -48,6 +48,8 @@
 //                   needs an onboarded sender domain and a real recipient
 //                   mailbox, so keep it interactive.
 
+import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
+
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
@@ -75,34 +77,13 @@ export type ExampleCase = {
   completionTimeoutMs?: number;
 };
 
-/** Example ids that intentionally have no matrix case (see header). */
-export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
-  "whoami",
-  "list-projects",
-  "ai-models",
-  "cf-ai-to-markdown",
-  "ai-generate-image",
-  "ai-generate-audio",
-  "ai-transcribe-audio",
-  "ai-generate-video",
-  "cf-browser-markdown",
-  "cf-images-transform",
-  "cf-videos-frame",
-  "exa-web-search",
-  "connect-public-mcp",
-  "connect-openapi-petstore",
-  "secret-postman-echo",
-  "github-mcp-connect",
-  "github-webhooks-project-worker",
-  // Built-in integration usage snippets: each needs a REAL connected
-  // GitHub/Google/Slack account, which e2e fixture projects never hold.
-  "github-list-repos",
-  "github-read-file",
-  "github-backed-repo",
-  "gmail-search-inbox",
-  "slack-post-message",
-  "email-send",
-]);
+/** Example ids that intentionally have no matrix case: exactly the entries
+ * the catalogue marks `e2eProven: false` (see the field's docstring — the
+ * data is the single source; the per-id rationales live in the header
+ * above). */
+export const EXAMPLE_IDS_WITHOUT_CASES = new Set(
+  ITX_EXAMPLES.filter((example) => example.e2eProven === false).map((example) => example.id),
+);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "stream-cross-post": {
@@ -367,10 +348,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
-  "browse-examples": {
+  "docs-search-and-get": {
     assert: (result, _ctx, expect) => {
-      expect(result).toMatchObject({ hasCode: true, id: "describe-project" });
-      expect((result as { count: number }).count).toBeGreaterThan(10);
+      expect(result).toMatchObject({
+        examplePasteReady: true,
+        streamTypesIncludeAppend: true,
+      });
+      expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);
+      expect(result).toHaveProperty("firstHit.fetchCall");
     },
   },
   "agent-send-message": {

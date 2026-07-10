@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 
-// An identical copy of this hook lives in apps/streams-example-app/src/lib/use-stick-to-bottom.ts —
+// An identical copy of this hook lives in apps/os/src/lib/use-stick-to-bottom.ts —
 // the two apps share no package, and the logic is deliberately the same.
 // If you fix a bug here, fix it there too.
 

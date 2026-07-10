@@ -228,6 +228,20 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         blockProcessorWhile(async () => {
           const extraction = extractAsyncJsSnippet(event.payload.content);
           if (extraction.kind === "none") return;
+          if (extraction.kind === "malformed") {
+            // Same corrective lane as multi-block: the model believes its
+            // script ran; silence would read as the platform hanging.
+            await append({
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
+              payload: {
+                content:
+                  "Your code block did NOT run: the block's content must START with `async` — a single `async (itx) => { ... }` with no comments or statements before it. Resend it with the function first (move any leading comments inside the function body).",
+                llmRequestPolicy: { behaviour: "after-current-request" },
+              },
+            });
+            return;
+          }
           if (extraction.kind === "multiple") {
             // Corrective feedback, same lane as a thrown script: the model
             // reads why nothing ran and resends. after-current-request so the
@@ -1229,6 +1243,11 @@ type SnippetExtraction =
   // option — the model believes everything it wrote will run — so the caller
   // rejects the whole output with corrective feedback instead.
   | { kind: "multiple"; count: number }
+  // A fenced block exists but its content does not start with `async` —
+  // leading comments or statements before the arrow function. Nothing can
+  // run; the caller sends corrective feedback (models habitually open code
+  // with a comment line, and silence here reads as the platform hanging).
+  | { kind: "malformed" }
   | { kind: "none" };
 
 function extractAsyncJsSnippet(content: string): SnippetExtraction {
@@ -1242,9 +1261,12 @@ function extractAsyncJsSnippet(content: string): SnippetExtraction {
   if (blocks.length > 1) return { kind: "multiple", count: blocks.length };
   const fenced = content.match(FENCED_SNIPPET_RE);
   const code = (fenced?.[1] ?? content).trim();
-  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)
-    ? { kind: "script", code }
-    : { kind: "none" };
+  if (/^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)) {
+    return { kind: "script", code };
+  }
+  // An unfenced non-script response is a deliberate no-op turn; a fenced one
+  // is a malformed script attempt.
+  return fenced ? { kind: "malformed" } : { kind: "none" };
 }
 
 // The "tool result" half of the codemode loop: a finished script execution
