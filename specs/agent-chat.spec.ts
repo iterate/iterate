@@ -16,8 +16,12 @@ test("onboarding agent replies to a chat message in the feed", async ({
   baseURL,
 }) => {
   // Two full onboarding LLM turns (unprompted greeting can itself be multi-
-  // script) plus UI paint. Under preview load this regularly exceeds 90s/turn.
-  test.setTimeout(480_000);
+  // script) plus UI paint. Under preview load a turn can exceed 90s, so this
+  // gets the heavy-test ceiling (mirrors E2E_HEAVY_TEST_TIMEOUT_MS for the
+  // vitest agent tests) — NOT more: with one retry, this spec's timeout is
+  // the preview lane's worst-case tail (2× this value), and a wedged
+  // onboarding agent should fail loudly, not stretch the lane.
+  test.setTimeout(240_000);
   await using fixture = await helpers.createFixture("agent-chat");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
 
@@ -32,10 +36,18 @@ test("onboarding agent replies to a chat message in the feed", async ({
 
   // Phrasing mirrors the agents e2e suite: the onboarding prompt pulls the
   // model hard toward its own script, so the ask must be explicit about
-  // sending a visible chat message with the token.
-  const marker = `pong-${crypto.randomUUID().slice(0, 8)}`;
+  // sending a visible chat message with the token. The token is a plain word,
+  // NOT a random slug: models echo simple words into chat text reliably, but
+  // preview-tier models drop uuid-ish tokens (observed live on llama-4-scout
+  // 2026-07-10: three marker-less replies to a `pong-8f3a2b1c` ask). The spec
+  // proves message->reply routing; content fidelity for machine-significant
+  // strings is proven by the vitest agent tests, whose markers ride inside
+  // script code where models copy them faithfully. No collision risk: each
+  // spec instance owns a fresh project, and the onboarding greeting never
+  // says "kumquat".
+  const marker = "kumquat";
   const message = [
-    `Please send a visible web chat message containing exactly this token: ${marker}`,
+    `Please send a visible web chat message containing exactly this word: ${marker}`,
     "Use the chat tool. Do not only describe what you would do.",
   ].join("\n");
 
@@ -52,7 +64,7 @@ test("onboarding agent replies to a chat message in the feed", async ({
     const greeting = await agent.stream.waitForEvent({
       afterOffset: 0,
       eventTypes: [WEB_MESSAGE_SENT],
-      timeoutMs: 180_000,
+      timeoutMs: 120_000,
     });
     await page.locator(assistantMessage).first().waitFor({ timeout: 30_000 });
 
@@ -64,10 +76,10 @@ test("onboarding agent replies to a chat message in the feed", async ({
     await agent.stream.waitForEvent({
       afterOffset: greeting.offset,
       eventTypes: [WEB_MESSAGE_SENT],
-      timeoutMs: 180_000,
+      timeoutMs: 120_000,
       predicate: (event) => {
         const text = (event.payload as { message?: unknown } | undefined)?.message;
-        return typeof text === "string" && text.includes(marker);
+        return typeof text === "string" && text.toLowerCase().includes(marker);
       },
     });
     await page

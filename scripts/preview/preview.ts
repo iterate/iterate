@@ -13,7 +13,7 @@ import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
-import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import { OS_PREVIEW_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -352,11 +352,16 @@ export async function test(options: PullRequestCommandOptions = {}) {
     `PR body records lease ${recordedLease.slug} (doppler config ${recordedLease.dopplerConfig}, recorded until ${formatUntil(recordedLease.leasedUntil)})`,
   );
 
-  const testableApps = Object.values(current.state.apps)
-    .filter((entry) => canRunPreviewTests(entry))
-    .filter((entry) => entry.headSha === context.pullRequestHeadSha)
-    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-    .filter((app): app is PreviewAppRuntime => app != null);
+  const toRuntimes = (entries: (typeof current.state.apps)[string][]) =>
+    entries
+      .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
+      .filter((app): app is PreviewAppRuntime => app != null);
+  const recordedTestable = Object.values(current.state.apps).filter((entry) =>
+    canRunPreviewTests(entry),
+  );
+  let testableApps = toRuntimes(
+    recordedTestable.filter((entry) => entry.headSha === context.pullRequestHeadSha),
+  );
 
   if (testableApps.length === 0) {
     // No app is recorded at this head — but "skip green" is only honest when
@@ -369,25 +374,47 @@ export async function test(options: PullRequestCommandOptions = {}) {
       ...context,
       previousState: current.state,
     });
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: appsDeployWouldSelect.map((app) => app.slug),
-      pullRequestHeadSha: context.pullRequestHeadSha,
-      recordedApps: current.state.apps,
-    });
-    logPreview(skip.notice);
-    await updatePreviewState(context, (state) => ({
-      ...state,
-      notice: skip.notice,
-    }));
-    if (skip.verdict === "stale-head") {
-      throw new Error(skip.notice);
+    // Older-head entries that never earned a green ("awaiting-tests" — a
+    // cancelled run's deploy landed but its tests never ran — or
+    // "tests-failed"). When the diff says nothing app-affecting changed,
+    // those deployments ARE this head's code, so the honest move is to run
+    // their tests now — not to skip green over zero results (observed
+    // 2026-07-10: run 7 deployed then got cancelled by run 8's push; run 8's
+    // one-line non-app diff then "skipped, results still stand" while every
+    // app sat at awaiting-tests).
+    const untestedOlderHead = recordedTestable.filter(
+      (entry) => entry.status !== "deployed" || entry.testDurationMs == null,
+    );
+    if (appsDeployWouldSelect.length === 0 && untestedOlderHead.length > 0) {
+      testableApps = toRuntimes(untestedOlderHead);
+      logPreview(
+        `no app is recorded at head ${context.pullRequestHeadSha.slice(0, 7)}, but nothing app-affecting changed and ${untestedOlderHead
+          .map((entry) => `${entry.appSlug} (${entry.status})`)
+          .join(
+            ", ",
+          )} never passed tests on the recorded deploy — testing the recorded deployments now`,
+      );
+    } else {
+      const skip = explainPreviewTestSkip({
+        appsDeployWouldSelect: appsDeployWouldSelect.map((app) => app.slug),
+        pullRequestHeadSha: context.pullRequestHeadSha,
+        recordedApps: current.state.apps,
+      });
+      logPreview(skip.notice);
+      await updatePreviewState(context, (state) => ({
+        ...state,
+        notice: skip.notice,
+      }));
+      if (skip.verdict === "stale-head") {
+        throw new Error(skip.notice);
+      }
+      return {
+        ok: true,
+        skipped: true,
+        skippedReason: skip.verdict,
+        state: current.state,
+      };
     }
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: skip.verdict,
-      state: current.state,
-    };
   }
   logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
 
@@ -1261,12 +1288,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // files were removed at the top of this script) for preview.ts to
         // fold into the PR body alongside Playwright's
         // playwright-results.json.
-        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
+        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not
         // hide (or orphan) the vitest results.
-        "SPEC_OK=0; pnpm --dir ../.. spec || SPEC_OK=$?",
+        `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         "cat /tmp/os-preview-vitest.log",
         '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
@@ -3140,7 +3167,13 @@ function isNoSlotAvailableError(error: unknown) {
 // Contention is expected with many PRs in flight: instead of failing (or
 // worse, stealing a slot), the deploy waits its turn and logs who holds what
 // while it waits. Override with PREVIEW_SLOT_WAIT_MS=0 to fail fast.
-const defaultSlotWaitTotalMs = 20 * 60 * 1000;
+// Bounded so a slotless (or broken-slot) run fails LOUDLY inside the job's
+// 10-minute ceiling instead of being killed silently by it: 2026-07-09's
+// unerasable-slot loop burned this entire budget per attempt, and external
+// retries stacked those into 15-30 minute walls. 6 minutes still rides out
+// a normal handover (cleanup of a closing PR takes ~2m); a genuinely full
+// fleet surfaces as a failed check with the holder table.
+const defaultSlotWaitTotalMs = 6 * 60 * 1000;
 // Semaphore caps a single acquire long-poll at 5 minutes; loop to go longer.
 const slotWaitPerAttemptMs = 5 * 60 * 1000;
 
@@ -3377,6 +3410,16 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
+  // Slots whose erase already failed this run. A free-but-unerasable slot
+  // comes straight back from the semaphore after we release it, so without
+  // a pause the loop hot-cycles the same broken slot (observed 2026-07-09:
+  // three unerasable slots, ~6s per lap, 150+ laps burning the entire wait
+  // budget while spamming the log). Erase is expected to self-heal now
+  // (do-reset resurrects unlisted classes), so a repeat failure means the
+  // slot needs a human/agent — pause to let other slots free up instead of
+  // thrashing, and say so once.
+  const eraseFailuresBySlug = new Map<string, number>();
+  const brokenSlotPauseMs = 30_000;
 
   for (;;) {
     attempt += 1;
@@ -3406,6 +3449,19 @@ async function acquireAnyEnvironmentConfigLease(input: {
       if (Date.now() >= deadline) {
         throw new Error(
           `Could not hand ${input.holder} a clean slot: erasing ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+        );
+      }
+      const eraseFailures = (eraseFailuresBySlug.get(acquired.slug) ?? 0) + 1;
+      eraseFailuresBySlug.set(acquired.slug, eraseFailures);
+      if (eraseFailures === 2) {
+        logPreview(
+          `${acquired.slug} failed erase twice — it needs repair (scripts/lib/do-reset.ts header has the recipe). ` +
+            `Pausing ${brokenSlotPauseMs / 1000}s between further attempts instead of hot-cycling it.`,
+        );
+      }
+      if (eraseFailures >= 2) {
+        await new Promise((res) =>
+          setTimeout(res, Math.min(brokenSlotPauseMs, Math.max(0, deadline - Date.now()))),
         );
       }
       continue;
