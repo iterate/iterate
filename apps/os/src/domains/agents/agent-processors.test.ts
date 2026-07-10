@@ -412,6 +412,49 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
+  it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    // Models habitually open code with a comment line; the block used to die
+    // in total silence (kind "none"), which reads as the platform hanging.
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: "```js\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    const requested = stream.events.filter(
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(requested).toHaveLength(0);
+    const corrective = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("must START with `async`"),
+    );
+    expect(corrective?.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
+
+    // Plain prose with no fence stays a deliberate no-op turn (no feedback).
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: "Just thinking out loud, nothing to run." },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    const feedbackEvents = stream.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("must START with"),
+    );
+    expect(feedbackEvents).toHaveLength(1);
+  });
+
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
