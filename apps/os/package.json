@@ -29,8 +29,7 @@
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
-    "test:watch": "vitest",
-    "generate:iterate-sdk-runtime": "tsx ./scripts/generate-iterate-sdk-runtime.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7",

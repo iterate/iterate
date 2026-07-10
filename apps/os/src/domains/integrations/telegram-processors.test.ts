@@ -1082,12 +1082,6 @@ class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
-  async kill(): Promise<void> {}
-
-  async acceptCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement acceptCrossPost().");
-  }
-
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
@@ -1161,6 +1155,12 @@ class MemoryStream implements Stream {
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
   }
+
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
+  }
+
+  async kill(): Promise<void> {}
 
   async crossPostTo(): Promise<never> {
     throw new Error("MemoryStream does not implement crossPostTo().");

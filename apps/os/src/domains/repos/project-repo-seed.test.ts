@@ -26,9 +26,6 @@ test("the template's own spec matches what the substitution looks for", () => {
     PROJECT_REPO_INITIAL_FILES.find((file) => file.path === "package.json")!.content,
   );
   expect(packageJson).toMatchObject({
-    // Types-only devDependency: the platform injects the iterate/sdk RUNTIME
-    // into every worker build as a virtual module (worker-loader.ts) — the
-    // worker-bundler's npm installer cannot fetch tarball-URL deps anyway.
     devDependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
   });
 });

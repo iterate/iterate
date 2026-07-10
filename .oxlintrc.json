@@ -273,19 +273,6 @@
       "rules": {
         "iterate/mechanical-class-impl": "error"
       }
-    },
-    {
-      "files": [
-        "packages/iterate/src/sdk.ts",
-        "packages/iterate/src/processor-contracts.ts",
-        "packages/iterate/src/stream-processor.ts",
-        "packages/iterate/src/stream-events.ts"
-      ],
-      "rules": {
-        "iterate/relative-import-extensions": "off",
-        "import/extensions": "off"
-      },
-      "plugins": ["import"]
     }
   ]
 }

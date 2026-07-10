@@ -45,16 +45,11 @@ test("template gets the platform types from iterate/sdk, not a committed snapsho
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     devDependencies: Record<string, string>;
   };
-  // Types-only devDependency: worker.ts imports the StreamProcessor RUNTIME
-  // from "iterate/sdk" too, but that resolves via the platform-injected
-  // virtual module at build time (worker-loader.ts), never via npm — the
-  // worker-bundler's installer only fetches registry semver deps.
   expect(templatePackageJson.devDependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 
   expect(templateFile("worker.ts")).toContain('from "./sdk.ts"');
-  expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
 });
 
 test("template app links use custom-domain subdomains only for custom host routes", () => {

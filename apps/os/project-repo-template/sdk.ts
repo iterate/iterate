@@ -1,13 +1,11 @@
 // The platform's runtime SDK, seeded into this repo: the `IterateProjectWorker`
 // base class plus the env type it needs. Capability TYPES live in the
-// `iterate` package (a types-only devDependency of this repo) and are
-// re-exported below, so `./sdk.ts` stays the one import surface for worker
-// types. Runtime machinery (StreamProcessor, defineProcessorContract, the
-// SDK's `z`) imports straight from `iterate/sdk` — see the compaction
-// processor in worker.ts — which the PLATFORM resolves at build time by
-// injecting its own iterate/sdk bundle as a virtual module, so npm never
-// installs the runtime. Treat this file as read-only — the platform's copy
-// is the design of record.
+// `iterate` package (a devDependency of this repo) and are re-exported below,
+// so `./sdk.ts` stays the one import surface for worker code. The runtime part
+// is seeded rather than imported because the worker build pipeline installs
+// only registry `dependencies` — and `iterate` is a devDependency (worker code
+// otherwise only needs its types). Treat this file as read-only — the
+// platform's copy is the design of record.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { ItxBinding, StreamEvent, StreamEventBatch } from "iterate/sdk";
 

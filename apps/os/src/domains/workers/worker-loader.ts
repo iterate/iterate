@@ -3,7 +3,6 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
-import { ITERATE_SDK_RUNTIME_MODULE } from "./iterate-sdk-runtime.generated.ts";
 import { stableSha256 } from "./utils.ts";
 
 const WORKER_COMPATIBILITY_DATE = "2026-05-01";
@@ -121,26 +120,11 @@ async function resolveThroughBuilder(input: {
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
-  // The platform PROVIDES the `iterate/sdk` runtime to every dynamic worker
-  // build — the exact bundle the deployed contract was generated from. The
-  // worker-bundler's npm installer only resolves registry semver deps, so a
-  // project repo could never install it itself (the template's `iterate`
-  // devDependency is a pkg.pr.new tarball URL and is types-only). Merged
-  // UNDER any source-declared virtualModules: a repo that ships its own
-  // "iterate/sdk" wins. Riding in `options` puts the SDK content in the
-  // build key, so an SDK change rebuilds instead of serving stale artifacts.
-  const options: WorkerBuildOptions = {
-    ...input.options,
-    virtualModules: {
-      "iterate/sdk": ITERATE_SDK_RUNTIME_MODULE,
-      ...input.options.virtualModules,
-    },
-  };
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
   const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    options,
+    options: input.options,
     source: resolved,
   });
 
@@ -168,7 +152,7 @@ async function resolveThroughBuilder(input: {
   const artifact = await env.BUILDER.build({
     buildKey,
     files: await resolvedSourceFiles(input.projectId, resolved),
-    options,
+    options: input.options,
   });
   return memoizeArtifact(artifact);
 }
