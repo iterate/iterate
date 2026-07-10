@@ -144,41 +144,36 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(hello.status).toBe(200);
   expect(await hello.json()).toMatchObject({ app: "hello", projectId });
 
-  // Stateful app: an HTML counter page whose increment REDIRECTS back to /
-  // so the browser URL never sticks, with Durable Object state surviving
-  // across requests. (The single-label `--` form is the one platform
-  // wildcard certs can serve — dotted `<app>.<slug>.<base>` needs a second
-  // wildcard level and is exercised in the unit tests + reserved for custom
-  // hostnames.)
+  // Stateful app: a mini client-side counter page — the count renders
+  // server-side, the button POSTs /increment (JSON), and live updates ride
+  // the /ws WebSocket (proven in the websocket test below) — with Durable
+  // Object state surviving across requests. (The single-label `--` form is
+  // the one platform wildcard certs can serve — dotted `<app>.<slug>.<base>`
+  // needs a second wildcard level and is exercised in the unit tests +
+  // reserved for custom hostnames.)
   const page = await fetchAppReady(`counter--${slug}`);
   expect(page.status).toBe(200);
-  expect(await page.text()).toMatch(/count:\s*0/i);
+  expect(await page.text()).toContain('count: <span id="n">0</span>');
 
   const increment = await fetchApp(`counter--${slug}`, {
     method: "POST",
     path: "/increment",
-    redirect: "manual",
   });
-  expect(increment.status).toBe(303);
-  expect(increment.headers.get("location")).toBe("/");
+  expect(increment.status).toBe(200);
+  expect(await increment.json()).toEqual({ count: 1 });
 
   await fetchApp(`counter--${slug}`, { method: "POST", path: "/increment" });
   const read = await fetchApp(`counter--${slug}`);
-  expect(await read.text()).toMatch(/count:\s*2/i);
+  expect(await read.text()).toContain('count: <span id="n">2</span>');
 
   // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.ts" });
   expect(workerSource?.content).toContain("const APPS");
   const tree = await project.repo.listFiles();
-  expect(tree.paths).toEqual(
-    expect.arrayContaining([
-      "worker.ts",
-      "sdk.ts",
-      "apps/hello/worker.ts",
-      "apps/counter/worker.ts",
-      "package.json",
-    ]),
-  );
+  expect(tree.paths).toEqual(expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]));
+  // The seed is ONE worker file — the example apps are named exports of it.
+  expect(tree.paths).not.toContain("sdk.ts");
+  expect(tree.paths.some((path: string) => path.startsWith("apps/"))).toBe(false);
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.
@@ -187,15 +182,15 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(await unknown.text()).toContain("unknown app");
 });
 
-// WebSocket upgrades through project ingress into the seeded stateful
-// websocket app. This is the regression proof for the fetch-native dispatch
-// lane: an upgrade's 101 response cannot cross RPC method calls (workerd
+// WebSocket upgrades through project ingress into the seeded counter app.
+// This is the regression proof for the fetch-native dispatch lane: an
+// upgrade's 101 response cannot cross RPC method calls (workerd
 // DataCloneError on the socket), so ingress, the userspace router
 // (env.ITX.fetch + x-iterate-worker-dispatch), the stateful worker DO, and
 // the facet must all forward it over real fetch hops. Locally the app host
 // rides on the HTTP Host header (Node cannot resolve *.localhost); against a
 // deployed preview the real wildcard hostname is dialed directly.
-test("websocket app: upgrade flows through ingress into the seeded stateful app", async () => {
+test("counter websockets: upgrade flows through ingress and increments broadcast live", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   const slug = `ws-app-${marker}`;
 
@@ -213,14 +208,22 @@ test("websocket app: upgrade flows through ingress into the seeded stateful app"
   const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
   const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
   const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
-  const appHost = `websocket--${slug}`;
+  const appHost = `counter--${slug}`;
+  const localHostHeader = `${appHost}.localhost${base.port ? `:${base.port}` : ""}`;
 
   const connect = () =>
     isLocal
       ? new WebSocket(`ws://${base.host}/ws`, {
-          headers: { host: `${appHost}.localhost${base.port ? `:${base.port}` : ""}` },
+          headers: { host: localHostHeader },
         })
       : new WebSocket(`wss://${appHost}.${projectBase}/ws`);
+
+  const postIncrement = () =>
+    isLocal
+      ? fetchWithHostHeader(new URL(buildUrl({ path: "/increment" })), localHostHeader, {
+          method: "POST",
+        })
+      : fetch(`${base.protocol}//${appHost}.${projectBase}/increment`, { method: "POST" });
 
   const openSocket = (ws: WebSocket) =>
     new Promise<WebSocket>((resolve, reject) => {
@@ -251,18 +254,28 @@ test("websocket app: upgrade flows through ingress into the seeded stateful app"
     }
   };
 
+  // Every new socket is greeted with the current count, so a fresh tab is
+  // correct before anyone clicks.
   const first = await openSocketReady();
-  const second = await openSocketReady();
   try {
-    // One frame proves the whole lane; the peer copy proves both sockets
-    // terminate in the SAME Durable Object instance (shared live state).
-    const echoed = nextMessage(first);
-    const relayed = nextMessage(second);
-    first.send("ping");
-    expect(await echoed).toBe("echo:ping");
-    expect(await relayed).toBe("peer:ping");
+    expect(await nextMessage(first)).toBe("0");
+    const second = await openSocketReady();
+    try {
+      expect(await nextMessage(second)).toBe("0");
+
+      // One HTTP increment broadcasts to BOTH sockets — the live-update lane
+      // and the proof both sockets terminate in the SAME Durable Object
+      // instance (shared live state).
+      const firstSaw = nextMessage(first);
+      const secondSaw = nextMessage(second);
+      const incremented = await postIncrement();
+      expect(incremented.status).toBe(200);
+      expect(await firstSaw).toBe("1");
+      expect(await secondSaw).toBe("1");
+    } finally {
+      second.close();
+    }
   } finally {
     first.close();
-    second.close();
   }
 });

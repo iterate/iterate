@@ -49,7 +49,7 @@ describe("agentDefaultsForPath", () => {
     expect(kickoffTypes("/agents/demo")).toBe(0);
   });
 
-  it("bakes overrides into the returned events", () => {
+  it("bakes overrides into the returned events — a systemPrompt override replaces wholesale", () => {
     const custom = defaultsFor("/agents/demo", {
       systemPrompt: "Answer only in pirate speak.",
       model: "openai/gpt-5.5",
@@ -71,22 +71,15 @@ describe("agentDefaultsForPath", () => {
     }
   });
 
-  it("subagents get the default prompt plus the subagent suffix — never a thread transcriber prompt", () => {
-    const nested = defaultsFor("/agents/slack/main/C123/ts-99/subagents/helper");
-    expect(nested.systemPrompt).toContain("YOU ARE A SUBAGENT");
-    expect(nested.systemPrompt).toContain("/agents/slack/main/C123/ts-99");
+  it("child agents get the plain default prompt — never a thread transcriber prompt, no child suffix", () => {
+    // Child-agent-ness rides on the parent's message (the fold labels
+    // agent-sourced messages with the sender's path and reply door), not on
+    // a birth-time prompt.
+    const nested = defaultsFor("/agents/slack/main/C123/ts-99/helper");
+    expect(nested.systemPrompt).toContain("HOW YOU ACT");
+    expect(nested.systemPrompt).not.toContain("You are a child agent");
     // The shape-loose Slack predicate must not classify the nested path.
     expect(nested.systemPrompt).not.toContain("inside a Slack thread");
-    const plain = defaultsFor("/agents/main");
-    expect(plain.systemPrompt).not.toContain("YOU ARE A SUBAGENT");
-  });
-
-  it("a systemPrompt override keeps the subagent suffix appended", () => {
-    const custom = defaultsFor("/agents/main/subagents/pirate", {
-      systemPrompt: "Answer only in pirate speak.",
-    });
-    expect(custom.systemPrompt.startsWith("Answer only in pirate speak.")).toBe(true);
-    expect(custom.systemPrompt).toContain("YOU ARE A SUBAGENT");
-    expect(custom.systemPrompt).toContain("/agents/main");
+    expect(nested.systemPrompt).toBe(defaultsFor("/agents/main").systemPrompt);
   });
 });

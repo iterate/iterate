@@ -20,6 +20,8 @@ type ClaudeMcpOptions = {
   baseHost?: string;
   /** Initial prompt passed to Claude before entering interactive mode. */
   prompt?: string;
+  /** Include the ask_assistant tool in addition to exec_js. */
+  withAgent?: boolean;
 };
 
 /** Print the Claude Code command for the remote OS MCP server after an admin-token preflight. */
@@ -31,7 +33,10 @@ export async function claudeMcp(options: ClaudeMcpOptions = {}) {
   const baseHost = options.baseHost?.trim();
   const prompt = options.prompt?.trim() || DEFAULT_INITIAL_PROMPT;
   const adminToken = requireEnv("APP_CONFIG_ADMIN_API_SECRET");
-  const mcpUrl = baseHost ? normalizeBaseUrl(baseHost) : defaultMcpUrlFromEnv();
+  const mcpUrl = applyClaudeMcpToolOptions(
+    baseHost ? normalizeBaseUrl(baseHost) : defaultMcpUrlFromEnv(),
+    options,
+  );
   await assertMcpAdminBearerAccepted({ mcpUrl, token: adminToken });
   const command = [
     "claude",
@@ -152,6 +157,14 @@ function isLocalhostHostname(hostname: string) {
     hostname === "::1" ||
     hostname === "[::1]"
   );
+}
+
+function applyClaudeMcpToolOptions(baseUrl: string, options: Pick<ClaudeMcpOptions, "withAgent">) {
+  if (!options.withAgent) return baseUrl;
+
+  const parsed = new URL(baseUrl);
+  parsed.searchParams.set("withAgent", "true");
+  return parsed.toString();
 }
 
 async function assertMcpAdminBearerAccepted(input: { mcpUrl: string; token: string }) {

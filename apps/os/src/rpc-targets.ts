@@ -114,6 +114,10 @@ import {
   TELEGRAM_CALL_GRAMMAR,
 } from "./domains/integrations/telegram-api.ts";
 import {
+  connectionWaitroseClient,
+  WAITROSE_CALL_GRAMMAR,
+} from "./domains/integrations/waitrose-api.ts";
+import {
   deleteProjectFile,
   mintProjectFileUrl,
   putProjectFile,
@@ -1040,7 +1044,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("subagents/researcher") from an agent script addresses a subagent, get("../..") from a subagent addresses its parent. list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
         get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
@@ -1982,7 +1986,8 @@ function describeConnectionSdk(input: {
  * The `itx.integrations` collection.
  *
  * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`) dispatch to deployment code —
+ * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * dispatch to deployment code —
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
  * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
@@ -2196,6 +2201,31 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       });
     }
 
+    if (slug === "waitrose") {
+      if (!connection || method.length === 0) {
+        throw new Error(WAITROSE_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.waitrose[${JSON.stringify(connection)}].searchProducts("oat milk", { size: 5 })`,
+          grammar: WAITROSE_CALL_GRAMMAR,
+          sdk: 'the vendored Waitrose client (waitrose-api.ts): shoppingContext(), searchProducts(term, { size, sortBy, start }), trolley(orderId?), addToTrolley(lineNumber, quantity), removeFromTrolley(lineNumber), updateTrolleyItems(items, orderId?). Connect by writing the connection secret: await itx.secrets.get("/secrets/integrations/waitrose/<connection>/session").update({ egress: { urls: ["https://www.waitrose.com"] }, material: { username, password }, refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql-prod/graph/live" } }) — the Secret DO logs in on first use and re-logins on 401',
+          slug: "waitrose",
+        });
+      }
+      // The connection's vendored Waitrose client: replay the caller's method
+      // path onto it — its transport rides the connection secret's
+      // substituting egress (waitrose-api.ts), so a session token never
+      // enters this isolate. Methods are flat; a deeper path means the caller
+      // invented a namespace, and the client's own miss error answers it.
+      const waitrose = connectionWaitroseClient({
+        connection,
+        projectId: this.props.projectId,
+      });
+      return await replayPathCall(waitrose, { args, path: method });
+    }
+
     if (slug === "parallel") {
       const [, ...operationPath] = path;
       return await (
@@ -2254,6 +2284,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
         'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
         'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
+        'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
@@ -3057,9 +3088,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
     const defaults = agentDefaultsForPath({
@@ -3096,10 +3128,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like `message`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report by messaging their parent (its
-   * inputs), never web chat, so an ask() at a subagent times out — use
-   * `message()` and read the report from your own inputs.
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer `message()` and read their report from your own inputs:
+   * every agent-sourced message is labeled with how to reply (message the
+   * sender, whose web chat nobody watches), so `ask()` can time out waiting
+   * for a chat reply that never comes.
    */
   async ask(input: {
     message: string;
@@ -4135,7 +4168,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       projectId: this.#props.projectId,
       // The "current actor": this itx's own scope path. Relative agent paths
       // resolve against it, and message() stamps it as the sender when the
-      // scope is an agent — how a subagent's report knows who it is from.
+      // scope is an agent — how delegated reports know who they are from.
       sourceScopePath: this.#props.capabilityHost.path,
     });
   }
@@ -4333,8 +4366,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
-   * is one RPC end to end.
+   * invokeCapability in userspace, so a dotted call onto any getter the
+   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
@@ -5123,9 +5156,15 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
-// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
-// it gives every project web search with zero setup.
+// Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
+// free pool exhausts fast); pre-connecting it gives every project web search
+// with zero setup. When the deployment has a first-party Exa key
+// (config.integrations.exa), it rides as a bearer placeholder substituted at
+// the egress door — raw key bytes never enter the MCP client.
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+const EXA_PLATFORM_KEY_HEADER = {
+  authorization: 'Bearer getSecret({ platform: "integrations.exa.apiKey" })',
+};
 
 class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
@@ -5156,8 +5195,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
    */
   get exa(): McpClientRpc {
+    const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL },
+      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
       {
         description: {
           instructions:

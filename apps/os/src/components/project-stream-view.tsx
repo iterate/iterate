@@ -326,23 +326,25 @@ export function ProjectStreamView({
         ) : null}
       </div>
 
-      {caps.agentFeed && agentUiState?.tokenUsage != null ? (
-        <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
-      ) : null}
       <div className="shrink-0 px-4 pb-4 pt-2.5">
-        <StreamViewComposer
-          autoFocusMessage={autoFocusMessageComposer}
-          {...(defaultComposerMode == null
-            ? caps.agentFeed
-              ? { defaultMode: "message" as const }
-              : { defaultMode: "raw" as const }
-            : { defaultMode: defaultComposerMode })}
-          interrupt={interrupt}
-          {...(messageComposer == null ? {} : { messageComposer })}
-          onNudgeDeliveries={nudgeDeliveries}
-          presence={presence}
-          store={store}
-        />
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-1">
+          {caps.agentFeed && agentUiState?.tokenUsage != null ? (
+            <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
+          ) : null}
+          <StreamViewComposer
+            autoFocusMessage={autoFocusMessageComposer}
+            {...(defaultComposerMode == null
+              ? caps.agentFeed
+                ? { defaultMode: "message" as const }
+                : { defaultMode: "raw" as const }
+              : { defaultMode: defaultComposerMode })}
+            interrupt={interrupt}
+            {...(messageComposer == null ? {} : { messageComposer })}
+            onNudgeDeliveries={nudgeDeliveries}
+            presence={presence}
+            store={store}
+          />
+        </div>
       </div>
     </div>
   );

@@ -177,8 +177,8 @@ export interface Project {
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is \`workers.get(ref)\`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so \`itx.worker.slack.chat.postMessage(...)\`
-   * is one RPC end to end.
+   * invokeCapability in userspace, so a dotted call onto any getter the
+   * worker adds (\`itx.worker.<getter>.<method>(...)\`) is one RPC end to end.
    */
   worker: DynamicWorkerCapability<ProjectWorker>;
 }
@@ -371,9 +371,10 @@ export interface Agent {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
    */
   configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
@@ -382,10 +383,11 @@ export interface Agent {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like \`message\`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report by messaging their parent (its
-   * inputs), never web chat, so an ask() at a subagent times out — use
-   * \`message()\` and read the report from your own inputs.
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer \`message()\` and read their report from your own inputs:
+   * every agent-sourced message is labeled with how to reply (message the
+   * sender, whose web chat nobody watches), so \`ask()\` can time out waiting
+   * for a chat reply that never comes.
    */
   ask(input: {
     message: string;
@@ -622,7 +624,8 @@ export interface Files {
  * The \`itx.integrations\` collection.
  *
  * Connection-yielding dotted calls are \`{slug}.{connection}.{...method}\`.
- * Built-in slugs (\`slack\`, \`google\`, \`github\`) dispatch to deployment code —
+ * Built-in slugs (\`slack\`, \`google\`, \`github\`, \`telegram\`, \`waitrose\`)
+ * dispatch to deployment code —
  * \`itx.integrations.slack["main-slack"].chat.postMessage({...})\` reaches any
  * Slack Web API method (a real WebClient), \`itx.integrations.google["jonas"].gmail.request({...})\`
  * the Gmail REST proxy, and \`itx.integrations.github["jonas"]\` is a real
@@ -949,8 +952,8 @@ export interface WorkspaceCollection {
  * workers should be typed by callers through \`workers.get<T>(ref)\`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * \`invokeCapability\` in userspace and every dotted call — including any
- * nested surface a userland getter hands back (the seeded \`slack\` and
- * \`waitrose\` getters, an SDK client you add) — is one RPC.
+ * nested surface a userland getter hands back (an SDK client the project
+ * adds and installs through its \`package.json\`) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -965,7 +968,6 @@ export interface ProjectWorker {
    * the whole batch is redelivered later.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
-  slack: ProjectWorkerSlack;
 }
 
 /**
@@ -1226,22 +1228,6 @@ export interface Workspace {
   exists(path: string): Promise<boolean>;
   /** Git over this workspace's checkout. */
   git: WorkspaceGit;
-}
-
-/**
- * Slack Web API surface exposed by the seeded project worker
- * (\`itx.worker.slack.chat.postMessage({...})\`).
- *
- * The seeded repo implements this in userland with the real \`@slack/web-api\`
- * package (installed by the worker build pipeline from its \`package.json\`), so
- * any nested Web API method family resolves — the index signature reflects
- * that this tree is as wide as the SDK's.
- */
-export interface ProjectWorkerSlack {
-  chat: {
-    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
-  } & Record<string, unknown>;
-  [family: string]: unknown;
 }
 
 /**
@@ -1697,7 +1683,6 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
-  subagents: { path: string; spawnedAt: string }[];
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -1746,7 +1731,9 @@ export type StreamEvent = {
   path: string;
 };
 
-/** Caller-supplied policy overrides, baked into the returned events. */
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the path's platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
   model?: string;
@@ -1831,7 +1818,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1871,7 +1858,10 @@ export type ConnectTelegramResult =
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the \`startOAuthFlow\`/\`completeConnect\` pair.
  * Telegram is excluded: it connects by bot-token paste (\`connectTelegram\`),
- * with no redirect and no signed state. */
+ * with no redirect and no signed state. Waitrose is excluded too: it connects
+ * by writing the connection secret (username/password plus the
+ * \`waitrose-session\` refresh strategy) — the Secret DO logs in itself on
+ * first use. */
 export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =

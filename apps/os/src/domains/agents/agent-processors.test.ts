@@ -392,6 +392,37 @@ describe("minimal web-chat agent processors", () => {
     expect(requested?.payload?.code).toBe(script);
   });
 
+  it("rejects a multi-block response with corrective feedback instead of executing the first block", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
+    // planned a whole workflow as four sequential scripts in one response.
+    // Only the first used to run — silently; the model believed all four did.
+    const block = (body: string) => `\`\`\`js\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: `${block("return 1;")}\n\n${block("return 2;")}\n\n${block("return 3;")}`,
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    const requested = stream.events.filter(
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(requested).toHaveLength(0);
+    const corrective = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("3 fenced code blocks"),
+    );
+    expect(corrective?.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
+  });
+
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
@@ -1387,50 +1418,29 @@ describe("file attachments in the LLM request", () => {
   });
 });
 
-describe("subagents in reduced state", () => {
-  const announced = (childPath: string, offset: number) => ({
-    type: "events.iterate.com/stream/child-stream-created",
-    payload: { childPath },
-    offset,
-    createdAt: "2026-07-09T00:00:00.000Z",
-    path: "/agents/main",
-  });
-
-  it("folds immediate subagent births from child-stream-created announcements", () => {
-    const state = reduceAgentEvents([
-      announced("/agents/main/subagents/researcher", 1),
-      // A grandchild announces to every ancestor too — it belongs to the
-      // subagent's own fold, not this one.
-      announced("/agents/main/subagents/researcher/subagents/helper", 2),
-      // Duplicate announcements dedupe.
-      announced("/agents/main/subagents/researcher", 3),
-      // A non-subagent child stream is not a subagent.
-      announced("/agents/main/notes", 4),
-    ]);
-    expect(state.subagents).toMatchObject([
-      { path: "/agents/main/subagents/researcher", spawnedAt: "2026-07-09T00:00:00.000Z" },
-    ]);
-  });
-});
-
 describe("inter-agent mail", () => {
   const mail = (payload: Record<string, unknown>, offset: number) => ({
     type: "events.iterate.com/agents/message-received",
     payload,
     offset,
     createdAt: "2026-07-09T00:00:00.000Z",
-    path: "/agents/main/subagents/researcher",
+    path: "/agents/main/researcher",
   });
 
-  it("folds agent mail into history with the sender named, as an autonomous trigger", () => {
+  it("folds agent mail into history with the sender named and the reply door spelled out, as an autonomous trigger", () => {
     const state = reduceAgentEvents([
       mail({ content: "status?", from: { kind: "agent", path: "/agents/main" } }, 1),
     ]);
-    expect(state.history).toMatchObject([
-      { role: "user", content: "Message from agent /agents/main:\nstatus?" },
-    ]);
+    expect(state.history).toHaveLength(1);
+    const entry = state.history[0]!;
+    expect(entry.role).toBe("user");
+    // Child-agent-ness rides on the message: the label names the sender and
+    // tells the recipient how to reply (the sender never sees this web chat).
+    expect(entry.content).toContain("Message from agent /agents/main");
+    expect(entry.content).toContain('itx.agents.get("/agents/main").message(text)');
+    expect(entry.content.endsWith("status?")).toBe(true);
     // Agent mail counts against the autonomous turn budget instead of
-    // refilling it — the loop breaker bounds parent↔subagent ping-pong.
+    // refilling it — the loop breaker bounds agent↔agent ping-pong.
     expect(state.pendingTriggerSource).toBe("agent-loop");
     expect(state.pendingTriggerOffset).toBe(1);
   });

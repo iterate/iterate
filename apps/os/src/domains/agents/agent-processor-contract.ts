@@ -64,6 +64,7 @@ export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
  */
 const AGENT_SNIPPET_GUIDE = [
   "THE LOOP — your scripts are tool calls:",
+  "- ONE script per response, always. Writing several code blocks to plan ahead executes nothing — the later steps depend on results you haven't seen yet, so they'd be guesswork anyway. Write only the first step; the loop brings you back for the rest.",
   "- Whatever your function RETURNS (JSON-serializable) comes back to you as your next input, and you get another turn to act on it. A thrown error comes back the same way — read it and adapt. Do NOT wrap calls in try/catch or .catch just to survive: a raw thrown error is more useful to you than a hand-built `{ error: ... }` object.",
   "- A script that returns undefined ends your turn. That is how you finish: send your final message(s), return nothing.",
   '- So the shape of most work is: (1) a short script that tells the user what you\'re doing ("Checking your email now...") and fetches data in one Promise.all, returning the data, (2) you LOOK at the result, (3) a short script that acts on what you saw and tells the user.',
@@ -133,6 +134,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "```",
   "",
   "A response with no code block does nothing and ends your turn (the user never sees your raw text — only what you sendMessage).",
+  "A response with MORE than one code block executes NOTHING — never queue future steps as extra blocks. Multi-step work is one script per response: send step 1, its return value arrives as your next input, and you write step 2 having seen it.",
   "",
   "The `itx` argument is an RpcStub<Project> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
   "",
@@ -257,7 +259,7 @@ const LlmRequestResult = z.discriminatedUnion("status", [
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.7.0",
+  version: "0.8.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
@@ -336,22 +338,6 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
       )
       .default({}),
-    /**
-     * This agent's subagents: agents whose streams sit at
-     * `<this path>/subagents/<path>` (see lib/subagent-paths.ts). Derived
-     * entirely from the `stream/child-stream-created` announcements every
-     * descendant stream posts to its ancestors — a subagent someone births by
-     * raw stream append shows up exactly like one born by messaging
-     * `itx.agents.get("subagents/<name>")`.
-     */
-    subagents: z
-      .array(
-        z.object({
-          path: z.string(),
-          spawnedAt: z.string(),
-        }),
-      )
-      .default([]),
     /**
      * Lifetime token totals, folded from token-usage-reported. Cost/observability
      * data, not loop-control state: nothing in the agent loop branches on it.
@@ -436,7 +422,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agents/message-received": {
       description:
-        "A message reached the agent. THE inbound message event for every source — `from` says who sent it: a user (web UI or MCP client), another agent (parent↔subagent delegation and reports ride exactly this), or a domain transcriber relaying a Slack/email/GitHub message. The reducer folds it straight into model-visible history; `llmRequestPolicy` carries the sender's trigger gating (e.g. mention-gated PR comments record without waking the agent).",
+        "A message reached the agent. THE inbound message event for every source — `from` says who sent it: a user (web UI or MCP client), another agent (delegation and reports ride exactly this), or a domain transcriber relaying a Slack/email/GitHub message. The reducer folds it straight into model-visible history; `llmRequestPolicy` carries the sender's trigger gating (e.g. mention-gated PR comments record without waking the agent).",
       payloadSchema: z.object({
         content: z.string(),
         from: AgentMessageFrom,
@@ -454,7 +440,7 @@ export const AgentProcessorContract = defineProcessorContract({
           },
         },
         {
-          description: "A parent agent sends work to its subagent.",
+          description: "One agent sends work to another agent.",
           payload: {
             content:
               "Find every place we retry failed webhook deliveries and summarize the backoff policy.",
@@ -794,9 +780,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-completed",
-    // Subagent births: every descendant stream announces itself to its
-    // ancestors; the fold keeps the immediate `<path>/subagents/<name>` ones.
-    "events.iterate.com/stream/child-stream-created",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",
