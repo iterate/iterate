@@ -613,7 +613,10 @@ describe("itx", () => {
 
             async callRepoAgent(label) {
               const itx = await this.env.ITX.get();
-              return await itx.agent.repoAgent.echo(label);
+              // repoAgent is mounted on the agent scope this DO runs in, so it
+              // is a member of the scope's own itx (itx.agent is the narrow
+              // control surface and no longer proxies dynamic names).
+              return await itx.repoAgent.echo(label);
             }
           }
         `,
@@ -674,7 +677,10 @@ describe("itx", () => {
         increment(label: string): Promise<{ count: number; label: string; scope: string }>;
       };
     };
-    const agentCapabilities = agent as typeof agent & {
+    // The agent HANDLE is a plain, unproxied surface (so `agents.get(...)`
+    // results pipeline over workerd RPC — see AgentRpcTarget); its dynamic
+    // capabilities are reached through the `capabilityHost` property.
+    const agentCapabilities = agent.capabilityHost as typeof agent.capabilityHost & {
       inlineCounter: {
         callRepoAgent(label: string): Promise<{ label: string; whoami: string }>;
         increment(label: string): Promise<{ count: number; label: string; whoami: string }>;
