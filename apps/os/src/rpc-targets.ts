@@ -1130,11 +1130,9 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * a no-op.
    */
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
-    const defaultModel = parseConfig(env).defaultAgentModel;
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
-      ...(defaultModel === undefined ? {} : { defaultModel }),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
@@ -3021,12 +3019,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * after it (agents/agent-defaults.ts).
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
-    const defaultModel = parseConfig(env).defaultAgentModel;
     const defaults = agentDefaultsForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
       overrides: input,
-      ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     // The defaults batch (fixed keys) establishes policy on a fresh agent and
     // dedupes away on an existing one; the keyless events are the last word

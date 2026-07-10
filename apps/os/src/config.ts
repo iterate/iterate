@@ -96,17 +96,6 @@ export const AppConfig = z.object({
    * not main's. Unset (prod, local dev) keeps the template's `@main`.
    */
   iterateSdkPackageSpec: z.string().trim().min(1).optional(),
-  /**
-   * Model newborn agents select at birth when the caller didn't override one.
-   * Unset means the platform default (DEFAULT_AGENT_MODEL, openai/gpt-5.5).
-   * The preview/dev Cloudflare account cannot run OpenAI partner models
-   * (env.AI rejects them with `2021: Invalid User Credentials`; verified live
-   * 2026-07-10 — prd answers in seconds on the same code), so its envs pin a
-   * Workers-AI-native model here via generated wrangler vars
-   * (APP_CONFIG_DEFAULT_AGENT_MODEL, scripts/generate-wrangler-config.ts).
-   * Delete the whole knob when that account gains partner-model access.
-   */
-  defaultAgentModel: z.string().trim().min(1).optional(),
   /** First-party project email (itx.email + the inbound email() door). */
   email: z
     .object({
