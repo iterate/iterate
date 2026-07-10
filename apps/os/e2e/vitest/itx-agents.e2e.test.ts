@@ -206,14 +206,14 @@ describe("itx", () => {
         [
           "get",
           {
-            // The seeded stateful app (the multi-app seed moved the counter
-            // class out of the root router into its own repo-backed module).
+            // The seeded stateful app: CounterApp is a named export of the
+            // one-file seeded worker.ts.
             className: "CounterApp",
             durableWorkerKey,
             path: agentPath,
             source: {
-              files: { include: ["apps/counter/**"], repoPath: "/repos/config", type: "repo" },
-              options: { entryPoint: "apps/counter/worker.ts" },
+              files: { repoPath: "/repos/config", type: "repo" },
+              options: { entryPoint: "worker.ts" },
             },
             type: "stateful",
           },
@@ -241,9 +241,13 @@ describe("itx", () => {
       payload: {
         content: fencedAgentScript(`
           async (itx) => {
-            const probe = await itx.agent.agentProbe.inspect("agent-only");
-            const first = await itx.agent.agentCounter.increment();
-            const current = await itx.agent.agentCounter.current();
+            // Agent-scope capabilities are members of the agent's OWN itx —
+            // \`itx.agent\` is the narrow control surface (message/ask/stream/…)
+            // and deliberately does NOT proxy dynamic names (see
+            // AgentRpcTarget); its dynamic door is itx.agent.capabilityHost.
+            const probe = await itx.agentProbe.inspect("agent-only");
+            const first = await itx.agentCounter.increment();
+            const current = await itx.agent.capabilityHost.agentCounter.current();
             await itx.chat.sendMessage(JSON.stringify({
               durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
               current,
@@ -322,8 +326,10 @@ describe("itx", () => {
 
     // @ts-expect-error - dynamic project capability mounted by this test.
     expect(await project.scopeProbe.projectScope()).toEqual({ kind: "project", projectId });
+    // The agent HANDLE has no dynamic fallback (see AgentRpcTarget) — its
+    // scope's dynamic capabilities live behind the capabilityHost property.
     // @ts-expect-error - dynamic agent capability mounted by this test.
-    expect(await agent.scopeProbe.agentScope()).toEqual({
+    expect(await agent.capabilityHost.scopeProbe.agentScope()).toEqual({
       kind: "agent",
       whoami: `agent ${projectId}:${agentPath}`,
     });

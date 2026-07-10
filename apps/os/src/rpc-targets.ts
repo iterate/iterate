@@ -114,6 +114,10 @@ import {
   TELEGRAM_CALL_GRAMMAR,
 } from "./domains/integrations/telegram-api.ts";
 import {
+  connectionWaitroseClient,
+  WAITROSE_CALL_GRAMMAR,
+} from "./domains/integrations/waitrose-api.ts";
+import {
   deleteProjectFile,
   mintProjectFileUrl,
   putProjectFile,
@@ -1069,7 +1073,14 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope — `".."` climbs). */
+  /**
+   * The agent control surface at a path (`"/agents/<name>"`, or relative to
+   * the calling scope — `".."` climbs). The returned handle is a plain,
+   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
+   * `itx.agents.get(path).message(text)` in one expression — over workerd RPC
+   * (the script lane); see AgentRpcTarget's class comment for the mechanism
+   * and `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
+   */
   get(path: string): AgentRpcTarget {
     const resolved = resolveAgentPath(path, this.props.sourceScopePath);
     return new AgentRpcTarget({
@@ -1975,7 +1986,8 @@ function describeConnectionSdk(input: {
  * The `itx.integrations` collection.
  *
  * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`) dispatch to deployment code —
+ * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * dispatch to deployment code —
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
  * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
@@ -2189,6 +2201,31 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       });
     }
 
+    if (slug === "waitrose") {
+      if (!connection || method.length === 0) {
+        throw new Error(WAITROSE_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.waitrose[${JSON.stringify(connection)}].searchProducts("oat milk", { size: 5 })`,
+          grammar: WAITROSE_CALL_GRAMMAR,
+          sdk: 'the vendored Waitrose client (waitrose-api.ts): shoppingContext(), searchProducts(term, { size, sortBy, start }), trolley(orderId?), addToTrolley(lineNumber, quantity), removeFromTrolley(lineNumber), updateTrolleyItems(items, orderId?). Connect by writing the connection secret: await itx.secrets.get("/secrets/integrations/waitrose/<connection>/session").update({ egress: { urls: ["https://www.waitrose.com"] }, material: { username, password }, refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql-prod/graph/live" } }) — the Secret DO logs in on first use and re-logins on 401',
+          slug: "waitrose",
+        });
+      }
+      // The connection's vendored Waitrose client: replay the caller's method
+      // path onto it — its transport rides the connection secret's
+      // substituting egress (waitrose-api.ts), so a session token never
+      // enters this isolate. Methods are flat; a deeper path means the caller
+      // invented a namespace, and the client's own miss error answers it.
+      const waitrose = connectionWaitroseClient({
+        connection,
+        projectId: this.props.projectId,
+      });
+      return await replayPathCall(waitrose, { args, path: method });
+    }
+
     if (slug === "parallel") {
       const [, ...operationPath] = path;
       return await (
@@ -2247,6 +2284,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
         'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
         'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
+        'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
       ].join("\n"),
@@ -2876,8 +2914,8 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
 type AgentRpcTargetProps = {
   auth: ItxAuth;
   // The agent scope's own capability host; its (already-normalized) path IS
-  // the agent path. Exposed as `agent.capabilityHost` and used as the
-  // fallback for dynamic dotted-path calls (`agent.someTool(...)`).
+  // the agent path. Exposed as `agent.capabilityHost` — the door to the
+  // scope's dynamic capabilities (`agent.capabilityHost.someTool(...)`).
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
   projectId: string;
@@ -2885,7 +2923,35 @@ type AgentRpcTargetProps = {
   sourceScopePath?: string;
 };
 
-/** Agent capability surface for message loops and agent-local dynamic tools. */
+/**
+ * Agent capability surface for message loops and agent-local dynamic tools.
+ *
+ * DELIBERATELY NOT wrapped in `withInvokeCapabilityFallback`, unlike the other
+ * itx surfaces — and this is load-bearing, not an omission. This is the one
+ * surface routinely returned FROM A METHOD CALL (`itx.agents.get(path)`), and
+ * workerd's RPC classifies a call result for promise pipelining with native
+ * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
+ * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
+ * pipelined call on the result dies with the baffling "The RPC receiver does
+ * not implement the method ..."). A plain class instance classifies as a
+ * single stub and pipelines fine — which is what lets model code write the
+ * natural one-liners over the script lane (`env.ITX` loopback):
+ *
+ *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get(path).capabilityHost.someTool(args);
+ *
+ * The second line is how DYNAMIC capabilities are reached through a fetched
+ * handle: `capabilityHost` is a property (workerd resolves property PATHS
+ * through proxies — `tryGetProperty` has an explicit `isProxyOfRpcTarget`
+ * walk — the gap is only in classifying METHOD RESULTS), so the proxied
+ * CapabilityHostRpcTarget behind it still does dotted dynamic dispatch.
+ * Inside the agent's own scope nothing changes: scope capabilities live on
+ * the root itx (`itx.someTool(...)`), whose proxy is never a call result.
+ *
+ * Keep it this way: never return a proxied target from a method callers will
+ * pipeline on. (Upstream fix proposed for the workerd classifier; until it
+ * ships everywhere this rule stands regardless.)
+ */
 class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -2896,14 +2962,23 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     props.auth.assertCanAccessProject(props.projectId);
     normalizeAgentPath(props.capabilityHost.path);
     this.#props = props;
-    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get #path() {
     return this.#props.capabilityHost.path;
   }
 
-  /** The agent scope's own capability host (provide/revoke/runScript/__describe). */
+  /**
+   * The agent scope's own capability host (provide/revoke/runScript/
+   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
+   * through a fetched handle: `agents.get(path).capabilityHost.someTool(args)`.
+   * That chain pipelines over workerd RPC because `capabilityHost` is a
+   * PROPERTY: workerd resolves property paths through the host's fallback
+   * Proxy (its traversal code special-cases proxies), whereas the handle
+   * itself must stay unproxied to be pipelinable at all (see the class
+   * comment). Inside the agent's own scripts the same capabilities are simply
+   * `itx.someTool(args)`.
+   */
   get capabilityHost(): CapabilityHostRpcTarget {
     return this.#props.capabilityHost;
   }
@@ -3125,12 +3200,13 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   > {
     return describeNode({
       instructions:
-        "One agent: the narrow control surface for the agent stream at this path. Dotted calls on unknown members resolve against the agent scope's capability host.",
+        "One agent: the narrow control surface for the agent stream at this path. This surface has ONLY the members listed below — the agent scope's dynamic capabilities are reached through `capabilityHost` (e.g. agents.get(path).capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
         ask: "Send a message and wait for the agent's next chat reply.",
-        capabilityHost: "This agent scope's durable capability table.",
+        capabilityHost:
+          "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         configure:
           "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
@@ -4288,8 +4364,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
-   * is one RPC end to end.
+   * invokeCapability in userspace, so a dotted call onto any getter the
+   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {

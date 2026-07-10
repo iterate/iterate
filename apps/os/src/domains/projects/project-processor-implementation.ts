@@ -232,7 +232,7 @@ export class ProjectProcessor extends StreamProcessor<
             // mounts, boot context — is appended by the PROJECT WORKER, which
             // sees this same child-stream-created event through its stream
             // delivery and applies itx.agents.defaults (see
-            // project-repo-template/worker.ts and agents/agent-defaults.ts).
+            // config-repo-template/worker.ts and agents/agent-defaults.ts).
             // Slack/Telegram-agent wiring requires the full routed-path shape
             // — the connection segment is what replies authenticate with.
             // Subagents are checked FIRST: the thread predicates are

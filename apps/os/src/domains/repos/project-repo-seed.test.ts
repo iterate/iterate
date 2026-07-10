@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { projectRepoSeedFiles, TEMPLATE_ITERATE_PACKAGE_SPEC } from "./project-repo-seed.ts";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 test("no override seeds the template verbatim", () => {
   expect(projectRepoSeedFiles(undefined)).toBe(PROJECT_REPO_INITIAL_FILES);

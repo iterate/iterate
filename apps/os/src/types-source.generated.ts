@@ -177,8 +177,8 @@ export interface Project {
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is \`workers.get(ref)\`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so \`itx.worker.slack.chat.postMessage(...)\`
-   * is one RPC end to end.
+   * invokeCapability in userspace, so a dotted call onto any getter the
+   * worker adds (\`itx.worker.<getter>.<method>(...)\`) is one RPC end to end.
    */
   worker: DynamicWorkerCapability<ProjectWorker>;
 }
@@ -293,9 +293,47 @@ export interface CfBrowserCapability {
   ): Promise<Response>;
 }
 
-/** Agent capability surface for message loops and agent-local dynamic tools. */
+/**
+ * Agent capability surface for message loops and agent-local dynamic tools.
+ *
+ * DELIBERATELY NOT wrapped in \`withInvokeCapabilityFallback\`, unlike the other
+ * itx surfaces — and this is load-bearing, not an omission. This is the one
+ * surface routinely returned FROM A METHOD CALL (\`itx.agents.get(path)\`), and
+ * workerd's RPC classifies a call result for promise pipelining with native
+ * brand checks that a JS Proxy can never pass (\`serializeJsValueWithPipeline\`
+ * in workerd's worker-rpc.c++ falls through to \`NonPipelinable\`, so EVERY
+ * pipelined call on the result dies with the baffling "The RPC receiver does
+ * not implement the method ..."). A plain class instance classifies as a
+ * single stub and pipelines fine — which is what lets model code write the
+ * natural one-liners over the script lane (\`env.ITX\` loopback):
+ *
+ *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get(path).capabilityHost.someTool(args);
+ *
+ * The second line is how DYNAMIC capabilities are reached through a fetched
+ * handle: \`capabilityHost\` is a property (workerd resolves property PATHS
+ * through proxies — \`tryGetProperty\` has an explicit \`isProxyOfRpcTarget\`
+ * walk — the gap is only in classifying METHOD RESULTS), so the proxied
+ * CapabilityHost behind it still does dotted dynamic dispatch.
+ * Inside the agent's own scope nothing changes: scope capabilities live on
+ * the root itx (\`itx.someTool(...)\`), whose proxy is never a call result.
+ *
+ * Keep it this way: never return a proxied target from a method callers will
+ * pipeline on. (Upstream fix proposed for the workerd classifier; until it
+ * ships everywhere this rule stands regardless.)
+ */
 export interface Agent {
-  /** The agent scope's own capability host (provide/revoke/runScript/__describe). */
+  /**
+   * The agent scope's own capability host (provide/revoke/runScript/
+   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
+   * through a fetched handle: \`agents.get(path).capabilityHost.someTool(args)\`.
+   * That chain pipelines over workerd RPC because \`capabilityHost\` is a
+   * PROPERTY: workerd resolves property paths through the host's fallback
+   * Proxy (its traversal code special-cases proxies), whereas the handle
+   * itself must stay unproxied to be pipelinable at all (see the class
+   * comment). Inside the agent's own scripts the same capabilities are simply
+   * \`itx.someTool(args)\`.
+   */
   capabilityHost: CapabilityHost;
   /** Shortcut for \`capabilityHost.provideCapability\` (mounts on THIS agent's scope). */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
@@ -476,7 +514,14 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (\`"/agents/<name>"\`, or relative to the calling scope — \`".."\` climbs). */
+  /**
+   * The agent control surface at a path (\`"/agents/<name>"\`, or relative to
+   * the calling scope — \`".."\` climbs). The returned handle is a plain,
+   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
+   * \`itx.agents.get(path).message(text)\` in one expression — over workerd RPC
+   * (the script lane); see Agent's class comment for the mechanism
+   * and \`agent-handle-pipelining.itx.e2e.test.ts\` for the guard.
+   */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
@@ -577,7 +622,8 @@ export interface Files {
  * The \`itx.integrations\` collection.
  *
  * Connection-yielding dotted calls are \`{slug}.{connection}.{...method}\`.
- * Built-in slugs (\`slack\`, \`google\`, \`github\`) dispatch to deployment code —
+ * Built-in slugs (\`slack\`, \`google\`, \`github\`, \`telegram\`, \`waitrose\`)
+ * dispatch to deployment code —
  * \`itx.integrations.slack["main-slack"].chat.postMessage({...})\` reaches any
  * Slack Web API method (a real WebClient), \`itx.integrations.google["jonas"].gmail.request({...})\`
  * the Gmail REST proxy, and \`itx.integrations.github["jonas"]\` is a real
@@ -904,8 +950,8 @@ export interface WorkspaceCollection {
  * workers should be typed by callers through \`workers.get<T>(ref)\`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * \`invokeCapability\` in userspace and every dotted call — including any
- * nested surface a userland getter hands back (the seeded \`slack\` and
- * \`waitrose\` getters, an SDK client you add) — is one RPC.
+ * nested surface a userland getter hands back (an SDK client the project
+ * adds and installs through its \`package.json\`) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -920,7 +966,6 @@ export interface ProjectWorker {
    * the whole batch is redelivered later.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
-  slack: ProjectWorkerSlack;
 }
 
 /**
@@ -1181,22 +1226,6 @@ export interface Workspace {
   exists(path: string): Promise<boolean>;
   /** Git over this workspace's checkout. */
   git: WorkspaceGit;
-}
-
-/**
- * Slack Web API surface exposed by the seeded project worker
- * (\`itx.worker.slack.chat.postMessage({...})\`).
- *
- * The seeded repo implements this in userland with the real \`@slack/web-api\`
- * package (installed by the worker build pipeline from its \`package.json\`), so
- * any nested Web API method family resolves — the index signature reflects
- * that this tree is as wide as the SDK's.
- */
-export interface ProjectWorkerSlack {
-  chat: {
-    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
-  } & Record<string, unknown>;
-  [family: string]: unknown;
 }
 
 /**
@@ -1653,6 +1682,12 @@ export type AgentProcessorState = {
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
   subagents: { path: string; spawnedAt: string }[];
+  tokenUsage: {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCachedInputTokens: number;
+    totalReasoningOutputTokens: number;
+  };
 };
 
 /**
@@ -1780,7 +1815,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1820,7 +1855,10 @@ export type ConnectTelegramResult =
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the \`startOAuthFlow\`/\`completeConnect\` pair.
  * Telegram is excluded: it connects by bot-token paste (\`connectTelegram\`),
- * with no redirect and no signed state. */
+ * with no redirect and no signed state. Waitrose is excluded too: it connects
+ * by writing the connection secret (username/password plus the
+ * \`waitrose-session\` refresh strategy) — the Secret DO logs in itself on
+ * first use. */
 export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =

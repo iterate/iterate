@@ -194,30 +194,14 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 /**
- * Slack Web API surface exposed by the seeded project worker
- * (`itx.worker.slack.chat.postMessage({...})`).
- *
- * The seeded repo implements this in userland with the real `@slack/web-api`
- * package (installed by the worker build pipeline from its `package.json`), so
- * any nested Web API method family resolves — the index signature reflects
- * that this tree is as wide as the SDK's.
- */
-export interface ProjectWorkerSlack {
-  chat: {
-    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
-  } & Record<string, unknown>;
-  [family: string]: unknown;
-}
-
-/**
  * Default seeded project worker contract.
  *
  * This documents the reference repo's `worker.ts` only. Arbitrary dynamic
  * workers should be typed by callers through `workers.get<T>(ref)`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * `invokeCapability` in userspace and every dotted call — including any
- * nested surface a userland getter hands back (the seeded `slack` and
- * `waitrose` getters, an SDK client you add) — is one RPC.
+ * nested surface a userland getter hands back (an SDK client the project
+ * adds and installs through its `package.json`) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -232,7 +216,6 @@ export interface ProjectWorker {
    * the whole batch is redelivered later.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
-  slack: ProjectWorkerSlack;
 }
 
 const WorkerFileSource = z.discriminatedUnion("type", [

@@ -24,12 +24,11 @@ describe("streamViewMode", () => {
 });
 
 describe("modeCapabilities", () => {
-  it("hides the raw rail when pretty-raw has raw=false", () => {
+  it("keeps raw group filters available when pretty-raw has legacy raw=false", () => {
     const caps = modeCapabilities({ mode: "pretty-raw", raw: false }, "/agents/x");
     expect(caps.agentFeed).toBe(true);
-    expect(caps.rawFeed).toBe(false);
-    expect(caps.eventInspector).toBe(false);
-    // Type filter still available so the user can re-enable raw.
+    expect(caps.rawFeed).toBe(true);
+    expect(caps.eventInspector).toBe(true);
     expect(caps.rawEventTypes).toBe(true);
     expect(caps.rawComponents).toBe(true);
   });

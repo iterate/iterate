@@ -22,7 +22,7 @@
     ".next/",
     ".wrangler/",
     "routeTree.gen.ts",
-    "project-repo-template.generated.ts",
+    "config-repo-template.generated.ts",
     "worker-configuration.d.ts",
     "apps/auth/wrangler.jsonc",
     "apps/semaphore/wrangler.jsonc",

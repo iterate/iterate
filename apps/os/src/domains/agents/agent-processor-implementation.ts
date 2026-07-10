@@ -30,6 +30,7 @@ import {
 } from "./agent-processor-contract.ts";
 import {
   jsonCompatible,
+  normalizeLlmUsage,
   runWorkersAiAttempt,
   type WorkersAiBinding,
 } from "./workers-ai-transport.ts";
@@ -597,6 +598,25 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           },
         },
       };
+      // The normalized token report rides the same atomic append as the
+      // completion: same information, one commit. Skipped (not failed) when
+      // the vendor reported no parseable usage.
+      const normalizedUsage = normalizeLlmUsage(completion.usage);
+      const usageEvents =
+        normalizedUsage === undefined
+          ? []
+          : [
+              {
+                type: "events.iterate.com/agent/token-usage-reported" as const,
+                idempotencyKey: this.idempotencyKey(`token-usage@${llmRequestOffset}`),
+                payload: {
+                  llmRequestOffset,
+                  model,
+                  maxContextTokens: contextWindowTokens(model),
+                  ...normalizedUsage,
+                },
+              },
+            ];
       if (await this.#isRequestStillCurrent({ llmRequestOffset })) {
         await this.append(
           {
@@ -605,9 +625,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             payload: { content: completion.text, llmRequestOffset },
           },
           completedEvent,
+          ...usageEvents,
         );
       } else {
-        await this.append(completedEvent);
+        await this.append(completedEvent, ...usageEvents);
       }
     } catch (error) {
       await this.append({
@@ -812,6 +833,30 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         requestGeneration: state.requestGeneration + 1,
       };
     }
+    case "events.iterate.com/agent/token-usage-reported":
+      return {
+        ...state,
+        tokenUsage: {
+          totalInputTokens: state.tokenUsage.totalInputTokens + event.payload.inputTokens,
+          totalOutputTokens: state.tokenUsage.totalOutputTokens + event.payload.outputTokens,
+          totalCachedInputTokens:
+            state.tokenUsage.totalCachedInputTokens + (event.payload.cachedInputTokens ?? 0),
+          totalReasoningOutputTokens:
+            state.tokenUsage.totalReasoningOutputTokens +
+            (event.payload.reasoningOutputTokens ?? 0),
+        },
+      };
+    case "events.iterate.com/agent/history-reset":
+      // Wholesale replace of the model-visible conversation. The request
+      // lifecycle fields (currentRequest, llmRequests, requestGeneration) are
+      // deliberately untouched: an attempt in flight across the reset settles
+      // normally — clearing it here would strand its completion against a
+      // fold that no longer expects it and wedge the turn.
+      return {
+        ...state,
+        systemPrompt: event.payload.systemPrompt,
+        history: event.payload.history,
+      };
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
@@ -916,7 +961,8 @@ function agentInputTriggerSource(
 // Building the model-facing chat request.
 // =============================================================================
 
-/** One agent-history message as the model receives it. */
+/** One agent-history message as the model receives it: the contract's
+ * `AgentInputItem` shape plus the `system` role the request builder adds. */
 type AgentChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -961,6 +1007,37 @@ function renderFileHintLine(file: AgentFileAttachment): string {
     `bytes: await itx.files.get(${JSON.stringify(file.path)}).bytes(); ` +
     `convert: itx.ai.toMarkdown; public url: ${file.url}]`
   );
+}
+
+// =============================================================================
+// Context windows: model → the window the token-usage-reported payload claims.
+// =============================================================================
+
+/**
+ * Context windows per model family, longest-prefix matched so dated variants
+ * inherit their family's window. The OpenAI figures are our OPERATING window,
+ * not the documented one: gpt-5.5's real window is 1.05M tokens, but 272k is
+ * where OpenAI's pricing doubles, so compaction should treat that as full.
+ * Kimi's documented window is 262,144; 256k is the safe round-down.
+ */
+const MODEL_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  "openai/gpt-5.5": 272_000,
+  "openai/gpt-5": 272_000,
+  "@cf/moonshotai/kimi-k2.7-code": 256_000,
+};
+
+/** Conservative floor for models not in the map. */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+
+export function contextWindowTokens(model: string): number {
+  let best: { prefixLength: number; tokens: number } | undefined;
+  for (const [prefix, tokens] of Object.entries(MODEL_CONTEXT_WINDOW_TOKENS)) {
+    if (!model.startsWith(prefix)) continue;
+    if (best === undefined || prefix.length > best.prefixLength) {
+      best = { prefixLength: prefix.length, tokens };
+    }
+  }
+  return best?.tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
 }
 
 // =============================================================================
