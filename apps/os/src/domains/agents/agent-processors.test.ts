@@ -870,7 +870,6 @@ describe("minimal web-chat agent processors", () => {
       llmRetryBackoffBaseMs: 8,
     });
     const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -882,7 +881,7 @@ describe("minimal web-chat agent processors", () => {
 
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      await deliver();
+      await deliverNewEvents({ processor: agent, stream, cursors });
       const stopped = stream.events.some(
         (event) =>
           event.type === "events.iterate.com/agent/input-added" &&
