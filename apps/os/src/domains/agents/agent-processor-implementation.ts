@@ -20,7 +20,6 @@ import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
-  AGENT_COMPACTION_TRIGGER_FRACTION,
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AgentProcessorContract,
@@ -287,112 +286,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         );
         return;
       }
-      // Compaction: a turn's usage report says how full the context ran. Past
-      // the threshold, summarize the conversation into a history-reset. A
-      // droppable ATTEMPT like the LLM turn itself: the report is the durable
-      // evidence, and if this incarnation dies mid-summary the next
-      // over-threshold report re-triggers.
-      case "events.iterate.com/agent/token-usage-reported": {
-        const usage = event.payload;
-        const contextTokens = usage.inputTokens + usage.outputTokens;
-        const thresholdTokens = Math.floor(
-          usage.maxContextTokens * AGENT_COMPACTION_TRIGGER_FRACTION,
-        );
-        if (contextTokens < thresholdTokens) return;
-        runInBackground(() =>
-          this.#compactHistory({ contextTokens, thresholdTokens, triggerOffset: event.offset }),
-        );
-        return;
-      }
       default:
         return;
     }
-  }
-
-  /** Serializes compaction attempts on this incarnation, so a second trigger
-   * waits for the first run's history-reset to land and then sees it in the
-   * staleness guard instead of racing a parallel summary. */
-  #compactionChain: Promise<unknown> = Promise.resolve();
-
-  /**
-   * One compaction attempt: summarize the whole model-visible conversation
-   * with the agent's own model, then replace history with the summary (plus
-   * any turns that landed while the summary ran, carried forward verbatim).
-   * Best-effort by design — every early return leaves the journal untouched
-   * and a later over-threshold report retries:
-   *
-   * - already ran for this trigger (redelivery) → skip before the AI call
-   * - a newer history-reset exists → this trigger is stale
-   * - history was rewritten mid-run (concurrent reset) → drop the summary
-   * - the summary call itself fails → nothing durable changed; the base's
-   *   runInBackground catch logs the error
-   */
-  async #compactHistory(input: {
-    contextTokens: number;
-    thresholdTokens: number;
-    triggerOffset: number;
-  }): Promise<void> {
-    const { contextTokens, thresholdTokens, triggerOffset } = input;
-    const run = this.#compactionChain.then(async () => {
-      const ai = this.deps.ai;
-      if (ai === undefined) return;
-      const resetKey = this.idempotencyKey(`history-reset@${triggerOffset}`);
-      if ((await this.stream.getEvent({ idempotencyKey: resetKey })) !== undefined) return;
-      const newerResets = await this.stream.getEvents({
-        afterOffset: triggerOffset,
-        eventTypes: ["events.iterate.com/agent/history-reset"],
-        limit: 1,
-      });
-      if (newerResets.length > 0) return;
-
-      const state = reduceAgentEvents(await this.#readConsumedEvents());
-      if (state.history.length === 0) return;
-      const transcript = state.history
-        .map(
-          (message) =>
-            `${message.role === "user" ? "User" : "Assistant"}:\n${flattenMessageToText(message)}`,
-        )
-        .join("\n\n");
-      const summary = await runWorkersAiAttempt({
-        ai,
-        deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        messages: [
-          { role: "system", content: AGENT_COMPACTION_PROMPT },
-          { role: "user", content: transcript },
-        ],
-        model: state.llmConfig.model,
-        onChunk: async () => {},
-      });
-
-      // Re-fold: turns that landed while the summary ran are carried forward
-      // verbatim behind the summary; a rewritten prefix means another reset
-      // won the race and this summary describes a conversation that no longer
-      // exists.
-      const stateNow = reduceAgentEvents(await this.#readConsumedEvents());
-      const prefix = stateNow.history.slice(0, state.history.length);
-      if (JSON.stringify(prefix) !== JSON.stringify(state.history)) return;
-      const carriedForward = stateNow.history.slice(state.history.length);
-      await this.append({
-        type: "events.iterate.com/agent/history-reset",
-        idempotencyKey: resetKey,
-        payload: {
-          systemPrompt: stateNow.systemPrompt,
-          history: [
-            {
-              role: "user" as const,
-              content: `[Earlier conversation history was compacted. Summary:]\n\n${summary.text}`,
-            },
-            ...carriedForward,
-          ],
-          reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
-        },
-      });
-    });
-    // The chain absorbs failures (a rejected run must not wedge later
-    // attempts), but the attempt itself still rejects so the base's
-    // runInBackground catch-and-log records what went wrong.
-    this.#compactionChain = run.catch(() => {});
-    await run;
   }
 
   // ---------------------------------------------------------------------------
@@ -1106,28 +1002,6 @@ function renderFileHintLine(file: AgentFileAttachment): string {
     `convert: itx.ai.toMarkdown; public url: ${file.url}]`
   );
 }
-
-// =============================================================================
-// Compaction: over-threshold usage reports → a summarizing history-reset.
-// =============================================================================
-
-/**
- * System prompt for the summary turn. The summary becomes the agent's ENTIRE
- * memory of everything before the reset, so it optimizes for retrieval keys —
- * names, paths, ids, decisions — over narrative flow.
- */
-const AGENT_COMPACTION_PROMPT = [
-  "You are compacting an AI agent's conversation history because it is close to overflowing the model's context window. Write a summary that will REPLACE the transcript below as the agent's only memory of it.",
-  "",
-  "Preserve, with their exact spellings:",
-  "- who the user is, what they are trying to achieve, and their standing preferences or instructions",
-  "- decisions made and the reasons for them",
-  "- open tasks, promises, and anything the agent said it would do",
-  "- names, file paths, URLs, ids, and other exact strings the agent may need to reference again (including itx.files paths from attachment hint lines — files do not survive compaction except through your summary)",
-  "- key results of work already done, so it is not redone",
-  "",
-  "Write dense prose. No preamble, no headings about the summarization itself — output only the summary.",
-].join("\n");
 
 // =============================================================================
 // Token usage: vendor dialects → the one normalized token-usage-reported shape.
