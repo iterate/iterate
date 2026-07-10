@@ -5040,13 +5040,21 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
   async get(input: { name: string; maxTokens?: number }): Promise<string> {
     const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.name);
     if (example) {
+      // Paste-ready for the codemode contract: the annotation lives INSIDE
+      // the function (a response block must START with `async` — leading
+      // comments die silently), and `vars` is bound so the body's example
+      // inputs (`vars.foo ?? fallback`) resolve to their fallbacks until the
+      // caller substitutes real values.
       return [
-        `// EXAMPLE ${JSON.stringify(example.id)}: ${example.title}`,
+        "async (itx) => {",
+        `  // EXAMPLE ${JSON.stringify(example.id)}: ${example.title}`,
         example.e2eProven === false
-          ? `// From the example catalogue (interactive: depends on a connected account or external service).`
-          : `// Proven: this exact script runs unattended against a live project in the platform's test suite.`,
-        `// ${example.description}`,
+          ? `  // From the example catalogue (interactive: depends on a connected account or external service).`
+          : `  // Proven: this exact script runs unattended against a live project in the platform's test suite.`,
+        `  // ${example.description}`,
+        `  const vars = {}; // example inputs — replace \`vars.x ?? fallback\` with real values`,
         example.code,
+        "}",
       ].join("\n");
     }
     if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {

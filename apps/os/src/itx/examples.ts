@@ -729,6 +729,8 @@ const hits = await itx.docs.search({ q: "repo file edit commit write change" });
 // each hit's fetchCall field is the literal next call. Example hits are
 // working scripts — copy those first.
 const example = await itx.docs.get({ name: vars.name ?? "describe-project" });
+// Example scripts come back paste-ready: a complete async (itx) => { ... }
+// with the annotation and a vars stub INSIDE the function.
 
 // Type declarations come back as TypeScript source, ending with a comment
 // naming anything that did not fit (and how to fetch it).
@@ -737,7 +739,7 @@ const streamTypes = await itx.docs.get({ name: "Stream", maxTokens: 800 });
 return {
   hitCount: hits.length,
   firstHit: hits[0] ?? null,
-  exampleStartsWithAnnotation: example.startsWith("// EXAMPLE"),
+  examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
   streamTypesIncludeAppend: streamTypes.includes("append("),
 };
 `.trim(),

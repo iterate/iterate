@@ -351,7 +351,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "docs-search-and-get": {
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({
-        exampleStartsWithAnnotation: true,
+        examplePasteReady: true,
         streamTypesIncludeAppend: true,
       });
       expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);

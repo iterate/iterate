@@ -286,7 +286,9 @@ export function agentDefaultsForPath(input: {
           '- The project config repo is at "/repos/config" (itx.repo): worker.ts (the project worker + website), package.json, AGENTS.md. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
           "- Your private workspace (itx.workspace) overlays the config repo's latest main: readFile/writeFile/edit/glob, then itx.workspace.git.commit({ message }) ships straight to main and the project worker/website redeploys. No branches, no push.",
           "- Delegate by messaging a child agent into existence: await itx.agents.get('researcher').message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
-          "- FIRST MOVE for anything unfamiliar: await itx.docs.search({ q: \"several related words\" }) — e2e-tested example scripts, type declarations, and this project's mounted capabilities; each hit's fetch field is the literal next call. await itx.__describe() lists everything at your scope.",
+          // Deliberate reinforcement of the prompt's FIND WORKING CODE
+          // section — repetition is the one thing small prompts buy back.
+          "- FIRST MOVE for anything unfamiliar: await itx.docs.search({ q: \"several related words\" }) — working example scripts, type declarations, and this project's mounted capabilities; each hit's fetchCall field is the literal next call. await itx.__describe() lists everything at your scope.",
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },

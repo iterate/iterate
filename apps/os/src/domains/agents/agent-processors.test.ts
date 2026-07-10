@@ -55,12 +55,12 @@ describe("minimal web-chat agent processors", () => {
       "The block must contain a single async arrow function",
     );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(message)");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
     // Tool-call stance: small data-first snippets, parallel fan-out, and the
     // explicit loop-ending rule.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Promise.all");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("`return;` with no value");
     // Discovery is the prompt's centerpiece: the docs door (search with many
     // words, fetch by name, e2e-tested examples first), not a capability tour
     // or an embedded type surface (the budget test bans the blob).
