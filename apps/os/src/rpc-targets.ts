@@ -55,7 +55,6 @@ import {
   rejectBuiltinCollision,
   withInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
-import { ITX_TYPES_SOURCE } from "./types-source.generated.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
@@ -145,7 +144,14 @@ import {
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath, listMcpTools } from "./domains/itx/mcp-client.ts";
-import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import { ITX_EXAMPLES } from "./itx/examples.ts";
+import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
+import {
+  declarationsByName,
+  searchScore,
+  typeSlice,
+  type DocsSearchHit,
+} from "./domains/itx/itx-api-graph.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
   StreamProcessor,
@@ -191,7 +197,6 @@ import type {
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
-import type { ItxExampleSummary, ItxExampleWithCode } from "./itx/examples.ts";
 import type { McpClientConnectInput, McpClientRpc } from "./domains/itx/mcp-client.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
@@ -2286,7 +2291,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
         'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
-        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
+        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.docs.get({ name: "github-mcp-connect" }).',
       ].join("\n"),
       types: [
         "type GmailRequestInput = {",
@@ -3899,7 +3904,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
-  examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
+  docs: 'Find working code + types: search({ q: "many related words" }) over e2e-tested example scripts, type declarations, and mounted capabilities; get({ name }) fetches one.',
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
@@ -4003,8 +4008,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
-   * capability (built-ins + dynamic mounts), the children map, and the full
-   * public type surface in `types`.
+   * capability (built-ins + dynamic mounts), the children map, and the
+   * `Project` declaration in `types` (the full surface is one
+   * `itx.docs.get({ name })` per declaration away).
    */
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#props.capabilityHost.path;
@@ -4018,8 +4024,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
         "Built-ins are project-global and identical at every scope; `capabilities` is the full inventory (built-ins + dynamic mounts). " +
         "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
-        "Deep discovery: call __describe() on any child.",
-      types: ITX_TYPES_SOURCE,
+        'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
+      types: typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: "Project",
+        maxTokens: 2000,
+      }).sourceText,
       children: {
         ...PROJECT_BUILTIN_BLIPS,
         ...(scopePath.startsWith("/agents/")
@@ -4189,9 +4199,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
-  get examples(): ItxExampleCatalogRpcTarget {
-    return new ItxExampleCatalogRpcTarget();
+  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+   * declarations, and this scope's mounted capabilities; `get({ name })`
+   * fetches one. Pass search MANY related words — matching is dumb word
+   * overlap. */
+  get docs(): ItxDocsRpcTarget {
+    return new ItxDocsRpcTarget({ capabilityHost: this.#props.capabilityHost });
   }
 
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
@@ -4878,42 +4891,160 @@ export class StreamProcessorRpcTarget<
 // The examples catalogue is plain data (src/itx/examples.ts) shared with the
 // REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
 // agents and scripts browse known-good snippets instead of guessing at the
-// surface; list() omits the code bodies so it stays cheap to skim.
-// Session-context entries are excluded: they run against the OS Session
-// (what authenticate() returns), which an itx holder does not have.
+// surface. Session-context entries are excluded: they run against the OS
+// Session (what authenticate() returns), which an itx holder does not have.
 const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
 
-class ItxExampleCatalogRpcTarget extends IterateRpcTarget<"ItxExampleCatalog"> {
+const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
+
+/**
+ * The docs door: search + fetch over everything callable from this scope —
+ * e2e-TESTED example scripts (each runs unattended in the platform's test
+ * suite; copy them), the public type surface (the Itx Type Graph), and the
+ * capabilities mounted in the caller's scope chain. One door for "how do I
+ * X?": search first, fetch what the hits name, adapt working code.
+ *
+ * The search mechanism is deliberately dumb (word matching, no embeddings),
+ * which is why every docstring here tells callers to pass MANY related words
+ * — recall comes from the query, not the engine.
+ */
+class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
+  readonly #capabilityHost: CapabilityHostRpcTarget;
+
+  constructor(props: { capabilityHost: CapabilityHostRpcTarget }) {
+    super();
+    this.#capabilityHost = props.capabilityHost;
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Read-only catalogue of known-good itx script snippets: list() summaries, get({ id }) one example with full code. Copy working patterns instead of inventing them.",
-      children: { get: "One example with code.", list: "All example summaries." },
-      parent: "a project itx (itx.examples)",
+        "Search + fetch over everything callable from this scope: e2e-tested example scripts (copy these), the public type surface, and this scope's mounted capabilities. " +
+        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
+        "get({ name }) fetches what a hit names: an example's full annotated code, or a type declaration with its referenced types.",
+      children: {
+        get: "Fetch one entry by name: an example's full code, or a type declaration closure.",
+        search:
+          "Find examples, types, and mounted capabilities by keywords (pass many related words).",
+      },
+      parent: "a project itx (itx.docs)",
     });
   }
 
-  /** Every example summary, without code bodies (cheap to skim). */
-  async list(): Promise<ItxExampleSummary[]> {
-    return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
-  }
+  /**
+   * Find examples, types, and mounted capabilities. Pass MANY related words —
+   * matching is dumb word overlap, so more synonyms means better recall:
+   * `search({ q: "file upload attachment bytes store image" })`, not
+   * `search({ q: "files" })`. Example hits are e2e-tested scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetch` field is
+   * the literal next call to make.
+   */
+  async search(input: { q: string }): Promise<DocsSearchHit[]> {
+    const scored: Array<{ hit: DocsSearchHit; score: number }> = [];
 
-  /** One example with its full script body. */
-  async get(input: { id: string }): Promise<ItxExampleWithCode> {
-    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.id);
-    if (!example) {
-      throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
+    for (const example of PROJECT_CONTEXT_EXAMPLES) {
+      const score = searchScore(
+        input.q,
+        `${example.id} ${example.title} ${example.description} ${example.code}`,
+      );
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "example",
+          name: example.id,
+          summary: `${example.title} — ${example.description}`,
+          fetch: `await itx.docs.get({ name: ${JSON.stringify(example.id)} })`,
+        },
+      });
     }
-    return { ...exampleSummary(example), code: example.code };
-  }
-}
 
-function exampleSummary(example: ItxExample): ItxExampleSummary {
-  return {
-    description: example.description,
-    id: example.id,
-    title: example.title,
-  };
+    for (const declaration of ITX_API_DECLARATIONS) {
+      const memberText = Object.entries(declaration.memberSummaries)
+        .map(([member, summary]) => `${member} ${summary}`)
+        .join(" ");
+      const score = searchScore(
+        input.q,
+        `${declaration.name} ${declaration.summary} ${memberText}`,
+      );
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "type",
+          name: declaration.name,
+          summary: declaration.summary,
+          fetch: `await itx.docs.get({ name: ${JSON.stringify(declaration.name)} })`,
+        },
+      });
+    }
+
+    // Capabilities mounted in this scope's chain (agent scope sees its own
+    // mounts plus the project root's) — the part of the surface no static
+    // corpus can know.
+    const { capabilities } = await this.#capabilityHost.__describe();
+    for (const capability of capabilities) {
+      if (capability.type === "builtin") continue; // builtins are covered by their type declarations
+      const dottedPath = capability.path.join(".");
+      const instructions = capability.instructions ?? "";
+      const score = searchScore(input.q, `${dottedPath} ${instructions}`);
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "capability",
+          name: dottedPath,
+          summary: instructions.split(/(?<=[.!?])\s/)[0] ?? "(no instructions recorded)",
+          fetch: `await itx.${dottedPath}.__describe()`,
+        },
+      });
+    }
+
+    const kindRank: Record<DocsSearchHit["kind"], number> = { example: 0, capability: 1, type: 2 };
+    return scored
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          kindRank[a.hit.kind] - kindRank[b.hit.kind] ||
+          a.hit.name.localeCompare(b.hit.name),
+      )
+      .slice(0, 12)
+      .map((entry) => entry.hit);
+  }
+
+  /**
+   * Fetch one entry by the name a search hit gave you. An example name
+   * returns its full script (e2e-tested — runs unattended in the platform's
+   * test suite); a type declaration name returns its TypeScript source plus
+   * as much of its reference closure as fits `maxTokens` (default 1500),
+   * ending with a comment naming anything left out and how to fetch it.
+   */
+  async get(input: { name: string; maxTokens?: number }): Promise<string> {
+    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.name);
+    if (example) {
+      return [
+        `// EXAMPLE ${JSON.stringify(example.id)}: ${example.title}`,
+        `// e2e-tested — this exact script runs unattended in the platform's test suite.`,
+        `// ${example.description}`,
+        example.code,
+      ].join("\n");
+    }
+    if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
+      return typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: input.name,
+        maxTokens: input.maxTokens ?? 1500,
+      }).sourceText;
+    }
+    const nearest = (await this.search({ q: input.name })).slice(0, 3);
+    throw new Error(
+      `unknown docs entry ${JSON.stringify(input.name)}` +
+        (nearest.length > 0
+          ? ` — closest matches: ${nearest.map((hit) => hit.name).join(", ")}`
+          : "") +
+        `. itx.docs.search({ q: "several related words" }) finds examples, types, and capabilities.`,
+    );
+  }
 }
 
 /**

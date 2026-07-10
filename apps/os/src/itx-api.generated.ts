@@ -73,8 +73,9 @@ export interface Project {
   projectId: string;
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
-   * capability (built-ins + dynamic mounts), the children map, and the full
-   * public type surface in `types`.
+   * capability (built-ins + dynamic mounts), the children map, and the
+   * `Project` declaration in `types` (the full surface is one
+   * `itx.docs.get({ name })` per declaration away).
    */
   __describe(): Promise<ProjectDescription>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
@@ -119,8 +120,11 @@ export interface Project {
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
   email: EmailCapability;
-  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
-  examples: ItxExampleCatalog;
+  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+   * declarations, and this scope's mounted capabilities; `get({ name })`
+   * fetches one. Pass search MANY related words — matching is dumb word
+   * overlap. */
+  docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
   /** The integrations collection: built-in integrations as dispatch branches
@@ -595,12 +599,36 @@ export interface EmailCapability {
   }): Promise<{ from: string; to: string; messageId: string | null }>;
 }
 
-export interface ItxExampleCatalog {
+/**
+ * The docs door: search + fetch over everything callable from this scope —
+ * e2e-TESTED example scripts (each runs unattended in the platform's test
+ * suite; copy them), the public type surface (the Itx Type Graph), and the
+ * capabilities mounted in the caller's scope chain. One door for "how do I
+ * X?": search first, fetch what the hits name, adapt working code.
+ *
+ * The search mechanism is deliberately dumb (word matching, no embeddings),
+ * which is why every docstring here tells callers to pass MANY related words
+ * — recall comes from the query, not the engine.
+ */
+export interface Docs {
   __describe(): Promise<Description>;
-  /** Every example summary, without code bodies (cheap to skim). */
-  list(): Promise<ItxExampleSummary[]>;
-  /** One example with its full script body. */
-  get(input: { id: string }): Promise<ItxExampleWithCode>;
+  /**
+   * Find examples, types, and mounted capabilities. Pass MANY related words —
+   * matching is dumb word overlap, so more synonyms means better recall:
+   * `search({ q: "file upload attachment bytes store image" })`, not
+   * `search({ q: "files" })`. Example hits are e2e-tested scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetch` field is
+   * the literal next call to make.
+   */
+  search(input: { q: string }): Promise<DocsSearchHit[]>;
+  /**
+   * Fetch one entry by the name a search hit gave you. An example name
+   * returns its full script (e2e-tested — runs unattended in the platform's
+   * test suite); a type declaration name returns its TypeScript source plus
+   * as much of its reference closure as fits `maxTokens` (default 1500),
+   * ending with a comment naming anything left out and how to fetch it.
+   */
+  get(input: { name: string; maxTokens?: number }): Promise<string>;
 }
 
 /**
@@ -1110,6 +1138,19 @@ export interface AgentDefaults {
 /** Disposable handle for one live project egress interception. */
 export interface ProjectEgressIntercept extends Disposable {
   release(): Promise<void>;
+}
+
+/** A search hit from `itx.docs.search`, in relevance order. */
+export interface DocsSearchHit {
+  /** What kind of corpus entry matched: an e2e-tested example script, a type
+   * declaration, or a capability mounted in the caller's scope. */
+  kind: "example" | "type" | "capability";
+  /** The name to fetch it by (example id, declaration name, or mount path). */
+  name: string;
+  /** One-line summary of the entry. */
+  summary: string;
+  /** The literal itx call that fetches the full entry — copy it verbatim. */
+  fetch: string;
 }
 
 /** One project file, addressed by path. */
@@ -1778,16 +1819,6 @@ export type EmailAttachmentInput =
       /** MIME type; defaults to application/octet-stream. */
       contentType?: string;
     };
-
-/** One example without its code — what `itx.examples.list()` returns. */
-export type ItxExampleSummary = {
-  description: string;
-  id: string;
-  title: string;
-};
-
-/** One example with its full script body — what `itx.examples.get({ id })` returns. */
-export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 /**
  * One entry of `integrations.list()`. Discriminated on `source`: built-in

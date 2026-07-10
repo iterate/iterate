@@ -48,16 +48,6 @@ export type ItxExample = {
   title: string;
 };
 
-/** One example without its code — what `itx.examples.list()` returns. */
-export type ItxExampleSummary = {
-  description: string;
-  id: string;
-  title: string;
-};
-
-/** One example with its full script body — what `itx.examples.get({ id })` returns. */
-export type ItxExampleWithCode = ItxExampleSummary & { code: string };
-
 const ALL_RUNTIMES: ItxExampleRuntime[] = [...ITX_EXAMPLE_RUNTIMES];
 
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
@@ -712,23 +702,31 @@ return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
   {
-    id: "browse-examples",
-    title: "Browse this catalogue through itx.examples",
+    id: "docs-search-and-get",
+    title: "Find working code + types through itx.docs",
     description:
-      "The catalogue itself is a built-in capability: list() returns every project-context entry without its code (cheap to skim), get({ id }) returns one with the full script body. Agents use this to copy working patterns instead of guessing at the surface. Session-context entries are excluded — an itx holder has no Session.",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const summaries = await itx.examples.list();
+// MANY related words per query — the search is dumb word matching, so
+// synonyms are what buy recall.
+const hits = await itx.docs.search({ q: "repo file edit commit write change" });
 
-// Summaries carry { id, title, description } — no code. Fetch one entry's
-// full script body by id.
-const example = await itx.examples.get({ id: vars.exampleId ?? "describe-project" });
+// Hits are { kind: "example" | "type" | "capability", name, summary, fetch };
+// each hit's fetch field is the literal next call. Examples are e2e-tested
+// scripts — copy those first.
+const example = await itx.docs.get({ name: vars.name ?? "describe-project" });
+
+// Type declarations come back as TypeScript source, ending with a comment
+// naming anything that did not fit (and how to fetch it).
+const streamTypes = await itx.docs.get({ name: "Stream", maxTokens: 800 });
 
 return {
-  count: summaries.length,
-  hasCode: typeof example.code === "string" && example.code.length > 0,
-  id: example.id,
+  hitCount: hits.length,
+  firstHit: hits[0] ?? null,
+  exampleStartsWithAnnotation: example.startsWith("// EXAMPLE"),
+  streamTypesIncludeAppend: streamTypes.includes("append("),
 };
 `.trim(),
   },

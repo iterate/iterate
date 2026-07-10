@@ -15,12 +15,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { API } from "@typescript/native-preview/unstable/sync";
-import { generateItxApi, verifyRpcTargetsSatisfyContract } from "../scripts/generate-itx-api.ts";
+import {
+  generateItxApi,
+  generateItxApiGraphSource,
+  verifyRpcTargetsSatisfyContract,
+} from "../scripts/generate-itx-api.ts";
 
 const generatedPath = fileURLToPath(new URL("./itx-api.generated.ts", import.meta.url));
 
 test("itx-api.generated.ts is fresh (pnpm generate:itx-api)", () => {
   expect(readFileSync(generatedPath, "utf8")).toBe(generateItxApi());
+}, 60_000);
+
+test("itx-api-graph.generated.ts is fresh (pnpm generate:itx-api)", () => {
+  // The Itx Type Graph is the same content per-declaration; both artifacts
+  // come from one generator run, so freshness of one implies the other ONLY
+  // when both were committed together — check them independently.
+  const graphPath = fileURLToPath(new URL("./itx-api-graph.generated.ts", import.meta.url));
+  expect(readFileSync(graphPath, "utf8")).toBe(
+    generateItxApiGraphSource(readFileSync(generatedPath, "utf8")),
+  );
 }, 60_000);
 
 test("the packages/iterate copy (published as iterate/sdk) is fresh (pnpm generate:itx-api)", () => {

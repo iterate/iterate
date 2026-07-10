@@ -57,31 +57,20 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(message)");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
-    // The verbatim type surface rides along so the agent knows what it holds.
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Project>");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Project {");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface CapabilityHost {");
-    // Tool-call stance: small data-first snippets, parallel fan-out, explicit
-    // loop-ending rule, and the built-in discovery surfaces.
+    // Tool-call stance: small data-first snippets, parallel fan-out, and the
+    // explicit loop-ending rule.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Promise.all");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
+    // Discovery is the prompt's centerpiece: the docs door (search with many
+    // words, fetch by name, e2e-tested examples first), not a capability tour
+    // or an embedded type surface (the budget test bans the blob).
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.search");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.get");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("MANY related words");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("e2e-TESTED example scripts");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      'itx.integrations.google["<connection>"].gmail.request',
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("CONFIG REPO EDITS");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      'const repo = itx.repos.get(vars.repoPath ?? "/repos/config")',
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      "repo.edit({ path, message, oldString, newString })",
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-read-file");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-edit-file");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("__describe()");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Never tell the user you lack access");
   });
 
   it("feeds a returned script result back as input and schedules another turn", async () => {
