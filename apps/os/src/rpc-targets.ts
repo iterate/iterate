@@ -2879,8 +2879,8 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
 type AgentRpcTargetProps = {
   auth: ItxAuth;
   // The agent scope's own capability host; its (already-normalized) path IS
-  // the agent path. Exposed as `agent.capabilityHost` and used as the
-  // fallback for dynamic dotted-path calls (`agent.someTool(...)`).
+  // the agent path. Exposed as `agent.capabilityHost` — the door to the
+  // scope's dynamic capabilities (`agent.capabilityHost.someTool(...)`).
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
   projectId: string;
@@ -2888,7 +2888,35 @@ type AgentRpcTargetProps = {
   sourceScopePath?: string;
 };
 
-/** Agent capability surface for message loops and agent-local dynamic tools. */
+/**
+ * Agent capability surface for message loops and agent-local dynamic tools.
+ *
+ * DELIBERATELY NOT wrapped in `withInvokeCapabilityFallback`, unlike the other
+ * itx surfaces — and this is load-bearing, not an omission. This is the one
+ * surface routinely returned FROM A METHOD CALL (`itx.agents.get(path)`), and
+ * workerd's RPC classifies a call result for promise pipelining with native
+ * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
+ * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
+ * pipelined call on the result dies with the baffling "The RPC receiver does
+ * not implement the method ..."). A plain class instance classifies as a
+ * single stub and pipelines fine — which is what lets model code write the
+ * natural one-liners over the script lane (`env.ITX` loopback):
+ *
+ *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get(path).capabilityHost.someTool(args);
+ *
+ * The second line is how DYNAMIC capabilities are reached through a fetched
+ * handle: `capabilityHost` is a property (workerd resolves property PATHS
+ * through proxies — `tryGetProperty` has an explicit `isProxyOfRpcTarget`
+ * walk — the gap is only in classifying METHOD RESULTS), so the proxied
+ * CapabilityHostRpcTarget behind it still does dotted dynamic dispatch.
+ * Inside the agent's own scope nothing changes: scope capabilities live on
+ * the root itx (`itx.someTool(...)`), whose proxy is never a call result.
+ *
+ * Keep it this way: never return a proxied target from a method callers will
+ * pipeline on. (Upstream fix proposed for the workerd classifier; until it
+ * ships everywhere this rule stands regardless.)
+ */
 class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -2899,7 +2927,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     props.auth.assertCanAccessProject(props.projectId);
     normalizeAgentPath(props.capabilityHost.path);
     this.#props = props;
-    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get #path() {
@@ -3130,12 +3157,13 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   > {
     return describeNode({
       instructions:
-        "One agent: the narrow control surface for the agent stream at this path. Dotted calls on unknown members resolve against the agent scope's capability host.",
+        "One agent: the narrow control surface for the agent stream at this path. This surface has ONLY the members listed below — the agent scope's dynamic capabilities are reached through `capabilityHost` (e.g. agents.get(path).capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
         ask: "Send a message and wait for the agent's next chat reply.",
-        capabilityHost: "This agent scope's durable capability table.",
+        capabilityHost:
+          "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         configure:
           "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",

@@ -1792,7 +1792,10 @@ describe("itx", () => {
 
             async callRepoAgent(label) {
               const itx = await this.env.ITX.get();
-              return await itx.agent.repoAgent.echo(label);
+              // repoAgent is mounted on the agent scope this DO runs in, so it
+              // is a member of the scope's own itx (itx.agent is the narrow
+              // control surface and no longer proxies dynamic names).
+              return await itx.repoAgent.echo(label);
             }
           }
         `,
@@ -1853,7 +1856,10 @@ describe("itx", () => {
         increment(label: string): Promise<{ count: number; label: string; scope: string }>;
       };
     };
-    const agentCapabilities = agent as typeof agent & {
+    // The agent HANDLE is a plain, unproxied surface (so `agents.get(...)`
+    // results pipeline over workerd RPC — see AgentRpcTarget); its dynamic
+    // capabilities are reached through the `capabilityHost` property.
+    const agentCapabilities = agent.capabilityHost as typeof agent.capabilityHost & {
       inlineCounter: {
         callRepoAgent(label: string): Promise<{ label: string; whoami: string }>;
         increment(label: string): Promise<{ count: number; label: string; whoami: string }>;
@@ -2124,9 +2130,13 @@ describe("itx", () => {
       payload: {
         content: fencedAgentScript(`
           async (itx) => {
-            const probe = await itx.agent.agentProbe.inspect("agent-only");
-            const first = await itx.agent.agentCounter.increment();
-            const current = await itx.agent.agentCounter.current();
+            // Agent-scope capabilities are members of the agent's OWN itx —
+            // \`itx.agent\` is the narrow control surface (message/ask/stream/…)
+            // and deliberately does NOT proxy dynamic names (see
+            // AgentRpcTarget); its dynamic door is itx.agent.capabilityHost.
+            const probe = await itx.agentProbe.inspect("agent-only");
+            const first = await itx.agentCounter.increment();
+            const current = await itx.agent.capabilityHost.agentCounter.current();
             await itx.chat.sendMessage(JSON.stringify({
               durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
               current,
@@ -2205,8 +2215,10 @@ describe("itx", () => {
 
     // @ts-expect-error - dynamic project capability mounted by this test.
     expect(await project.scopeProbe.projectScope()).toEqual({ kind: "project", projectId });
+    // The agent HANDLE has no dynamic fallback (see AgentRpcTarget) — its
+    // scope's dynamic capabilities live behind the capabilityHost property.
     // @ts-expect-error - dynamic agent capability mounted by this test.
-    expect(await agent.scopeProbe.agentScope()).toEqual({
+    expect(await agent.capabilityHost.scopeProbe.agentScope()).toEqual({
       kind: "agent",
       whoami: `agent ${projectId}:${agentPath}`,
     });
