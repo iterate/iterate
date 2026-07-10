@@ -1040,7 +1040,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("subagents/researcher") from an agent script addresses a subagent, get("../..") from a subagent addresses its parent. list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
         get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
@@ -1136,9 +1136,11 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * a no-op.
    */
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+    const defaultModel = parseConfig(env).defaultAgentModel;
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
@@ -3063,10 +3065,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * message itself and leaving the prompt alone.
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
+    const defaultModel = parseConfig(env).defaultAgentModel;
     const defaults = agentDefaultsForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
       overrides: input,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     // The defaults batch (fixed keys) establishes policy on a fresh agent and
     // dedupes away on an existing one; the keyless events are the last word
@@ -3097,10 +3101,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * correlated per request — concurrent asks on one agent stream interleave
    * exactly like two people typing into the same chat. Like `message`, the
    * sender derives from the calling scope, so an agent asking another agent
-   * does not refill the receiver's autonomous turn budget. NOT the tool for
-   * SUBAGENTS: they are prompted to report by messaging their parent (its
-   * inputs), never web chat, so an ask() at a subagent times out — use
-   * `message()` and read the report from your own inputs.
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer `message()` and read their report from your own inputs:
+   * their prompt tells them to reply by messaging the parent, not by writing to
+   * web chat, so `ask()` can time out waiting for a chat reply.
    */
   async ask(input: {
     message: string;
@@ -4136,7 +4140,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       projectId: this.#props.projectId,
       // The "current actor": this itx's own scope path. Relative agent paths
       // resolve against it, and message() stamps it as the sender when the
-      // scope is an agent — how a subagent's report knows who it is from.
+      // scope is an agent — how delegated reports know who they are from.
       sourceScopePath: this.#props.capabilityHost.path,
     });
   }

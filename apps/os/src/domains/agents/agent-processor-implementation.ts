@@ -16,7 +16,6 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import { subagentParentPath } from "../../lib/subagent-paths.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -686,8 +685,8 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       // Inbound messages fold straight into history. The trigger source keys
       // on WHO sent it: humans (web, MCP, Slack, email, GitHub) refill the
       // autonomous turn budget; another AGENT's mail counts against it — the
-      // same breaker that stops script self-loops bounds parent↔subagent
-      // reply ping-pong, because neither side's messages reset the other.
+      // same breaker that stops script self-loops bounds agent↔agent reply
+      // ping-pong, because neither side's messages reset the other.
       const from = event.payload.from;
       const files = event.payload.files;
       const triggerSource =
@@ -875,18 +874,6 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
       };
-    case "events.iterate.com/stream/child-stream-created": {
-      // Every descendant stream announces its FULL path to every ancestor;
-      // this agent's subagents are the announcements whose parent-agent path
-      // is exactly this stream (event.path), so grandchildren stay out.
-      const childPath = event.payload.childPath;
-      if (subagentParentPath(childPath) !== event.path) return state;
-      if (state.subagents.some((subagent) => subagent.path === childPath)) return state;
-      return {
-        ...state,
-        subagents: [...state.subagents, { path: childPath, spawnedAt: event.createdAt }],
-      };
-    }
     default:
       return state;
   }

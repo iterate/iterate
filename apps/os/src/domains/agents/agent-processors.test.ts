@@ -1416,39 +1416,13 @@ describe("file attachments in the LLM request", () => {
   });
 });
 
-describe("subagents in reduced state", () => {
-  const announced = (childPath: string, offset: number) => ({
-    type: "events.iterate.com/stream/child-stream-created",
-    payload: { childPath },
-    offset,
-    createdAt: "2026-07-09T00:00:00.000Z",
-    path: "/agents/main",
-  });
-
-  it("folds immediate subagent births from child-stream-created announcements", () => {
-    const state = reduceAgentEvents([
-      announced("/agents/main/subagents/researcher", 1),
-      // A grandchild announces to every ancestor too — it belongs to the
-      // subagent's own fold, not this one.
-      announced("/agents/main/subagents/researcher/subagents/helper", 2),
-      // Duplicate announcements dedupe.
-      announced("/agents/main/subagents/researcher", 3),
-      // A non-subagent child stream is not a subagent.
-      announced("/agents/main/notes", 4),
-    ]);
-    expect(state.subagents).toMatchObject([
-      { path: "/agents/main/subagents/researcher", spawnedAt: "2026-07-09T00:00:00.000Z" },
-    ]);
-  });
-});
-
 describe("inter-agent mail", () => {
   const mail = (payload: Record<string, unknown>, offset: number) => ({
     type: "events.iterate.com/agents/message-received",
     payload,
     offset,
     createdAt: "2026-07-09T00:00:00.000Z",
-    path: "/agents/main/subagents/researcher",
+    path: "/agents/main/researcher",
   });
 
   it("folds agent mail into history with the sender named and the reply door spelled out, as an autonomous trigger", () => {
@@ -1464,7 +1438,7 @@ describe("inter-agent mail", () => {
     expect(entry.content).toContain('itx.agents.get("/agents/main").message(text)');
     expect(entry.content.endsWith("status?")).toBe(true);
     // Agent mail counts against the autonomous turn budget instead of
-    // refilling it — the loop breaker bounds parent↔subagent ping-pong.
+    // refilling it — the loop breaker bounds agent↔agent ping-pong.
     expect(state.pendingTriggerSource).toBe("agent-loop");
     expect(state.pendingTriggerOffset).toBe(1);
   });

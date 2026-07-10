@@ -7,10 +7,12 @@ const PROJECT_ID = "prj_defaults_test";
 function defaultsFor(
   agentPath: string,
   overrides?: Parameters<typeof agentDefaultsForPath>[0]["overrides"],
+  defaultModel?: string,
 ) {
   return agentDefaultsForPath({
     agentPath,
     projectId: PROJECT_ID,
+    ...(defaultModel === undefined ? {} : { defaultModel }),
     ...(overrides === undefined ? {} : { overrides }),
   });
 }
@@ -65,19 +67,35 @@ describe("agentDefaultsForPath", () => {
     expect(provider?.payload).toMatchObject({ model: "openai/gpt-5.5" });
   });
 
+  it("uses the deployment default model unless the caller overrides it", () => {
+    const defaults = defaultsFor("/agents/demo", undefined, "@cf/moonshotai/kimi-k2.7-code");
+    expect(defaults.model).toBe("@cf/moonshotai/kimi-k2.7-code");
+    const provider = defaults.events.find(
+      (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
+    );
+    expect(provider?.payload).toMatchObject({ model: "@cf/moonshotai/kimi-k2.7-code" });
+
+    const override = defaultsFor(
+      "/agents/demo",
+      { model: "openai/gpt-5.5" },
+      "@cf/moonshotai/kimi-k2.7-code",
+    );
+    expect(override.model).toBe("openai/gpt-5.5");
+  });
+
   it("keys every event on (projectId, agentPath) so re-appends dedupe", () => {
     for (const event of defaultsFor("/agents/demo").events) {
       expect(event.idempotencyKey).toContain(PROJECT_ID);
     }
   });
 
-  it("subagents get the plain default prompt — never a thread transcriber prompt, no subagent suffix", () => {
+  it("child agents get the plain default prompt — never a thread transcriber prompt, no child suffix", () => {
     // Child-agent-ness rides on the parent's message (the fold labels
     // agent-sourced messages with the sender's path and reply door), not on
     // a birth-time prompt.
-    const nested = defaultsFor("/agents/slack/main/C123/ts-99/subagents/helper");
+    const nested = defaultsFor("/agents/slack/main/C123/ts-99/helper");
     expect(nested.systemPrompt).toContain("HOW YOU ACT");
-    expect(nested.systemPrompt).not.toContain("YOU ARE A SUBAGENT");
+    expect(nested.systemPrompt).not.toContain("You are a child agent");
     // The shape-loose Slack predicate must not classify the nested path.
     expect(nested.systemPrompt).not.toContain("inside a Slack thread");
     expect(nested.systemPrompt).toBe(defaultsFor("/agents/main").systemPrompt);
