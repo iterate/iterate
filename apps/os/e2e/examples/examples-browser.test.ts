@@ -77,7 +77,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       using session = await connectFromBrowser();
       using project = session.projects.get(projectId);
 
-      const ctx = { marker: `browser-${uniqueSuffix()}`, projectId };
+      const ctx = { attemptSalt: uniqueSuffix(), marker: `browser-${uniqueSuffix()}`, projectId };
       const vars = exampleCase.vars?.(ctx) ?? {};
       const result = await evalBrowserReplSessionCode({
         code: example.code,

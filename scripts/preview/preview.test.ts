@@ -1065,7 +1065,7 @@ describe("lease holder helpers", () => {
   });
 
   it("parses PREVIEW_SLOT_WAIT_MS overrides", () => {
-    expect(resolveSlotWaitTotalMs({})).toBe(20 * 60 * 1000);
+    expect(resolveSlotWaitTotalMs({})).toBe(6 * 60 * 1000);
     expect(resolveSlotWaitTotalMs({ PREVIEW_SLOT_WAIT_MS: "0" })).toBe(0);
     expect(resolveSlotWaitTotalMs({ PREVIEW_SLOT_WAIT_MS: "5000" })).toBe(5000);
     expect(() => resolveSlotWaitTotalMs({ PREVIEW_SLOT_WAIT_MS: "later" })).toThrow(
