@@ -49,16 +49,19 @@ describe("agentDefaultsForPath", () => {
     expect(kickoffTypes("/agents/demo")).toBe(0);
   });
 
-  it("bakes overrides into the returned events", () => {
+  it("bakes overrides into the returned events, appended after the codemode contract", () => {
     const custom = defaultsFor("/agents/demo", {
       systemPrompt: "Answer only in pirate speak.",
       model: "openai/gpt-5.5",
     });
-    expect(custom.systemPrompt).toBe("Answer only in pirate speak.");
+    // The persona rides after the platform prompt — an agent whose prompt
+    // loses the codemode contract cannot act at all.
+    expect(custom.systemPrompt).toContain("HOW YOU ACT");
+    expect(custom.systemPrompt.endsWith("Answer only in pirate speak.")).toBe(true);
     const config = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/config-updated",
     );
-    expect(config?.payload.systemPrompt).toBe("Answer only in pirate speak.");
+    expect(config?.payload.systemPrompt).toBe(custom.systemPrompt);
     const provider = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );
@@ -81,12 +84,20 @@ describe("agentDefaultsForPath", () => {
     expect(plain.systemPrompt).not.toContain("YOU ARE A SUBAGENT");
   });
 
-  it("a systemPrompt override keeps the subagent suffix appended", () => {
+  it("a systemPrompt override keeps the codemode contract and the subagent suffix", () => {
     const custom = defaultsFor("/agents/main/subagents/pirate", {
       systemPrompt: "Answer only in pirate speak.",
     });
-    expect(custom.systemPrompt.startsWith("Answer only in pirate speak.")).toBe(true);
+    expect(custom.systemPrompt).toContain("HOW YOU ACT");
+    expect(custom.systemPrompt).toContain("Answer only in pirate speak.");
     expect(custom.systemPrompt).toContain("YOU ARE A SUBAGENT");
     expect(custom.systemPrompt).toContain("/agents/main");
+    // Order: platform contract, then persona, then the subagent contract.
+    expect(custom.systemPrompt.indexOf("HOW YOU ACT")).toBeLessThan(
+      custom.systemPrompt.indexOf("Answer only in pirate speak."),
+    );
+    expect(custom.systemPrompt.indexOf("Answer only in pirate speak.")).toBeLessThan(
+      custom.systemPrompt.indexOf("YOU ARE A SUBAGENT"),
+    );
   });
 });

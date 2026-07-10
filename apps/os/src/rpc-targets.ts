@@ -3016,9 +3016,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
-   * keeps the subagent contract: the "you are a subagent" suffix is appended
-   * after it (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt is a PERSONA, not a
+   * replacement: it is appended after the path's platform prompt (which keeps
+   * the codemode contract the agent needs to act at all), and on a subagent
+   * path the "you are a subagent" suffix rides last (agents/agent-defaults.ts).
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
     const defaultModel = parseConfig(env).defaultAgentModel;

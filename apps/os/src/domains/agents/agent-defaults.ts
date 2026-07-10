@@ -214,7 +214,9 @@ function agentSystemPromptForPath(agentPath: string): string {
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
-/** Caller-supplied policy overrides, baked into the returned events. */
+/** Caller-supplied policy overrides, baked into the returned events. The
+ * systemPrompt is a persona appended after the path's platform prompt (which
+ * always keeps the codemode contract), not a wholesale replacement. */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
   model?: string;
@@ -253,7 +255,15 @@ export function agentDefaultsForPath(input: {
   const { agentPath, projectId } = input;
   const model = input.overrides?.model ?? input.defaultModel ?? DEFAULT_AGENT_MODEL;
   const parentAgentPath = subagentParentPath(agentPath);
-  const basePrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
+  // A caller-supplied systemPrompt is a persona riding AFTER the path prompt,
+  // never a replacement: the path prompt carries the codemode contract (ONE
+  // fenced async (itx) => {} block), and an agent without it cannot act at all
+  // — its outputs stop parsing as scripts and it dies silently.
+  const pathPrompt = agentSystemPromptForPath(agentPath);
+  const basePrompt =
+    input.overrides?.systemPrompt === undefined
+      ? pathPrompt
+      : `${pathPrompt}\n\n${input.overrides.systemPrompt}`;
   const systemPrompt =
     parentAgentPath === null
       ? basePrompt
