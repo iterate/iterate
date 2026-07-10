@@ -217,13 +217,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
-          const code = extractAsyncJsSnippet(event.payload.content);
-          if (code === null) return;
+          const extraction = extractAsyncJsSnippet(event.payload.content);
+          if (extraction.kind === "none") return;
+          if (extraction.kind === "multiple") {
+            // Corrective feedback, same lane as a thrown script: the model
+            // reads why nothing ran and resends. after-current-request so the
+            // retry turn fires without a user nudge.
+            await append({
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: this.idempotencyKey("multi-snippet-rejected", event),
+              payload: {
+                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`js block.`,
+                llmRequestPolicy: { behaviour: "after-current-request" },
+              },
+            });
+            return;
+          }
           await append({
             type: "events.iterate.com/capability-host/script-execution-requested",
             idempotencyKey: this.idempotencyKey("script-execution-requested", event),
             payload: {
-              code,
+              code: extraction.code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
               expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
             },
@@ -986,18 +1000,32 @@ function isRateLimitErrorMessage(message: string): boolean {
   return /\b3021\b|rate.?limit/i.test(message);
 }
 
-function extractAsyncJsSnippet(content: string): string | null {
+type SnippetExtraction =
+  | { kind: "script"; code: string }
+  // The model queued several scripts in one response (planning ahead).
+  // Executing only the first and dropping the rest silently is the worst
+  // option — the model believes everything it wrote will run — so the caller
+  // rejects the whole output with corrective feedback instead.
+  | { kind: "multiple"; count: number }
+  | { kind: "none" };
+
+const FENCED_SNIPPET_RE =
+  /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+
+function extractAsyncJsSnippet(content: string): SnippetExtraction {
   // Fences count only at line starts: scripts legitimately carry ``` inside
   // string literals (chat messages formatted as markdown), and in valid JS
   // those always sit mid-line — a raw newline cannot appear in a string
   // literal, and an unescaped ``` would terminate a template literal. A fence
   // match anywhere used to cut the script at the first embedded ``` and
   // execute an unparseable prefix (unclosed string literal).
-  const fenced = content.match(
-    /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im,
-  );
+  const blocks = content.match(new RegExp(FENCED_SNIPPET_RE, "gim")) ?? [];
+  if (blocks.length > 1) return { kind: "multiple", count: blocks.length };
+  const fenced = content.match(FENCED_SNIPPET_RE);
   const code = (fenced?.[1] ?? content).trim();
-  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
+  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)
+    ? { kind: "script", code }
+    : { kind: "none" };
 }
 
 // The "tool result" half of the codemode loop: a finished script execution

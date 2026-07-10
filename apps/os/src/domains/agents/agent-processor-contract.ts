@@ -55,6 +55,7 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
  */
 const AGENT_SNIPPET_GUIDE = [
   "THE LOOP — your scripts are tool calls:",
+  "- ONE script per response, always. Writing several code blocks to plan ahead executes nothing — the later steps depend on results you haven't seen yet, so they'd be guesswork anyway. Write only the first step; the loop brings you back for the rest.",
   "- Whatever your function RETURNS (JSON-serializable) comes back to you as your next input, and you get another turn to act on it. A thrown error comes back the same way — read it and adapt. Do NOT wrap calls in try/catch or .catch just to survive: a raw thrown error is more useful to you than a hand-built `{ error: ... }` object.",
   "- A script that returns undefined ends your turn. That is how you finish: send your final message(s), return nothing.",
   '- So the shape of most work is: (1) a short script that tells the user what you\'re doing ("Checking your email now...") and fetches data in one Promise.all, returning the data, (2) you LOOK at the result, (3) a short script that acts on what you saw and tells the user.',
@@ -124,6 +125,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "```",
   "",
   "A response with no code block does nothing and ends your turn (the user never sees your raw text — only what you sendMessage).",
+  "A response with MORE than one code block executes NOTHING — never queue future steps as extra blocks. Multi-step work is one script per response: send step 1, its return value arrives as your next input, and you write step 2 having seen it.",
   "",
   "The `itx` argument is an RpcStub<Project> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
   "",

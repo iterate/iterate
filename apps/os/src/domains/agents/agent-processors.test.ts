@@ -390,6 +390,37 @@ describe("minimal web-chat agent processors", () => {
     expect(requested?.payload?.code).toBe(script);
   });
 
+  it("rejects a multi-block response with corrective feedback instead of executing the first block", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
+    // planned a whole workflow as four sequential scripts in one response.
+    // Only the first used to run — silently; the model believed all four did.
+    const block = (body: string) => `\`\`\`js\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: `${block("return 1;")}\n\n${block("return 2;")}\n\n${block("return 3;")}`,
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    const requested = stream.events.filter(
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(requested).toHaveLength(0);
+    const corrective = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("3 fenced code blocks"),
+    );
+    expect(corrective?.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
+  });
+
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
