@@ -51,6 +51,11 @@ export function StreamFeedFilterRow({
   const [typesOpen, setTypesOpen] = useState(false);
   const showTypePanel = caps.rawComponents || caps.rawEventTypes;
   const typeFilterCount = (search.components?.length ?? 0) + (search.types?.length ?? 0);
+  const searchLabel = caps.agentFeed
+    ? caps.rawFeed
+      ? "Search pretty feed"
+      : "Search chat"
+    : "Search feed";
 
   return (
     <div className="flex shrink-0 flex-col gap-2 px-4 pb-1.5 pt-1">
@@ -99,8 +104,8 @@ export function StreamFeedFilterRow({
               ref={focusOnMount}
               value={search.q ?? ""}
               onChange={(event) => setSearch({ q: event.target.value || undefined })}
-              placeholder={caps.agentFeed && !caps.rawFeed ? "Search chat…" : "Search feed…"}
-              aria-label={caps.agentFeed && !caps.rawFeed ? "Search chat" : "Search feed"}
+              placeholder={`${searchLabel}…`}
+              aria-label={searchLabel}
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
