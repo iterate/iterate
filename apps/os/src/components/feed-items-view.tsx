@@ -145,7 +145,7 @@ export function FeedItemsView({
   const contentRef = useRef<HTMLDivElement>(null);
   useStickToBottom({
     scrollElementRef: scrollRef,
-    contentElementRef: contentRef,
+    contentElementRefs: [contentRef],
     onRelease: () => setInitialPinDone(true),
   });
 
