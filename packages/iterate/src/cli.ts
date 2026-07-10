@@ -1127,6 +1127,25 @@ const launcherProcedures = {
           .optional()
           .default(false)
           .describe("With --enroll: force a software P-256 key instead of the Secure Enclave."),
+        native: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "macOS: approve via native dialogs — the Approve button leads straight into Touch ID. Needs an enrolled Secure Enclave key.",
+          ),
+        keys: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("List the project's enrolled approval keys and exit."),
+        revoke: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Revoke this machine's approval key (append key-revoked, destroy local material) and exit.",
+          ),
       }),
     )
     .meta({
@@ -1170,6 +1189,9 @@ const launcherProcedures = {
         headers: headersRecord(auth.requestHeaders),
         enroll: input.enroll,
         softwareKey: input.softwareKey,
+        native: input.native,
+        keys: input.keys,
+        revoke: input.revoke,
       });
     }),
 

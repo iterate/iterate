@@ -7,9 +7,13 @@
 // - "secure-enclave" (macOS): the private key lives in the Secure Enclave and
 //   physically cannot leave it; every signature demands a fresh Touch ID /
 //   Face ID check (`.biometryCurrentSet`, so re-enrolling biometrics kills
-//   the key). The key file holds only the public half and the keychain tag.
-//   A tiny vendored Swift helper (compiled with swiftc on first use, cached
-//   next to the key files) does the two enclave operations.
+//   the key). The key file holds the public half plus the CryptoKit
+//   `dataRepresentation` blob — an encrypted handle only this machine's
+//   enclave can use (no keychain: ad-hoc binaries lack the entitlement, same
+//   approach as age-plugin-se). Deleting the key file destroys the only
+//   handle. The native side is enclave-approver.swift — one file compiled
+//   with swiftc on first use (cache keyed by source hash, next to the key
+//   files) that owns keygen, signing, and the native approval dialog.
 //
 // - "software" (everywhere else / --software): a WebCrypto P-256 key whose
 //   private JWK sits in the key file. Same protocol, none of the hardware
@@ -19,8 +23,9 @@
 // enclave emits DER, converted here before anything leaves the machine.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod/v4";
 import {
@@ -44,8 +49,8 @@ const StoredApprovalKey = z.discriminatedUnion("kind", [
     /** Base64 uncompressed P-256 public point (65 bytes). */
     publicKey: z.string(),
     label: z.string(),
-    /** Keychain application tag the enclave key is stored under. */
-    keychainTag: z.string(),
+    /** Base64 CryptoKit dataRepresentation — the enclave key's only handle. */
+    keyBlob: z.string(),
   }),
   z.object({
     kind: z.literal("software"),
@@ -87,16 +92,16 @@ export async function createApprovalKey(input: {
   let key: StoredApprovalKey;
   if (useEnclave) {
     log("Generating a Secure Enclave key (Touch ID guards every signature)...");
-    const helper = await ensureEnclaveHelper();
-    const keychainTag = `com.iterate.approve.${input.projectId}`;
-    const generated = await runJson(helper, ["generate", keychainTag]);
-    const publicKey = z.object({ publicKey: z.string() }).parse(generated).publicKey;
+    const approver = await ensureEnclaveApprover();
+    const generated = z
+      .object({ publicKey: z.string(), keyBlob: z.string() })
+      .parse(await runJson(approver, ["generate"]));
     key = {
       kind: "secure-enclave",
-      keyId: await approvalKeyId(publicKey),
-      publicKey,
+      keyId: await approvalKeyId(generated.publicKey),
+      publicKey: generated.publicKey,
       label: input.label,
-      keychainTag,
+      keyBlob: generated.keyBlob,
     };
   } else {
     log("Generating a software P-256 key (no Secure Enclave on this machine)...");
@@ -130,8 +135,8 @@ export async function signApprovalMessage(
   message: Uint8Array,
 ): Promise<string> {
   if (key.kind === "secure-enclave") {
-    const helper = await ensureEnclaveHelper();
-    const signed = await runJson(helper, ["sign", key.keychainTag, bytesToBase64(message)]);
+    const approver = await ensureEnclaveApprover();
+    const signed = await runJson(approver, ["sign", key.keyBlob, bytesToBase64(message)]);
     const der = z.object({ signatureDer: z.string() }).parse(signed).signatureDer;
     return bytesToBase64(derSignatureToRaw(base64ToBytes(der)));
   }
@@ -150,37 +155,79 @@ export async function signApprovalMessage(
   return bytesToBase64(new Uint8Array(signature));
 }
 
-// ── the Secure Enclave helper ────────────────────────────────────────────────
-
-const HELPER_VERSION = 1;
+/**
+ * One native dialog for one held request; approving signs in the same
+ * gesture (dialog button → Touch ID sheet), so what the human read is what
+ * the signature covers. Secure Enclave keys only — software keys have no
+ * native moment worth a dialog.
+ */
+export async function promptNativeApproval(input: {
+  key: Extract<StoredApprovalKey, { kind: "secure-enclave" }>;
+  message: Uint8Array;
+  /** The human-approval-requested payload, rendered by the dialog. */
+  request: Record<string, unknown>;
+}): Promise<{ decision: "granted"; signature: string } | { decision: "rejected" | "ignored" }> {
+  const approver = await ensureEnclaveApprover();
+  const answer = z
+    .object({
+      decision: z.enum(["granted", "rejected", "ignored"]),
+      signatureDer: z.string().optional(),
+    })
+    .parse(
+      await runJson(approver, [
+        "approve",
+        input.key.keyBlob,
+        bytesToBase64(input.message),
+        Buffer.from(JSON.stringify(input.request)).toString("base64"),
+      ]),
+    );
+  if (answer.decision !== "granted") return { decision: answer.decision };
+  return {
+    decision: "granted",
+    signature: bytesToBase64(derSignatureToRaw(base64ToBytes(answer.signatureDer!))),
+  };
+}
 
 /**
- * Compile the vendored Swift helper on first use (any Mac with the Xcode
- * command-line tools has swiftc) and cache the binary next to the key files.
+ * Destroy the LOCAL key material. The key file holds the enclave key's only
+ * handle (or the software key's private JWK), so deleting it is the
+ * destruction. The caller appends the `human-approval-key-revoked` event —
+ * deletion and revocation are separate acts, and revocation is the one that
+ * changes what the platform accepts.
  */
-async function ensureEnclaveHelper(): Promise<string> {
-  const helperPath = join(APPROVAL_KEYS_DIR, `enclave-signer-v${HELPER_VERSION}`);
+export async function deleteApprovalKey(projectId: string): Promise<void> {
+  await rm(keyPath(projectId), { force: true });
+}
+
+// ── the native enclave approver ──────────────────────────────────────────────
+
+/**
+ * Compile enclave-approver.swift on first use (any Mac with the Xcode
+ * command-line tools has swiftc) and cache the binary next to the key files,
+ * keyed by source hash — editing the Swift transparently recompiles.
+ */
+async function ensureEnclaveApprover(): Promise<string> {
+  const sourcePath = join(import.meta.dirname, "enclave-approver.swift");
+  const source = await readFile(sourcePath, "utf8");
+  const binaryPath = join(
+    APPROVAL_KEYS_DIR,
+    `enclave-approver-${createHash("sha256").update(source).digest("hex").slice(0, 8)}`,
+  );
   try {
-    await readFile(helperPath);
-    return helperPath;
+    await readFile(binaryPath);
+    return binaryPath;
   } catch {
     // fall through to compile
   }
   await mkdir(APPROVAL_KEYS_DIR, { recursive: true });
-  const sourcePath = join(tmpdir(), `iterate-enclave-signer-${process.pid}.swift`);
-  await writeFile(sourcePath, ENCLAVE_SIGNER_SWIFT);
-  try {
-    const compile = await run("swiftc", ["-O", "-o", helperPath, sourcePath]);
-    if (compile.exitCode !== 0) {
-      throw new Error(
-        `swiftc failed (exit ${compile.exitCode}) — install the Xcode command-line tools ` +
-          `(xcode-select --install) or use --software.\n${compile.stderr.trim()}`,
-      );
-    }
-  } finally {
-    await rm(sourcePath, { force: true });
+  const compile = await run("swiftc", ["-O", "-o", binaryPath, sourcePath]);
+  if (compile.exitCode !== 0) {
+    throw new Error(
+      `swiftc failed (exit ${compile.exitCode}) — install the Xcode command-line tools ` +
+        `(xcode-select --install) or use --software-key.\n${compile.stderr.trim()}`,
+    );
   }
-  return helperPath;
+  return binaryPath;
 }
 
 async function runJson(command: string, args: string[]): Promise<unknown> {
@@ -192,88 +239,3 @@ async function runJson(command: string, args: string[]): Promise<unknown> {
   }
   return JSON.parse(result.stdout);
 }
-
-/**
- * The whole enclave surface: `generate <tag>` mints a biometry-guarded P-256
- * key in the Secure Enclave and prints its public point; `sign <tag>
- * <messageBase64>` signs with `.ecdsaSignatureMessageX962SHA256` (the enclave
- * hashes the message itself) and prints the DER signature. Vendored as a
- * string so the published CLI needs no asset resolution.
- */
-const ENCLAVE_SIGNER_SWIFT = `
-import Foundation
-import Security
-
-func fail(_ message: String) -> Never {
-  FileHandle.standardError.write((message + "\\n").data(using: .utf8)!)
-  exit(1)
-}
-
-func jsonOut(_ dict: [String: String]) {
-  let data = try! JSONSerialization.data(withJSONObject: dict)
-  print(String(data: data, encoding: .utf8)!)
-}
-
-let args = CommandLine.arguments
-guard args.count >= 3 else {
-  fail("usage: enclave-signer generate <tag> | sign <tag> <messageBase64>")
-}
-let command = args[1]
-let tag = args[2].data(using: .utf8)!
-
-switch command {
-case "generate":
-  var error: Unmanaged<CFError>?
-  guard let accessControl = SecAccessControlCreateWithFlags(
-    kCFAllocatorDefault,
-    kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-    [.privateKeyUsage, .biometryCurrentSet],
-    &error
-  ) else { fail("access control: \\(error!.takeRetainedValue())") }
-
-  let attributes: [String: Any] = [
-    kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-    kSecAttrKeySizeInBits as String: 256,
-    kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
-    kSecPrivateKeyAttrs as String: [
-      kSecAttrIsPermanent as String: true,
-      kSecAttrApplicationTag as String: tag,
-      kSecAttrAccessControl as String: accessControl,
-    ],
-  ]
-  guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-    fail("key generation failed: \\(error!.takeRetainedValue())")
-  }
-  guard let publicKey = SecKeyCopyPublicKey(privateKey),
-        let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
-    fail("public key export failed")
-  }
-  jsonOut(["publicKey": publicKeyData.base64EncodedString()])
-
-case "sign":
-  guard args.count >= 4, let message = Data(base64Encoded: args[3]) else {
-    fail("sign needs <tag> <messageBase64>")
-  }
-  let query: [String: Any] = [
-    kSecClass as String: kSecClassKey,
-    kSecAttrApplicationTag as String: tag,
-    kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-    kSecReturnRef as String: true,
-    kSecUseOperationPrompt as String: "Sign an iterate egress approval",
-  ]
-  var item: CFTypeRef?
-  let status = SecItemCopyMatching(query as CFDictionary, &item)
-  guard status == errSecSuccess else { fail("approval key not found in keychain: \\(status)") }
-  let privateKey = item as! SecKey
-  var error: Unmanaged<CFError>?
-  guard let signature = SecKeyCreateSignature(
-    privateKey, .ecdsaSignatureMessageX962SHA256, message as CFData, &error
-  ) as Data? else {
-    fail("signing failed: \\(error!.takeRetainedValue())")
-  }
-  jsonOut(["signatureDer": signature.base64EncodedString()])
-
-default:
-  fail("unknown command \\(command)")
-}
-`;

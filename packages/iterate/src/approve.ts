@@ -25,7 +25,9 @@ import {
 import type { ItxAuthCredentials, Project, Stream, StreamEvent } from "./itx-api.generated.ts";
 import {
   createApprovalKey,
+  deleteApprovalKey,
   loadApprovalKey,
+  promptNativeApproval,
   signApprovalMessage,
   type StoredApprovalKey,
 } from "./approval-keys.ts";
@@ -35,6 +37,7 @@ const GRANTED = "events.iterate.com/project/human-approval-granted";
 const REJECTED = "events.iterate.com/project/human-approval-rejected";
 const SETTLED = "events.iterate.com/project/human-approval-settled";
 const KEY_ADDED = "events.iterate.com/project/human-approval-key-added";
+const KEY_REVOKED = "events.iterate.com/project/human-approval-key-revoked";
 
 export async function runApprovalCli(input: {
   auth: ItxAuthCredentials;
@@ -43,6 +46,9 @@ export async function runApprovalCli(input: {
   headers?: Record<string, string>;
   enroll?: boolean;
   softwareKey?: boolean;
+  native?: boolean;
+  revoke?: boolean;
+  keys?: boolean;
 }): Promise<void> {
   const itx = connectItx({
     auth: input.auth,
@@ -55,6 +61,9 @@ export async function runApprovalCli(input: {
   prompts.intro(`iterate approve — project ${input.projectId}`);
 
   let key = await loadApprovalKey(input.projectId);
+  if (input.keys === true) return listKeys({ itx, localKey: key });
+  if (input.revoke === true) return revokeKey({ key, projectId: input.projectId, stream });
+
   if (input.enroll === true) {
     key = await enroll({
       existing: key,
@@ -63,12 +72,22 @@ export async function runApprovalCli(input: {
       stream,
     });
   }
+  const native = input.native === true;
+  if (native && key?.kind !== "secure-enclave") {
+    throw new Error(
+      "--native needs a Secure Enclave key: run `iterate approve --enroll` on this Mac (without --software-key).",
+    );
+  }
   prompts.log.info(
     key === null
       ? "No local approval key: grants will be plain events. Run with --enroll to sign approvals."
       : `Grants are signed with ${key.kind} key ${key.keyId} (${key.label}).`,
   );
-  prompts.log.step("Waiting for held egress requests... (Ctrl-C to stop)");
+  prompts.log.step(
+    native
+      ? "Waiting for held egress requests — approvals pop native dialogs... (Ctrl-C to stop)"
+      : "Waiting for held egress requests... (Ctrl-C to stop)",
+  );
 
   // Live tail from "now"; after the first event the cursor makes every
   // waitForEvent replay-from-offset, so nothing lands unseen while a prompt
@@ -98,33 +117,38 @@ export async function runApprovalCli(input: {
     }
 
     renderHeldRequest(event.offset, payload);
-    const approved = await prompts.confirm({
-      message: `Approve ${payload.method} ${new URL(payload.url).host}?`,
-      initialValue: false,
+    const message = buildApprovalMessage({
+      projectId: input.projectId,
+      approvalRequestEventOffset: event.offset,
+      requested: payload,
+      decision: "granted",
     });
-    if (prompts.isCancel(approved)) {
-      prompts.outro("Stopped. Held requests will auto-reject on their timeouts.");
-      return;
-    }
 
-    if (approved) {
-      const grant: { approvalRequestEventOffset: number; keyId?: string; signature?: string } = {
-        approvalRequestEventOffset: event.offset,
-      };
-      if (key !== null) {
+    // The human moment. Native mode: one dialog whose Approve button leads
+    // straight into the Touch ID sheet — reading and signing are the same
+    // gesture. Terminal mode: y/n, then sign.
+    let verdict: { decision: "granted"; signature?: string } | { decision: "rejected" | "ignored" };
+    if (native) {
+      verdict = await promptNativeApproval({
+        key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
+        message,
+        request: payload as unknown as Record<string, unknown>,
+      });
+    } else {
+      const approved = await prompts.confirm({
+        message: `Approve ${payload.method} ${new URL(payload.url).host}?`,
+        initialValue: false,
+      });
+      if (prompts.isCancel(approved)) {
+        prompts.outro("Stopped. Held requests will auto-reject on their timeouts.");
+        return;
+      }
+      verdict = { decision: approved ? "granted" : "rejected" };
+      if (approved && key !== null) {
         const spinner = prompts.spinner();
         spinner.start(key.kind === "secure-enclave" ? "Signing — check Touch ID..." : "Signing...");
         try {
-          grant.keyId = key.keyId;
-          grant.signature = await signApprovalMessage(
-            key,
-            buildApprovalMessage({
-              projectId: input.projectId,
-              approvalRequestEventOffset: event.offset,
-              requested: payload,
-              decision: "granted",
-            }),
-          );
+          verdict = { decision: "granted", signature: await signApprovalMessage(key, message) };
           spinner.stop("Signed.");
         } catch (error) {
           spinner.stop("Signing failed.");
@@ -132,18 +156,76 @@ export async function runApprovalCli(input: {
           continue;
         }
       }
-      await stream.append({ type: GRANTED, payload: grant });
-      // Granting is a claim, not a fact — the egress door verifies the
-      // signature and settles the request. Report what actually happened.
-      await reportSettlement({ approvalRequestEventOffset: event.offset, stream });
-    } else {
+    }
+
+    if (verdict.decision === "ignored") {
+      prompts.log.info(`Ignored #${event.offset} — it can be answered elsewhere or expire.`);
+      continue;
+    }
+    if (verdict.decision === "rejected") {
       await stream.append({
         type: REJECTED,
         payload: { approvalRequestEventOffset: event.offset, reason: "human" },
       });
       prompts.log.warn(`Rejected #${event.offset}.`);
+      continue;
     }
+    await stream.append({
+      type: GRANTED,
+      payload: {
+        approvalRequestEventOffset: event.offset,
+        ...(key === null ? {} : { keyId: key.keyId, signature: verdict.signature }),
+      },
+    });
+    // Granting is a claim, not a fact — the egress door verifies the
+    // signature and settles the request. Report what actually happened.
+    await reportSettlement({ approvalRequestEventOffset: event.offset, stream });
   }
+}
+
+/** `--keys`: the project's enrolled approval keys, with this machine's marked. */
+async function listKeys(input: {
+  itx: RpcStub<Project>;
+  localKey: StoredApprovalKey | null;
+}): Promise<void> {
+  const snapshot = await input.itx.processor.snapshot();
+  const keys = snapshot.state.humanApprovalKeys;
+  if (keys.length === 0) {
+    prompts.outro("No approval keys enrolled — grants are plain events. Enroll with --enroll.");
+    return;
+  }
+  for (const key of keys) {
+    const marks = [
+      key.keyId === input.localKey?.keyId ? "this machine" : null,
+      key.revokedAt === null ? null : `revoked ${key.revokedAt}`,
+    ].filter((mark) => mark !== null);
+    prompts.log.info(
+      `${key.keyId}  ${key.label}  added ${key.addedAt}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`,
+    );
+  }
+  prompts.outro(`${keys.filter((key) => key.revokedAt === null).length} active key(s).`);
+}
+
+/**
+ * `--revoke`: stop the platform accepting this machine's key, then destroy
+ * the local material. Order matters — the event is the act that changes what
+ * grants are accepted; local deletion is just hygiene after it.
+ */
+async function revokeKey(input: {
+  key: StoredApprovalKey | null;
+  projectId: string;
+  stream: RpcStub<Stream>;
+}): Promise<void> {
+  if (input.key === null) {
+    prompts.outro("No local approval key for this project — nothing to revoke.");
+    return;
+  }
+  await input.stream.append({ type: KEY_REVOKED, payload: { keyId: input.key.keyId } });
+  await deleteApprovalKey(input.projectId);
+  prompts.outro(
+    `Revoked ${input.key.kind} key ${input.key.keyId} and destroyed the local material. ` +
+      "If it was the last active key, grants fall back to plain events.",
+  );
 }
 
 /**
