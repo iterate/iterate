@@ -100,17 +100,19 @@ export function envShapedVars(env: DeployedEnv) {
     // `2021: Invalid User Credentials`; verified live 2026-07-10, prd
     // answered in seconds on identical code) — so every non-prd env pins a
     // Workers-AI-native model and prd omits the var to use the platform
-    // default (openai/gpt-5.5). Scout over kimi: Workers AI per-minute rate
-    // caps are PER MODEL and kimi's is tiny (two concurrent e2e lanes
-    // saturate it; 15-60s/turn when it answers at all), while scout ran a
-    // full agent turn in 2.6s with clean codemode fences and a 131k context
-    // that fits the ~34k-token agent prompt (llama-3.3's 24k does not) —
-    // all measured live on preview-1, 2026-07-10. Delete this override —
-    // and the config knob it feeds (config.ts defaultAgentModel) — when the
-    // preview/dev account gains partner-model access.
+    // default (openai/gpt-5.5). Model choice, all measured live on
+    // preview-1 2026-07-10 (full agent-tools flow: codemode script append +
+    // chat reply): mistral-small-3.1 4/4 proofs in 11-14s. Rejected: kimi
+    // (per-MODEL per-minute rate cap is tiny — two concurrent e2e lanes
+    // saturate it — and 15-60s/turn), llama-4-scout (2.6s replies but
+    // skipped the scripted action — replied "done" without running it),
+    // llama-3.3-fast and qwen2.5-coder (context < the ~34k-token agent
+    // prompt, 5021). Delete this override — and the config knob it feeds
+    // (config.ts defaultAgentModel) — when the preview/dev account gains
+    // partner-model access.
     ...(env.cloudflareAccountId === envs.prd.cloudflareAccountId
       ? {}
-      : { APP_CONFIG_DEFAULT_AGENT_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct" }),
+      : { APP_CONFIG_DEFAULT_AGENT_MODEL: "@cf/mistralai/mistral-small-3.1-24b-instruct" }),
   };
 }
 
@@ -433,7 +435,7 @@ function localDevBindings() {
       // Same partner-model gap as the deployed non-prd envs (see
       // envShapedVars): local dev's env.AI remote proxy runs under wrangler
       // user auth on the preview/dev account and rejects openai/* with 2021.
-      APP_CONFIG_DEFAULT_AGENT_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      APP_CONFIG_DEFAULT_AGENT_MODEL: "@cf/mistralai/mistral-small-3.1-24b-instruct",
     },
   };
 }
