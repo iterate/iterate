@@ -64,6 +64,9 @@ export type BrowserProcessorConfig = {
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
     stream: Stream;
+    /** The mirrored stream's identity — the StreamProcessor base deps' path/projectId. */
+    path: string;
+    projectId: string;
     sql: SqlClient;
     subscriptionKey: string;
   }): BrowserHostedProcessor;
@@ -453,6 +456,8 @@ function createStreamRuntime(
     // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({
       stream: rpc,
+      path: args.streamPath,
+      projectId: args.projectId,
       sql,
       subscriptionKey,
     });
@@ -624,6 +629,8 @@ function createStreamRuntime(
         if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
           stream: election.connection,
+          path: args.streamPath,
+          projectId: args.projectId,
           sql,
           subscriptionKey,
         });

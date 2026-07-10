@@ -73,23 +73,6 @@ export interface Session {
   projects: ProjectCollection;
 }
 
-/**
- * The server-side **itx** — the object an \`async (itx) => { … }\` script holds and
- * what \`env.ITX.get()\` returns. One class serves the project root and every nested
- * (agent) scope; the injected \`capabilityHost\` selects which scope's dynamic
- * capability table backs it.
- *
- * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
- * Object. Its built-in members (\`streams\`, \`agents\`, \`repo\`, …) are resolved here
- * in the isolate; only unknown roots fall through \`withInvokeCapabilityFallback\`
- * to the capability host's dynamic table (which itself chains up to enclosing
- * scopes). So the common \`itx.streams.get(...)\` path never makes a round trip
- * just to check whether \`streams\` was shadowed. The deliberate cost: a dynamic
- * capability can never shadow a built-in name — the built-in always wins
- * (\`rejectBuiltinCollision\` enforces this at provide time). If we end up needing
- * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
- * round trip; today we don't.
- */
 export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
@@ -105,6 +88,10 @@ export interface Project {
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; \`state.created\` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<ProjectLiveState>;
+  /** Demo capability for the live-state playground — \`ticker\` (stateless) + \`increment()\` (DO-backed). */
+  liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -180,8 +167,8 @@ export interface Project {
    * per-event work (policy, metrics, indexing feeds) can join the same
    * ordered, checkpointed delivery — with one rule when it does: platform
    * steps must be idempotent and must never throw; only the worker delegation
-   * may reject into the spine's retry/park machinery. Deliberately EMPTY of
-   * such steps until a real second consumer earns its place.
+   * may reject into the spine's retry/park machinery. The streams index is the
+   * first such step (see \`#indexStreamActivity\`).
    *
    * Same trust model as \`worker.processEventBatch\` itself: any project
    * principal may call it.
@@ -224,9 +211,9 @@ export interface ProjectCollection {
    * \`waitUntilCreated: false\` to resolve as soon as the project EXISTS
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live processor state (\`itx.processor.onStateChange\` — \`state.created\`
-   * flips when bootstrap lands). The dashboard uses the fast path to redirect
-   * into the project instantly and play creation progress from pushes.
+   * live state (\`itx.liveState\` — \`state.reduced.created\` flips when bootstrap
+   * lands). The dashboard uses the fast path to redirect into the project
+   * instantly and play creation progress from pushes.
    */
   create(args: {
     organizationSlug?: string;
@@ -245,6 +232,38 @@ export interface ProjectCollection {
    * and is the default for non-user admin principals, which have no claims.
    */
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
+}
+
+/**
+ * A node's live state — a source-agnostic reactive value. \`get()\` reads it once;
+ * \`subscribe()\` opens a channel that pushes a full snapshot then minimal diffs
+ * (see \`lib/live-state\`), which the React \`useLiveState\` hook reassembles so
+ * components pick only the slice they render. ANY RpcTarget can expose one: a
+ * Durable Object over its folded state, or a stateless worker over state it
+ * computes or fetches.
+ *
+ * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
+ * reassembles it from its fold), so writes go through the node's own verbs —
+ * events appended, mutations called — never a generic \`set\`. A wire-level
+ * \`set\`/\`assign\` would let any principal that can reach the node broadcast
+ * fabricated state to every subscriber.
+ */
+export interface LiveStateRpc<State = unknown> {
+  get(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
+}
+
+/**
+ * Demo capability (\`itx.liveDemo\`) — a corner of the tree that exists only to
+ * exercise both live-state cases: \`ticker\` (stateless, above) and \`increment()\`
+ * (mutates the project DO's shared counter, which every watcher of \`itx.liveState\`
+ * sees — the Durable-Object-backed case).
+ */
+export interface LiveDemo {
+  /** Stateless live state: a poll-driven ticker, no Durable Object. */
+  ticker: LiveStateRpc<{ tick: number; startedAt: number }>;
+  /** Stateful live state: bump the project DO's counter (visible on \`itx.liveState\`). */
+  increment(): Promise<void>;
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
@@ -288,17 +307,51 @@ export interface Agent {
   stream: Stream;
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  sendMessage(message: string): Promise<StreamEvent>;
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's \`from\` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * \`{ kind: "agent", path }\` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent>;
+  /**
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * that already ran (a plain last-write-wins update) AND on a path that has
+   * never existed — the append births the agent with the full default policy
+   * plus these overrides, and the batch claims the same idempotency keys the
+   * project worker's defaults lane uses, so whichever lane runs second
+   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
+   * keeps the subagent contract: the "you are a subagent" suffix is appended
+   * after it (agents/agent-defaults.ts).
+   */
+  configure(input: AgentDefaultsOverrides): Promise<void>;
+  /**
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like \`message\`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget. NOT the tool for
+   * SUBAGENTS: they are prompted to report by messaging their parent (its
+   * inputs), never web chat, so an ask() at a subagent times out — use
+   * \`message()\` and read the report from your own inputs.
    */
   ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
@@ -423,7 +476,7 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (\`"/agents/<name>"\`). */
+  /** The agent control surface at a path (\`"/agents/<name>"\`, or relative to the calling scope — \`".."\` climbs). */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
@@ -807,6 +860,8 @@ export interface Repo {
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
   /** The repo stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<RepoProcessorState>;
+  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<RepoProcessorState>;
 }
 
 /**
@@ -988,16 +1043,6 @@ export interface Stream {
 
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  /**
-   * Server-push of the processor's reduced state. The callback receives the
-   * durable checkpoint \`{ offset, state }\` — offset-carrying so clients can
-   * commit pushes and \`snapshot()\` reads monotonically against each other —
-   * once immediately on subscribe (current state IS the first paint) and then
-   * after every checkpointed batch that changed state.
-   */
-  onStateChange(
-    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
-  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
@@ -1072,6 +1117,8 @@ export interface Secret {
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: WakeableStreamProcessorRpc<SecretDescription>;
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
+  liveState: LiveStateRpc<SecretDescription>;
 }
 
 /**
@@ -1080,14 +1127,13 @@ export interface Secret {
  * read-only, always-fresh materialization of the config repo's main branch.
  * Every other workspace is an OVERLAY over the root: reads see latest main
  * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. \`git\` publishes
- * the overlay as snapshot commits on the workspace's own branch in the
- * config repo (\`workspaces/<path>\`), never to main.
+ * there is no clone — a new workspace is usable instantly. \`git.commit\`
+ * commits the overlay's changes straight to the config repo's MAIN branch
+ * (the same lane as \`itx.repo.commitFiles\`, so the project worker/website
+ * redeploys automatically), then the overlay resets to mirror the new main.
  *
  * Constraints: the \`.git\` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently). Workspace
- * branches are for durability and handoff, not worker builds: point worker
- * refs at branches maintained through \`itx.repo\`, never at \`workspaces/**\`.
+ * are fine (past ~1.5MB they are stored in R2 transparently).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
@@ -1102,8 +1148,8 @@ export interface Workspace {
   /**
    * Wipe the workspace back to pristine: the local layer and every deletion
    * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Unpublished work is LOST (published snapshots survive
-   * on the workspace branch).
+   * re-materializes). Uncommitted work is LOST (committed changes live on
+   * main).
    */
   reset(): Promise<void>;
   /**
@@ -1186,24 +1232,23 @@ export interface CfVideosCapability {
 }
 
 /**
- * The publish surface of an overlay workspace. There is no staging area and
- * no separate push: \`commit({ message })\` snapshots the whole merged view
- * (latest main + the local layer, minus deletions and \`.gitignore\`d paths)
- * as ONE commit force-pushed to the workspace's own branch in the project
- * repo. Push credentials are injected inside the workspace Durable Object
- * (from the config repo's \`gitAccess()\`), so no token ever rides this
- * surface.
+ * The commit surface of an overlay workspace. There is no staging area, no
+ * branch, and no separate push: \`commit({ message })\` turns the workspace's
+ * changes (local files minus \`.gitignore\`d paths, plus deletions) into ONE
+ * ordinary commit on the config repo's MAIN branch — the same lane as
+ * \`itx.repo.commitFiles\`, so the project worker/website redeploys
+ * automatically. Credentials are internal; no token rides this surface.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
   /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
   status(): Promise<WorkspaceChange[]>;
-  /** Publish the merged view as one snapshot commit on this workspace's own branch. */
+  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
   }): Promise<WorkspacePublishResult>;
-  /** Published snapshots of this workspace, newest first. */
+  /** The config repo's main-branch history, newest first. */
   log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
 }
 
@@ -1306,7 +1351,7 @@ export type ProjectDescription = Description & {
  * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
- * agent Durable Object hosts agent + llm providers + more) resolve WHICH
+ * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
  * processor wakes from the request's \`processorSlug\` — the inspection half of
  * this node reads the host's main processor.
  */
@@ -1342,6 +1387,29 @@ export type ProjectProcessorState = {
     createdAt: string;
     updatedAt: string;
   }[];
+};
+
+/**
+ * The project's LIVE state — what \`itx.liveState\` exposes and the dashboard renders.
+ *
+ * This is PROJECT state, NOT stream-processor state. The project Durable Object
+ * assembles it from independent sources, each a peer slice:
+ * - \`reduced\` — the event-sourced project facts (created flag, agent/repo/secret
+ *   catalogs) folded by the project processor. One contributor, not the base.
+ * - \`streamsIndex\` — a materialized view of the project's streams the DO keeps in
+ *   its own SQLite (recency, counts). Nothing to do with the processor.
+ * - \`liveDemo\` — plain DO memory, for the live-state playground.
+ *
+ * A \`useLiveState\` selector picks whichever slice a component renders, so a
+ * change in one slice never re-renders watchers of another.
+ */
+export type ProjectLiveState = {
+  /** Event-sourced project facts, folded by the project processor — one source among several. */
+  reduced: ProjectProcessorState;
+  /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
+  streamsIndex: Record<string, StreamIndexRow>;
+  /** Demo (stateful live state): a counter bumped by \`itx.liveDemo.increment()\`, seen by every watcher. */
+  liveDemo: { count: number };
 };
 
 /** Capability recipe accepted by \`provideCapability\`. */
@@ -1488,6 +1556,42 @@ export type StreamSubscriberWakeResponse = {
   getRuntimeState?: GetProcessorRuntimeState;
 };
 
+/**
+ * One message pushed down a live-state subscription. The first is always a
+ * \`snapshot\` (a resync sends a fresh one); every message after carries only the
+ * diff from revision \`from\` to \`to\`. Revisions are monotonic for the life of one
+ * subscription, so a gap (\`from\` ≠ the client's revision) means a message was
+ * missed and the client should resubscribe.
+ *
+ * \`State\` is asserted by the caller of \`useLiveState\` — the wire itself is
+ * structure-agnostic.
+ */
+export type LiveUpdate<State = unknown> =
+  | { type: "snapshot"; revision: number; state: State }
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+
+/**
+ * Live handle for one live-state subscription. \`ping()\` reports liveness (and
+ * the call rejects when the hosting incarnation is gone); \`unsubscribe()\` closes it.
+ */
+export type LiveStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
+/** One row of the streams index: a stream and its activity, for the ⌘K list and recency sort. */
+export type StreamIndexRow = {
+  path: string;
+  /** First time we saw the stream (its earliest observed activity). */
+  createdAt: string;
+  /** Most recent activity — the recency sort key. Monotonic (never moves backwards). */
+  lastActivityAt: string;
+  /** Type of the most recent event. */
+  lastType: string;
+  /** How many events we've observed on the stream. */
+  eventCount: number;
+};
+
 export type CfMarkdownConversionArgs =
   | []
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
@@ -1522,9 +1626,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 
 /**
  * The agent processor's reduced state, inferred from the contract's
- * \`stateSchema\` — the one definition of the shape (the old hand-written copy
- * in the former types.ts silently omitted \`llmProviderConfigured\` and
- * \`requestGeneration\`).
+ * \`stateSchema\`.
  */
 export type AgentProcessorState = {
   systemPrompt: string;
@@ -1536,29 +1638,22 @@ export type AgentProcessorState = {
       | undefined;
   }[];
   llmConfig: { model: string };
-  llmProvider: "cloudflare-ai" | "openai-ws";
-  llmProviderConfigured: boolean;
+  llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | {
-        phase: "requested";
-        llmRequestId: number;
-        requestedAt?: number | undefined;
-        provider?: "cloudflare-ai" | "openai-ws" | undefined;
-      }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;
   requestGeneration: number;
   consecutiveLlmFailures: number;
-  inProgressScriptExecutions: {
-    code: string;
-    executionId: string;
-    requestedOffset: number;
-    startedAt: string;
-  }[];
-  scriptExecutionsCompleted: string[];
+  lastLlmFailureRateLimited: boolean;
+  llmRequests: Record<
+    string,
+    { status: "requested" | "started"; model: string; expiresAt: number }
+  >;
+  subagents: { path: string; spawnedAt: string }[];
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -1567,13 +1662,28 @@ export type AgentProcessorState = {
   };
 };
 
+/**
+ * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
+ * base64 (optionally a full \`data:\` URL) — that is what Workers AI image
+ * models return, and the whole point of accepting strings is piping
+ * \`itx.ai.run\` output straight into storage.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -1592,13 +1702,11 @@ export type StreamEvent = {
   path: string;
 };
 
-/**
- * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
- * base64 (optionally a full \`data:\` URL) — that is what Workers AI image
- * models return, and the whole point of accepting strings is piping
- * \`itx.ai.run\` output straight into storage.
- */
-export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
+};
 
 export type AgentFileAttachment = {
   contentType: string;
@@ -1999,7 +2107,14 @@ export type StreamEventInput = {
   metadata?: Record<string, unknown> | undefined;
   source?:
     | {
-        processor?: { slug: string; version: string } | undefined;
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
         crossPostedFrom?:
           | {
               subscriptionKey: string;
@@ -2052,7 +2167,7 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
 /**
  * Live subscription handle returned by \`Stream.subscribe\`.
  *
- * \`ping()\` mirrors {@link ProcessorStateSubscriptionHandle.ping}: \`true\` while
+ * \`ping()\` reports liveness: \`true\` while
  * the connection is still open on the live stream, \`false\` after it closed
  * (replaced, delivery failure, unsubscribe); it rejects when the stream's
  * Durable Object incarnation is gone. Either non-\`true\` outcome means the
@@ -2084,20 +2199,18 @@ export type ProcessorSnapshot<State> = {
 };
 
 /**
- * Live handle for one \`onStateChange\` subscription.
- *
- * \`ping()\` is the liveness probe: \`true\` while the subscription is still
- * registered on the live processor, \`false\` once it was dropped (delivery
- * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
- * Object incarnation is gone. For a subscriber, \`false\` and a rejection mean
- * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
- * transport half-opens, so a periodic ping is how a client turns "silently
- * stale" into "detectably dead".
+ * A structural patch turning a previous JSON value into the next one. Two
+ * shapes, discriminated by whether the \`set\` key is present:
+ * - \`{ set }\` — replace this position wholesale. Used for primitives, arrays
+ *   (treated as opaque leaves, never diffed positionally), \`null\`, type changes,
+ *   and newly-added object keys.
+ * - \`{ fields?, drop? }\` — descend into a plain object: \`fields\` maps each
+ *   changed key to its own patch; \`drop\` lists keys that disappeared. At least
+ *   one is present (an empty descend never gets emitted).
  */
-export type ProcessorStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
+export type LiveStatePatch =
+  | { set: unknown }
+  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
@@ -2130,18 +2243,10 @@ export type FlattenedCapabilityInvocation = {
 /** One step of an {@link ItxExpression}: a property read, or a \`[method, ...args]\` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 
-/** Caller-supplied policy overrides, baked into the returned events. */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  provider?: AgentLlmProvider;
-  model?: string;
-};
-
 /** The default policy for one agent path: the named pieces plus the exact
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
   systemPrompt: string;
-  provider: AgentLlmProvider;
   model: string;
   events: AgentPolicyEventInput[];
 };
@@ -2350,8 +2455,6 @@ export type StreamEventBatch = {
   state: unknown;
 };
 
-export type AgentLlmProvider = "cloudflare-ai" | "openai-ws";
-
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection
  * stays self-contained. */
@@ -2453,15 +2556,16 @@ export type WorkspaceChange = {
   path: string;
 };
 
-/** Result of \`WorkspaceGit.commit\` — the published snapshot. */
+/** Result of \`WorkspaceGit.commit\` — the commit landed on the config repo's main. */
 export type WorkspacePublishResult = {
+  /** The repo branch the commit landed on — the config repo's default (main). */
   branch: string;
   /** Paths committed (after .gitignore filtering) plus deletions applied. */
   changedPaths: string[];
   commitOid: string;
 };
 
-/** One commit returned by \`WorkspaceGit.log\` (the workspace branch's history). */
+/** One commit returned by \`WorkspaceGit.log\` (the config repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;

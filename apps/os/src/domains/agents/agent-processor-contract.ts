@@ -2,34 +2,49 @@ import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
+export const DEFAULT_AGENT_MODEL = "openai/gpt-5.5";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
-export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
+export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 
 /**
- * How stale an llm-request-requested's INTENT may be before providers must
- * refuse to start an attempt and settle it as expired instead. Recovery can
- * deliver a requested event arbitrarily late (a host revived days after a
- * crash loop); expiry is what makes late recovery safe — wake whenever,
- * act only within the intent's validity horizon. Matches the providers'
- * in-flight deadline: an attempt that would still be running is worth
- * starting; one whose whole lifetime has lapsed is not.
+ * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
+ * capped at 6× base — 10s, 20s, 60s. Without it a provider blip returning
+ * instant errors (2026-07-09 prd: Workers AI 8008s in ~90ms) burns the whole
+ * retry budget inside one second and the turn dies before the blip clears.
+ * Rides the scheduled event's debounceMs, so it is derived from the fold
+ * (consecutiveLlmFailures) and deterministic under refold.
+ */
+export const AGENT_LLM_RETRY_BACKOFF_BASE_MS = 10_000;
+
+/**
+ * Two horizons in one constant, deliberately equal:
+ *
+ * - How stale an llm-request-requested INTENT may be before the reconciler
+ *   refuses to start an attempt and settles it as an expired failure instead.
+ *   Recovery can deliver a requested event arbitrarily late (a host revived
+ *   days after a crash loop); expiry is what makes late recovery safe — wake
+ *   whenever, act only within the intent's validity horizon.
+ * - The wall-clock cap on one attempt's whole vendor phase (dial + stream
+ *   drain, enforced in workers-ai-transport.ts): an attempt that would still
+ *   be legitimately running is worth starting; one whose whole lifetime has
+ *   lapsed is not.
  */
 export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
 
 /**
- * The agent's own outer deadline on a `requested` request, enforced by its
- * per-batch reconciliation. Providers normally settle their own orphans well
- * before this; the backstop only fires when the provider layer is entirely
- * absent (the cloudflare-ai-without-recovery class of bug). It sits past TWO
- * provider deadlines so even an attempt queued behind another full-length
- * request finishes or fails first. If the pathological case still occurs (a
- * deep execution queue), the outcomes CONVERGE rather than conflict: the
- * backstop failure and any late provider completion carry idempotent keys,
- * the reducer ignores completions for a request that is no longer current,
- * and the late attempt's output is gated on request currency — the journal
- * records both facts, the fold believes exactly one.
+ * Last-resort deadline on a `requested` current request, enforced by the
+ * scheduling reconciler. Normally dead code: the obligation reconciler
+ * settles every open request well before this (attempts self-cap at
+ * DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS, crashed attempts cancel, expired
+ * intents fail). It exists for folds the normal lifecycle didn't produce —
+ * hand-seeded checkpoints, raw-append journals — and as insurance against
+ * reconciliation bugs. If it ever races a still-running attempt the outcomes
+ * CONVERGE rather than conflict: the backstop failure and any late completion
+ * carry idempotent keys, the reducer ignores completions for a request that
+ * is no longer current, and the late attempt's output is gated on request
+ * currency — the journal records both facts, the fold believes exactly one.
  */
 export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 
@@ -70,7 +85,7 @@ const AGENT_SNIPPET_GUIDE = [
   "  ]);",
   "  const messages = await Promise.all(",
   "    (inbox.data.messages ?? []).map((m) =>",
-  '      itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
+  '      itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
   "    ),",
   "  );",
   "  return messages.map((m) => ({ id: m.data.id, snippet: m.data.snippet, headers: m.data.payload?.headers }));",
@@ -134,12 +149,12 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- Browser Run quick actions: use `const resp = await itx.browser.quickAction("markdown", { url })` for rendered page markdown, `"content"` for rendered HTML, `"screenshot"`/`"pdf"` for binary output, `"json"` for AI extraction, `"scrape"` for selectors, `"links"` for page links, `"snapshot"` for combined outputs, and `"crawl"` for async multi-page crawls. Parse JSON responses with `await resp.json()`; return/store binary responses as needed.',
   '- CONFIG REPO EDITS are the default way to change files when you do NOT need to run shell commands, tests, package managers, or servers. Get a repo handle with `const repo = itx.repos.get(vars.repoPath ?? "/repos/config")` (or use `itx.repo` for the config repo), inspect with `await repo.readFile({ path })`, then make targeted changes with `await repo.edit({ path, message, oldString, newString })`. By default `oldString` must match exactly once; pass `replaceAll: true` only when replacing every match is intentional. Use `repo.commitFiles({ message, changes })` for new files or batch/full-file writes. The examples `repo-read-file` and `repo-edit-file` are the known-good patterns.',
   '- GITHUB-BACKED REPOS: any project repo can be backed by a real GitHub repository through a GitHub connection — `await itx.repo.linkGithub({ connection: "<conn>", owner, repo })` (creates the GitHub repo, private, if the installation can). Once linked, every commit you make with `repo.edit`/`repo.commitFiles` is mirrored to GitHub automatically (best-effort; the repo processor state shows `github` and `lastGithubPush`), and every GitHub webhook about that repository (pushes, PRs, issues, …) is cross-posted verbatim onto the repo\'s own stream as `events.iterate.com/github/webhook-received`. `await repo.syncFromGithub()` adopts commits made directly on GitHub (fast-forward only; `{ force: true }` discards local-only commits); `await repo.pushToGithub()` repairs a failed mirror push; `unlinkGithub()` disconnects. Your own mirrored commits boomerang back as push webhooks on the repo stream — check the head oid before reacting to them.',
-  '- You have YOUR OWN private workspace, mounted at `itx.workspace` — an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm). Read/write/edit freely: `await itx.workspace.readFile("/worker.ts")`, `writeFile(path, content)`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`; paths are absolute with "/" as the repo root. Reads see latest main until you shadow a path with a write; your changes are PRIVATE until `await itx.workspace.git.commit({ message })` publishes them as ONE snapshot commit on your OWN branch of the config repo — never main (the project worker builds from main, so use `itx.repo.edit`/`commitFiles` when a change should go live). `itx.workspaces.get("/")` is the shared read-only root (always latest main). Prefer the workspace over the sandbox for multi-step file reading, drafting, and editing — it needs no container boot. The known-good patterns are `itx.examples.get({ id: "workspace-edit-and-push" })` and `"workspace-files-transfer"`.',
+  '- You have YOUR OWN private workspace, mounted at `itx.workspace` — an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm). Read/write/edit freely: `await itx.workspace.readFile("/worker.ts")`, `writeFile(path, content)`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`; paths are absolute with "/" as the repo root. Reads see latest main until you shadow a path with a write; your changes are PRIVATE until you commit. TO SHIP CHANGES (including the project homepage/worker): `await itx.workspace.git.commit({ message })` — that is the WHOLE flow; it commits your changes straight to the config repo\'s MAIN branch and the project worker/website redeploys automatically. There are NO branches and NO push step. `itx.workspaces.get("/")` is the shared read-only root (always latest main). Prefer the workspace over the sandbox for multi-step file reading, drafting, and editing — it needs no container boot. The known-good patterns are `itx.examples.get({ id: "workspace-edit-and-push" })` and `"workspace-files-transfer"`.',
   '- Your workspace and project file storage compose through BYTES, in both directions. Pull a stored file (a user upload, an attachment) into your checkout: `await itx.workspace.writeFileBytes("/imported/report.pdf", await itx.files.get("/uploads/report.pdf").bytes())`. Publish a workspace file to storage — e.g. to mint a shareable signed URL or attach it to a chat message: `await itx.files.get("/exports/notes.md").put({ data: await itx.workspace.readFileBytes("/notes.md"), contentType: "text/markdown" })` then `.url()`. Gotcha: `files.put` STRING data must be base64 — encode plain text as bytes with `new TextEncoder().encode(text)`.',
   '- SANDBOXES — real Linux containers running Cloudflare\'s stock sandbox image, kept like project pets — are for when you need to actually run code, shell tools, or servers. Nothing gives you one automatically: check `await itx.sandboxes.list()` and PREFER REUSING an existing sandbox; otherwise create one — `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })` (names are one path segment — the path is `/sandboxes/<name>`; instance types are Cloudflare\'s, fixed for life: lite | basic | standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/). Then `const sandbox = await itx.sandboxes.get(path)` — the Cloudflare Sandbox SDK verbatim (`exec`, files, processes, sessions, `gitCheckout`, code interpreter, `tunnels`; see https://developers.cloudflare.com/sandbox/api/ for that whole API) plus lifecycle verbs: `start()`, `sleep()` (snapshot + shut down now; the sandbox stays yours), `destroy()` (permanent — the name is retired). The `sandbox-exec` example is the known-good pattern.',
   "- Sandbox facts that differ from stock Cloudflare: sandboxes are created explicitly (get() refuses paths never created), and — unlike stock Cloudflare, where sleep loses all state — ONLY `/workspace` survives sleep (snapshotted on sleep()/idle and restored on the next start; everything else on disk resets, and a crash loses anything since the last snapshot — keep durable work in /workspace or commit it to a repo). The first command boots the container (allow a minute cold); it sleeps after idle (`sleepAfter`, default 10m). NOTHING is preinstalled beyond the stock image (Ubuntu 22.04, Node 20, Bun, git, curl, jq) and NO repo is checked out — install tools with apt/npm and clone what you need with `gitCheckout` (if the project has a GitHub connection, a working GH_TOKEN env var is planted automatically). `setEnvVars` is durable here; values should be `getSecret({ path })` placeholders substituted only at egress, so real secret material never enters the container — never set (or print) a raw secret. All sandbox network egress flows through project egress policy; there is no direct internet path.",
   "- To expose a server running in a sandbox at a PUBLIC url, open a quick tunnel: `const { url } = await sandbox.tunnels.get(<port>)` gives a `https://<random>.trycloudflare.com` address (start the server first, e.g. with `startProcess`). The url is ephemeral — it changes if the container restarts — so fetch it fresh each session; `sandbox.tunnels.destroy(<port>)` closes it.",
-  '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).sendMessage("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
+  '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).message("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (itx-api.generated.ts — generated from the live RPC surface; you hold a `Project`, agent-scoped):",
@@ -148,9 +163,6 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   ITX_TYPES_SOURCE,
   "```",
 ].join("\n");
-
-export const AgentLlmProvider = z.enum(["cloudflare-ai", "openai-ws"]);
-export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
 
 /**
  * A file reference riding on an agent input: where the bytes live in project
@@ -168,17 +180,16 @@ export const AgentFileAttachment = z.object({
 export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
 
 /**
- * One model-visible history item as providers receive it: a user or assistant
- * turn, plus any file attachments. `history-reset` payloads are arrays of
- * these, so a reset can rebuild any history shape — summary-only, or summary
- * plus recent turns kept verbatim.
+ * One model-visible history item as the LLM turn receives it: a user or
+ * assistant turn, plus any file attachments. `history-reset` payloads are
+ * arrays of these, so a reset can rebuild any history shape — summary-only,
+ * or summary plus recent turns kept verbatim.
  */
 const AgentInputItem = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   files: z.array(AgentFileAttachment).optional(),
 });
-export type AgentInputItem = z.infer<typeof AgentInputItem>;
 
 const LlmRequestPolicy = z
   .discriminatedUnion("behaviour", [
@@ -188,11 +199,58 @@ const LlmRequestPolicy = z
   ])
   .default({ behaviour: "after-current-request" });
 
+/**
+ * WHO sent an inbound message — the discriminant every consumer keys on:
+ * the reducer picks the trigger source ("agent" mail counts against the
+ * autonomous turn budget instead of refilling it; humans refill it), the UI
+ * picks the bubble label, and transcribers record the sender facts they
+ * have in hand. One inbound message event for every source is the point:
+ * web chat, MCP, another agent, and the domain transcribers all go through
+ * the same door.
+ */
+const AgentMessageFrom = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), origin: z.enum(["web", "mcp"]) }),
+  z.object({ kind: z.literal("agent"), path: z.string() }),
+  z.object({
+    kind: z.literal("slack"),
+    userId: z.string().optional(),
+    botName: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("telegram"),
+    userId: z.string().optional(),
+    username: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("email"),
+    address: z.string().optional(),
+    name: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("github"),
+    login: z.string().optional(),
+    senderType: z.string().optional(),
+  }),
+]);
+
+const LlmRequestResult = z.discriminatedUnion("status", [
+  z.object({
+    rawResponse: z.unknown().optional(),
+    status: z.literal("success"),
+    usage: z.unknown().optional(),
+  }),
+  z.object({
+    error: z.object({ message: z.string() }),
+    rawResponse: z.unknown().optional(),
+    status: z.literal("failure"),
+  }),
+]);
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.4.0",
+  version: "0.7.0",
   description:
-    "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
+    "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
     systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
     history: z.array(AgentInputItem).default([]),
@@ -201,8 +259,7 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
       })
       .default({ model: DEFAULT_AGENT_MODEL }),
-    llmProvider: AgentLlmProvider.default("cloudflare-ai"),
-    llmProviderConfigured: z.boolean().default(false),
+    llmConfigConfigured: z.boolean().default(false),
     currentRequest: z
       .discriminatedUnion("phase", [
         z.object({
@@ -212,15 +269,14 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          llmRequestId: z.number().int().positive(),
+          /** The llm-request-requested event's own stream offset — the handle
+           * every later lifecycle event (started/chunk/completed/cancelled)
+           * carries. */
+          llmRequestOffset: z.number().int().positive(),
           /** Epoch ms the requested event committed (its createdAt), driving
            * the reconciler's backstop deadline. Optional: raw appends and
            * pre-backstop checkpoints lack it, and the backstop then skips. */
           requestedAt: z.number().int().positive().optional(),
-          /** The provider the request was addressed to, so a backstop
-           * settlement attributes the failure honestly even if the agent's
-           * configured provider changed while the request sat unanswered. */
-          provider: AgentLlmProvider.optional(),
         }),
       ])
       .nullable()
@@ -242,17 +298,51 @@ export const AgentProcessorContract = defineProcessorContract({
      * not retry-loop forever.
      */
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
-    inProgressScriptExecutions: z
+    /**
+     * Whether the most recent LLM failure was the vendor's rate limit
+     * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
+     * per-minute window — so a REPEAT rate-limited failure jumps the retry
+     * backoff to the ladder cap instead of burning the last attempt inside
+     * the same hot minute. Cleared by any success (with
+     * consecutiveLlmFailures).
+     */
+    lastLlmFailureRateLimited: z.boolean().default(false),
+    /**
+     * Open LLM obligations: every request that has not reached a terminal
+     * event, keyed by the llm-request-requested event's offset (as a string).
+     * The reconcile pass compares this fold against the incarnation's live
+     * execution set. Entries carry model + expiresAt so recovery can START an
+     * attempt from state alone. Terminal events delete the entry (not mark
+     * completed).
+     */
+    llmRequests: z
+      .record(
+        z.string(),
+        z.object({
+          status: z.enum(["requested", "started"]),
+          model: z.string().min(1),
+          /** Epoch ms past which no attempt may START; stale intent settles
+           * as an expired failure instead. */
+          expiresAt: z.number().int().positive(),
+        }),
+      )
+      .default({}),
+    /**
+     * This agent's subagents: agents whose streams sit at
+     * `<this path>/subagents/<path>` (see lib/subagent-paths.ts). Derived
+     * entirely from the `stream/child-stream-created` announcements every
+     * descendant stream posts to its ancestors — a subagent someone births by
+     * raw stream append shows up exactly like one born by messaging
+     * `itx.agents.get("subagents/<name>")`.
+     */
+    subagents: z
       .array(
         z.object({
-          code: z.string(),
-          executionId: z.string(),
-          requestedOffset: z.number().int().positive(),
-          startedAt: z.string(),
+          path: z.string(),
+          spawnedAt: z.string(),
         }),
       )
       .default([]),
-    scriptExecutionsCompleted: z.array(z.string()).default([]),
     /**
      * Lifetime token totals, folded from token-usage-reported. Cost/observability
      * data, not loop-control state: nothing in the agent loop branches on it.
@@ -335,21 +425,43 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/agents/user-message-received": {
+    "events.iterate.com/agents/message-received": {
       description:
-        "A user message reached the agent — from the web UI, or from an MCP client acting on the project owner's behalf.",
+        "A message reached the agent. THE inbound message event for every source — `from` says who sent it: a user (web UI or MCP client), another agent (parent↔subagent delegation and reports ride exactly this), or a domain transcriber relaying a Slack/email/GitHub message. The reducer folds it straight into model-visible history; `llmRequestPolicy` carries the sender's trigger gating (e.g. mention-gated PR comments record without waking the agent).",
       payloadSchema: z.object({
         content: z.string(),
-        origin: z.enum(["web", "mcp"]),
+        from: AgentMessageFrom,
+        /** Files attached to the message — see {@link AgentFileAttachment}. */
+        files: z.array(AgentFileAttachment).optional(),
+        llmRequestPolicy: LlmRequestPolicy,
       }),
       examples: [
         {
           description: "A user sends a chat message from the web UI.",
-          payload: { content: "What's on my calendar today?", origin: "web" },
+          payload: {
+            content: "What's on my calendar today?",
+            from: { kind: "user", origin: "web" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
         },
         {
-          description: "An MCP client asks the agent a question on the project owner's behalf.",
-          payload: { content: "Summarize the open incidents in this project.", origin: "mcp" },
+          description: "A parent agent sends work to its subagent.",
+          payload: {
+            content:
+              "Find every place we retry failed webhook deliveries and summarize the backoff policy.",
+            from: { kind: "agent", path: "/agents/main" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+        {
+          description:
+            "The slack-agent transcriber relays a thread message; a reaction or join would carry dont-trigger-request instead.",
+          payload: {
+            content:
+              "`events.iterate.com/slack/webhook-received` event received\n\n```yaml\nevent:\n  type: message\n  text: what's our uptime this month?\n```",
+            from: { kind: "slack", userId: "U0788AB12CD" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
         },
       ],
     },
@@ -371,19 +483,20 @@ export const AgentProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/agent/output-added": {
-      description: "The LLM provider produced assistant output.",
+      description: "The LLM produced assistant output.",
       payloadSchema: z.object({
         content: z.string(),
-        llmRequestId: z.number().int().positive().optional(),
+        /** Offset of the llm-request-requested event this output answers. */
+        llmRequestOffset: z.number().int().positive().optional(),
       }),
       examples: [
         {
           description:
-            "The model answered with a codemode script; llmRequestId is the offset of the llm-request-requested event it answers.",
+            "The model answered with a codemode script; llmRequestOffset is the offset of the llm-request-requested event it answers.",
           payload: {
             content:
               '```js\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
-            llmRequestId: 57,
+            llmRequestOffset: 57,
           },
         },
       ],
@@ -393,7 +506,6 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         ifUnset: z.boolean().optional(),
         model: z.string().min(1),
-        provider: AgentLlmProvider,
       }),
       examples: [
         {
@@ -401,13 +513,12 @@ export const AgentProcessorContract = defineProcessorContract({
             "Agent birth applies the platform default model unless something already chose one.",
           payload: {
             ifUnset: true,
-            model: "@cf/moonshotai/kimi-k2.7-code",
-            provider: "cloudflare-ai",
+            model: "openai/gpt-5.5",
           },
         },
         {
-          description: "The project explicitly switches the agent to an OpenAI model.",
-          payload: { model: "gpt-5.5", provider: "openai-ws" },
+          description: "The project explicitly selects a Workers AI model.",
+          payload: { model: "openai/gpt-5.5" },
         },
       ],
     },
@@ -416,7 +527,6 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         debounceMs: z.number().int().nonnegative(),
         model: z.string().min(1),
-        provider: AgentLlmProvider,
         requestId: z.string(),
       }),
       examples: [
@@ -425,8 +535,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "A user input triggered a request, debounced 250ms so rapid-fire inputs collapse into one turn.",
           payload: {
             debounceMs: 250,
-            model: "@cf/moonshotai/kimi-k2.7-code",
-            provider: "cloudflare-ai",
+            model: "openai/gpt-5.5",
             requestId: "llm-request:gen-3",
           },
         },
@@ -434,55 +543,71 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The agent has prepared an LLM request. The event offset is the llmRequestId; providers rebuild the prompt from history.",
+        "The agent has prepared an LLM request. The event's own offset is the llmRequestOffset every later lifecycle event references; the processor rebuilds the prompt from history.",
       payloadSchema: z.object({
         model: z.string().min(1),
-        provider: AgentLlmProvider,
         requestId: z.string(),
-        /** Epoch ms past which no provider may START an attempt; stale intent
-         * settles as an expired failure instead. Absent (raw appends), the
-         * providers default to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
+        /** Epoch ms past which no attempt may START; stale intent settles as
+         * an expired failure instead. Absent (raw appends), reconciliation
+         * defaults to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
         expiresAt: z.number().int().positive().optional(),
       }),
       examples: [
         {
           description:
-            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestId the provider answers to.",
+            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestOffset the processor answers to.",
           payload: {
-            model: "@cf/moonshotai/kimi-k2.7-code",
-            provider: "cloudflare-ai",
+            model: "openai/gpt-5.5",
             requestId: "llm-request:gen-3",
           },
         },
       ],
     },
+    "events.iterate.com/agent/llm-request-started": {
+      description: "The agent processor started an LLM request through the AI binding.",
+      payloadSchema: z.object({
+        llmRequestOffset: z.number().int().positive(),
+        model: z.string().min(1),
+      }),
+      examples: [
+        {
+          description: "The agent picks up a prepared request and dials the AI binding.",
+          payload: { llmRequestOffset: 57, model: "openai/gpt-5.5" },
+        },
+      ],
+    },
+    "events.iterate.com/agent/llm-response-chunk": {
+      description: "One streamed chunk received from the AI binding.",
+      payloadSchema: z.object({
+        chunk: z.unknown(),
+        llmRequestOffset: z.number().int().positive(),
+        sequence: z.number().int().nonnegative(),
+      }),
+      examples: [
+        {
+          description: "The first streamed text delta of a response.",
+          payload: {
+            chunk: { choices: [{ delta: { content: "Hello" } }] },
+            llmRequestOffset: 57,
+            sequence: 0,
+          },
+        },
+      ],
+    },
     "events.iterate.com/agent/llm-request-completed": {
-      description: "A provider processor finished an LLM request.",
+      description: "The agent processor finished an LLM request.",
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative(),
-        llmRequestId: z.number().int().positive(),
-        provider: AgentLlmProvider,
-        result: z.discriminatedUnion("status", [
-          z.object({
-            rawResponse: z.unknown().optional(),
-            status: z.literal("success"),
-            usage: z.unknown().optional(),
-          }),
-          z.object({
-            error: z.object({ message: z.string() }),
-            rawResponse: z.unknown().optional(),
-            status: z.literal("failure"),
-          }),
-        ]),
+        llmRequestOffset: z.number().int().positive(),
+        result: LlmRequestResult,
       }),
       examples: [
         {
           description:
-            "The provider returned assistant output, with token usage as the model reported it.",
+            "The LLM returned assistant output, with token usage as the model reported it.",
           payload: {
             durationMs: 2340,
-            llmRequestId: 57,
-            provider: "cloudflare-ai",
+            llmRequestOffset: 57,
             result: {
               status: "success",
               usage: { completion_tokens: 118, prompt_tokens: 4096, total_tokens: 4214 },
@@ -491,13 +616,12 @@ export const AgentProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "The provider call failed; the error becomes a model-visible input so the agent can react.",
+            "The LLM call failed; the error becomes a model-visible input so the agent can react.",
           payload: {
             durationMs: 30012,
-            llmRequestId: 61,
-            provider: "openai-ws",
+            llmRequestOffset: 61,
             result: {
-              error: { message: "Provider request timed out after 30000ms" },
+              error: { message: "LLM request timed out after 30000ms" },
               status: "failure",
             },
           },
@@ -506,13 +630,14 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/token-usage-reported": {
       description:
-        "A provider processor reports normalized token counts and the model's context window " +
-        "for a completed LLM request. Providers translate their own usage dialects " +
-        "(input_tokens vs prompt_tokens) at source, so consumers — the state tally, cost " +
-        "views, and compaction — see one shape.",
+        "Normalized token counts and the model's context window for a successfully completed " +
+        "LLM request. The processor translates vendor usage dialects (input_tokens vs " +
+        "prompt_tokens) at source, so consumers — the state tally, cost views, and compaction — " +
+        "see one shape.",
       payloadSchema: z.object({
-        llmRequestId: z.number().int().positive(),
-        provider: AgentLlmProvider,
+        /** The llm-request-requested event this request ran under — the same
+         * handle the lifecycle events carry. */
+        llmRequestOffset: z.number().int().positive(),
         model: z.string().min(1),
         /** The model's context window, so a consumer can judge fullness from the event alone. */
         maxContextTokens: z.number().int().positive(),
@@ -520,19 +645,18 @@ export const AgentProcessorContract = defineProcessorContract({
         inputTokens: z.number().int().nonnegative(),
         /** Total output tokens, including reasoning ones. */
         outputTokens: z.number().int().nonnegative(),
-        /** Prompt-cache hits, where the provider reports them. */
+        /** Prompt-cache hits, where the model reports them. */
         cachedInputTokens: z.number().int().nonnegative().optional(),
-        /** Reasoning/thinking tokens, where the provider reports them. */
+        /** Reasoning/thinking tokens, where the model reports them. */
         reasoningOutputTokens: z.number().int().nonnegative().optional(),
       }),
       examples: [
         {
           description:
-            "OpenAI reports a mostly-cache-hit request at about a tenth of the model's window.",
+            "An OpenAI model reports a mostly-cache-hit request at about a tenth of the model's window.",
           payload: {
-            llmRequestId: 57,
-            provider: "openai-ws",
-            model: "gpt-5.5",
+            llmRequestOffset: 57,
+            model: "openai/gpt-5.5",
             maxContextTokens: 272000,
             inputTokens: 29295,
             outputTokens: 111,
@@ -541,10 +665,9 @@ export const AgentProcessorContract = defineProcessorContract({
           },
         },
         {
-          description: "Workers AI reports totals only — it has no cache/reasoning breakdown.",
+          description: "A Workers AI model reports totals only — no cache/reasoning breakdown.",
           payload: {
-            llmRequestId: 61,
-            provider: "cloudflare-ai",
+            llmRequestOffset: 61,
             model: "@cf/moonshotai/kimi-k2.7-code",
             maxContextTokens: 256000,
             inputTokens: 4096,
@@ -591,8 +714,8 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          reason: z.literal("interrupted-by-user-input"),
-          llmRequestId: z.number().int().positive(),
+          reason: z.enum(["interrupted-by-user-input", "durable-object-crashed"]),
+          llmRequestOffset: z.number().int().positive(),
         }),
       ]),
       examples: [
@@ -605,8 +728,21 @@ export const AgentProcessorContract = defineProcessorContract({
           },
         },
         {
-          description: "New user input interrupted a request already running at the provider.",
-          payload: { phase: "requested", reason: "interrupted-by-user-input", llmRequestId: 58 },
+          description: "New user input interrupted a request already running at the model.",
+          payload: {
+            phase: "requested",
+            reason: "interrupted-by-user-input",
+            llmRequestOffset: 58,
+          },
+        },
+        {
+          description:
+            "The Durable Object incarnation died mid-attempt (kill/reset/eviction); the reconciler cancelled the in-flight request and the turn reschedules.",
+          payload: {
+            phase: "requested",
+            reason: "durable-object-crashed",
+            llmRequestOffset: 61,
+          },
         },
       ],
     },
@@ -621,45 +757,49 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "The circuit breaker halted an agent that chained 20 autonomous script turns without human input.",
+            "The circuit breaker halted an agent that chained 100 autonomous script turns without human input.",
           payload: {
-            maxAutonomousTurns: 20,
-            reason: "Agent circuit breaker stopped after 20 consecutive autonomous turns.",
+            maxAutonomousTurns: 100,
+            reason: "Agent circuit breaker stopped after 100 consecutive autonomous turns.",
             triggerOffset: 143,
           },
         },
       ],
     },
   },
-  processorDeps: [CapabilityHostProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
-    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agents/message-received",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
+    // Subagent births: every descendant stream announces itself to its
+    // ancestors; the fold keeps the immediate `<path>/subagents/<name>` ones.
+    "events.iterate.com/stream/child-stream-created",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
-    "events.iterate.com/agent/llm-request-cancelled",
-    // The reconciler's backstop: normally providers append the completion,
-    // but a request whose provider layer never answers at all is settled by
-    // the agent itself past AGENT_LLM_REQUEST_BACKSTOP_MS.
+    "events.iterate.com/agent/llm-request-started",
+    "events.iterate.com/agent/llm-response-chunk",
     "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/token-usage-reported",
+    "events.iterate.com/agent/output-added",
+    "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
   ],
@@ -674,8 +814,6 @@ export type AgentProcessorContract = typeof AgentProcessorContract;
 
 /**
  * The agent processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape (the old hand-written copy
- * in the former types.ts silently omitted `llmProviderConfigured` and
- * `requestGeneration`).
+ * `stateSchema`.
  */
 export type AgentProcessorState = ProcessorState<AgentProcessorContract>;

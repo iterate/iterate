@@ -32,8 +32,8 @@ describe("agent-ui reducer", () => {
   it("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "count the inputs", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -41,30 +41,27 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           sequence: 0,
-          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+          chunk: { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           sequence: 1,
-          chunk: { type: "response.output_text.delta", delta: "const n = await " },
+          chunk: { choices: [{ delta: { content: "const n = await " } }] },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           sequence: 2,
-          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
+          chunk: { choices: [{ delta: { content: "stream.count();" } }] },
         },
       },
     ]);
@@ -85,8 +82,8 @@ describe("agent-ui reducer", () => {
   it("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "hi", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "hi", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -104,8 +101,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
-          llmRequestId: 5,
-          provider: "openai-ws",
+          llmRequestOffset: 5,
           durationMs: 2100,
           result: { status: "success", usage: { input_tokens: 9400, output_tokens: 300 } },
         },
@@ -169,7 +165,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/output-added",
         payload: {
-          llmRequestId: 10,
+          llmRequestOffset: 10,
           content:
             "```js\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
         },
@@ -183,7 +179,7 @@ describe("agent-ui reducer", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { llmRequestId: 10, result: { status: "success" } },
+        payload: { llmRequestOffset: 10, result: { status: "success" } },
       },
       {
         type: "events.iterate.com/agents/web-message-sent",
@@ -219,14 +215,14 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
+  it("streams legacy openai-ws llm-response-chunk frames into the live llm step", () => {
     // itx journals every raw Responses-WS frame as llm-response-chunk
     // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
     // showed only a bare spinner because the reducer ignored these frames.
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "count the inputs", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -267,7 +263,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("accumulates cloudflare-ai chunk deltas", () => {
+  it("accumulates agent llm-response-chunk deltas", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -275,17 +271,17 @@ describe("agent-ui reducer", () => {
         payload: { model: "test-model" },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        payload: { llmRequestId: 3, sequence: 0, chunk: { response: "Hel" } },
+        type: "events.iterate.com/agent/llm-response-chunk",
+        payload: { llmRequestOffset: 3, sequence: 0, chunk: { response: "Hel" } },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
-        payload: { llmRequestId: 3, sequence: 1, chunk: { response: "lo" } },
+        type: "events.iterate.com/agent/llm-response-chunk",
+        payload: { llmRequestOffset: 3, sequence: 1, chunk: { response: "lo" } },
       },
       {
-        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          llmRequestId: 3,
+          llmRequestOffset: 3,
           sequence: 2,
           chunk: { choices: [{ delta: { reasoning_content: "hmm" } }] },
         },
@@ -429,8 +425,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
-          llmRequestId: 7,
-          provider: "openai-ws",
+          llmRequestOffset: 7,
           durationMs: 250,
           result: { status: "success" },
         },
@@ -442,7 +437,7 @@ describe("agent-ui reducer", () => {
     const activity = state.items[0];
     expect(activity).toMatchObject({ kind: "activity", status: "done" });
     expect(activity?.kind === "activity" ? activity.steps : []).toMatchObject([
-      { kind: "llm", llmRequestId: 7, status: "done", outcome: "completed" },
+      { kind: "llm", llmRequestOffset: 7, status: "done", outcome: "completed" },
     ]);
   });
 
@@ -472,8 +467,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "also, one more thing", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
       },
     ]);
 
@@ -496,14 +491,13 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "also, one more thing", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
-          llmRequestId: 7,
-          provider: "openai-ws",
+          llmRequestOffset: 7,
           durationMs: 100,
           result: { status: "success" },
         },
@@ -522,7 +516,7 @@ describe("agent-ui reducer", () => {
     });
     expect(state.queuedUserMessages).toHaveLength(0);
     expect(state.live?.steps).toHaveLength(1);
-    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestId: 12 });
+    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestOffset: 12 });
   });
 
   it("does not append late chunks from an interrupted request into the next turn", () => {
@@ -542,14 +536,14 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { content: "oh this is taking too long", origin: "web" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "oh this is taking too long", from: { kind: "user", origin: "web" } },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",
         payload: {
           phase: "requested",
-          llmRequestId: 7,
+          llmRequestOffset: 7,
           reason: "interrupted-by-user-input",
         },
       },
@@ -574,7 +568,7 @@ describe("agent-ui reducer", () => {
     if (activity?.kind !== "activity") throw new Error("expected activity item");
     expect(activity.steps[0]).toMatchObject({
       kind: "llm",
-      llmRequestId: 7,
+      llmRequestOffset: 7,
       outcome: "cancelled",
       responseText: "old partial",
     });
@@ -585,7 +579,7 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps).toHaveLength(1);
     expect(state.live?.steps[0]).toMatchObject({
       kind: "llm",
-      llmRequestId: 12,
+      llmRequestOffset: 12,
       responseText: "",
     });
   });
@@ -812,11 +806,57 @@ describe("agent-ui reducer", () => {
     expect(state.queuedUserMessages).toMatchObject([{ kind: "user", text: "one more" }]);
   });
 
-  it("shows only the attachments from the slack-agent's yaml input event", () => {
+  it("shows only the attachments from the slack-agent's transcribed message", () => {
     // The slack message itself already rendered from the webhook event; the
-    // slack-agent processor's agent/input-added yaml dump exists for the
-    // model, not the user — but its stored file attachments are the only
+    // slack-agent processor's message-received yaml transcription exists for
+    // the model, not the user — but its stored file attachments are the only
     // browser-renderable copy of shared files.
+    const file = {
+      contentType: "image/png",
+      filename: "screenshot.png",
+      path: "files/screenshot.png",
+      size: 123,
+      url: "https://files.example/screenshot.png",
+    };
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/message-received",
+        idempotencyKey: "slack-agent:webhook-to-agent-input:41",
+        payload: {
+          content: "```yaml\nbody: ...\n```",
+          from: { kind: "slack", userId: "U1" },
+          files: [file],
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { kind: "user", text: "", files: [file], via: { service: "slack", sender: "U1" } },
+    ]);
+  });
+
+  it("keeps email/github transcription text visible — they have no raw-event bubble", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/message-received",
+        payload: {
+          content:
+            "`events.iterate.com/email/received` event received\n\n```yaml\nsubject: hi\n```",
+          from: { kind: "email", address: "dana@example.com" },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: expect.stringContaining("subject: hi"),
+        via: { service: "email", sender: "dana@example.com" },
+      },
+    ]);
+  });
+
+  it("still blanks pre-unification slack yaml inputs from old journals", () => {
     const file = {
       contentType: "image/png",
       filename: "screenshot.png",
@@ -837,6 +877,26 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
+  it("renders inter-agent mail as a labeled user bubble", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/message-received",
+        payload: {
+          content: "Done. Findings attached below.",
+          from: { kind: "agent", path: "/agents/main/subagents/researcher" },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      {
+        kind: "user",
+        text: "Done. Findings attached below.",
+        via: { service: "agent", sender: "/agents/main/subagents/researcher" },
+      },
+    ]);
+  });
+
   it("marks an LLM request cancelled when interrupted", () => {
     const state = reduceAll([
       {
@@ -848,7 +908,7 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/llm-request-cancelled",
         payload: {
           phase: "requested",
-          llmRequestId: 7,
+          llmRequestOffset: 7,
           reason: "interrupted-by-user-input",
         },
       },

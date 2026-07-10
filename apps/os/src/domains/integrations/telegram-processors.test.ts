@@ -20,7 +20,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("forwards a private-chat message to the chat's agent stream, verbatim", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -39,7 +44,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("routes forum-topic messages to a per-topic stream, negative group ids verbatim", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     const payload = humanMessageWebhookPayload({ chatId: -1004242, chatType: "supergroup" });
@@ -59,7 +69,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("drops chat-less updates (inline queries) without creating any stream", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -80,7 +95,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("ignores connected/disconnected lifecycle facts (status is a journal fold, not router state)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -102,7 +122,12 @@ describe("TelegramProcessor (webhook router)", () => {
     const network = new MemoryStreamNetwork();
     // A mis-armed subscription: telegram router woken on a non-connection path.
     const stream = network.get("/integrations/telegram");
-    const processor = new TelegramProcessor({ stream, connection: null });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: null,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -128,7 +153,12 @@ describe("TelegramProcessor (webhook router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const [webhook] = await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
@@ -156,7 +186,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("/new rotates the chat to a fresh session stream; /new itself routes into it", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
     const sessionZero = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
 
@@ -190,7 +225,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("orders same-second /new pairs by message_id and never rolls the session backwards", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -230,7 +270,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("group-chat /new@BotName and trailing text both rotate the session", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -250,7 +295,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("annotates replies to bot messages with the EXACT thread from the sent claim", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
     const oldSession = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`;
 
@@ -300,7 +350,12 @@ describe("TelegramProcessor (webhook router)", () => {
   it("falls back to the reply date for user messages: containing session, or session zero when older than the first /new", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const processor = new TelegramProcessor({ stream, connection: CONNECTION });
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      connection: CONNECTION,
+    });
     const cursors = new Map<object, number>();
     const chatPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
 
@@ -375,7 +430,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -390,7 +445,7 @@ describe("TelegramAgentProcessor", () => {
     ]);
     expect(calls).toEqual([
       "append:events.iterate.com/telegram/webhook-received", // the test's own seed
-      "append:events.iterate.com/agent/input-added",
+      "append:events.iterate.com/agents/message-received",
       "telegram:sendChatAction",
     ]);
 
@@ -410,7 +465,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(telegramCalls).toHaveLength(0);
   });
@@ -426,7 +481,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -463,12 +518,19 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload as {
+      content: string;
+      from?: unknown;
+      llmRequestPolicy?: unknown;
+    };
     expect(payload.content).toContain("approve");
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+    // The sender is the button PRESSER (callback_query.from), never the
+    // bot that authored the embedded message.
+    expect(payload.from).toEqual({ kind: "telegram", userId: "7" });
   });
 
   it("transcribes media as bracketed placeholders", async () => {
@@ -483,7 +545,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect((inputs[0]!.payload as { content: string }).content).toContain("[photo]");
@@ -548,7 +610,7 @@ describe("TelegramAgentProcessor", () => {
     // Durable lanes ran: the message reached the agent, and the reply was
     // delivered (its journal marker is absent on this first pass).
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(1);
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: "an old reply" }]);
     // But NO typing ack (arrival OR "still working") on a stale replay.
@@ -750,7 +812,7 @@ describe("TelegramAgentProcessor", () => {
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
     // …and the transcript records the /new WITHOUT waking the agent.
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -773,7 +835,7 @@ describe("TelegramAgentProcessor", () => {
 
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -784,7 +846,7 @@ describe("TelegramAgentProcessor", () => {
     // acknowledgement lands in the chat before the agent's answer.
     const types = stream.events.map((event) => event.type);
     expect(types.indexOf("events.iterate.com/telegram/send-requested")).toBeLessThan(
-      types.indexOf("events.iterate.com/agent/input-added"),
+      types.indexOf("events.iterate.com/agents/message-received"),
     );
   });
 
@@ -817,7 +879,7 @@ describe("TelegramAgentProcessor", () => {
     expect(code).toContain("…truncated");
     // No LLM turn and no agent input — the command IS the whole handling.
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
   });
 
@@ -836,7 +898,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const content = (inputs[0]!.payload as { content: string }).content;
@@ -968,6 +1030,8 @@ function setup(input: { agentPath?: string; now?: () => number } = {}) {
   };
   const processor = new TelegramAgentProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     agentPath,
     // MemoryStream stamps events at ~epoch (ms 1, 2, 3…); a clock just past
     // that keeps the ack freshness gate (#1807) open by default. Stale-gate

@@ -1,6 +1,7 @@
-import { InMemoryFs, Workspace } from "@cloudflare/shell";
+import { Workspace } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
+import type { RepoFileChange } from "../repos/types.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -25,8 +26,8 @@ const WHITEOUTS_KEY = "whiteouts:v1";
 
 // The pre-overlay model's clone sentinel. A workspace that carries it holds a
 // FULL stale checkout from the clone-on-first-touch era — the first overlay
-// touch wipes it (the disposability contract: committed state lives on the
-// workspace branch, everything else is disposable).
+// touch wipes it (the disposability contract: committed state lives on main,
+// everything else is disposable).
 const LEGACY_CLONE_SENTINEL_KEY = "workspace-cloned:v1";
 
 const DEFAULT_COMMIT_AUTHOR = { email: "support@iterate.com", name: "Iterate" };
@@ -56,6 +57,11 @@ export class UnboundedWorkspace extends Workspace {
 interface RepoAccess {
   getHead(): Promise<{ commitOid: string }>;
   gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }>;
+  commitFiles(input: {
+    author?: { email: string; name: string };
+    changes: RepoFileChange[];
+    message: string;
+  }): Promise<{ branch: string; changedPaths: string[]; commitOid: string; noChanges: boolean }>;
   log(input: { branch?: string; limit?: number }): Promise<{
     commits: {
       author: { email: string; name: string };
@@ -89,8 +95,6 @@ interface WorkspaceKv {
 }
 
 type WorkspaceCoreOptions = {
-  /** The workspace's own publish branch in the config repo (`workspaces/<path>`). */
-  branch: string;
   /** git bound to `workspace`'s filesystem — the root materialization's clone lane. */
   git: ReturnType<typeof createGit>;
   /** Durable synchronous kv for the head cursor / whiteouts / legacy sentinel. */
@@ -132,14 +136,13 @@ type WorkspaceCoreOptions = {
  * is usable instantly and always sees latest main through the fall-through,
  * until a local write pins a path.
  *
- * Truth lives in the filesystem; git is the PUBLISH mechanism, not the
- * storage: `gitCommit` snapshots the merged view (main + local layer, minus
- * whiteouts and .gitignored paths) as one commit force-pushed to this
- * workspace's own branch in the project's Artifacts repo — never to main —
- * which keeps the local layer disposable.
+ * Truth lives in the filesystem; git is the COMMIT mechanism, not the
+ * storage: `gitCommit` turns the overlay's changes (local layer minus
+ * whiteouts and .gitignored paths) into one ordinary commit on the config
+ * repo's MAIN branch via the repo's own `commitFiles` lane, then drops the
+ * overlay — committed state lives on main, uncommitted state is disposable.
  */
 export class WorkspaceCore {
-  readonly #branch: string;
   readonly #git: ReturnType<typeof createGit>;
   readonly #isRoot: boolean;
   readonly #kv: WorkspaceKv;
@@ -148,7 +151,6 @@ export class WorkspaceCore {
   readonly #workspace: Workspace;
 
   constructor(options: WorkspaceCoreOptions) {
-    this.#branch = options.branch;
     this.#git = options.git;
     this.#isRoot = options.mode === "root";
     this.#kv = options.kv;
@@ -320,20 +322,32 @@ export class WorkspaceCore {
    * Wipe this workspace back to pristine. Root: the next read re-materializes
    * main (the escape hatch for a wedged checkout). Overlay: the local layer
    * and every whiteout vanish, so the workspace shows exactly the parent
-   * again — unpublished work is lost (published state survives on the
-   * workspace branch).
+   * again — uncommitted work is lost (committed state lives on main).
    */
   async reset(): Promise<void> {
-    // Settle any in-flight materialization or write first — even a FAILING
-    // one (that is exactly when reset is needed), hence catch-and-ignore.
-    await this.#rootRefresh?.catch(() => {});
-    await this.#writeChain.catch(() => {});
-    this.#rootRefresh = undefined;
-    this.#overlayReady = undefined;
-    this.#kv.delete(ROOT_HEAD_KEY);
-    this.#kv.delete(WHITEOUTS_KEY);
-    this.#kv.delete(LEGACY_CLONE_SENTINEL_KEY);
-    await this.#wipeFilesystem();
+    // The wipe OCCUPIES the single-flight materialization slot for its whole
+    // duration: #ensureFreshRoot always awaits the slot before deciding to
+    // materialize, so no clone can interleave with the rm sweep or observe
+    // the cleared head key mid-wipe. It chains BEHIND any in-flight
+    // materialization (even a failing one — that is exactly when reset is
+    // needed, hence catch-and-ignore) and runs on the write chain, so
+    // concurrent overlay writes queue behind it rather than landing on a
+    // half-wiped tree.
+    const wipe = () =>
+      this.#serializeWrite(async () => {
+        this.#overlayReady = undefined;
+        this.#kv.delete(ROOT_HEAD_KEY);
+        this.#kv.delete(WHITEOUTS_KEY);
+        this.#kv.delete(LEGACY_CLONE_SENTINEL_KEY);
+        await this.#wipeFilesystem();
+      });
+    const run = (this.#rootRefresh ?? Promise.resolve()).catch(() => {}).then(wipe);
+    // Only vacate the slot if a newer occupant hasn't replaced this one.
+    const occupant: Promise<void> = run.finally(() => {
+      if (this.#rootRefresh === occupant) this.#rootRefresh = undefined;
+    });
+    this.#rootRefresh = occupant;
+    await occupant;
   }
 
   /**
@@ -705,12 +719,17 @@ export class WorkspaceCore {
   }
 
   /**
-   * Publish the merged view as ONE snapshot commit on this workspace's own
-   * branch in the config repo. Implementation: clone main, replay the local
-   * layer (minus .gitignored paths) and whiteout deletions onto it, commit,
-   * force-push. Force because each publish is a fresh snapshot on the current
-   * main — the branch always shows "main as this workspace sees it", not an
-   * incremental history.
+   * Commit the workspace's changes to the config repo's MAIN branch, through
+   * the repo's own `commitFiles` authority lane — the same lane
+   * `itx.repo.commitFiles` uses, so the durable head cache, worker rebuilds
+   * (the project website), and any GitHub mirror all fire exactly as if the
+   * changes had been committed directly. There is no workspace branch and no
+   * separate "publish" step: commit = your changes are live on main.
+   *
+   * On success the local layer and whiteouts are cleared — the changes ARE
+   * main now, so the workspace goes back to mirroring latest main through the
+   * fall-through (read-your-write holds: `commitFiles` returning is the
+   * repo's head-cursor boundary, and the root re-materializes against it).
    */
   async gitCommit(input: {
     author?: { email: string; name: string };
@@ -730,129 +749,75 @@ export class WorkspaceCore {
         paths: await this.#localFilePaths(),
         readFile: (path) => this.#workspace.readFile(path),
       });
-      const whiteouts = Object.keys(this.#whiteouts());
-      if (localPaths.length === 0 && whiteouts.length === 0) {
-        throw new Error("Nothing to publish — the workspace has no changes over main.");
+      // Deletions the same way status() derives them: parent files masked by
+      // a whiteout (directly or via a deleted ancestor directory) and not
+      // shadowed by a local copy. Enumerating the parent expands directory
+      // whiteouts to concrete file paths, which is what commitFiles deletes.
+      const localSet = new Set(localPaths);
+      const deletions = (await this.#parent().listAllFiles()).filter(
+        (path) => this.#isMaskedFromParent(path) && !localSet.has(path),
+      );
+      if (localPaths.length === 0 && deletions.length === 0) {
+        throw new Error("Nothing to commit — the workspace has no changes over main.");
       }
 
-      const repo = await this.#repo().gitAccess();
-      // Same read-your-write guard as #materializeRoot: the publish base must
-      // observe at least the head cursor, or a post-commit publish could
-      // snapshot pre-commit main under the overlay (the Artifacts remote is
-      // eventually consistent). Same 503-retry as every other clone lane.
-      const expectedHead = (await this.#repo().getHead()).commitOid;
-      let filesystem: InMemoryFs;
-      let git: ReturnType<typeof createGit>;
-      for (let attempt = 1, staleAttempt = 1; ; ) {
-        filesystem = new InMemoryFs();
-        git = createGit(filesystem, "/repo");
-        try {
-          // Full (non-shallow) clone: pushing needs the object walk to reach
-          // a commit the remote already has.
-          await git.clone({
-            branch: repo.defaultBranch,
-            singleBranch: true,
-            url: repo.remote,
-            username: "x",
-            password: repo.token,
-          });
-        } catch (error) {
-          if (attempt >= CLONE_ATTEMPTS) throw error;
-          console.warn(`publish clone attempt ${attempt} failed, retrying: ${String(error)}`);
-          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-          attempt++;
-          continue;
-        }
-        const [tip] = await git.log({ depth: 1 });
-        if (!tip) throw new Error("Publish clone has no commits.");
-        if (tip.oid !== expectedHead && staleAttempt <= 5) {
-          console.warn(
-            `publish clone is behind the head cursor (saw ${tip.oid}, expected ${expectedHead}); retry ${staleAttempt}`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, 500 * staleAttempt));
-          staleAttempt++;
-          continue;
-        }
-        break;
-      }
-      await git.checkout({ branch: this.#branch });
-
-      const changedPaths: string[] = [];
+      const changes: RepoFileChange[] = [];
       for (const path of localPaths) {
         const bytes = await this.#workspace.readFileBytes(path);
         if (bytes === null) continue;
-        const absolute = `/repo${path}`;
-        const dir = absolute.slice(0, absolute.lastIndexOf("/"));
-        if (dir !== "/repo" && !(await filesystem.exists(dir))) {
-          await filesystem.mkdir(dir, { recursive: true });
-        }
-        await filesystem.writeFileBytes(absolute, bytes);
-        await git.add({ filepath: path.slice(1) });
-        changedPaths.push(path);
+        changes.push({ path, ...encodeRepoContent(bytes) });
       }
-      for (const whiteout of whiteouts) {
-        // A whiteout may cover a subtree — expand it against the clone.
-        const stat = (await filesystem.exists(`/repo${whiteout}`))
-          ? await filesystem.stat(`/repo${whiteout}`)
-          : null;
-        if (stat === null) continue;
-        const doomed =
-          stat.type === "directory"
-            ? (await walkFiles(filesystem, `/repo${whiteout}`)).map((p) => p.slice("/repo".length))
-            : [whiteout];
-        for (const path of doomed) {
-          if (await filesystem.exists(`/repo${path}`)) await filesystem.rm(`/repo${path}`);
-          await git.rm({ filepath: path.slice(1) });
-          changedPaths.push(path);
-        }
-      }
+      for (const path of deletions) changes.push({ path, delete: true });
 
-      // The pre-clone guard only proved SOMETHING existed locally; deletions
-      // main already applied stage nothing, so re-check what actually staged
-      // rather than pushing an empty snapshot (or failing inside git.commit).
-      if (changedPaths.length === 0) {
-        throw new Error(
-          "Nothing to publish — the workspace's deletions have already landed on main.",
-        );
-      }
-      const commit = await git.commit({
+      const result = await this.#repo().commitFiles({
         author: input.author ?? DEFAULT_COMMIT_AUTHOR,
+        changes,
         message: input.message,
       });
-      const pushed = await git.push({
-        force: true,
-        ref: this.#branch,
-        remote: "origin",
-        username: "x",
-        password: repo.token,
-      });
-      if (!pushed.ok) {
-        throw new Error(`Failed to push ${this.#branch}: ${JSON.stringify(pushed.refs)}`);
-      }
-      return { branch: this.#branch, changedPaths: changedPaths.sort(), commitOid: commit.oid };
+
+      // The changes are on main; drop the overlay so the workspace mirrors
+      // the new main instead of shadowing it with now-stale private copies.
+      this.#kv.delete(WHITEOUTS_KEY);
+      await this.#wipeFilesystem();
+
+      return {
+        branch: result.branch,
+        changedPaths: result.changedPaths
+          .map((path) => (path.startsWith("/") ? path : `/${path}`))
+          .sort(),
+        commitOid: result.commitOid,
+      };
     });
   }
 
-  /** Published snapshots of this workspace, newest first ([] before the first publish). */
+  /** The config repo's main-branch history, newest first (workspace commits land there). */
   async gitLog(input: { limit?: number } = {}): Promise<WorkspaceGitLogEntry[]> {
-    if (this.#isRoot) {
-      throw new Error('The root workspace ("/") mirrors main — read main\'s log via itx.repo.log.');
-    }
-    // Only "branch does not exist yet" reads as no-publishes; anything else
-    // (a bad limit, a broken remote) is the caller's error to see.
-    const result = await this.#repo()
-      .log({ branch: this.#branch, limit: input.limit })
-      .catch((error: unknown) => {
-        if (/not.?found|could not find/i.test(String(error))) return null;
-        throw error;
-      });
-    if (result === null) return [];
+    const result = await this.#repo().log({ limit: input.limit });
     return result.commits.map((commit) => ({
       author: commit.author,
       message: commit.message,
       oid: commit.oid,
       timestamp: commit.timestamp,
     }));
+  }
+}
+
+/**
+ * The repo write lane wants text as text (reviewable diffs on GitHub mirrors)
+ * and bytes as base64; a workspace file is just bytes. Valid UTF-8 rides as
+ * a string, anything else (images, PDFs) as base64 — the same convention as
+ * `files.put`.
+ */
+function encodeRepoContent(bytes: Uint8Array): { content: string } | { contentBase64: string } {
+  try {
+    return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+  } catch {
+    let binary = "";
+    // Chunked: String.fromCharCode(...bytes) overflows the arg limit on big files.
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return { contentBase64: btoa(binary) };
   }
 }
 
@@ -868,18 +833,6 @@ function mergeEntries(input: {
   for (const entry of input.parent) byPath.set(entry.path, entry);
   for (const entry of input.local) byPath.set(entry.path, entry);
   return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/** All file paths under a directory of an in-memory checkout (absolute). */
-async function walkFiles(filesystem: InMemoryFs, dir: string): Promise<string[]> {
-  const paths: string[] = [];
-  for (const entry of await filesystem.readdir(dir)) {
-    const absolute = `${dir}/${entry}`;
-    const stat = await filesystem.stat(absolute);
-    if (stat.type === "directory") paths.push(...(await walkFiles(filesystem, absolute)));
-    else paths.push(absolute);
-  }
-  return paths;
 }
 
 /**

@@ -2,3 +2,12 @@
 @import "@iterate-com/ui/globals.css";
 
 @source "../src/**/*.{ts,tsx}";
+
+/* ⌘K stream rows flash when their stream is touched: the row remounts (keyed
+   by lastActivityAt) and this one-shot fade plays. An animation, not a
+   transition, so hover/selection color changes stay instant. */
+@keyframes stream-flash {
+  from {
+    background-color: rgb(250 204 21 / 0.35);
+  }
+}

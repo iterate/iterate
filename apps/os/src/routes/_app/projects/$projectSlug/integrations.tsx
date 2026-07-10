@@ -69,8 +69,7 @@ import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
-import type { ProjectProcessorState } from "~/domains/projects/project-processor-contract.ts";
+import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 type Connection = Awaited<ReturnType<Project["integrations"]["getConnection"]>>;
 
@@ -93,13 +92,16 @@ const Search = StreamViewSearch.extend({
 });
 
 const STREAM_VIEW_SEARCH_RESET = {
+  components: undefined,
   event: undefined,
   filter: undefined,
   from: undefined,
+  mode: undefined,
   panel: undefined,
   preset: undefined,
   processor: undefined,
   q: undefined,
+  raw: undefined,
   tab: undefined,
   to: undefined,
   types: undefined,
@@ -858,10 +860,11 @@ function AccountConnectionsItem() {
   // to the route ItxBoundary and flash the whole panel back to the global
   // "Connecting…" placeholder), and a freshly-created session secret appears
   // here the instant its stream folds, with no manual invalidation to race.
-  const secretsList = useItxState<ProjectProcessorState>(
-    (itx, setState) => itx.processor.onStateChange(setState),
+  const secretsList = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced,
     [],
-  ).state?.secrets;
+  ).value?.secrets;
   const accounts: AccountConnection[] = (secretsList ?? []).flatMap((secret) => {
     const match = ACCOUNT_CONNECTION_PATH.exec(secret.path);
     return match ? [{ connection: match[2], path: secret.path, slug: match[1] }] : [];

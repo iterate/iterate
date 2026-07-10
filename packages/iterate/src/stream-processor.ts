@@ -29,6 +29,7 @@ type MaybePromise<T> = T | Promise<T>;
  */
 export type StreamProcessorContract = {
   slug: string;
+  version: string;
   stateSchema: z.ZodType;
   events: EventCatalog;
   processorDeps?: readonly unknown[];
@@ -39,13 +40,18 @@ export type StreamProcessorContract = {
 
 /**
  * Host-provided constructor dependencies shared by every processor:
- * the stream append capability, optional checkpoint storage
- * (`readState`/`writeState`), and an optional `keepAliveWhile` hook for hosts
- * whose runtime would otherwise shut down while async work is in flight (e.g.
- * a Durable Object).
+ * the stream append capability, the home stream's identity (`path` /
+ * `projectId`, stamped as provenance onto every emitted event), optional
+ * checkpoint storage (`readState`/`writeState`), and an optional
+ * `keepAliveWhile` hook for hosts whose runtime would otherwise shut down
+ * while async work is in flight (e.g. a Durable Object).
  */
 export type StreamProcessorBaseDeps<Contract> = {
   stream: Stream;
+  /** Path of the stream this processor runs on (the stream `stream` points at). */
+  path: string;
+  /** Owning project, or null on a global (deployment-root) stream. */
+  projectId: string | null;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
@@ -107,8 +113,16 @@ type SideEffectHelpers = {
 /** What `processEvent` receives: one reduction result plus batch context and helpers. */
 type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
   SideEffectHelpers & {
-    /** Append one or more events listed in `contract.emits`. */
+    /**
+     * Append one or more events listed in `contract.emits` to this stream,
+     * stamped with `source.processor` provenance pointing at THIS event as
+     * `whileProcessing`. The binding is a closure, so appends made later from
+     * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
+     * the event that was being processed.
+     */
     append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
+    /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
+    appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
     streamMaxOffset: number;
     /**
      * The offset this batch will checkpoint through once all blocking work
@@ -119,7 +133,13 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
 
 /** What `processEventBatch` receives: the whole delivered batch plus its reductions. */
 type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
-  /** Append one or more events listed in `contract.emits`. */
+  /**
+   * Append one or more events listed in `contract.emits`, stamped with
+   * `source.processor` but no `whileProcessing`: a batch-level append is
+   * derived from the whole fold, not one event, and the stamp says so by
+   * omission. Per-event attribution comes from the `processEvent` lane
+   * (`super.processEventBatch(args)` keeps it running).
+   */
   append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
   /** New events past the checkpoint, in stream order, consumed or not. */
   events: readonly StreamEvent[];
@@ -137,7 +157,7 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
  * A durable checkpoint: the reduced state plus the highest stream offset that
  * has been fully reduced and processed. Written atomically per batch.
  *
- * The canonical shapes live in the generated itx API (`ProcessorSnapshot` /
+ * The canonical shapes live in rpc-types.ts (`ProcessorSnapshot` /
  * `ProcessorRuntimeState`, the published contract); these are aliases under
  * the engine's historical names so the two can never drift apart.
  */
@@ -150,37 +170,6 @@ export type StreamProcessorSnapshot<State> = ProcessorSnapshot<State>;
  */
 export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & {
   snapshot: StreamProcessorSnapshot<State>;
-};
-
-/** Callback registered via `onStateChange`; may be a remote RPC stub. */
-type StateChangeCallback<State> = (snapshot: StreamProcessorSnapshot<State>) => unknown;
-/** A state-change callback after retention: disposal releases the duplicated stub. */
-type RetainedStateChangeCallback<State> = StateChangeCallback<State> &
-  Disposable & {
-    onRpcBroken?(callback: (error: unknown) => void): void;
-  };
-
-/**
- * One registered `onStateChange` subscriber. `deliver` pushes a checkpoint
- * snapshot into the retained callback and observes the result; `drop` removes
- * the subscription and releases the retained stub. All removal paths (explicit
- * unsubscribe, sync throw, async delivery rejection, transport brokenness) go
- * through `drop`, so membership in the subscription set is the single source
- * of truth that `ping()` reports to clients.
- */
-type StateChangeSubscription<State> = {
-  deliver(snapshot: StreamProcessorSnapshot<State>): void;
-  drop(): void;
-};
-
-/**
- * In-process handle returned by `StreamProcessor.onStateChange`.
- * `unsubscribe()` (or disposal) drops the subscription; `isLive()` backs the
- * RPC facade's `ping()`.
- */
-export type StreamProcessorStateSubscriptionHandle = Disposable & {
-  isLive(): boolean;
-  unsubscribe(): void;
 };
 
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
@@ -223,7 +212,7 @@ export type StreamProcessorConstructorArgs<
  * blocking work has completed.
  *
  * `ingest` is host plumbing; the `process*` family is the authoring surface.
- * Subclasses override up to three hooks:
+ * Subclasses override up to four hooks:
  *
  * - `reduce` — pure projection of one consumed event into the next state
  * - `processEvent` — synchronous per-event side effects; what most processors
@@ -231,6 +220,9 @@ export type StreamProcessorConstructorArgs<
  * - `processEventBatch` — batch-level side effects (e.g. one SQLite
  *   transaction); the default implementation calls `processEvent` once per
  *   reduced event
+ * - `reconcile` — desired-vs-actual reconciliation over the batch's final
+ *   fold; the base calls it only for AT-HEAD batches, so overrides never
+ *   need their own mid-refold gate
  *
  * plus an optional one-time `prepare` for setup that must land before the
  * checkpoint is first read (e.g. schema migrations that reset it).
@@ -246,11 +238,16 @@ export abstract class StreamProcessor<
 > extends RpcTarget {
   abstract readonly contract: Contract;
   protected readonly stream: Stream;
+  /** Path of the home stream — the one `this.stream` points at. */
+  protected readonly path: string;
+  /** Owning project, or null on a global (deployment-root) stream. */
+  protected readonly projectId: string | null;
   protected readonly deps: Deps;
 
   #checkpointOffset = 0;
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
   #loaded: Promise<void> | undefined;
+  #hasLoaded = false;
   #processing: Promise<void> = Promise.resolve();
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
@@ -261,14 +258,18 @@ export abstract class StreamProcessor<
   readonly #writeState: (
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
-  readonly #stateChangeSubscriptions = new Set<StateChangeSubscription<ProcessorState<Contract>>>();
+  readonly #stateChangeObservers = new Set<
+    (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void
+  >();
   readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
     super();
     // Base deps are destructured out; everything else is the subclass's Deps.
-    const { stream, keepAliveWhile, readState, writeState, ...deps } = args;
+    const { stream, path, projectId, keepAliveWhile, readState, writeState, ...deps } = args;
     this.stream = stream;
+    this.path = path;
+    this.projectId = projectId;
     this.deps = deps as Deps;
     this.#keepAliveWhile = keepAliveWhile;
     this.#readState = readState ?? (() => this.#memorySnapshot);
@@ -312,65 +313,6 @@ export abstract class StreamProcessor<
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
-  }
-
-  async onStateChange(
-    cb: StateChangeCallback<ProcessorState<Contract>>,
-  ): Promise<StreamProcessorStateSubscriptionHandle> {
-    await this.#loadState();
-    const retained = retainStateChangeCallback(cb);
-    const subscriptions = this.#stateChangeSubscriptions;
-    const subscription: StateChangeSubscription<ProcessorState<Contract>> = {
-      deliver(snapshot) {
-        let result: unknown;
-        try {
-          result = retained(snapshot);
-        } catch (error) {
-          // A disposed/broken stub can throw synchronously at call time.
-          subscription.drop();
-          throw error;
-        }
-        if (isThenable(result)) {
-          // Delivery stays fire-and-forget, but the rejection must be
-          // observed: a dead remote rejects every push, and swallowing that
-          // would keep the dead callback registered (and its ping() lying)
-          // forever. State pushes coalesce to one per checkpointed batch, so
-          // the resolve frame per push is affordable — unlike the per-event
-          // stream fast path (see retainProcessEventBatch).
-          void Promise.resolve(result)
-            .then(undefined, (error: unknown) => {
-              if (!subscriptions.has(subscription)) return;
-              console.error(
-                "stream processor state change delivery failed; dropping subscription",
-                error,
-              );
-              subscription.drop();
-            })
-            .finally(() => disposeIgnoredRpcResult(result));
-          return;
-        }
-        disposeIgnoredRpcResult(result);
-      },
-      drop() {
-        if (!subscriptions.delete(subscription)) return;
-        retained[Symbol.dispose]();
-      },
-    };
-    subscriptions.add(subscription);
-    // Transport-level death signal, best-effort (see retainStateChangeCallback
-    // on why registration is defensive): the delivery-rejection path above is
-    // the guaranteed cleanup; this one is just earlier when available.
-    retained.onRpcBroken?.(() => subscription.drop());
-
-    // The initial push: current state IS the first paint. A synchronously
-    // failing callback never becomes a subscription (deliver dropped it).
-    subscription.deliver({ offset: this.#checkpointOffset, state: this.#getState() });
-
-    return {
-      isLive: () => subscriptions.has(subscription),
-      unsubscribe: () => subscription.drop(),
-      [Symbol.dispose]: () => subscription.drop(),
-    };
   }
 
   /**
@@ -437,7 +379,7 @@ export abstract class StreamProcessor<
   protected async prepare(): Promise<void> {}
 
   /** Build and validate an append input for an event listed in `contract.emits`. */
-  protected buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
+  #buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
     if (!this.contract.emits.includes(event.type)) {
       throw new Error(
         `Processor "${this.contract.slug}" cannot build emitted event "${event.type}".`,
@@ -475,16 +417,38 @@ export abstract class StreamProcessor<
    */
   protected async processEventBatch(args: ProcessEventBatchArgs<Contract>): Promise<void> {
     for (const reducedEvent of args.reducedEvents) {
+      // Event-bound append lanes: everything appended through them (including
+      // later, from work scheduled here) is stamped as emitted while
+      // processing THIS event.
+      const whileProcessing = reducedEvent.event;
       this.processEvent({
         ...reducedEvent,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset: args.checkpointOffset,
         blockProcessorWhile: args.blockProcessorWhile,
         runInBackground: args.runInBackground,
-        append: args.append,
+        append: (...input) => this.#appendStamped({ target: this.stream, whileProcessing }, input),
+        appendTo: (path, ...input) =>
+          this.#appendStamped({ target: this.stream.at(path), whileProcessing }, input),
       });
     }
   }
+
+  /**
+   * Desired-vs-actual reconciliation hook — the obligation pattern's home
+   * (docs/writing-stream-processors.md): compare the batch's final fold (open
+   * obligations, schedules that should fire) against this incarnation's live
+   * work, then start undriven attempts and settle dead ones through
+   * idempotent appends.
+   *
+   * The base calls it after `processEventBatch`, and ONLY when the batch
+   * reaches the stream head (`checkpointOffset >= streamMaxOffset`). A
+   * mid-catch-up fold shows obligations whose outcomes sit in later pages;
+   * reconciling it would re-drive real vendor calls and journal false
+   * failures — the gate lives here so no override can forget it. Defaults to
+   * a no-op.
+   */
+  protected async reconcile(_args: ProcessEventBatchArgs<Contract>): Promise<void> {}
 
   /**
    * Reduce one raw stream event against explicit state, without touching the
@@ -556,19 +520,25 @@ export abstract class StreamProcessor<
 
     const blockingWork: Promise<unknown>[] = [];
     try {
-      await this.processEventBatch({
+      const batchArgs: ProcessEventBatchArgs<Contract> = {
         events,
         reducedEvents,
         previousState,
         state,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset,
-        append: (...input) => this.#appendEmitted(...input),
+        append: (...input) => this.append(...input),
         blockProcessorWhile: (work) => {
           blockingWork.push(this.#runKeepAliveBackedWork(work));
         },
         runInBackground: (work) => this.runInBackground(work),
-      });
+      };
+      await this.processEventBatch(batchArgs);
+      // Reconciliation sees only at-head folds; the final catch-up page
+      // qualifies by construction (see the reconcile doc comment).
+      if (checkpointOffset >= args.streamMaxOffset) {
+        await this.reconcile(batchArgs);
+      }
       await Promise.all(blockingWork);
     } catch (error) {
       // A failed batch must still settle work it already registered so nothing
@@ -587,6 +557,10 @@ export abstract class StreamProcessor<
     await this.#writeState({ offset: checkpointOffset, state });
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
+    // The state now reflects a folded journal prefix — which is what isLoaded
+    // asserts. This is how a processor whose checkpoint was DISCARDED at load
+    // (schema mismatch) becomes loaded again: the refold lands here.
+    this.#hasLoaded = true;
     if (!Object.is(previousState, state)) {
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
@@ -601,10 +575,15 @@ export abstract class StreamProcessor<
         `stream processor "${this.contract.slug}" skipped event at offset ` +
         `${event.offset} ("${event.type}"): it fails the contract's schema`;
       console.error(message, error);
+      // Raw `stream.append`, not the emitted lane: `stream/error-occurred` is
+      // core-owned and deliberately absent from subclass `emits` — this is the
+      // runtime speaking, not the processor author. It still carries the full
+      // provenance stamp (which processor skipped which event).
       this.runInBackground(() =>
         this.stream.append({
           type: "events.iterate.com/stream/error-occurred",
-          idempotencyKey: `processor-event-parse-failed:${this.contract.slug}:${event.offset}`,
+          idempotencyKey: this.idempotencyKey("event-parse-failed", event),
+          source: { processor: this.#processorStamp(event) },
           payload: {
             message,
             error: { name: error.name, message: error.message },
@@ -614,9 +593,67 @@ export abstract class StreamProcessor<
     }
   }
 
-  #appendEmitted(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
-    const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
-    return this.stream.append(...events);
+  /**
+   * Append events listed in `contract.emits` to this processor's own stream,
+   * stamped with `source.processor` provenance (no `whileProcessing`: this
+   * lane is for appends outside any batch — alarm handlers, DO methods — and
+   * for batch-level decisions derived from the whole fold). Inside
+   * `processEvent`, prefer the event-bound `args.append`.
+   */
+  protected append(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
+    return this.#appendStamped({ target: this.stream }, input);
+  }
+
+  /** Like {@link append}, onto a sibling stream (resolved via `stream.at(path)`). */
+  protected appendTo(path: string, ...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
+    return this.#appendStamped({ target: this.stream.at(path) }, input);
+  }
+
+  /**
+   * Processor-scoped idempotency key: `<slug>/<key>`, plus `@<path>:<offset>`
+   * when the append is a deterministic consequence of processing one event —
+   * a redelivered batch then dedupes instead of double-appending. The path
+   * makes fan-in safe: two same-slug processors on different streams
+   * forwarding into one target can never collide. Omit `whileProcessing` for
+   * state-derived appends and fold the deciding state into `key` instead
+   * (e.g. a generation counter).
+   */
+  protected idempotencyKey(
+    key: string,
+    whileProcessing?: Pick<StreamEvent, "offset" | "path">,
+  ): string {
+    const base = `${this.contract.slug}/${key}`;
+    if (whileProcessing === undefined) return base;
+    return `${base}@${whileProcessing.path}:${whileProcessing.offset}`;
+  }
+
+  /**
+   * The provenance stamp for one append lane. Always overwrites any
+   * caller-supplied `source.processor`: the stamp describes THIS append, and
+   * ancestry stays walkable through `whileProcessing` (and `crossPostedFrom`
+   * for cross-post copies, which preserve the original stamp).
+   */
+  #processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">) {
+    return {
+      slug: this.contract.slug,
+      version: this.contract.version,
+      stream: { path: this.path, projectId: this.projectId },
+      ...(whileProcessing === undefined
+        ? {}
+        : { whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type } }),
+    };
+  }
+
+  #appendStamped(
+    args: { target: Stream; whileProcessing?: Pick<StreamEvent, "offset" | "type"> },
+    input: EmittedInput<Contract>[],
+  ): Promise<StreamEvent[]> {
+    const processor = this.#processorStamp(args.whileProcessing);
+    const events = input.map((event) => {
+      const built = this.#buildEmittedEvent(event) as StreamEventInput;
+      return { ...built, source: { ...built.source, processor } };
+    });
+    return args.target.append(...events);
   }
 
   // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered
@@ -641,13 +678,56 @@ export abstract class StreamProcessor<
     }
   }
 
+  /**
+   * The current reduced state, synchronously (the schema default until the first
+   * load). Lets a host assemble its live state without an async hop.
+   */
+  get currentState(): ProcessorState<Contract> {
+    return this.#getState();
+  }
+
+  /**
+   * Whether `currentState` IS the fold rather than the schema default. Hosts
+   * gate live-state assembly on it: assembling a cold processor's default would
+   * push patches that wipe real facts to subscribers. True after a checkpoint
+   * loads cleanly (or was found absent on a fresh processor), after any ingested
+   * batch (the state then reflects the journal prefix), or via {@link markLoaded}.
+   * A checkpoint DISCARDED at load (schema mismatch after a state-shape deploy)
+   * leaves this false — the state is the default with a refold pending, exactly
+   * what the gate exists to keep away from subscribers.
+   */
+  get isLoaded(): boolean {
+    return this.#hasLoaded;
+  }
+
+  /**
+   * The host's confirmation that the journal has been folded through head, for
+   * the one case ingest can't cover: a clean catch-up that delivered ZERO
+   * batches. Then whatever `currentState` is — including the schema default
+   * over an empty journal — is by construction the fold.
+   */
+  markLoaded(): void {
+    this.#hasLoaded = true;
+  }
+
+  /**
+   * Observe reduced-state changes IN-PROCESS: the observer is a local function
+   * (the host wires it to refresh its live-state engine), not a retained RPC
+   * stub. Returns an unsubscribe.
+   */
+  observeStateChanges(
+    observer: (snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>) => void,
+  ): () => void {
+    this.#stateChangeObservers.add(observer);
+    return () => void this.#stateChangeObservers.delete(observer);
+  }
+
   #notifyStateChange(snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>): void {
-    for (const subscription of [...this.#stateChangeSubscriptions]) {
+    for (const observer of [...this.#stateChangeObservers]) {
       try {
-        subscription.deliver(snapshot);
+        observer(snapshot);
       } catch (error) {
-        // deliver() already dropped the subscription on a synchronous throw.
-        console.error("stream processor state change callback failed", error);
+        console.error("stream processor state-change observer failed", error);
       }
     }
   }
@@ -677,7 +757,10 @@ export abstract class StreamProcessor<
       await this.prepare();
       const snapshot = await this.#readState();
       if (snapshot === undefined) {
+        // Fresh processor, no checkpoint: nothing has been observed yet, so
+        // the schema default IS the fold of the (empty) delivered prefix.
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        this.#hasLoaded = true;
         return;
       }
       // The checkpoint is a disposable CACHE of the fold (see
@@ -695,10 +778,16 @@ export abstract class StreamProcessor<
           parsed.error,
         );
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+        // Deliberately NOT loaded: the state is the schema default with a
+        // refold pending — exactly what the isLoaded gate keeps away from
+        // live-state subscribers. The refold flips it: ingest (a replayed
+        // delivery or the host's catch-up), or the host's zero-batch
+        // {@link markLoaded} confirmation.
         return;
       }
       this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
+      this.#hasLoaded = true;
     })().catch((error: unknown) => {
       // Clear the memoized load so a later batch retries the snapshot read
       // instead of replaying this rejection forever.
@@ -711,71 +800,5 @@ export abstract class StreamProcessor<
   #getState(): ProcessorState<Contract> {
     this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
     return this.#state;
-  }
-}
-
-function retainStateChangeCallback<State>(
-  cb: StateChangeCallback<State>,
-): RetainedStateChangeCallback<State> {
-  const retainable = cb as StateChangeCallback<State> &
-    Partial<Disposable> & {
-      dup?(): RetainedStateChangeCallback<State>;
-      onRpcBroken?(callback: (error: unknown) => void): void;
-    };
-  const retained = retainable.dup?.() ?? retainable;
-  const dispose = retained[Symbol.dispose]?.bind(retained);
-  const wrapped: RetainedStateChangeCallback<State> = Object.assign(
-    (snapshot: StreamProcessorSnapshot<State>) => retained(snapshot),
-    {
-      [Symbol.dispose]() {
-        dispose?.();
-      },
-    },
-  );
-  // Same defensive wiring as retainProcessEventBatch (stream-connections.ts):
-  // Cap'n Web stubs intercept onRpcBroken locally but expose no own property
-  // descriptors, and a Workers RPC property access can fabricate a pipelined
-  // method that rejects at call time — so wire whatever the stub claims to
-  // have and swallow registration failures.
-  const onRpcBroken = retained.onRpcBroken;
-  if (typeof onRpcBroken === "function") {
-    wrapped.onRpcBroken = (brokenCallback: (error: unknown) => void) => {
-      try {
-        const result = onRpcBroken.call(retained, brokenCallback) as unknown;
-        if (isThenable(result)) {
-          void Promise.resolve(result).catch(() => {
-            // Pipelined fake: the remote has no onRpcBroken method.
-          });
-        }
-      } catch {
-        // Registration is best-effort.
-      }
-    };
-  }
-  return wrapped;
-}
-
-/** Shared thenable probe for RPC results (stubs are thenable-shaped). */
-export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as PromiseLike<unknown>).then === "function"
-  );
-}
-
-/**
- * Dispose an ignored RPC call result. Reading a Cap'n Web / Workers RPC method
- * yields a disposable stub even when the caller ignores the value; dropping it
- * without disposal leaks the remote reference. Exported so the stream
- * connection code shares one implementation.
- */
-export function disposeIgnoredRpcResult(result: unknown): void {
-  if (
-    result !== null &&
-    (typeof result === "object" || typeof result === "function") &&
-    Symbol.dispose in result
-  ) {
-    (result as Disposable)[Symbol.dispose]();
   }
 }

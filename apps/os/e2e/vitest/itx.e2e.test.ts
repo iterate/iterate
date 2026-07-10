@@ -2020,12 +2020,6 @@ describe("itx", () => {
         wakeExpressionRoot(event) === "agents" &&
         String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
     )?.offset;
-    const cloudflareAiSubscriptionOffset = events.find(
-      (event) =>
-        event.type === "events.iterate.com/stream/subscription-configured" &&
-        wakeExpressionRoot(event) === "agents" &&
-        String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#cloudflare-ai"),
-    )?.offset;
     const itxSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
@@ -2040,7 +2034,6 @@ describe("itx", () => {
 
     expect(outputOffset).toBe(historicalOutput.offset);
     expect(agentSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
-    expect(cloudflareAiSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(itxSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(modelSelectionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);
@@ -2288,6 +2281,16 @@ describe("itx", () => {
       eventTypes: ["events.iterate.com/capability-host/capability-provided"],
       timeoutMs: 60_000,
     });
+    // Policy (worker) and mechanics (project processor) are appended by two
+    // INDEPENDENT reactors to the same child-stream-created announcement —
+    // policy arriving says nothing about the mechanics batch. Await the batch
+    // itself: it is one atomic append, so its capability-host member visible
+    // means all four are.
+    const mechanics = agentStream.waitForEvent({
+      eventTypes: ["events.iterate.com/stream/subscription-configured"],
+      predicate: (event) => event.idempotencyKey?.endsWith("#capability-host") ?? false,
+      timeoutMs: 60_000,
+    });
 
     // Any append materializes the agent stream; the platform announces it on
     // the root stream, the project worker reacts with the defaults batch.
@@ -2300,13 +2303,36 @@ describe("itx", () => {
     expect(configEvent.payload?.systemPrompt).toContain("async (itx)");
     expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
     expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+    await mechanics;
 
-    // The subscriptions (mechanics) still come from the platform, not the worker.
-    const events = await agentStream.getEvents({ afterOffset: 0 });
-    const subscriptions = events.filter(
-      (event) => event.type === "events.iterate.com/stream/subscription-configured",
-    );
-    expect(subscriptions.length).toBeGreaterThanOrEqual(4);
+    // Birth mechanics: project-worker (every project stream) + agent processor +
+    // capability-host. One agent processor owns history, scheduling, and the
+    // Workers AI call — no separate LLM provider processors. The mechanics come
+    // from the project processor's serialized lane (queued behind the worker
+    // probe), so they can land AFTER the pump-delivered policy above — wait
+    // for them instead of snapshotting the instant policy arrives.
+    const mechanicsDeadline = Date.now() + 60_000;
+    let subscriptionCount = 0;
+    let processorSlugs: string[] = [];
+    for (;;) {
+      const events = await agentStream.getEvents({ afterOffset: 0 });
+      const subscriptions = events.filter(
+        (event) => event.type === "events.iterate.com/stream/subscription-configured",
+      );
+      subscriptionCount = subscriptions.length;
+      processorSlugs = subscriptions
+        .map(
+          (event) =>
+            (event.payload as { delivery?: { processorSlug?: string } } | undefined)?.delivery
+              ?.processorSlug,
+        )
+        .filter((slug): slug is string => typeof slug === "string");
+      if (processorSlugs.includes("agent") && processorSlugs.includes("capability-host")) break;
+      if (Date.now() > mechanicsDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
+    expect(subscriptionCount).toBeGreaterThanOrEqual(3);
   });
 
   test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
@@ -2466,6 +2492,8 @@ describe("itx", () => {
     const processor = new ProjectWorkerForwardingProbeProcessor({
       readState: () => storedSnapshot,
       stream: outputStream as never,
+      path: outputPath,
+      projectId: null,
       writeState: (snapshot) => {
         storedSnapshot = snapshot;
       },

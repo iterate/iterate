@@ -102,17 +102,24 @@ export class SlackAgentProcessor extends StreamProcessor<
         // Route context (channel/thread_ts/streamPath) is captured in reduce().
         return;
       case "events.iterate.com/slack/webhook-received": {
-        const appendAgentInput = async (
+        // The webhook transcribes into the unified inbound message event —
+        // Slack messages are messages FROM a user, `from` carries the facts.
+        // The sender is extracted here, once, wherever the payload shape
+        // carries it (event_callback events vs interactivity payloads), so
+        // button presses and reactions keep their sender too.
+        const senderUserId = slackWebhookSenderUserId(event.payload.body);
+        const appendAgentMessage = async (
           input: {
             files?: AgentFileAttachment[];
             llmRequestPolicy?: { behaviour: "dont-trigger-request" };
           } = {},
         ) => {
           await append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `slack-agent:webhook-to-agent-input:${event.offset}`,
+            type: "events.iterate.com/agents/message-received",
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: slackWebhookAgentInput(event.payload),
+              from: { kind: "slack", ...(senderUserId == null ? {} : { userId: senderUserId }) },
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
                 ? {}
@@ -129,7 +136,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           .loose()
           .safeParse(event.payload.body);
         if (!parsed.success) {
-          blockProcessorWhile(appendAgentInput);
+          blockProcessorWhile(appendAgentMessage);
           return;
         }
 
@@ -141,7 +148,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (isBotAction(slackEvent, botUserId)) return;
         if (readStringField(slackEvent, "type") !== "message") {
           blockProcessorWhile(async () => {
-            await appendAgentInput({
+            await appendAgentMessage({
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             });
             await this.#addEyesReactionForMessageTarget(target, event);
@@ -169,7 +176,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           blockProcessorWhile(async () => {
             await append({
               type: "events.iterate.com/capability-host/script-execution-requested",
-              idempotencyKey: `slack-agent:bang-command:${event.offset}`,
+              idempotencyKey: this.idempotencyKey("bang-command", event),
               payload: {
                 code: bangCommand.code,
                 executionId: `slack-bang-command-${event.offset}`,
@@ -202,7 +209,7 @@ export class SlackAgentProcessor extends StreamProcessor<
               });
             }
           }
-          await appendAgentInput(files == null ? {} : { files });
+          await appendAgentMessage(files == null ? {} : { files });
           await this.#addEyesReactionForMessageTarget(target, event);
         });
         return;
@@ -307,6 +314,22 @@ export class SlackAgentProcessor extends StreamProcessor<
       throw error;
     }
   }
+}
+
+/**
+ * The human sender of a slack webhook, wherever the payload shape carries
+ * it: event_callback events (messages, reactions, joins) put it at
+ * `event.user`; interactivity payloads (block_actions, view submissions)
+ * at `user.id`. Undefined when the payload names no human (or is off-shape).
+ */
+function slackWebhookSenderUserId(body: unknown): string | undefined {
+  const record = readRecord(body);
+  if (record == null) return undefined;
+  return (
+    readString(readRecord(record.event)?.user) ??
+    readString(readRecord(record.user)?.id) ??
+    undefined
+  );
 }
 
 function slackWebhookAgentInput(payload: unknown) {

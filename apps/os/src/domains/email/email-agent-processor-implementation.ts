@@ -107,11 +107,20 @@ export class EmailAgentProcessor extends StreamProcessor<
           console.error("[email-agent] failed to resolve stored attachments", { error });
         }
       }
+      // The unified inbound message event: an email is a message FROM its
+      // sender, `from` carries the address facts.
+      const fromAddress = event.payload.message.from.address ?? event.payload.envelope.from;
+      const fromName = event.payload.message.from.name;
       await append({
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `email-agent:received-to-agent-input:${event.offset}`,
+        type: "events.iterate.com/agents/message-received",
+        idempotencyKey: this.idempotencyKey("received-to-agent-input", event),
         payload: {
           content: inboundEmailAgentInput(event.payload),
+          from: {
+            kind: "email" as const,
+            ...(fromAddress == null ? {} : { address: fromAddress }),
+            ...(fromName == null ? {} : { name: fromName }),
+          },
           ...(files == null || files.length === 0 ? {} : { files }),
           // Automated mail (Auto-Submitted, bulk precedence, mailer-daemon) is
           // recorded but never triggers a reply — the classic mail-loop guard.

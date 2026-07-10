@@ -15,7 +15,7 @@ const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 /** How a domain page lets its stream view send chat messages (agents only). */
 export type StreamMessageComposer = {
   placeholder?: string;
-  onInterrupt?: (llmRequestId: number) => Promise<void>;
+  onInterrupt?: (llmRequestOffset: number) => Promise<void>;
   onSubmit: (message: string) => Promise<void>;
   onSubmitFiles?: (input: { files: File[]; message: string }) => Promise<void>;
 };

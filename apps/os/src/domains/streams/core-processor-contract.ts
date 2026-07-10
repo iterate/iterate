@@ -117,7 +117,7 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
     expression: DeliveryExpression,
     /**
      * Which hosted processor the wake is for — multi-processor hosts (an
-     * agent DO hosts agent + llm-provider + more) resolve on it;
+     * agent DO hosts agent + slack-agent + more) resolve on it;
      * single-processor hosts may omit it. Rides the wake request verbatim.
      */
     processorSlug: z.string().trim().min(1).optional(),
@@ -556,12 +556,12 @@ export const CoreProcessorContract = defineProcessorContract({
               processor: {
                 announcement: {
                   slug: "agent",
-                  version: "0.3.1",
+                  version: "0.4.0",
                   description:
                     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
                   consumes: [
                     "events.iterate.com/agent/input-added",
-                    "events.iterate.com/agents/user-message-received",
+                    "events.iterate.com/agents/message-received",
                     "events.iterate.com/agent/llm-request-completed",
                   ],
                   emits: [

@@ -16,7 +16,8 @@
 
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
+import { subagentParentPath } from "../../lib/subagent-paths.ts";
+import { agentWorkspacePath } from "../workspaces/utils.ts";
 import {
   slackConnectionFromAgentPath,
   telegramChatIdFromAgentPath,
@@ -25,19 +26,7 @@ import {
 import { isEmailAgentPath } from "../email/utils.ts";
 import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
-import {
-  DEFAULT_AGENT_MODEL,
-  DEFAULT_AGENT_SYSTEM_PROMPT,
-  type AgentLlmProvider,
-} from "./agent-processor-contract.ts";
-import { DEFAULT_OPENAI_WS_MODEL } from "./openai-ws-processor-contract.ts";
-import { readOpenAiApiKeyFromAppConfig } from "./utils.ts";
-
-/** New agents default to openai-ws when the deployment has an OpenAI key
- * configured; otherwise they fall back to Workers AI. */
-export function deploymentDefaultLlmProvider(env: unknown): AgentLlmProvider {
-  return readOpenAiApiKeyFromAppConfig(env) === null ? "cloudflare-ai" : "openai-ws";
-}
+import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -181,11 +170,31 @@ const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
+/**
+ * A subagent's reply door is its PARENT: nobody watches its web chat, and it
+ * must not inherit a thread agent's reply door either. The suffix rides AFTER
+ * whatever base prompt the subagent gets — including a caller-supplied
+ * override — so a custom persona still keeps the subagent contract.
+ */
+function subagentSystemPromptSuffix(parentAgentPath: string): string {
+  return [
+    `YOU ARE A SUBAGENT. Your parent agent lives at ${parentAgentPath}; it delegated work to you, and its messages arrive as your inputs ("Message from agent ${parentAgentPath}: ...").`,
+    `Nobody is watching your web chat — do NOT use itx.chat.sendMessage. Report to your parent: const parent = await itx.agents.get(${JSON.stringify(parentAgentPath)}); await parent.message(text). (Await the get() BEFORE calling methods on it — chaining the calls in one expression fails.)`,
+    "Work across as many script turns as you need, then report ONCE with a complete, self-contained result. No acknowledgements, no progress chatter — your parent's messages need no reply unless they ask for one.",
+    "You may delegate further: const sub = await itx.agents.get('subagents/<name>'); await sub.message(task) births a subagent under your own path (relative paths resolve against your path), and its reports arrive as your inputs.",
+  ].join("\n");
+}
+
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
  * agents reply via their connection's Slack Web API, Telegram chat agents via
  * their connection's Bot API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string): string {
+  // Subagents FIRST: the thread-agent predicates below are shape-loose
+  // (Slack matches any >=6-segment path under its connection, email matches
+  // by prefix), so a subagent nested under a thread agent would otherwise
+  // inherit the parent's transcriber prompt and reply door.
+  if (subagentParentPath(agentPath) !== null) return DEFAULT_AGENT_SYSTEM_PROMPT;
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   const slackConnection = slackConnectionFromAgentPath(agentPath);
   if (slackConnection !== null) {
@@ -205,15 +214,9 @@ function agentSystemPromptForPath(agentPath: string): string {
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
-const DEFAULT_MODEL_BY_LLM_PROVIDER = {
-  "cloudflare-ai": DEFAULT_AGENT_MODEL,
-  "openai-ws": DEFAULT_OPENAI_WS_MODEL,
-} satisfies Record<AgentLlmProvider, string>;
-
 /** Caller-supplied policy overrides, baked into the returned events. */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
-  provider?: AgentLlmProvider;
   model?: string;
 };
 
@@ -221,7 +224,6 @@ export type AgentDefaultsOverrides = {
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
   systemPrompt: string;
-  provider: AgentLlmProvider;
   model: string;
   events: AgentPolicyEventInput[];
 };
@@ -236,21 +238,26 @@ export type AgentPolicyEventInput = {
 };
 
 /**
- * The default agent policy for a path. `deploymentLlmProvider` is the
- * deployment-wide provider choice (openai-ws when the deployment has an
- * OpenAI key); `overrides` bake caller customization into the returned
- * events so the common case stays one append.
+ * The default agent policy for a path. Every agent runs through the single
+ * agent processor's Cloudflare AI binding; `overrides` bake caller
+ * customization into the returned events so the common case stays one append.
  */
 export function agentDefaultsForPath(input: {
   agentPath: string;
-  deploymentLlmProvider: AgentLlmProvider;
   projectId: string;
   overrides?: AgentDefaultsOverrides;
+  /** Deployment-level default model (config.defaultAgentModel) — falls back
+   * to the platform DEFAULT_AGENT_MODEL. Overrides still win. */
+  defaultModel?: string;
 }): AgentDefaultPolicy {
   const { agentPath, projectId } = input;
-  const provider = input.overrides?.provider ?? input.deploymentLlmProvider;
-  const model = input.overrides?.model ?? DEFAULT_MODEL_BY_LLM_PROVIDER[provider];
-  const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
+  const model = input.overrides?.model ?? input.defaultModel ?? DEFAULT_AGENT_MODEL;
+  const parentAgentPath = subagentParentPath(agentPath);
+  const basePrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
+  const systemPrompt =
+    parentAgentPath === null
+      ? basePrompt
+      : `${basePrompt}\n\n${subagentSystemPromptSuffix(parentAgentPath)}`;
 
   const events: AgentPolicyEventInput[] = [
     {
@@ -261,7 +268,7 @@ export function agentDefaultsForPath(input: {
     {
       type: "events.iterate.com/agent/llm-provider-selected",
       idempotencyKey: `agent/llm-provider-selected:${projectId}:${agentPath}`,
-      payload: { ifUnset: true, model, provider },
+      payload: { ifUnset: true, model },
     },
     // The agent's own workspace, a durable itx-expression re-evaluated per
     // call, so agent birth never touches the workspace Durable Object. (No
@@ -276,8 +283,8 @@ export function agentDefaultsForPath(input: {
         expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
         instructions:
           `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
-          'Reads see latest main until you shadow a path; writes/edits/deletes stay private (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
-          `workspace.git.commit({ message }) publishes your changes as a snapshot commit on the config repo branch "${workspaceBranchName(agentWorkspacePath(agentPath))}", never to main.`,
+          'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
+          "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
       },
     },
     // Per-agent boot context as a model-visible input (the system prompt is
@@ -294,9 +301,10 @@ export function agentDefaultsForPath(input: {
           '- The project\'s config repo is at repo path "/repos/config" (itx.repo) — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus userland capability getters: an itx.worker.slack.* Slack SDK surface and itx.worker.waitrose.*), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time; platform capability types come from its `iterate` devDependency — import type { ... } from "iterate/sdk"), sdk.ts (the seeded IterateProjectWorker base class, re-exporting those types), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>, Telegram chat agents under /agents/telegram/<connection>/chat-<chatId>; secrets under /secrets/**.",
+          "- Message another agent: const agent = await itx.agents.get(path); await agent.message(text) — ALWAYS await the get() before calling methods on it (chaining get(path).message(text) in one expression fails). Sent from your agent scope the message arrives as that agent's input labeled with your path, and replies land in your inputs. Paths without a leading / resolve relative to your own path with filesystem semantics ('..' climbs). To delegate work, message a SUBAGENT into existence: const sub = await itx.agents.get('subagents/researcher'); await sub.message(task) — the first message births an ordinary agent at <your path>/subagents/researcher that knows you are its parent, and its reports arrive back as your inputs. Customize one with await sub.configure({ systemPrompt, model }) (works before its first message too).",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',
-          '- You also have your own workspace: `itx.workspace` is an instant copy-on-write overlay over the config repo\'s latest main in a durable filesystem — no container, no clone, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. Reads see latest main until you shadow a path; your changes stay private until `await itx.workspace.git.commit({ message })` publishes them as a snapshot commit on your own branch in the config repo, never main. `itx.workspaces.get("/")` is the shared read-only root (the config repo\'s latest main). Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
+          '- You also have your own workspace: `itx.workspace` is an instant copy-on-write overlay over the config repo\'s latest main in a durable filesystem — no container, no clone, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. Reads see latest main until you shadow a path; your changes stay private until you commit. To ship changes (including the project homepage/worker): `await itx.workspace.git.commit({ message })` — that commits them straight to the config repo\'s MAIN branch and the project worker/website redeploys automatically; no branches, no push, no other steps. `itx.workspaces.get("/")` is the shared read-only root (the config repo\'s latest main). Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
           "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
@@ -320,5 +328,5 @@ export function agentDefaultsForPath(input: {
       : []),
   ];
 
-  return { systemPrompt, provider, model, events };
+  return { systemPrompt, model, events };
 }

@@ -115,7 +115,7 @@ const CompactionProcessorContract = defineProcessorContract({
     // contract resolves them standalone.
     "events.iterate.com/agent/token-usage-reported": {
       payloadSchema: z.looseObject({
-        llmRequestId: z.number(),
+        llmRequestOffset: z.number(),
         model: z.string(),
         maxContextTokens: z.number(),
         inputTokens: z.number(),
@@ -363,6 +363,8 @@ export default class ProjectWorker extends IterateProjectWorker {
       const itx = await this.env.ITX.get();
       const compaction = new CompactionProcessor({
         stream: itx.streams.get(batch.path),
+        path: batch.path,
+        projectId: batch.projectId,
         keepAliveWhile: (work) => this.ctx.waitUntil(work()),
         agent: itx.agents.get(batch.path),
         ai: itx.ai,
@@ -380,10 +382,10 @@ export default class ProjectWorker extends IterateProjectWorker {
     // THIS WORKER configures new agents. When any stream under /agents/ is
     // born (a web chat, the onboarding agent, a Slack thread, an email
     // thread), the platform announces it on the project root stream and this
-    // reaction appends the agent's policy: system prompt, model/provider,
+    // reaction appends the agent's policy: system prompt, model,
     // capability mounts, boot context. `itx.agents.defaults.forPath` returns
     // the platform's defaults as data — edit the result (or pass overrides:
-    // { systemPrompt, provider, model }) to change how YOUR agents behave.
+    // { systemPrompt, model }) to change how YOUR agents behave.
     if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = event.payload?.childPath;
       if (typeof childPath === "string" && childPath.startsWith("/agents/")) {

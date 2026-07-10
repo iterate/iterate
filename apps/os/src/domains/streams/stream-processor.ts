@@ -4,12 +4,9 @@
 // platform imports under its historical path.
 export {
   StreamProcessor,
-  disposeIgnoredRpcResult,
-  isThenable,
   type StreamProcessorConstructorArgs,
   type StreamProcessorContract,
   type StreamProcessorRuntimeState,
   type StreamProcessorSnapshot,
   type StreamProcessorStateStorage,
-  type StreamProcessorStateSubscriptionHandle,
 } from "iterate/sdk";

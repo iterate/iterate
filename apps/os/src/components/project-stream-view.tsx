@@ -3,7 +3,6 @@ import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
   AgentUiState,
@@ -39,19 +38,23 @@ import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import { StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
-import { StreamStateView } from "~/components/stream-state-view.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
   type StreamMessageComposer,
 } from "~/components/stream-view-composer.tsx";
-import { StreamViewHeader } from "~/components/stream-view-header.tsx";
-import { presetsForStream } from "~/lib/stream-feed-filters.ts";
+import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
+import {
+  defaultPresetForMode,
+  feedItemsFilterFromSearch,
+  presetsForStream,
+} from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
-  streamViewTab,
+  modeCapabilities,
+  streamViewMode,
   useStreamViewPanels,
   useStreamViewSearch,
 } from "~/lib/stream-view-search.ts";
@@ -59,14 +62,15 @@ import {
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 /**
- * The stream view: every domain page's main pane. Renders one stream's Feed
- * and State tabs under the shared header, with the composer below and the
- * right-edge overlays (raw-event inspector, processors sidebar) on top.
+ * The stream view: every domain page's main pane. Renders mode-owned feed
+ * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
+ * with the composer below and right-edge overlays (raw-event inspector,
+ * processors sheet) on top.
  *
  * This component is the orchestrator: it owns the three browser-hosted
  * processors that mirror the stream into local SQLite (raw events, agent UI,
  * grouped feed items) and hands their stores/databases to focused child
- * components. All view state (tab, filters, open panels) lives in the URL —
+ * components. All view state (mode, filters, open panels) lives in the URL —
  * see ~/lib/stream-view-search.ts — so children read it themselves; the
  * component stays mounted across ⌘K stream switches (the switcher navigates
  * with an empty search, resetting the view to the new stream's defaults).
@@ -157,21 +161,18 @@ export function ProjectStreamView({
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
-  const agentPauseState = useStreamPauseState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
-  const [pauseMutationPending, setPauseMutationPending] = useState(false);
-  const [killMutationPending, setKillMutationPending] = useState(false);
 
-  const { search, setSearch } = useStreamViewSearch();
+  const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
-  const activeTab = streamViewTab(search);
-  // WHAT the feed shows is the preset's job; the stream path decides which
-  // presets exist and which one is the domain default (the first). A
-  // stale/hand-edited preset id falls back to the default.
+  const activeMode = streamViewMode(search, streamPath);
+  const caps = modeCapabilities(search, streamPath);
+  // Feed-items presets apply whenever the mode shows raw feed_items.
   const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
-  const defaultPreset = presets[0]!;
+  const defaultPreset = defaultPresetForMode(streamPath, activeMode);
   const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
   const feedSearch = search.q ?? "";
+  const rawFilter = feedItemsFilterFromSearch(search, streamPath);
 
   // The server is about to append: verify deliveries actually arrive and
   // reconnect within seconds if a subscription died silently — instead of
@@ -183,7 +184,7 @@ export function ProjectStreamView({
   }, [store, agentStore, feedStore]);
 
   const runningLlmRequestId =
-    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestId ?? null;
+    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
   const interrupt = useAgentInterrupt({
     onInterrupt: messageComposer?.onInterrupt,
     runningLlmRequestId,
@@ -223,117 +224,88 @@ export function ProjectStreamView({
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
   const presence = agentUiState?.presence ?? [];
-  const agentPauseControl = streamPath.startsWith("/agents/")
-    ? {
-        paused: agentPauseState.paused,
-        reason: agentPauseState.reason,
-        pending: pauseMutationPending,
-        setPaused: async (paused: boolean) => {
-          if (pauseMutationPending) return;
-          setPauseMutationPending(true);
-          try {
-            const stream = await resolvedStreamSource(streamPath);
-            await stream.append({
-              type: paused
-                ? "events.iterate.com/stream/paused"
-                : "events.iterate.com/stream/resumed",
-              payload: {
-                reason: paused ? "Paused by operator from the agent UI." : "Resumed by operator.",
-              },
-            });
-            nudgeDeliveries();
-          } finally {
-            setPauseMutationPending(false);
-          }
-        },
-      }
-    : undefined;
-  const streamKillControl = {
-    pending: killMutationPending,
-    kill: async () => {
-      if (killMutationPending) return;
-      setKillMutationPending(true);
-      try {
-        const stream = await resolvedStreamSource(streamPath);
-        await stream.kill();
-        toast.success("Stream killed");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.toLowerCase().includes("kill requested")) {
-          toast.success("Stream killed");
-        } else {
-          toast.error(`Failed to kill stream: ${message}`);
-          return;
-        }
-      } finally {
-        setKillMutationPending(false);
-      }
-      nudgeDeliveries();
-    },
-  };
+  const agentPauseControl = useAgentPauseControl({
+    database: store.streamDatabase,
+    resolvedStreamSource,
+    streamPath,
+    onNudgeDeliveries: nudgeDeliveries,
+  });
+  const streamKillControl = useStreamKillControl({
+    resolvedStreamSource,
+    streamPath,
+    onNudgeDeliveries: nudgeDeliveries,
+  });
 
   const filterRow =
-    search.filter !== true ? null : activeTab === "feed" ? (
+    search.filter !== true ? null : (
       <StreamFeedFilterRow
         activePreset={activePreset}
-        defaultPresetId={defaultPreset.id}
         eventCount={eventCount}
         connectionStatus={snapshot.connectionStatus}
         feedDatabase={feedStore.streamDatabase}
         presets={presets}
+        streamPath={streamPath}
       />
-    ) : (
-      <div className="flex shrink-0 items-center justify-end px-4 pb-1.5 pt-1">
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
-        </span>
-      </div>
     );
 
-  // The feed column — tab content with the right-edge overlays on top, the
-  // composer below. One JSX value so the split layout and the fullPanel
-  // sheet render the identical thing.
+  const agentFeed = caps.agentFeed ? (
+    <AgentFeedView
+      {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
+        ? { onInterruptQueuedMessages: interrupt.run }
+        : {})}
+      // Fresh virtualizer state per stream mirror + mode (see AgentFeedView docs).
+      key={`${store.streamDatabase.databasePath}:${activeMode}:agent`}
+      database={store.streamDatabase}
+      liveState={agentUiState}
+      search={feedSearch}
+      showDebug={caps.agentShowDebug}
+      emptyLabel={connectionLabel}
+      isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
+      projectSlug={projectSlug}
+      isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
+    />
+  ) : null;
+
+  const rawFeed = caps.rawFeed ? (
+    <FeedItemsView
+      key={`${feedStore.streamDatabase.databasePath}:${activeMode}:raw`}
+      database={feedStore.streamDatabase}
+      emptyLabel={connectionLabel}
+      filter={rawFilter}
+      onInspectEvent={panels.inspectEvent}
+    />
+  ) : null;
+
+  // Mode body: Pretty = agent only; Raw = feed_items only; Pretty+raw = both
+  // stacked (chat + full raw rail with click-to-inspect).
+  const modeBody =
+    caps.agentFeed && caps.rawFeed ? (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="relative min-h-0 flex-[3] overflow-hidden border-b">{agentFeed}</div>
+        <div className="relative flex min-h-0 flex-[2] flex-col overflow-hidden">
+          <div className="flex h-7 shrink-0 items-center border-b bg-muted/30 px-4">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Raw events
+            </span>
+            <span className="ml-2 font-mono text-[10px] text-muted-foreground/70">
+              click a row to inspect · arrow keys page
+            </span>
+          </div>
+          <div className="relative min-h-0 flex-1 overflow-hidden">{rawFeed}</div>
+        </div>
+      </div>
+    ) : (
+      (agentFeed ?? rawFeed)
+    );
+
+  // The feed column — mode body with overlays on top, composer below. One JSX
+  // value so the split layout and the fullPanel Events sheet render the same
+  // thing.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "state" ? (
-          <StreamStateView store={store} />
-        ) : activePreset.kind === "agent-chat" ? (
-          <AgentFeedView
-            {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
-              ? { onInterruptQueuedMessages: interrupt.run }
-              : {})}
-            // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
-            key={store.streamDatabase.databasePath}
-            database={store.streamDatabase}
-            liveState={agentUiState}
-            search={feedSearch}
-            emptyLabel={connectionLabel}
-            isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
-            projectSlug={projectSlug}
-            // The reduced-state row only exists once the processor has
-            // checkpointed; an already-subscribed empty stream is "nothing
-            // here yet", not "connecting".
-            isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
-          />
-        ) : (
-          <FeedItemsView
-            // Fresh virtualizer state per stream mirror (see FeedItemsView
-            // docs); filter changes are handled inside without remounting.
-            key={feedStore.streamDatabase.databasePath}
-            database={feedStore.streamDatabase}
-            emptyLabel={connectionLabel}
-            filter={{
-              eventTypes: search.types ?? null,
-              eventTypePrefix: activePreset.eventTypePrefix ?? null,
-              searchQuery: feedSearch === "" ? null : feedSearch,
-              offsetFrom: search.from ?? null,
-              offsetTo: search.to ?? null,
-            }}
-            onInspectEvent={panels.inspectEvent}
-          />
-        )}
-        {panels.inspectedOffset != null ? (
+        {modeBody}
+        {caps.eventInspector && panels.inspectedOffset != null ? (
           <RawEventInspectorPanel
             database={store.streamDatabase}
             offset={panels.inspectedOffset}
@@ -341,41 +313,46 @@ export function ProjectStreamView({
             onClose={panels.closeInspector}
           />
         ) : null}
-        {panels.processorsPanelOpen ? (
-          <StreamProcessorsPanel
-            presence={presence}
-            metrics={metrics}
-            eventCount={eventCount}
-            busy={agentBusy}
-            focusedKey={panels.focusedProcessorKey}
-            onFocus={panels.focusProcessor}
-            onBack={panels.openProcessorsOverview}
-            onClose={panels.closeProcessorsPanel}
-            onClearClientDatabase={clearClientDatabases}
-            getProcessorRuntimeState={getProcessorRuntimeState}
-          />
-        ) : null}
       </div>
 
-      {activeTab !== "state" &&
-      activePreset.kind === "agent-chat" &&
-      agentUiState?.tokenUsage != null ? (
+      {caps.agentFeed && agentUiState?.tokenUsage != null ? (
         <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
       ) : null}
-      {activeTab === "state" ? null : (
-        <div className="shrink-0 px-4 pb-4 pt-2.5">
-          <StreamViewComposer
-            autoFocusMessage={autoFocusMessageComposer}
-            {...(defaultComposerMode == null ? {} : { defaultMode: defaultComposerMode })}
-            interrupt={interrupt}
-            {...(messageComposer == null ? {} : { messageComposer })}
-            onNudgeDeliveries={nudgeDeliveries}
-            presence={presence}
-            store={store}
-          />
-        </div>
-      )}
+      <div className="shrink-0 px-4 pb-4 pt-2.5">
+        <StreamViewComposer
+          autoFocusMessage={autoFocusMessageComposer}
+          {...(defaultComposerMode == null
+            ? caps.agentFeed
+              ? { defaultMode: "message" as const }
+              : { defaultMode: "raw" as const }
+            : { defaultMode: defaultComposerMode })}
+          interrupt={interrupt}
+          {...(messageComposer == null ? {} : { messageComposer })}
+          onNudgeDeliveries={nudgeDeliveries}
+          presence={presence}
+          store={store}
+        />
+      </div>
     </div>
+  );
+
+  const processorsSheet = (
+    <StreamProcessorsPanel
+      open={panels.processorsPanelOpen}
+      onOpenChange={(open) => {
+        if (!open) panels.closeProcessorsPanel();
+      }}
+      presence={presence}
+      metrics={metrics}
+      eventCount={eventCount}
+      busy={agentBusy}
+      focusedKey={panels.focusedProcessorKey}
+      onFocus={panels.focusProcessor}
+      onBack={panels.openProcessorsOverview}
+      onClose={panels.closeProcessorsPanel}
+      onClearClientDatabase={clearClientDatabases}
+      getProcessorRuntimeState={getProcessorRuntimeState}
+    />
   );
 
   if (layout === "fullPanel") {
@@ -391,61 +368,11 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
-        <Sheet
-          open={search.events === true}
-          onOpenChange={(open) => setSearch({ events: open ? true : undefined })}
-        >
-          <SheetContent
-            side="right"
-            className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
-            showCloseButton={false}
-          >
-            <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
-            <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
-              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                {streamPath}
-              </span>
-              <div className="ml-auto flex items-center gap-1">
-                <Tabs
-                  value={activeTab}
-                  onValueChange={(value) =>
-                    setSearch({ tab: value === "feed" ? undefined : (value as "feed" | "state") })
-                  }
-                >
-                  <TabsList className="h-8">
-                    <TabsTrigger value="feed" className="px-3 text-xs">
-                      Feed
-                    </TabsTrigger>
-                    <TabsTrigger value="state" className="px-3 text-xs">
-                      State
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Search & filter"
-                  aria-expanded={search.filter === true}
-                  onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
-                  className="rounded-full text-muted-foreground"
-                >
-                  <FilterIcon className="size-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Close events"
-                  onClick={() => setSearch({ events: undefined })}
-                  className="rounded-full text-muted-foreground"
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
-              </div>
-            </div>
-            {filterRow}
-            {feedColumn}
-          </SheetContent>
-        </Sheet>
+        {processorsSheet}
+        <StreamEventsSheet streamPath={streamPath}>
+          {filterRow}
+          {feedColumn}
+        </StreamEventsSheet>
       </section>
     );
   }
@@ -472,8 +399,139 @@ export function ProjectStreamView({
         )}
         {feedColumn}
       </div>
+      {processorsSheet}
     </section>
   );
+}
+
+/**
+ * Full-panel layouts relegate the feed to this right-edge sheet behind the
+ * header's Events button (`?events=true`). Children are the filter row +
+ * feed column the split layout renders inline.
+ */
+function StreamEventsSheet({ children, streamPath }: { children: ReactNode; streamPath: string }) {
+  const { search, setSearch } = useStreamViewSearch();
+  const { eventsSheetOpen, openEventsSheet, closeEventsSheet } = useStreamViewPanels();
+  return (
+    <Sheet
+      open={eventsSheetOpen}
+      onOpenChange={(open) => (open ? openEventsSheet() : closeEventsSheet())}
+    >
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
+        showCloseButton={false}
+      >
+        <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
+        <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {streamPath}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <StreamModeTabs streamPath={streamPath} />
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Search & filter"
+              aria-expanded={search.filter === true}
+              onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
+              className="rounded-full text-muted-foreground"
+            >
+              <FilterIcon className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Close events"
+              onClick={closeEventsSheet}
+              className="rounded-full text-muted-foreground"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+        {children}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * The header's pause/resume affordance for agent streams — appends the
+ * paused/resumed control events. Undefined on non-agent paths (no pause
+ * semantics), so the header hides the action.
+ */
+function useAgentPauseControl(args: {
+  database: StreamBrowserDatabase;
+  resolvedStreamSource: ItxStreamSource;
+  streamPath: string;
+  onNudgeDeliveries: () => void;
+}):
+  | {
+      paused: boolean;
+      pending: boolean;
+      reason: string | null;
+      setPaused: (paused: boolean) => Promise<void>;
+    }
+  | undefined {
+  const { database, resolvedStreamSource, streamPath, onNudgeDeliveries } = args;
+  const pauseState = useStreamPauseState(database);
+  const [pending, setPending] = useState(false);
+  if (!streamPath.startsWith("/agents/")) return undefined;
+  return {
+    paused: pauseState.paused,
+    reason: pauseState.reason,
+    pending,
+    setPaused: async (paused: boolean) => {
+      if (pending) return;
+      setPending(true);
+      try {
+        const stream = await resolvedStreamSource(streamPath);
+        await stream.append({
+          type: paused ? "events.iterate.com/stream/paused" : "events.iterate.com/stream/resumed",
+          payload: {
+            reason: paused ? "Paused by operator from the agent UI." : "Resumed by operator.",
+          },
+        });
+        onNudgeDeliveries();
+      } finally {
+        setPending(false);
+      }
+    },
+  };
+}
+
+/** The header's kill-stream action; "kill requested" from a prior kill still reads as success. */
+function useStreamKillControl(args: {
+  resolvedStreamSource: ItxStreamSource;
+  streamPath: string;
+  onNudgeDeliveries: () => void;
+}): { kill: () => Promise<void>; pending: boolean } {
+  const { resolvedStreamSource, streamPath, onNudgeDeliveries } = args;
+  const [pending, setPending] = useState(false);
+  return {
+    pending,
+    kill: async () => {
+      if (pending) return;
+      setPending(true);
+      try {
+        const stream = await resolvedStreamSource(streamPath);
+        await stream.kill();
+        toast.success("Stream killed");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.toLowerCase().includes("kill requested")) {
+          toast.success("Stream killed");
+        } else {
+          toast.error(`Failed to kill stream: ${message}`);
+          return;
+        }
+      } finally {
+        setPending(false);
+      }
+      onNudgeDeliveries();
+    },
+  };
 }
 
 function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {
@@ -486,7 +544,7 @@ function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {
  * (or the stream has no interrupt hook), so consumers can gate on existence.
  */
 function useAgentInterrupt(args: {
-  onInterrupt: ((llmRequestId: number) => Promise<void>) | undefined;
+  onInterrupt: ((llmRequestOffset: number) => Promise<void>) | undefined;
   runningLlmRequestId: number | null;
   onNudgeDeliveries: () => void;
 }): StreamInterrupt | null {

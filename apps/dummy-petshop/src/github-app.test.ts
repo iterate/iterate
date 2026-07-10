@@ -305,15 +305,26 @@ describe("GitHub App installation webhooks", () => {
     await shop("/__backdoor/apps", postJson({ publicKeyPem, webhookSecret: "wh-secret-123" }));
     const receiver = await startReceiver();
     try {
-      const fired = await (
-        await shop(
-          "/__backdoor/apps/fire-webhook",
-          postJson({ url: receiver.url, event: { event: "ping" } }),
-        )
-      ).json<{ status: number; signature: string }>();
+      // This test is about the SIGNATURE SHAPE, not TCP reliability: a
+      // loopback fetch can transiently fail in the CI sandbox (status 0), so
+      // status 0 gets a couple of retries — a genuinely broken delivery still
+      // fails, now with the carried error instead of a bare 0.
+      let fired: { status: number; signature: string; error?: string };
+      for (let attempt = 1; ; attempt += 1) {
+        fired = await (
+          await shop(
+            "/__backdoor/apps/fire-webhook",
+            postJson({ url: receiver.url, event: { event: "ping" } }),
+          )
+        ).json<{ status: number; signature: string; error?: string }>();
+        if (fired.status !== 0 || attempt >= 3) break;
+        console.warn(`webhook delivery attempt ${attempt} failed: ${fired.error}`);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      expect(fired.error).toBeUndefined();
       expect(fired.status).toBe(200);
 
-      const delivery = receiver.received[0];
+      const delivery = receiver.received.at(-1)!;
       expect(delivery.signature).toBe(hexHmac("wh-secret-123", delivery.body));
       expect(delivery.signature).toBe(fired.signature);
     } finally {

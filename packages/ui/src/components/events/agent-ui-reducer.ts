@@ -21,10 +21,10 @@ import type { Event } from "./types.ts";
 export type AgentUiLlmStep = {
   kind: "llm";
   id: string;
-  llmRequestId: number;
+  /** Offset of the llm-request-requested event this step tracks. */
+  llmRequestOffset: number;
   status: "running" | "done";
   model?: string;
-  provider?: string;
   /** Streamed reasoning summary ("thinking") text. */
   thinkingText: string;
   /** Streamed response text — for code-mode agents this is source code. */
@@ -34,7 +34,6 @@ export type AgentUiLlmStep = {
   durationMs?: number;
   outcome?: "completed" | "failed" | "cancelled";
   errorMessage?: string;
-  providerResponseId?: string;
   startedAtMs: number;
 };
 
@@ -72,11 +71,11 @@ export type AgentUiFileAttachment = {
   url: string;
 };
 
-/** Marks a message that arrived through an external chat integration. */
+/** Marks a message that arrived through an external chat integration, or from another agent. */
 export type AgentUiMessageVia = {
-  service: "slack" | "telegram";
-  /** Best-effort sender label: slack user id / telegram username for humans,
-   * bot name for bots. */
+  service: "slack" | "telegram" | "agent" | "email" | "github";
+  /** Best-effort sender label: slack user id, telegram username, email address,
+   * github login, or agent path. */
   sender?: string;
 };
 
@@ -224,13 +223,16 @@ const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
 const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
-const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
-// The openai-ws processor journals every raw Responses-WS frame as
-// llm-response-chunk ({llmRequestId, sequence, chunk}); the frames stream
-// into the live activity below.
-const OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
-const CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
-const CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
+const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
+const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
+// Historical journals (pre single-agent-processor) still stream under these
+// types; keep reading them so old chats render correctly. This is data
+// compat, not code compat: delete these lanes once no journals predate the
+// PR #1808 cutover (e.g. after the next prd reset).
+const LEGACY_OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
+const LEGACY_OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
+const LEGACY_CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
+const LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-execution-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-execution-completed";
 const CODEMODE_SCRIPT_EXECUTION_REQUESTED =
@@ -262,13 +264,57 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
   const timestampMs = Date.parse(event.createdAt);
 
   switch (event.type) {
-    case "events.iterate.com/agents/user-message-received": {
+    // THE inbound message event, every source: `from.kind` picks the
+    // treatment. Users and agents render as chat bubbles (agents with a via
+    // label naming the sender path). Transcribed domain messages carry a
+    // model-facing YAML transcription as content; whether that text shows
+    // depends on whether the domain has a prettier bubble: slack and
+    // telegram render the RAW webhook event as the human-facing copy, so
+    // only their stored attachments surface here — email and github have no
+    // other bubble, so their transcription text stays visible.
+    case "events.iterate.com/agents/message-received": {
       const text = readString(event, "content");
       if (text == null) return state;
+      const from = readRecord(event, "from");
+      const kind = typeof from?.kind === "string" ? from.kind : "user";
+      const files = readFileAttachments(event);
+      if (kind === "agent") {
+        const sender = typeof from?.path === "string" ? from.path : undefined;
+        return emitUserMessageItem(state, ops, {
+          kind: "user",
+          id: `user-${event.offset}`,
+          text,
+          ...(files.length === 0 ? {} : { files }),
+          timestampMs,
+          via: { service: "agent", ...(sender === undefined ? {} : { sender }) },
+        });
+      }
+      if (kind === "slack" || kind === "telegram" || kind === "email" || kind === "github") {
+        const rendersFromRawEvent = kind === "slack" || kind === "telegram";
+        if (rendersFromRawEvent && files.length === 0) return state;
+        const senderValue =
+          kind === "slack"
+            ? from?.userId
+            : kind === "telegram"
+              ? (from?.username ?? from?.userId)
+              : kind === "email"
+                ? from?.address
+                : from?.login;
+        const sender = typeof senderValue === "string" ? senderValue : undefined;
+        return emitUserMessageItem(state, ops, {
+          kind: "user",
+          id: `user-${event.offset}`,
+          text: rendersFromRawEvent ? "" : text,
+          ...(files.length === 0 ? {} : { files }),
+          timestampMs,
+          via: { service: kind, ...(sender === undefined ? {} : { sender }) },
+        });
+      }
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-${event.offset}`,
         text,
+        ...(files.length === 0 ? {} : { files }),
         timestampMs,
       });
     }
@@ -283,17 +329,20 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // web-message-sent event already rendered as an assistant bubble —
       // they exist for the model's eyes, not the user's.
       if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
-      // Slack messages already render as a bubble from the webhook event
-      // itself; the slack-agent's yaml-dump input exists for the model's
-      // eyes. Only the stored file attachments are worth surfacing.
-      const isSlackInput = event.idempotencyKey?.startsWith("slack-agent:webhook-to-agent-input:");
+      // Pre-unification journals: the slack transcriber used to append its
+      // model-facing YAML dump as input-added under this key (today it emits
+      // agents/message-received). The raw webhook already rendered the
+      // bubble; surface only the stored attachments, exactly as before.
+      const isLegacySlackInput = event.idempotencyKey?.startsWith(
+        "slack-agent:webhook-to-agent-input:",
+      );
       return emitUserMessageItem(state, ops, {
         kind: "user",
         id: `user-file-${event.offset}`,
-        text: isSlackInput ? "" : text,
+        text: isLegacySlackInput ? "" : text,
         files,
         timestampMs,
-        ...(isSlackInput ? { via: { service: "slack" as const } } : {}),
+        ...(isLegacySlackInput ? { via: { service: "slack" as const } } : {}),
       });
     }
 
@@ -322,7 +371,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       const step: AgentUiLlmStep = {
         kind: "llm",
         id: `llm-${event.offset}`,
-        llmRequestId: event.offset,
+        llmRequestOffset: event.offset,
         status: "running",
         ...(model == null ? {} : { model }),
         thinkingText: "",
@@ -332,23 +381,24 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return { ...base, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case OPENAI_WS_REQUEST_STARTED:
-    case CLOUDFLARE_AI_REQUEST_STARTED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+    case AGENT_LLM_REQUEST_STARTED:
+    case LEGACY_OPENAI_WS_REQUEST_STARTED:
+    case LEGACY_CLOUDFLARE_AI_REQUEST_STARTED: {
+      const llmRequestOffset = readLlmRequestOffset(event);
       const model = readString(event, "model");
-      if (llmRequestId == null || model == null) return state;
-      return updateLlmStep(state, llmRequestId, (step) => ({ ...step, model }));
+      if (llmRequestOffset == null || model == null) return state;
+      return updateLlmStep(state, llmRequestOffset, (step) => ({ ...step, model }));
     }
 
-    case OPENAI_WS_RESPONSE_CHUNK: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+    case LEGACY_OPENAI_WS_RESPONSE_CHUNK: {
+      const llmRequestOffset = readLlmRequestOffset(event);
       const message = readRecord(event, "chunk");
-      if (llmRequestId == null || message == null) return state;
+      if (llmRequestOffset == null || message == null) return state;
       const frameType = typeof message.type === "string" ? message.type : "";
       const delta = typeof message.delta === "string" ? message.delta : "";
 
       if (frameType === "response.output_text.delta" && delta !== "") {
-        return updateLlmStep(state, llmRequestId, (step) => ({
+        return updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           responseText: step.status === "running" ? step.responseText + delta : step.responseText,
         }));
@@ -358,13 +408,13 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           frameType === "response.reasoning_text.delta") &&
         delta !== ""
       ) {
-        return updateLlmStep(state, llmRequestId, (step) => ({
+        return updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           thinkingText: step.status === "running" ? step.thinkingText + delta : step.thinkingText,
         }));
       }
       if (frameType === "response.reasoning_summary_part.added") {
-        return updateLlmStep(state, llmRequestId, (step) => ({
+        return updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           thinkingText:
             step.status !== "running" || step.thinkingText === ""
@@ -375,13 +425,14 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return state;
     }
 
-    case CLOUDFLARE_AI_RESPONSE_CHUNK: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+    case AGENT_LLM_RESPONSE_CHUNK:
+    case LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK: {
+      const llmRequestOffset = readLlmRequestOffset(event);
       const chunk = readPayloadRecord(event)?.chunk;
-      if (llmRequestId == null) return state;
+      if (llmRequestOffset == null) return state;
       const { responseDelta, thinkingDelta } = extractCloudflareChunkDeltas(chunk);
       if (responseDelta === "" && thinkingDelta === "") return state;
-      return updateLlmStep(state, llmRequestId, (step) => ({
+      return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
           step.status === "running" ? step.responseText + responseDelta : step.responseText,
@@ -391,19 +442,19 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     }
 
     case AGENT_OUTPUT_ADDED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
+      const llmRequestOffset = readLlmRequestOffset(event);
       const content = readString(event, "content");
-      if (llmRequestId == null || content == null) return state;
+      if (llmRequestOffset == null || content == null) return state;
       // Authoritative full text: replaces whatever streamed in (or fills it
       // in for providers that never streamed).
-      return updateLlmStep(state, llmRequestId, (step) =>
+      return updateLlmStep(state, llmRequestOffset, (step) =>
         step.status === "running" ? { ...step, responseText: content } : step,
       );
     }
 
     case AGENT_LLM_REQUEST_COMPLETED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
-      if (llmRequestId == null) return state;
+      const llmRequestOffset = readLlmRequestOffset(event);
+      if (llmRequestOffset == null) return state;
       const payload = readPayloadRecord(event);
       const result = isRecord(payload?.result) ? payload.result : undefined;
       const status = typeof result?.status === "string" ? result.status : "success";
@@ -413,23 +464,19 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
           ? result.error.message
           : undefined;
       return settleLiveIfIdle(
-        updateLlmStep(state, llmRequestId, (step) =>
+        updateLlmStep(state, llmRequestOffset, (step) =>
           step.outcome === "cancelled"
             ? step
             : {
                 ...step,
                 status: "done",
                 outcome: status === "success" ? "completed" : "failed",
-                ...(typeof payload?.provider === "string" ? { provider: payload.provider } : {}),
                 ...(typeof payload?.durationMs === "number"
                   ? { durationMs: payload.durationMs }
                   : {}),
                 ...(usage.input == null ? {} : { inputTokens: usage.input }),
                 ...(usage.output == null ? {} : { outputTokens: usage.output }),
                 ...(errorMessage == null ? {} : { errorMessage }),
-                ...(typeof result?.providerResponseId === "string"
-                  ? { providerResponseId: result.providerResponseId }
-                  : {}),
               },
         ),
         timestampMs,
@@ -438,10 +485,10 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     }
 
     case AGENT_LLM_REQUEST_CANCELLED: {
-      const llmRequestId = readNumber(event, "llmRequestId");
-      if (llmRequestId == null) return state;
+      const llmRequestOffset = readLlmRequestOffset(event);
+      if (llmRequestOffset == null) return state;
       return settleLiveIfIdle(
-        updateLlmStep(state, llmRequestId, (step) => ({
+        updateLlmStep(state, llmRequestOffset, (step) => ({
           ...step,
           status: "done",
           outcome: "cancelled",
@@ -730,12 +777,12 @@ function emitUserMessageItem(
 
 function updateLlmStep(
   state: AgentUiState,
-  llmRequestId: number,
+  llmRequestOffset: number,
   update: (step: AgentUiLlmStep) => AgentUiLlmStep,
 ): AgentUiState {
   if (state.live == null) return state;
   const index = state.live.steps.findIndex(
-    (step) => step.kind === "llm" && step.llmRequestId === llmRequestId,
+    (step) => step.kind === "llm" && step.llmRequestOffset === llmRequestOffset,
   );
   const step = state.live.steps[index];
   if (step == null || step.kind !== "llm") return state;
@@ -998,6 +1045,14 @@ function readOptionalReason(event: Event): { reason: string } | Record<string, n
 function readNumber(event: Event, key: string): number | null {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** The llm-request-requested offset an LLM lifecycle event references.
+ * Current events carry `llmRequestOffset`; journals written before the
+ * agent-contract 0.5.0 rename (and the legacy provider events) carry
+ * `llmRequestId`. */
+function readLlmRequestOffset(event: Event): number | null {
+  return readNumber(event, "llmRequestOffset") ?? readNumber(event, "llmRequestId");
 }
 
 function readRecord(event: Event, key: string): Record<string, unknown> | null {

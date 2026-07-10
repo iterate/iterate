@@ -39,7 +39,12 @@ export const PrAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/github-pr/route-configured",
     "events.iterate.com/github/webhook-received",
   ],
-  emits: ["events.iterate.com/agent/input-added"],
+  emits: [
+    // Route context stays a plain model-visible input; webhook transcriptions
+    // are inbound MESSAGES from their GitHub sender.
+    "events.iterate.com/agent/input-added",
+    "events.iterate.com/agents/message-received",
+  ],
 });
 
 /**

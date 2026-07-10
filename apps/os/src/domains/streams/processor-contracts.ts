@@ -5,7 +5,9 @@
 // catalog resolution) lives behind the SDK boundary.
 export {
   buildEvent,
+  cachedEventSchema,
   defineProcessorContract,
+  getConsumedEventDefinition,
   type EmittedInput,
   type ProcessorEvent,
   type ProcessorState,

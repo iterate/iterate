@@ -23,9 +23,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
-import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
-import { parseAgentDurableObjectName, readOpenAiApiKeyFromAppConfig } from "./utils.ts";
+import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -36,12 +34,15 @@ export class AgentDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
   readonly #agentProcessor = this.#processorHost.add(
     (deps) =>
       new AgentProcessor({
         ...deps,
+        ai: this.env.AI,
         // Oversized script results spill into the agent's OWN workspace (the
         // same checkout itx.workspace resolves to), so the model can page
         // through the file instead of blowing its context window. The first
@@ -53,22 +54,6 @@ export class AgentDurableObject extends DurableObject<Env> {
               projectId: this.#name.projectId,
             }),
           ).writeFile(path, content),
-      }),
-  );
-  readonly cloudflareAiProcessor = this.#processorHost.add(
-    (deps) =>
-      new CloudflareAiProcessor({
-        ...deps,
-        ai: this.env.AI,
-      }),
-  );
-  // Registered even without an OpenAI key: the processor then fails requests
-  // with a clear llm-request-completed error instead of crashing the host.
-  readonly openAiWsProcessor = this.#processorHost.add(
-    (deps) =>
-      new OpenAiWsProcessor({
-        ...deps,
-        apiKey: readOpenAiApiKeyFromAppConfig(this.env),
       }),
   );
 
