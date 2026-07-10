@@ -95,7 +95,29 @@ describe("feedItemsFilterFromSearch", () => {
     });
   });
 
-  it("honors components + types from the URL", () => {
+  it("honors raw group type filters in pretty-raw without applying pretty search", () => {
+    expect(
+      feedItemsFilterFromSearch(
+        {
+          mode: "pretty-raw",
+          components: ["stream.woken"],
+          types: ["events.iterate.com/stream/woken"],
+          q: "only-pretty",
+          from: 10,
+        },
+        "/agents/x",
+      ),
+    ).toEqual({
+      eventTypes: ["events.iterate.com/stream/woken"],
+      components: ["stream.woken"],
+      eventTypePrefix: null,
+      searchQuery: null,
+      offsetFrom: null,
+      offsetTo: null,
+    });
+  });
+
+  it("honors components + types from the URL in raw mode", () => {
     expect(
       feedItemsFilterFromSearch(
         { mode: "raw", components: ["stream.woken"], types: ["events.iterate.com/stream/woken"] },
@@ -143,8 +165,8 @@ describe("feedFiltersActive", () => {
     );
   });
 
-  it("treats raw=false on pretty-raw as an active filter", () => {
-    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(true);
+  it("ignores the legacy raw=false toggle in pretty-raw", () => {
+    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(false);
   });
 
   it("does not treat pretty mode on non-agent paths as pretty (clamped to raw)", () => {
