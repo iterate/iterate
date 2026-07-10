@@ -64,6 +64,24 @@ export async function runApprovalCli(input: {
   if (input.keys === true) return listKeys({ itx, localKey: key });
   if (input.revoke === true) return revokeKey({ key, projectId: input.projectId, stream });
 
+  // --native preconditions come BEFORE --enroll: failing after enrolling
+  // would leave a key side effect the human didn't ask for.
+  const native = input.native === true;
+  if (native) {
+    if (process.platform !== "darwin") throw new Error("--native is macOS-only.");
+    if (input.softwareKey === true) {
+      throw new Error("--native needs a Secure Enclave key; drop --software-key.");
+    }
+    if (key !== null && key.kind !== "secure-enclave") {
+      throw new Error(
+        "--native needs a Secure Enclave key, but this project's local key is a software key. Revoke it (--revoke) and re-enroll on this Mac.",
+      );
+    }
+    if (key === null && input.enroll !== true) {
+      throw new Error("--native needs an enrolled Secure Enclave key: run with --enroll first.");
+    }
+  }
+
   if (input.enroll === true) {
     key = await enroll({
       existing: key,
@@ -71,12 +89,6 @@ export async function runApprovalCli(input: {
       softwareKey: input.softwareKey,
       stream,
     });
-  }
-  const native = input.native === true;
-  if (native && key?.kind !== "secure-enclave") {
-    throw new Error(
-      "--native needs a Secure Enclave key: run `iterate approve --enroll` on this Mac (without --software-key).",
-    );
   }
   prompts.log.info(
     key === null
@@ -129,11 +141,18 @@ export async function runApprovalCli(input: {
     // gesture. Terminal mode: y/n, then sign.
     let verdict: { decision: "granted"; signature?: string } | { decision: "rejected" | "ignored" };
     if (native) {
-      verdict = await promptNativeApproval({
-        key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
-        message,
-        request: payload as unknown as Record<string, unknown>,
-      });
+      try {
+        verdict = await promptNativeApproval({
+          key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
+          message,
+          request: payload as unknown as Record<string, unknown>,
+        });
+      } catch (error) {
+        // A cancelled Touch ID sheet exits the approver non-zero; treat it
+        // like Ignore — the hold keeps waiting, the loop keeps listening.
+        prompts.log.error(error instanceof Error ? error.message : String(error));
+        verdict = { decision: "ignored" };
+      }
     } else {
       const approved = await prompts.confirm({
         message: `Approve ${payload.method} ${new URL(payload.url).host}?`,
