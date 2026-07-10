@@ -36,10 +36,18 @@ test("onboarding agent replies to a chat message in the feed", async ({
 
   // Phrasing mirrors the agents e2e suite: the onboarding prompt pulls the
   // model hard toward its own script, so the ask must be explicit about
-  // sending a visible chat message with the token.
-  const marker = `pong-${crypto.randomUUID().slice(0, 8)}`;
+  // sending a visible chat message with the token. The token is a plain word,
+  // NOT a random slug: models echo simple words into chat text reliably, but
+  // preview-tier models drop uuid-ish tokens (observed live on llama-4-scout
+  // 2026-07-10: three marker-less replies to a `pong-8f3a2b1c` ask). The spec
+  // proves message->reply routing; content fidelity for machine-significant
+  // strings is proven by the vitest agent tests, whose markers ride inside
+  // script code where models copy them faithfully. No collision risk: each
+  // spec instance owns a fresh project, and the onboarding greeting never
+  // says "kumquat".
+  const marker = "kumquat";
   const message = [
-    `Please send a visible web chat message containing exactly this token: ${marker}`,
+    `Please send a visible web chat message containing exactly this word: ${marker}`,
     "Use the chat tool. Do not only describe what you would do.",
   ].join("\n");
 
@@ -71,7 +79,7 @@ test("onboarding agent replies to a chat message in the feed", async ({
       timeoutMs: 120_000,
       predicate: (event) => {
         const text = (event.payload as { message?: unknown } | undefined)?.message;
-        return typeof text === "string" && text.includes(marker);
+        return typeof text === "string" && text.toLowerCase().includes(marker);
       },
     });
     await page
