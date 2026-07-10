@@ -116,11 +116,11 @@ export function AgentFeedView({
   const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
   // The live in-flight activity and the queued-messages panel are the list's
-  // trailing items, so TanStack Virtual owns ALL tail behavior natively:
-  // `followOnAppend` chases appends while the reader is pinned to the end, and
-  // end-anchored resize adjustments keep the pin as the live item grows with
-  // every streamed chunk. Rendering them outside the list would hide their
-  // height from the virtualizer and require hand-rolled scroll chasing.
+  // trailing items so they're inside the virtualizer's size model: their
+  // growth shows up in getTotalSize()/the sizer's height, which is what the
+  // stick's ResizeObserver follows and what anchorTo's mid-history
+  // compensation measures. Rendering them outside the list would hide their
+  // height from both.
   const liveCount = live == null ? 0 : 1;
   const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
   const totalCount = itemCount + liveCount + queuedCount;
@@ -145,12 +145,16 @@ export function AgentFeedView({
     estimateSize: () => 56,
     getItemKey,
     anchorTo: "end",
-    // followOnAppend stays OFF: following the tail is the stick's job (see
-    // useStickToBottom), measured against the real DOM. followOnAppend
-    // resolves against the virtualizer's internal offset model, which drifts
-    // from the DOM by a few px while async rows settle — its uncancellable
-    // reconcile loop then rewrites scrollTop every frame toward a bottom
-    // that isn't quite the bottom, out-writing the stick.
+    // followOnAppend stays OFF — the stick owns the tail (useStickToBottom).
+    // The library's follow cannot own it here because its gate is isAtEnd():
+    // every time the composer below this feed grows (multi-line draft,
+    // attachment chips), the viewport shrinks with NO scroll event, so
+    // distance-from-end silently accumulates — past scrollEndThreshold the
+    // library concludes the reader left the tail and stops following appends
+    // altogether. Rect changes never re-pin (observeElementRect only updates
+    // scrollRect and recalculates the range). Running follow AND the stick
+    // concurrently is two writers where follow's scroll-reconcile loop is
+    // uncancellable (TanStack/virtual#1221), so the stick is the only writer.
     followOnAppend: false,
     scrollEndThreshold: 80,
     overscan: 16,

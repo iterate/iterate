@@ -21,10 +21,19 @@ const RESTICK_EPSILON_PX = 2;
  * end-anchored resize compensation) keeps agreeing with reality.
  *
  * Stick lifecycle: starts stuck (feeds open at the newest message). Real
- * user input on the scroller — wheel, touch, keydown, pointerdown (scrollbar
- * grabs and row clicks included) — releases it, so a reader in history, or
- * one who clicked a row open to read it, is never yanked. A user scroll that
- * lands back at the bottom re-engages it.
+ * user input on the scroller — upward wheel, touch, keydown, pointerdown
+ * (scrollbar grabs and row clicks included) — releases it, so a reader in
+ * history, or one who clicked a row open to read it, is never yanked. A user
+ * scroll that lands back at the bottom re-engages it. Releasing on
+ * touchstart also means the hook never writes scrollTop during a touch-driven
+ * fling, sidestepping WebKit's dropped-write-during-momentum behavior.
+ *
+ * Known band: a released reader hovering within the virtualizer's
+ * scrollEndThreshold (80px) of the end is still "at end" to TanStack's
+ * anchorTo compensation, which holds their DISTANCE to the bottom constant
+ * while the tail grows — a gentle drift, not a yank, and it converges them
+ * back onto the stick at the clamp. Below RESTICK_EPSILON_PX the stick takes
+ * over exactly.
  */
 export function useStickToBottom({
   contentElementRef,
@@ -67,18 +76,26 @@ export function useStickToBottom({
       stuck.current = false;
       latestOnRelease.current?.();
     };
+    // Only an UPWARD wheel is leaving-the-tail intent; wheeling down while
+    // already at the bottom would otherwise release into a dead state where
+    // the next append writes nothing and no scroll event fires to re-stick.
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) release();
+    };
     const onScroll = () => {
       if (stuck.current) return;
       const distance = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
       if (distance <= RESTICK_EPSILON_PX) stuck.current = true;
     };
 
-    const releaseEvents = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    const releaseEvents = ["touchstart", "keydown", "pointerdown"] as const;
     for (const name of releaseEvents) scroller.addEventListener(name, release, { passive: true });
+    scroller.addEventListener("wheel", onWheel, { passive: true });
     scroller.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       resizeObserver.disconnect();
       for (const name of releaseEvents) scroller.removeEventListener(name, release);
+      scroller.removeEventListener("wheel", onWheel);
       scroller.removeEventListener("scroll", onScroll);
     };
   }, [scrollElementRef, contentElementRef]);

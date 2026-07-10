@@ -22,8 +22,8 @@ const MAX_RETAINED_ROWS = 2000;
  * per specific-renderer singleton or per collapsed run of same-type events,
  * narrowed by {@link FeedItemsFilterInput}.
  *
- * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
- * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
+ * Same virtualization scheme as the agent feed (agent-feed.tsx): the stick
+ * owns the tail (useStickToBottom; followOnAppend off), the row window is a
  * live SQL range query over dense positions, and rows are retained across
  * filter changes only when fetched under the same filter. Callers must
  * remount this component when pointing it at a different database (key it by
