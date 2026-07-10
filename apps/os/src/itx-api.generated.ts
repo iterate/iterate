@@ -328,10 +328,10 @@ export interface Agent {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. A custom systemPrompt is a PERSONA, not a
-   * replacement: it is appended after the path's platform prompt (which keeps
-   * the codemode contract the agent needs to act at all), and on a subagent
-   * path the "you are a subagent" suffix rides last (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
    */
   configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
@@ -1692,9 +1692,9 @@ export type StreamEvent = {
   path: string;
 };
 
-/** Caller-supplied policy overrides, baked into the returned events. The
- * systemPrompt is a persona appended after the path's platform prompt (which
- * always keeps the codemode contract), not a wholesale replacement. */
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the path's platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
   model?: string;

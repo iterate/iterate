@@ -678,9 +678,13 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
           : from.kind === "agent"
             ? ("agent-loop" as const)
             : ("user" as const);
+      // Child-agent-ness is not a birth-time prompt: everything an agent
+      // needs to know about talking to the sender rides on the message
+      // itself. The sender agent never sees this chat's sendMessage output,
+      // so the label spells out the reply door.
       const content =
         from.kind === "agent"
-          ? `Message from agent ${from.path}:\n${event.payload.content}`
+          ? `Message from agent ${from.path} (that agent cannot see your web chat — to reply to it: const sender = await itx.agents.get(${JSON.stringify(from.path)}); await sender.message(text)):\n${event.payload.content}`
           : event.payload.content;
       return {
         ...state,

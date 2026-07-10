@@ -3016,10 +3016,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
    * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. A custom systemPrompt is a PERSONA, not a
-   * replacement: it is appended after the path's platform prompt (which keeps
-   * the codemode contract the agent needs to act at all), and on a subagent
-   * path the "you are a subagent" suffix rides last (agents/agent-defaults.ts).
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
     const defaultModel = parseConfig(env).defaultAgentModel;
@@ -5084,9 +5084,15 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
-// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
-// it gives every project web search with zero setup.
+// Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
+// free pool exhausts fast); pre-connecting it gives every project web search
+// with zero setup. When the deployment has a first-party Exa key
+// (config.integrations.exa), it rides as a bearer placeholder substituted at
+// the egress door — raw key bytes never enter the MCP client.
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+const EXA_PLATFORM_KEY_HEADER = {
+  authorization: 'Bearer getSecret({ platform: "integrations.exa.apiKey" })',
+};
 
 class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
@@ -5117,8 +5123,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
    */
   get exa(): McpClientRpc {
+    const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL },
+      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
       {
         description: {
           instructions:

@@ -49,19 +49,16 @@ describe("agentDefaultsForPath", () => {
     expect(kickoffTypes("/agents/demo")).toBe(0);
   });
 
-  it("bakes overrides into the returned events, appended after the codemode contract", () => {
+  it("bakes overrides into the returned events — a systemPrompt override replaces wholesale", () => {
     const custom = defaultsFor("/agents/demo", {
       systemPrompt: "Answer only in pirate speak.",
       model: "openai/gpt-5.5",
     });
-    // The persona rides after the platform prompt — an agent whose prompt
-    // loses the codemode contract cannot act at all.
-    expect(custom.systemPrompt).toContain("HOW YOU ACT");
-    expect(custom.systemPrompt.endsWith("Answer only in pirate speak.")).toBe(true);
+    expect(custom.systemPrompt).toBe("Answer only in pirate speak.");
     const config = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/config-updated",
     );
-    expect(config?.payload.systemPrompt).toBe(custom.systemPrompt);
+    expect(config?.payload.systemPrompt).toBe("Answer only in pirate speak.");
     const provider = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );
@@ -74,30 +71,15 @@ describe("agentDefaultsForPath", () => {
     }
   });
 
-  it("subagents get the default prompt plus the subagent suffix — never a thread transcriber prompt", () => {
+  it("subagents get the plain default prompt — never a thread transcriber prompt, no subagent suffix", () => {
+    // Child-agent-ness rides on the parent's message (the fold labels
+    // agent-sourced messages with the sender's path and reply door), not on
+    // a birth-time prompt.
     const nested = defaultsFor("/agents/slack/main/C123/ts-99/subagents/helper");
-    expect(nested.systemPrompt).toContain("YOU ARE A SUBAGENT");
-    expect(nested.systemPrompt).toContain("/agents/slack/main/C123/ts-99");
+    expect(nested.systemPrompt).toContain("HOW YOU ACT");
+    expect(nested.systemPrompt).not.toContain("YOU ARE A SUBAGENT");
     // The shape-loose Slack predicate must not classify the nested path.
     expect(nested.systemPrompt).not.toContain("inside a Slack thread");
-    const plain = defaultsFor("/agents/main");
-    expect(plain.systemPrompt).not.toContain("YOU ARE A SUBAGENT");
-  });
-
-  it("a systemPrompt override keeps the codemode contract and the subagent suffix", () => {
-    const custom = defaultsFor("/agents/main/subagents/pirate", {
-      systemPrompt: "Answer only in pirate speak.",
-    });
-    expect(custom.systemPrompt).toContain("HOW YOU ACT");
-    expect(custom.systemPrompt).toContain("Answer only in pirate speak.");
-    expect(custom.systemPrompt).toContain("YOU ARE A SUBAGENT");
-    expect(custom.systemPrompt).toContain("/agents/main");
-    // Order: platform contract, then persona, then the subagent contract.
-    expect(custom.systemPrompt.indexOf("HOW YOU ACT")).toBeLessThan(
-      custom.systemPrompt.indexOf("Answer only in pirate speak."),
-    );
-    expect(custom.systemPrompt.indexOf("Answer only in pirate speak.")).toBeLessThan(
-      custom.systemPrompt.indexOf("YOU ARE A SUBAGENT"),
-    );
+    expect(nested.systemPrompt).toBe(defaultsFor("/agents/main").systemPrompt);
   });
 });
