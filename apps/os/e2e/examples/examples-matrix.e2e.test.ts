@@ -59,17 +59,54 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
 // promise (one project, created once). Tests then share that read-only
 // projectId but isolate their writes with a per-runtime `marker` (below), so
 // concurrent examples don't collide.
+//
+// The setup is BOUNDED and NON-POISONING: the create + worker bake dials
+// RPCs with no deadline of their own, and a wedged repo commit under full
+// lane load once parked this promise forever — every matrix test AND every
+// vitest retry then awaited the same dead memo, so the whole file produced
+// zero output until the lane watchdog killed it (marathons of 2026-07-10).
+// A failed or timed-out setup clears the memo, so the next attempt
+// re-creates the project fresh instead of re-awaiting the corpse.
+const MATRIX_SETUP_TIMEOUT_MS = 120_000;
 let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
 function ensureMatrixProject(): Promise<{ projectId: string }> {
   matrixSetupPromise ??= (async () => {
-    using itx = connectGlobal();
-    using project = itx.projects.create({ slug: PROJECT_SLUG });
-    const { projectId } = await project.__describe();
-    await bakeProjectWorkerRunner({
-      examples: MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("project-worker")),
-      projectId,
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `matrix project setup (create + worker bake) exceeded ${MATRIX_SETUP_TIMEOUT_MS / 1000}s`,
+            ),
+          ),
+        MATRIX_SETUP_TIMEOUT_MS,
+      );
     });
-    return { projectId };
+    try {
+      return await Promise.race([
+        deadline,
+        (async () => {
+          using itx = connectGlobal();
+          using project = itx.projects.create({
+            slug: `${PROJECT_SLUG}-${Date.now().toString(36)}`,
+          });
+          const { projectId } = await project.__describe();
+          await bakeProjectWorkerRunner({
+            examples: MATRIX_EXAMPLES.filter((example) =>
+              example.runtimes.includes("project-worker"),
+            ),
+            projectId,
+          });
+          return { projectId };
+        })(),
+      ]);
+    } catch (error) {
+      matrixSetupPromise = null;
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   })();
   return matrixSetupPromise;
 }
@@ -77,17 +114,29 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
 for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   // Cold isolates and a dynamic-worker load per call make these the slowest
-  // tests in the suite.
+  // tests in the suite. The budget is case-driven, NOT the blanket heavy
+  // ceiling: the first runtime pays the example's cold path
+  // (completionTimeoutMs — e.g. a sandbox container boot), later runtimes
+  // reuse it warm. A blanket 240s meant one stuck example burned
+  // 240s + 240s retry and the lane died by watchdog instead of reporting
+  // WHICH example was stuck (marathons j3tqdhncb6/rhhms9q9pv, 2026-07-10).
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
-    { timeout: 240_000 },
+    { timeout: (exampleCase.completionTimeoutMs ?? 90_000) + 30_000 },
     async () => {
       const { projectId } = await ensureMatrixProject();
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
       expect(runtimes.length).toBeGreaterThan(0);
 
+      // Fresh per attempt, shared across this attempt's runtimes — see
+      // ExampleRunContext.attemptSalt.
+      const attemptSalt = crypto.randomUUID().slice(0, 8);
       for (const runtime of runtimes) {
-        const ctx = { marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`, projectId };
+        const ctx = {
+          attemptSalt,
+          marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
+          projectId,
+        };
         const vars = exampleCase.vars?.(ctx) ?? {};
         try {
           const result = await runExampleCode(runtime, {

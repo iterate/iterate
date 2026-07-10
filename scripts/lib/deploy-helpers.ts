@@ -38,11 +38,17 @@ export function run(
 }
 
 /**
- * Probe a deployed URL until `ok(status)` holds (5 attempts, 3s apart) and
- * throw when it never does — a deploy is only done once the env answers.
+ * Probe a deployed URL until `ok(status)` holds (18 attempts, 5s apart ≈ 90s)
+ * and throw when it never does — a deploy is only done once the env answers.
+ *
+ * The window is deliberately generous: a fresh worker version can answer 503
+ * at the edge for tens of seconds while it propagates (measured 2026-07-09 on
+ * preview slots: dashboard 503 for ~30-60s after a green `wrangler deploy`).
+ * A success at attempt 12 costs nothing extra; giving up early fails the
+ * whole deploy+e2e job, whose retry costs ~5 minutes.
  */
 export async function smoke(url: string, ok: (status: number) => boolean, label: string) {
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  for (let attempt = 1; attempt <= 18; attempt++) {
     try {
       const response = await fetch(url, {
         redirect: "manual",
@@ -56,7 +62,7 @@ export async function smoke(url: string, ok: (status: number) => boolean, label:
     } catch (error) {
       console.warn(`smoke attempt ${attempt}: ${label} → ${error}`);
     }
-    await new Promise((res) => setTimeout(res, 3000));
+    await new Promise((res) => setTimeout(res, 5000));
   }
   throw new Error(
     `Smoke failed: ${label} (${url}) never answered healthily — the deploy is NOT verified.`,
