@@ -1687,4 +1687,121 @@ describe("token usage and history reset", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("an over-threshold usage report triggers compaction: summary via the agent's model, history replaced", async () => {
+    const stream = new MemoryStream();
+    const aiCalls: { model: string; messages: { role: string; content: string }[] }[] = [];
+    const makeAgent = () =>
+      new AgentProcessor({
+        stream,
+        path: stream.path,
+        projectId: null,
+        ai: {
+          async run(model, body) {
+            const { messages } = body as { messages: { role: string; content: string }[] };
+            aiCalls.push({ model, messages });
+            if (messages[0]!.content.includes("compacting an AI agent's conversation history")) {
+              return { response: "The user likes teal and is building STICKYMEETING." };
+            }
+            // A turn that ran at over half of gpt-5.5's 272k window.
+            return {
+              response: "noted!",
+              usage: { prompt_tokens: 140_000, completion_tokens: 500 },
+            };
+          },
+        },
+      });
+    const agent = makeAgent();
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "remember: I like teal", from: { kind: "user", origin: "web" } },
+    });
+    await deliver();
+    await deliver();
+    await deliver();
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
+    });
+    await deliver();
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    // Delivering the usage report trips the compaction trigger; the summary
+    // runs as a background attempt and appends the reset itself.
+    await deliver();
+    const reset = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/history-reset"],
+      timeoutMs: 5_000,
+    });
+
+    const compactionCalls = () =>
+      aiCalls.filter((call) =>
+        call.messages[0]!.content.includes("compacting an AI agent's conversation history"),
+      );
+    expect(compactionCalls()).toHaveLength(1);
+    // The summary sees the whole conversation and runs on the agent's model.
+    expect(compactionCalls()[0]!.model).toBe("openai/gpt-5.5");
+    expect(compactionCalls()[0]!.messages[1]!.content).toContain("User:\nremember: I like teal");
+    expect(compactionCalls()[0]!.messages[1]!.content).toContain("Assistant:\nnoted!");
+    expect(reset.payload).toMatchObject({
+      systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+      history: [
+        {
+          role: "user",
+          content: expect.stringContaining("The user likes teal and is building STICKYMEETING."),
+        },
+      ],
+      reason: expect.stringMatching(/^compaction@\d+: ~140500 tokens > 136000$/),
+    });
+
+    // The fold's model-visible history is now just the summary.
+    const state = reduceAgentEvents(stream.events);
+    expect(state.history).toHaveLength(1);
+    expect(state.history[0]!.content).toContain("[Earlier conversation history was compacted.");
+
+    // A fresh incarnation redelivering the whole journal must not summarize
+    // again: the durable guard sees this trigger's reset and skips before the
+    // AI call.
+    const revived = makeAgent();
+    await deliverNewEvents({ processor: revived, stream, cursors: new Map<object, number>() });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(compactionCalls()).toHaveLength(1);
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/history-reset"),
+    ).toHaveLength(1);
+  });
+
+  it("an under-threshold usage report does not compact", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          throw new Error("no AI call expected");
+        },
+      },
+    });
+    await stream.append({
+      type: "events.iterate.com/agent/token-usage-reported",
+      payload: {
+        llmRequestOffset: 1,
+        model: "openai/gpt-5.5",
+        maxContextTokens: 272_000,
+        inputTokens: 10_000,
+        outputTokens: 200,
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/history-reset"),
+    ).toBe(false);
+  });
 });
