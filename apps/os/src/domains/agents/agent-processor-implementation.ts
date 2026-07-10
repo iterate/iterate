@@ -81,14 +81,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   /** Retry spacing after n consecutive LLM failures: 0 for a fresh turn, then
    * base × 2^(n-1) capped at 6× base (10s, 20s, 60s at the default base) — see
    * AGENT_LLM_RETRY_BACKOFF_BASE_MS for why instant retries are worse than
-   * none. A RATE-LIMITED failure floors at the cap immediately: the vendor's
-   * quota refills on a time window (Workers AI 3021 is per-minute), so the
-   * ladder's early rungs would burn the whole retry budget inside the same
-   * hot minute. Pure in the fold's terms, so re-derived schedules agree. */
+   * none. A REPEATED rate-limited failure jumps straight to the cap: the
+   * vendor's quota refills on a time window (Workers AI 3021 is per-minute),
+   * so once one cheap retry has confirmed the window is still hot, the
+   * ladder's middle rung would burn the last attempt inside the same minute.
+   * The first retry stays at the ladder (the failure may have been the tail
+   * of a window), so attempts land at ~t0/t10/t70 — the third in a fresh
+   * minute, still inside every 120s wait budget. Pure in the fold's terms,
+   * so re-derived schedules agree. */
   #llmRetryBackoffMs(state: AgentState): number {
     if (state.consecutiveLlmFailures <= 0) return 0;
     const base = this.deps.llmRetryBackoffBaseMs ?? AGENT_LLM_RETRY_BACKOFF_BASE_MS;
-    if (state.lastLlmFailureRateLimited) return base * 6;
+    if (state.lastLlmFailureRateLimited && state.consecutiveLlmFailures >= 2) return base * 6;
     return Math.min(base * 2 ** (state.consecutiveLlmFailures - 1), base * 6);
   }
 

@@ -295,9 +295,10 @@ export const AgentProcessorContract = defineProcessorContract({
     /**
      * Whether the most recent LLM failure was the vendor's rate limit
      * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
-     * per-minute window — so the retry backoff floors at the ladder cap
-     * instead of burning attempts inside the same hot minute. Cleared by any
-     * success (with consecutiveLlmFailures).
+     * per-minute window — so a REPEAT rate-limited failure jumps the retry
+     * backoff to the ladder cap instead of burning the last attempt inside
+     * the same hot minute. Cleared by any success (with
+     * consecutiveLlmFailures).
      */
     lastLlmFailureRateLimited: z.boolean().default(false),
     /**

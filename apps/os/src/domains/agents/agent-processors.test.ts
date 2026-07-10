@@ -853,10 +853,11 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 266]);
   });
 
-  it("rate-limited failures floor the retry backoff at the ladder cap", async () => {
-    // The quota refills on a time window, so retrying on the ladder's early
-    // rungs burns the whole budget inside the same hot minute — every retry
-    // after a rate-limit failure waits the full cap (base × 6).
+  it("repeated rate-limited failures jump the retry backoff to the ladder cap", async () => {
+    // The quota refills on a time window: the first retry stays cheap (the
+    // failure may have been the tail of a hot minute), but once it confirms
+    // the window is still hot, the next retry waits the full cap (base × 6)
+    // instead of burning the last attempt inside the same minute.
     const stream = new MemoryStream();
     const agent = new AgentProcessor({
       stream,
@@ -894,9 +895,9 @@ describe("minimal web-chat agent processors", () => {
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
     );
-    // Seed at the plain debounce, then both retries at debounce + cap (8×6)
-    // instead of the exponential rungs (258, 266).
-    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 298, 298]);
+    // Seed at the plain debounce, first retry on the ladder (8×1), second at
+    // the cap (8×6) instead of the exponential middle rung (266).
+    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 298]);
   });
 
   it("resets the consecutive failure counter after a successful request", async () => {
