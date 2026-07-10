@@ -1,6 +1,10 @@
+import util from "node:util";
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
-import { createInvokeCapabilityPathProxy, withInvokeCapabilityFallback } from "./utils.ts";
+import {
+  createInvokeCapabilityPathProxy,
+  installPrototypeInvokeCapabilityFallback,
+} from "./utils.ts";
 
 class HostTarget extends RpcTarget {
   calls: DynamicCall[] = [];
@@ -25,6 +29,7 @@ class HostTarget extends RpcTarget {
     return `dynamic:${call.path.join(".")}:${call.args.join(",")}`;
   }
 }
+installPrototypeInvokeCapabilityFallback(HostTarget);
 
 type HostStub = {
   known(value: string): Promise<string>;
@@ -41,11 +46,10 @@ type HostStub = {
   };
 };
 
-describe("dynamic path proxy", () => {
+describe("prototype-chain dynamic fallback", () => {
   it("keeps real RpcTarget members and falls back only for unknown paths", async () => {
     const target = new HostTarget();
-    const host = withInvokeCapabilityFallback(target);
-    const stub = new RpcStub(host as never) as unknown as HostStub;
+    const stub = new RpcStub(target as never) as unknown as HostStub;
 
     await expect(stub.known("x")).resolves.toBe("known:x");
     await expect(stub.nested.math.add(20, 22)).resolves.toBe(42);
@@ -56,38 +60,70 @@ describe("dynamic path proxy", () => {
     expect(target.calls).toEqual([{ args: ["Ada"], path: ["tools", "greeter", "sayHello"] }]);
   });
 
-  it("wraps ordinary objects that implement invokeCapability", () => {
-    const target = withInvokeCapabilityFallback({
-      calls: [] as DynamicCall[],
-      invokeCapability(call: DynamicCall) {
-        this.calls.push(call);
-        return call.path.join(".");
-      },
-      ping(value: string) {
-        return `pong:${value}`;
-      },
-    }) as unknown as PlainTarget;
+  it("instances are genuine, unproxied RpcTargets (the whole point: workerd pipelining)", () => {
+    // workerd's pipeline classifier brand-checks a method call's RESULT and a
+    // Proxy never passes (cloudflare/workerd#6873) — the fallback must
+    // therefore live on the prototype chain, leaving instances plain. The
+    // live guard for the pipelining behavior itself is
+    // e2e/vitest/agent-handle-pipelining.itx.e2e.test.ts; this pins the
+    // structural half vitest can see.
+    const target = new HostTarget();
+    expect(util.types.isProxy(target)).toBe(false);
+    expect(target).toBeInstanceOf(RpcTarget);
+    expect(Object.getOwnPropertyNames(target)).toEqual(["calls", "ownField"]);
+  });
 
-    expect(target.ping("x")).toBe("pong:x");
-    expect(target.tools.greeter.sayHello("Ada")).toBe("tools.greeter.sayHello");
-    expect(target.calls).toEqual([{ args: ["Ada"], path: ["tools", "greeter", "sayHello"] }]);
+  it("dispatches through the invoker derived from the RECEIVING instance", () => {
+    // Two instances share one hop (it lives on the class prototype); the
+    // trap must route each call to the instance the lookup happened on.
+    const a = new HostTarget();
+    const b = new HostTarget();
+    (a as unknown as { toolA(): unknown }).toolA();
+    (b as unknown as { toolB(): unknown }).toolB();
+    expect(a.calls).toEqual([{ args: [], path: ["toolA"] }]);
+    expect(b.calls).toEqual([{ args: [], path: ["toolB"] }]);
+  });
+
+  it("supports a custom invokerFor (surfaces that dispatch through their capability host)", () => {
+    const recorded: DynamicCall[] = [];
+    class Handle extends RpcTarget {
+      get host() {
+        return {
+          invokeCapability(call: DynamicCall) {
+            recorded.push(call);
+            return `via-host:${call.path.join(".")}`;
+          },
+        };
+      }
+    }
+    installPrototypeInvokeCapabilityFallback(Handle, {
+      invokerFor: (handle) => handle.host,
+    });
+
+    const result = (new Handle() as unknown as { someTool(n: number): unknown }).someTool(7);
+    expect(result).toBe("via-host:someTool");
+    expect(recorded).toEqual([{ args: [7], path: ["someTool"] }]);
+  });
+
+  it("awaiting an instance must not treat it as a thenable", async () => {
+    // `then` reaching the dynamic fallback would turn every `await stub` into
+    // a capability call that never resolves.
+    const target = new HostTarget();
+    expect((target as unknown as { then: unknown }).then).toBeUndefined();
+    await expect(Promise.resolve(target)).resolves.toBe(target);
   });
 
   it("does not expose RpcTarget instance fields as dynamic paths", async () => {
-    const host = withInvokeCapabilityFallback(new HostTarget());
-    const stub = new RpcStub(host as never) as unknown as HostStub;
+    const stub = new RpcStub(new HostTarget() as never) as unknown as HostStub;
 
     await expect(stub.ownField()).rejects.toThrow(/instance property/);
   });
 
   it("lets __describe traverse dynamic paths over RPC (the host intercepts it)", async () => {
     // NOT reserved on purpose: the capability-host processor answers trailing
-    // __describe from mount metadata, so the proxy must let it through — and
-    // it must survive Cap'n Web's own-descriptor probe (an earlier version
-    // special-cased the get trap only and worked in-process but not over RPC).
+    // __describe from mount metadata, so the fallback must let it through.
     const target = new HostTarget();
-    const host = withInvokeCapabilityFallback(target);
-    const stub = new RpcStub(host as never) as unknown as {
+    const stub = new RpcStub(target as never) as unknown as {
       someMount: { sub: { __describe(): Promise<string> } };
     };
 
@@ -95,6 +131,45 @@ describe("dynamic path proxy", () => {
       "dynamic:someMount.sub.__describe:",
     );
     expect(target.calls).toEqual([{ args: [], path: ["someMount", "sub", "__describe"] }]);
+  });
+
+  it("is idempotent: a second install must not stack hops", () => {
+    class Once extends RpcTarget {
+      calls: DynamicCall[] = [];
+      invokeCapability(call: DynamicCall) {
+        this.calls.push(call);
+        return "ok";
+      }
+    }
+    installPrototypeInvokeCapabilityFallback(Once);
+    const hopAfterFirst = Object.getPrototypeOf(Once.prototype) as object;
+    installPrototypeInvokeCapabilityFallback(Once);
+    expect(Object.getPrototypeOf(Once.prototype)).toBe(hopAfterFirst);
+
+    const target = new Once();
+    (target as unknown as { tool(): unknown }).tool();
+    expect(target.calls).toEqual([{ args: [], path: ["tool"] }]);
+  });
+
+  it("does not conjure dispatchers for non-instance receivers (prototype probes)", () => {
+    // Frameworks and debugging tools read properties off prototypes directly;
+    // the fallback must answer plain undefined there — invokerFor would
+    // otherwise run against a receiver with no instance state.
+    const probed = (HostTarget.prototype as unknown as { someTool: unknown }).someTool;
+    expect(probed).toBeUndefined();
+  });
+
+  it("subclass instances inherit the fallback and dispatch to themselves", () => {
+    class Sub extends HostTarget {
+      subKnown() {
+        return "sub";
+      }
+    }
+    const sub = new Sub();
+    expect(sub.subKnown()).toBe("sub");
+    expect(sub.known("y")).toBe("known:y");
+    (sub as unknown as { subTool(v: string): unknown }).subTool("z");
+    expect(sub.calls).toEqual([{ args: ["z"], path: ["subTool"] }]);
   });
 
   it("hides reserved path segments from function-backed path proxies", () => {
@@ -115,14 +190,4 @@ describe("dynamic path proxy", () => {
 type DynamicCall = {
   args: unknown[];
   path: string[];
-};
-
-type PlainTarget = {
-  calls: DynamicCall[];
-  ping(value: string): string;
-  tools: {
-    greeter: {
-      sayHello(name: string): string;
-    };
-  };
 };

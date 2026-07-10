@@ -291,43 +291,38 @@ export interface CfBrowserCapability {
 /**
  * Agent capability surface for message loops and agent-local dynamic tools.
  *
- * DELIBERATELY NOT wrapped in `withInvokeCapabilityFallback`, unlike the other
- * itx surfaces — and this is load-bearing, not an omission. This is the one
- * surface routinely returned FROM A METHOD CALL (`itx.agents.get(path)`), and
- * workerd's RPC classifies a call result for promise pipelining with native
+ * Instances are DELIBERATELY plain — never wrapped in a Proxy. This is the
+ * surface most routinely returned FROM A METHOD CALL (`itx.agents.get(path)`),
+ * and workerd RPC classifies a call result for promise pipelining with native
  * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
  * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
  * pipelined call on the result dies with the baffling "The RPC receiver does
- * not implement the method ..."). A plain class instance classifies as a
- * single stub and pipelines fine — which is what lets model code write the
- * natural one-liners over the script lane (`env.ITX` loopback):
+ * not implement the method ..." — cloudflare/workerd#6873). A plain class
+ * instance classifies as a single stub and pipelines fine, which is what lets
+ * model code write the natural one-liners over the script lane (`env.ITX`
+ * loopback):
  *
  *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get(path).someTool(args);
  *   await itx.agents.get(path).capabilityHost.someTool(args);
  *
- * The second line is how DYNAMIC capabilities are reached through a fetched
- * handle: `capabilityHost` is a property (workerd resolves property PATHS
- * through proxies — `tryGetProperty` has an explicit `isProxyOfRpcTarget`
- * walk — the gap is only in classifying METHOD RESULTS), so the proxied
- * CapabilityHost behind it still does dotted dynamic dispatch.
- * Inside the agent's own scope nothing changes: scope capabilities live on
- * the root itx (`itx.someTool(...)`), whose proxy is never a call result.
- *
- * Keep it this way: never return a proxied target from a method callers will
- * pipeline on. (Upstream fix proposed for the workerd classifier; until it
- * ships everywhere this rule stands regardless.)
+ * The dynamic-tool spellings (lines 2 and 3 are equivalent) come from the
+ * PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
+ * this file: unknown members walk the prototype chain into a proxied hop and
+ * dispatch through this agent scope's capability host, while the instance
+ * itself stays a genuine, natively-branded RpcTarget. See
+ * installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
+ * mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
  */
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
-   * through a fetched handle: `agents.get(path).capabilityHost.someTool(args)`.
-   * That chain pipelines over workerd RPC because `capabilityHost` is a
-   * PROPERTY: workerd resolves property paths through the host's fallback
-   * Proxy (its traversal code special-cases proxies), whereas the handle
-   * itself must stay unproxied to be pipelinable at all (see the class
-   * comment). Inside the agent's own scripts the same capabilities are simply
-   * `itx.someTool(args)`.
+   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
+   * shorthand `agents.get(path).someTool(args)` resolves through the same
+   * host via the handle's prototype-chain fallback; both pipeline over
+   * workerd RPC. Inside the agent's own scripts the same capabilities are
+   * simply `itx.someTool(args)`.
    */
   capabilityHost: CapabilityHost;
   /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent's scope). */
@@ -513,9 +508,11 @@ export interface AgentCollection {
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
    * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
-   * `itx.agents.get(path).message(text)` in one expression — over workerd RPC
-   * (the script lane); see Agent's class comment for the mechanism
-   * and `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
+   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
+   * expression — over workerd RPC (the script lane); dynamic members resolve
+   * through the prototype-chain fallback. See Agent's class comment
+   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
+   * guard.
    */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */

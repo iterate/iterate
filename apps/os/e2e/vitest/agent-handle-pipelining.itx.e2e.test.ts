@@ -1,30 +1,32 @@
 /**
- * Agent handles must support workerd PROMISE PIPELINING from the script lane.
+ * Method-returned itx surfaces must support workerd PROMISE PIPELINING from
+ * the script lane.
  *
  * Model-authored scripts run in dynamic workers whose `itx` is a workerd RPC
  * stub (`env.ITX` loopback), and models write the natural one-liners:
  *
  *   await itx.agents.get("subagents/researcher").message(task);
- *   await itx.agents.get(path).capabilityHost.someTool(args);
+ *   await itx.agents.get(path).someTool(args);
+ *   await itx.capabilityHosts.get(path).runScript(code);
  *
- * Both chain a call onto the un-awaited RESULT of `agents.get(...)` — that is
- * workerd promise pipelining. workerd classifies a call result for pipelining
- * with native brand checks (`serializeJsValueWithPipeline` in worker-rpc.c++),
- * and a JS Proxy never passes them: when `get()` returned an AgentRpcTarget
- * wrapped in `withInvokeCapabilityFallback`, the result classified as
- * NonPipelinable and EVERY pipelined call on it died with the baffling
- * "The RPC receiver does not implement the method ..." — while the awaited
- * two-step worked, and property-path traversal through proxies (which workerd
- * special-cases in `tryGetProperty`) worked too. AgentRpcTarget is therefore
- * deliberately a plain, unproxied class (see its comment in rpc-targets.ts),
- * and an agent scope's DYNAMIC capabilities are reached through the
- * `capabilityHost` property — a getter, so its proxied target is traversed,
- * never pipeline-classified.
+ * Each chains a call onto the un-awaited RESULT of a method — that is workerd
+ * promise pipelining. workerd classifies a call result for pipelining with
+ * native brand checks (`serializeJsValueWithPipeline` in worker-rpc.c++), and
+ * a JS Proxy never passes them (cloudflare/workerd#6873): when these getters'
+ * results were instances wrapped in a fallback Proxy, they classified as
+ * NonPipelinable and EVERY pipelined call died with the baffling "The RPC
+ * receiver does not implement the method ..." — while the awaited two-step
+ * worked, and property-path traversal through proxies (which workerd
+ * special-cases in `tryGetProperty`) worked too. The fix: instances are
+ * genuine, unproxied RpcTargets, and the dynamic-capability fallback lives on
+ * each class's PROTOTYPE CHAIN instead (installPrototypeInvokeCapabilityFallback
+ * in domains/itx/utils.ts; registry at the bottom of rpc-targets.ts) — so
+ * `agents.get(path).someTool(args)` works AND pipelines.
  *
  * This file is the regression guard for that arrangement, exercising the
  * exact expressions the prompts teach, on the exact lane agents use
  * (capability-host runScript → dynamic worker → env.ITX). It FAILS on any
- * build where `agents.get()` returns a proxied target.
+ * build where a method-returned surface is a Proxy.
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
@@ -33,7 +35,7 @@ const PROOF_STREAM = "/e2e/handle-pipelining-proof";
 const PROOF_TYPE = "events.iterate.test/handle-pipelining-proof";
 
 test(
-  "itx.agents.get(...) pipelines: .message() and .capabilityHost.<dynamic capability>()",
+  "itx.agents.get(...) pipelines: .message(), .<dynamic capability>(), and .capabilityHost.<dynamic capability>()",
   { timeout: 120_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "handle-pipeline" });
@@ -65,20 +67,37 @@ test(
         const sent = await itx.agents.get(${JSON.stringify(agentPath)})
           .message("pipelined hello");
 
-        // 2. A dynamic capability through a fetched handle: capabilityHost is
-        //    a property (traversal — proxy-safe), proofAppend is the dynamic
-        //    name its fallback resolves, still all one un-awaited chain.
+        // 2. A dynamic capability DIRECTLY on the fetched handle: proofAppend
+        //    is an unknown member, resolved by the prototype-chain fallback
+        //    and dispatched through the agent scope's capability host —
+        //    all one un-awaited chain.
         const [appended] = await itx.agents.get(${JSON.stringify(agentPath)})
-          .capabilityHost.proofAppend({
+          .proofAppend({
             type: ${JSON.stringify(PROOF_TYPE)},
             payload: { marker: ${JSON.stringify(marker)} },
           });
+
+        // 3. The same capability through the explicit capabilityHost door —
+        //    equivalent spelling, also pipelined (capabilityHost is a
+        //    property hop, proofAppend the dynamic name).
+        const [appendedViaHost] = await itx.agents.get(${JSON.stringify(agentPath)})
+          .capabilityHost.proofAppend({
+            type: ${JSON.stringify(PROOF_TYPE)},
+            payload: { marker: ${JSON.stringify(marker)} + "-via-host" },
+          });
+
+        // 4. Another method-returned surface entirely: capabilityHosts.get()
+        //    used to hand back a Proxy too — its class methods must pipeline.
+        const echoed = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
+          .describeCapabilities();
 
         return {
           messageOffset: sent.offset,
           messageType: sent.type,
           proofOffset: appended.offset,
           proofType: appended.type,
+          proofViaHostOffset: appendedViaHost.offset,
+          hostCapabilityPaths: echoed.map((c) => c.path.join(".")),
         };
       }
     `);
@@ -87,9 +106,16 @@ test(
       messageType: "events.iterate.com/agents/message-received",
       proofType: PROOF_TYPE,
     });
-    const result = run.result as { messageOffset: number; proofOffset: number };
+    const result = run.result as {
+      messageOffset: number;
+      proofOffset: number;
+      proofViaHostOffset: number;
+      hostCapabilityPaths: string[];
+    };
     expect(result.messageOffset).toBeGreaterThan(0);
     expect(result.proofOffset).toBeGreaterThan(0);
+    expect(result.proofViaHostOffset).toBeGreaterThan(result.proofOffset);
+    expect(result.hostCapabilityPaths).toContain("proofAppend");
 
     // The side effects are real, not just unthrown: the message folded into
     // the agent stream and the dynamic capability appended the proof event.
