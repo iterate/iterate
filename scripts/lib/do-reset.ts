@@ -212,37 +212,73 @@ export async function resetWorkerDurableObjects(input: {
     // uploads strip it, and those go through the raw upload above.
     const parkedDir = mkdtempSync(join(tmpdir(), "do-reset-"));
     try {
-      writeFileSync(join(parkedDir, "worker.js"), parkedModuleWithKeptClasses);
-      writeFileSync(
-        join(parkedDir, "wrangler.json"),
-        JSON.stringify({
-          name: input.workerName,
-          main: "worker.js",
-          compatibility_date: input.compatibilityDate,
-          // Existing zone routes stay untouched (wrangler only manages routes
-          // listed in config); don't let a route-less config enable workers.dev.
-          workers_dev: false,
-          exports: {
-            ...Object.fromEntries(
-              deletedClasses.map((className) => [
-                className,
-                { type: "durable-object", state: "deleted" },
-              ]),
-            ),
-            ...Object.fromEntries(
-              kept.map((className) => [className, { type: "durable-object", storage: "sqlite" }]),
-            ),
-          },
-        }),
-      );
-      const viaExports = runWranglerDeploy({
-        configPath: join(parkedDir, "wrangler.json"),
-        cwd: input.cwd,
-        credentials: input.credentials,
-      });
-      if (!viaExports.ok) {
-        throw new Error(
-          `DO reset: parked deploy failed for ${input.workerName} (see output above).`,
+      // Classes the namespaces listing missed but the API knows have live
+      // objects. Observed live 2026-07-09 (preview-3/5/8, class
+      // SandboxStandard3DurableObject): the namespaces API attributed no
+      // namespace for the class to this script, yet the deploy failed with
+      // 10064 "does not export class X which is depended on by existing
+      // Durable Objects" — deterministically, wedging every slot handover
+      // for the full acquire budget (~15 min per CI run). The API error
+      // names the class, so resurrect it as a kept stub (the sandbox-class
+      // policy: orphaned instances are harmless once D1/KV are wiped; the
+      // next real deploy re-declares whatever its config exports) and
+      // retry. Bounded: each round can only ADD a class the API itself
+      // demanded, and a worker has finitely many classes.
+      const resurrected: string[] = [];
+      for (;;) {
+        const stubbed = [...kept, ...resurrected];
+        writeFileSync(
+          join(parkedDir, "worker.js"),
+          `${parkedModule}\n${stubbed.map((className) => `export class ${className} { constructor() {} }`).join("\n")}\n`,
+        );
+        writeFileSync(
+          join(parkedDir, "wrangler.json"),
+          JSON.stringify({
+            name: input.workerName,
+            main: "worker.js",
+            compatibility_date: input.compatibilityDate,
+            // Existing zone routes stay untouched (wrangler only manages routes
+            // listed in config); don't let a route-less config enable workers.dev.
+            workers_dev: false,
+            exports: {
+              ...Object.fromEntries(
+                deletedClasses.map((className) => [
+                  className,
+                  { type: "durable-object", state: "deleted" },
+                ]),
+              ),
+              ...Object.fromEntries(
+                stubbed.map((className) => [
+                  className,
+                  { type: "durable-object", storage: "sqlite" },
+                ]),
+              ),
+            },
+          }),
+        );
+        const viaExports = runWranglerDeploy({
+          configPath: join(parkedDir, "wrangler.json"),
+          cwd: input.cwd,
+          credentials: input.credentials,
+        });
+        if (viaExports.ok) break;
+        const missingClass = viaExports.output.match(
+          /does not export class '([A-Za-z0-9_$]+)'/,
+        )?.[1];
+        if (!missingClass || resurrected.includes(missingClass)) {
+          throw new Error(
+            `DO reset: parked deploy failed for ${input.workerName} (see output above).`,
+          );
+        }
+        console.log(
+          `DO reset: ${input.workerName} has live Durable Objects of class ${missingClass} ` +
+            `that the namespaces listing did not attribute to it — keeping it as a stub and retrying`,
+        );
+        resurrected.push(missingClass);
+      }
+      if (resurrected.length > 0) {
+        console.log(
+          `DO reset: kept unlisted classes ${resurrected.join(", ")} as stubs (instances survive as orphans)`,
         );
       }
     } finally {

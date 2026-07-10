@@ -267,7 +267,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           // reducer ignored it, so don't render an error input for it either.
           return;
         }
-        const retry = state.consecutiveLlmFailures < MAX_CONSECUTIVE_LLM_FAILURES;
+        const retry =
+          state.consecutiveLlmFailures <
+          (isRateLimitErrorMessage(result.error.message)
+            ? MAX_CONSECUTIVE_RATE_LIMITED_LLM_FAILURES
+            : MAX_CONSECUTIVE_LLM_FAILURES);
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/input-added",
@@ -973,10 +977,24 @@ const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
 const MAX_CONSECUTIVE_LLM_FAILURES = 3;
 
 /**
+ * Rate-limited failures get a longer runway: they are provider weather, not
+ * anything a fresh prompt fixes, and with repeat rate-limits jumping to the
+ * backoff cap (see #llmRetryBackoffMs) seven attempts span ~5 minutes —
+ * enough to clear a saturated per-minute window. Observed live 2026-07-10
+ * on the preview account: Workers AI `3021: rate limiting` bursts while
+ * several preview slots ran agent e2e concurrently killed turns at 3
+ * strikes inside ~30s, while sequential traffic moments later sailed
+ * through.
+ */
+const MAX_CONSECUTIVE_RATE_LIMITED_LLM_FAILURES = 7;
+
+/**
  * Whether an LLM failure message is the vendor telling us to slow down.
  * Matched on the message because the transport surfaces vendor errors as
  * text; Workers AI's shape is "3021: rate limiting: inference request per
- * min rate reached". Drives the backoff floor in #llmRetryBackoffMs.
+ * min rate reached". Drives the backoff floor in #llmRetryBackoffMs and the
+ * longer retry runway above. Derived from fold data only (the failure
+ * event's message), so refolds agree.
  */
 function isRateLimitErrorMessage(message: string): boolean {
   return /\b3021\b|rate.?limit/i.test(message);

@@ -880,9 +880,8 @@ export interface Repo {
    * unless \`force: true\` discards them. The synced head is immediately live
    * for worker builds.
    *
-   * Public repositories transfer server-side (any history size); private
-   * ones transfer in-process, where big histories need \`depth\`. \`depth\`
-   * prunes to the newest N commits — GitHub retains the full history, and a
+   * The history transfers in-process, so big histories need \`depth\` — it
+   * prunes to the newest N commits. GitHub retains the full history, and a
    * later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
