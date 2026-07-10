@@ -22,7 +22,7 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
     // homepage below.
     const app = req.headers.get("x-iterate-app");
     if (app === "hello") {
-      return this.serveApp(req, {
+      return this.fetchDynamicWorker(req, {
         type: "stateless",
         path: "/",
         entrypoint: "HelloApp",
@@ -33,7 +33,7 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
       });
     }
     if (app === "counter") {
-      return this.serveApp(req, {
+      return this.fetchDynamicWorker(req, {
         type: "stateful",
         path: "/",
         className: "CounterApp",
@@ -82,7 +82,7 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
    * intercept it here to render your own). Method calls on apps still go
    * through `project.workers.get(ref)` RPC dispatch; HTTP never does.
    */
-  private async serveApp(req: Request, ref: DynamicWorkerRef): Promise<Response> {
+  private async fetchDynamicWorker(req: Request, ref: DynamicWorkerRef): Promise<Response> {
     const headers = new Headers(req.headers);
     headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
     return await this.env.ITX.fetch(new Request(req, { headers }));
