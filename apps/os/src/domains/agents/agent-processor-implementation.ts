@@ -32,6 +32,7 @@ import {
   jsonCompatible,
   normalizeLlmUsage,
   runWorkersAiAttempt,
+  type CloudflareAiGatewayTransport,
   type WorkersAiBinding,
 } from "./workers-ai-transport.ts";
 
@@ -54,12 +55,19 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  * - `llmRetryBackoffBaseMs` scales the failure-retry backoff (default
  *   AGENT_LLM_RETRY_BACKOFF_BASE_MS); tests shrink it so retry loops run in
  *   milliseconds.
+ * - `cloudflareAiGatewayTransport` resolves how attempts travel through the
+ *   gateway (unified billing vs the BYOK lane — see
+ *   CloudflareAiGatewayTransport). A function, not a value:
+ *   it reads deployment config and the host's secrets, and a bad config must
+ *   fail the ATTEMPT (journaled, retried) rather than DO construction.
+ *   Defaults to unified billing.
  */
 type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
+  cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
 };
 
 /** Page size for full-journal reads (prompt building, currency checks). */
@@ -680,6 +688,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       });
       const completion = await runWorkersAiAttempt({
         ai,
+        transport: this.deps.cloudflareAiGatewayTransport?.(),
         // The attempt's whole vendor phase (dial + stream drain) self-caps at
         // the intent-expiry horizon, so a wedged binding releases the live
         // set here instead of pinning the obligation until the backstop.

@@ -79,6 +79,24 @@ export const AppConfig = z.object({
     })
     .optional(),
   openAiApiKey: redacted(z.string().trim().min(1)),
+  /**
+   * How agent LLM turns travel through the Cloudflare AI Gateway — see
+   * CloudflareAiGatewayTransport in workers-ai-transport.ts. Values come from
+   * envs.ts via envShapedVars (APP_CONFIG_CLOUDFLARE_AI_GATEWAY__*), so this
+   * is per-deployment, not per-Doppler-secret.
+   *
+   * `responseCacheTtlSeconds` opts the BYOK lane into the gateway's RESPONSE
+   * cache (whole-answer replay — distinct from OpenAI's prompt cache, which
+   * BYOK gets unconditionally). Only for deployments whose conversations are
+   * synthetic (previews, local dev); never prd.
+   */
+  cloudflareAiGateway: z
+    .object({
+      transport: z.enum(["unified", "byok"]).default("unified"),
+      id: z.string().trim().min(1).default("default"),
+      responseCacheTtlSeconds: z.coerce.number().int().positive().optional(),
+    })
+    .prefault({}),
   cloudflare: z
     .object({
       accountId: publicValue(z.string().trim().min(1)).optional(),
