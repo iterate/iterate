@@ -331,8 +331,8 @@ describe("minimal web-chat agent processors", () => {
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { origin: "web", content: "hello" },
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "hello", from: { kind: "user", origin: "web" } },
     });
     await deliver();
     await deliver();
@@ -350,8 +350,7 @@ describe("minimal web-chat agent processors", () => {
 
     expect(stream.events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
-        "events.iterate.com/agents/user-message-received",
-        "events.iterate.com/agent/input-added",
+        "events.iterate.com/agents/message-received",
         "events.iterate.com/agent/llm-request-scheduled",
         "events.iterate.com/agent/llm-request-requested",
         "events.iterate.com/agent/llm-request-started",
@@ -398,18 +397,21 @@ describe("minimal web-chat agent processors", () => {
     const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
 
     await stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { origin: "mcp", content: "how many agents does this project have?" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: "how many agents does this project have?",
+        from: { kind: "user", origin: "mcp" },
+      },
     });
     await deliver(agent);
     await deliver(agent);
 
+    // The message folds straight into history (no input-added reflection).
     expect(stream.events.map((event) => event.type)).toEqual([
-      "events.iterate.com/agents/user-message-received",
-      "events.iterate.com/agent/input-added",
+      "events.iterate.com/agents/message-received",
       "events.iterate.com/agent/llm-request-scheduled",
     ]);
-    expect(stream.events[1]!.payload).toMatchObject({
+    expect(stream.events[0]!.payload).toMatchObject({
       content: "how many agents does this project have?",
     });
   });
@@ -486,20 +488,18 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append(
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { origin: "mcp", content: "first ask from MCP" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "first ask from MCP", from: { kind: "user", origin: "mcp" } },
       },
       {
-        type: "events.iterate.com/agents/user-message-received",
-        payload: { origin: "mcp", content: "second ask from MCP" },
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: "second ask from MCP", from: { kind: "user", origin: "mcp" } },
       },
     );
 
+    // Both messages fold straight into history in one batch; the settle pass
+    // derives exactly one scheduled request for the pair.
     await deliverNewEvents({ processor: agent, stream, cursors });
-    expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
-    ).toHaveLength(2);
-
     await deliverNewEvents({ processor: agent, stream, cursors });
 
     const scheduled = stream.events.filter(
@@ -533,8 +533,8 @@ describe("minimal web-chat agent processors", () => {
 
     // First user message — triggers llm-request-scheduled (with debounce)
     await stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { origin: "web", content: "message one" },
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "message one", from: { kind: "user", origin: "web" } },
     });
     await deliver();
     await deliver();
@@ -542,8 +542,8 @@ describe("minimal web-chat agent processors", () => {
 
     // Second user message arrives before debounce fires — queued as pending
     await stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { origin: "web", content: "message two" },
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "message two", from: { kind: "user", origin: "web" } },
     });
     await deliver();
 
@@ -602,8 +602,8 @@ describe("minimal web-chat agent processors", () => {
     });
     // New event arrives after restart — triggers recovery
     await stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { origin: "web", content: "second message" },
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "second message", from: { kind: "user", origin: "web" } },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
     // Recovery should fire llm-request-requested without waiting for a debounce
@@ -851,6 +851,53 @@ describe("minimal web-chat agent processors", () => {
     // Retries space out exponentially (base × 2^(n-1) rides the debounce);
     // the 2026-07-09 prd incident burned all retries in ~1s of instant 8008s.
     expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 266]);
+  });
+
+  it("repeated rate-limited failures jump the retry backoff to the ladder cap", async () => {
+    // The quota refills on a time window: the first retry stays cheap (the
+    // failure may have been the tail of a hot minute), but once it confirms
+    // the window is still hot, the next retry waits the full cap (base × 6)
+    // instead of burning the last attempt inside the same minute.
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          throw new Error("3021: rate limiting: inference request per min rate reached");
+        },
+      },
+      llmRetryBackoffBaseMs: 8,
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "hello",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      await deliverNewEvents({ processor: agent, stream, cursors });
+      const stopped = stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agent/input-added" &&
+          String(event.payload?.content).includes("automatic retries stopped"),
+      );
+      if (stopped) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    // Seed at the plain debounce, first retry on the ladder (8×1), second at
+    // the cap (8×6) instead of the exponential middle rung (266).
+    expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 298]);
   });
 
   it("resets the consecutive failure counter after a successful request", async () => {
@@ -1141,8 +1188,8 @@ describe("refold safety", () => {
     });
     const cursors = new Map<object, number>();
     await stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { origin: "web", content: "hi" },
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "hi", from: { kind: "user", origin: "web" } },
     });
     await vi.waitFor(
       async () => {
@@ -1264,5 +1311,78 @@ describe("file attachments in the LLM request", () => {
     expect(flattened).toContain('itx.files.get("/agents/web/demo/abc-cat.png").bytes()');
     expect(flattened).toContain(attachment.url);
     expect(flattenMessageToText({ role: "user", content: "no files" })).toBe("no files");
+  });
+});
+
+describe("subagents in reduced state", () => {
+  const announced = (childPath: string, offset: number) => ({
+    type: "events.iterate.com/stream/child-stream-created",
+    payload: { childPath },
+    offset,
+    createdAt: "2026-07-09T00:00:00.000Z",
+    path: "/agents/main",
+  });
+
+  it("folds immediate subagent births from child-stream-created announcements", () => {
+    const state = reduceAgentEvents([
+      announced("/agents/main/subagents/researcher", 1),
+      // A grandchild announces to every ancestor too — it belongs to the
+      // subagent's own fold, not this one.
+      announced("/agents/main/subagents/researcher/subagents/helper", 2),
+      // Duplicate announcements dedupe.
+      announced("/agents/main/subagents/researcher", 3),
+      // A non-subagent child stream is not a subagent.
+      announced("/agents/main/notes", 4),
+    ]);
+    expect(state.subagents).toMatchObject([
+      { path: "/agents/main/subagents/researcher", spawnedAt: "2026-07-09T00:00:00.000Z" },
+    ]);
+  });
+});
+
+describe("inter-agent mail", () => {
+  const mail = (payload: Record<string, unknown>, offset: number) => ({
+    type: "events.iterate.com/agents/message-received",
+    payload,
+    offset,
+    createdAt: "2026-07-09T00:00:00.000Z",
+    path: "/agents/main/subagents/researcher",
+  });
+
+  it("folds agent mail into history with the sender named, as an autonomous trigger", () => {
+    const state = reduceAgentEvents([
+      mail({ content: "status?", from: { kind: "agent", path: "/agents/main" } }, 1),
+    ]);
+    expect(state.history).toMatchObject([
+      { role: "user", content: "Message from agent /agents/main:\nstatus?" },
+    ]);
+    // Agent mail counts against the autonomous turn budget instead of
+    // refilling it — the loop breaker bounds parent↔subagent ping-pong.
+    expect(state.pendingTriggerSource).toBe("agent-loop");
+    expect(state.pendingTriggerOffset).toBe(1);
+  });
+
+  it("human messages refill the autonomous budget", () => {
+    const state = reduceAgentEvents([
+      mail({ content: "hi", from: { kind: "user", origin: "web" } }, 1),
+    ]);
+    expect(state.history).toMatchObject([{ role: "user", content: "hi" }]);
+    expect(state.pendingTriggerSource).toBe("user");
+    expect(state.autonomousTurnCount).toBe(0);
+  });
+
+  it("dont-trigger-request records the message without waking the loop", () => {
+    const state = reduceAgentEvents([
+      mail(
+        {
+          content: "webhook without a mention",
+          from: { kind: "github", login: "someone" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+        1,
+      ),
+    ]);
+    expect(state.history).toHaveLength(1);
+    expect(state.pendingTriggerOffset).toBeNull();
   });
 });

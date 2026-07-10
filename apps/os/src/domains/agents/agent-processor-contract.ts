@@ -2,10 +2,11 @@ import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.5";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
-export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
+export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -153,7 +154,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- SANDBOXES — real Linux containers running Cloudflare\'s stock sandbox image, kept like project pets — are for when you need to actually run code, shell tools, or servers. Nothing gives you one automatically: check `await itx.sandboxes.list()` and PREFER REUSING an existing sandbox; otherwise create one — `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })` (names are one path segment — the path is `/sandboxes/<name>`; instance types are Cloudflare\'s, fixed for life: lite | basic | standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/). Then `const sandbox = await itx.sandboxes.get(path)` — the Cloudflare Sandbox SDK verbatim (`exec`, files, processes, sessions, `gitCheckout`, code interpreter, `tunnels`; see https://developers.cloudflare.com/sandbox/api/ for that whole API) plus lifecycle verbs: `start()`, `sleep()` (snapshot + shut down now; the sandbox stays yours), `destroy()` (permanent — the name is retired). The `sandbox-exec` example is the known-good pattern.',
   "- Sandbox facts that differ from stock Cloudflare: sandboxes are created explicitly (get() refuses paths never created), and — unlike stock Cloudflare, where sleep loses all state — ONLY `/workspace` survives sleep (snapshotted on sleep()/idle and restored on the next start; everything else on disk resets, and a crash loses anything since the last snapshot — keep durable work in /workspace or commit it to a repo). The first command boots the container (allow a minute cold); it sleeps after idle (`sleepAfter`, default 10m). NOTHING is preinstalled beyond the stock image (Ubuntu 22.04, Node 20, Bun, git, curl, jq) and NO repo is checked out — install tools with apt/npm and clone what you need with `gitCheckout` (if the project has a GitHub connection, a working GH_TOKEN env var is planted automatically). `setEnvVars` is durable here; values should be `getSecret({ path })` placeholders substituted only at egress, so real secret material never enters the container — never set (or print) a raw secret. All sandbox network egress flows through project egress policy; there is no direct internet path.",
   "- To expose a server running in a sandbox at a PUBLIC url, open a quick tunnel: `const { url } = await sandbox.tunnels.get(<port>)` gives a `https://<random>.trycloudflare.com` address (start the server first, e.g. with `startProcess`). The url is ephemeral — it changes if the container restarts — so fetch it fresh each session; `sandbox.tunnels.destroy(<port>)` closes it.",
-  '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).sendMessage("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
+  '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).message("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (itx-api.generated.ts — generated from the live RPC surface; you hold a `Project`, agent-scoped):",
@@ -192,6 +193,40 @@ const LlmRequestPolicy = z
   ])
   .default({ behaviour: "after-current-request" });
 
+/**
+ * WHO sent an inbound message — the discriminant every consumer keys on:
+ * the reducer picks the trigger source ("agent" mail counts against the
+ * autonomous turn budget instead of refilling it; humans refill it), the UI
+ * picks the bubble label, and transcribers record the sender facts they
+ * have in hand. One inbound message event for every source is the point:
+ * web chat, MCP, another agent, and the domain transcribers all go through
+ * the same door.
+ */
+const AgentMessageFrom = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), origin: z.enum(["web", "mcp"]) }),
+  z.object({ kind: z.literal("agent"), path: z.string() }),
+  z.object({
+    kind: z.literal("slack"),
+    userId: z.string().optional(),
+    botName: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("telegram"),
+    userId: z.string().optional(),
+    username: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("email"),
+    address: z.string().optional(),
+    name: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("github"),
+    login: z.string().optional(),
+    senderType: z.string().optional(),
+  }),
+]);
+
 const LlmRequestResult = z.discriminatedUnion("status", [
   z.object({
     rawResponse: z.unknown().optional(),
@@ -207,7 +242,7 @@ const LlmRequestResult = z.discriminatedUnion("status", [
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.5.0",
+  version: "0.6.1",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
@@ -258,6 +293,15 @@ export const AgentProcessorContract = defineProcessorContract({
      */
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     /**
+     * Whether the most recent LLM failure was the vendor's rate limit
+     * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
+     * per-minute window — so a REPEAT rate-limited failure jumps the retry
+     * backoff to the ladder cap instead of burning the last attempt inside
+     * the same hot minute. Cleared by any success (with
+     * consecutiveLlmFailures).
+     */
+    lastLlmFailureRateLimited: z.boolean().default(false),
+    /**
      * Open LLM obligations: every request that has not reached a terminal
      * event, keyed by the llm-request-requested event's offset (as a string).
      * The reconcile pass compares this fold against the incarnation's live
@@ -277,6 +321,22 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /**
+     * This agent's subagents: agents whose streams sit at
+     * `<this path>/subagents/<path>` (see lib/subagent-paths.ts). Derived
+     * entirely from the `stream/child-stream-created` announcements every
+     * descendant stream posts to its ancestors — a subagent someone births by
+     * raw stream append shows up exactly like one born by messaging
+     * `itx.agents.get("subagents/<name>")`.
+     */
+    subagents: z
+      .array(
+        z.object({
+          path: z.string(),
+          spawnedAt: z.string(),
+        }),
+      )
+      .default([]),
   }),
   events: {
     "events.iterate.com/agent/config-updated": {
@@ -345,21 +405,43 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/agents/user-message-received": {
+    "events.iterate.com/agents/message-received": {
       description:
-        "A user message reached the agent — from the web UI, or from an MCP client acting on the project owner's behalf.",
+        "A message reached the agent. THE inbound message event for every source — `from` says who sent it: a user (web UI or MCP client), another agent (parent↔subagent delegation and reports ride exactly this), or a domain transcriber relaying a Slack/email/GitHub message. The reducer folds it straight into model-visible history; `llmRequestPolicy` carries the sender's trigger gating (e.g. mention-gated PR comments record without waking the agent).",
       payloadSchema: z.object({
         content: z.string(),
-        origin: z.enum(["web", "mcp"]),
+        from: AgentMessageFrom,
+        /** Files attached to the message — see {@link AgentFileAttachment}. */
+        files: z.array(AgentFileAttachment).optional(),
+        llmRequestPolicy: LlmRequestPolicy,
       }),
       examples: [
         {
           description: "A user sends a chat message from the web UI.",
-          payload: { content: "What's on my calendar today?", origin: "web" },
+          payload: {
+            content: "What's on my calendar today?",
+            from: { kind: "user", origin: "web" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
         },
         {
-          description: "An MCP client asks the agent a question on the project owner's behalf.",
-          payload: { content: "Summarize the open incidents in this project.", origin: "mcp" },
+          description: "A parent agent sends work to its subagent.",
+          payload: {
+            content:
+              "Find every place we retry failed webhook deliveries and summarize the backoff policy.",
+            from: { kind: "agent", path: "/agents/main" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+        {
+          description:
+            "The slack-agent transcriber relays a thread message; a reaction or join would carry dont-trigger-request instead.",
+          payload: {
+            content:
+              "`events.iterate.com/slack/webhook-received` event received\n\n```yaml\nevent:\n  type: message\n  text: what's our uptime this month?\n```",
+            from: { kind: "slack", userId: "U0788AB12CD" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
         },
       ],
     },
@@ -579,22 +661,22 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "The circuit breaker halted an agent that chained 20 autonomous script turns without human input.",
+            "The circuit breaker halted an agent that chained 100 autonomous script turns without human input.",
           payload: {
-            maxAutonomousTurns: 20,
-            reason: "Agent circuit breaker stopped after 20 consecutive autonomous turns.",
+            maxAutonomousTurns: 100,
+            reason: "Agent circuit breaker stopped after 100 consecutive autonomous turns.",
             triggerOffset: 143,
           },
         },
       ],
     },
   },
-  processorDeps: [CapabilityHostProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
-    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agents/message-received",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-provider-selected",
@@ -605,6 +687,9 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-completed",
+    // Subagent births: every descendant stream announces itself to its
+    // ancestors; the fold keeps the immediate `<path>/subagents/<name>` ones.
+    "events.iterate.com/stream/child-stream-created",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",

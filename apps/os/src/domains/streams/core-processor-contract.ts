@@ -556,12 +556,12 @@ export const CoreProcessorContract = defineProcessorContract({
               processor: {
                 announcement: {
                   slug: "agent",
-                  version: "0.3.1",
+                  version: "0.4.0",
                   description:
                     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
                   consumes: [
                     "events.iterate.com/agent/input-added",
-                    "events.iterate.com/agents/user-message-received",
+                    "events.iterate.com/agents/message-received",
                     "events.iterate.com/agent/llm-request-completed",
                   ],
                   emits: [

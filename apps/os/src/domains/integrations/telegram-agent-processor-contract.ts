@@ -73,7 +73,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
   ],
   emits: [
-    "events.iterate.com/agent/input-added",
+    "events.iterate.com/agents/message-received",
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/telegram/message-sent",
     "events.iterate.com/capability-host/script-execution-requested",

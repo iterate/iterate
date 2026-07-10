@@ -699,7 +699,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     id: "agent-send-message",
     title: "Send a message to an agent",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). sendMessage appends the user-message event to the agent's stream and returns it; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured).",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured).",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -707,7 +707,7 @@ const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 
 // The returned value is the committed stream event — the durable record the
 // agent loop reduces into its history.
-const sent = await agent.sendMessage(vars.message ?? "Hello from the examples catalogue");
+const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
 return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
@@ -1376,7 +1376,10 @@ const view = await itx.scheduler.set({
     // A fixed path = one long-lived agent accumulating context. For a fresh
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
-    await itx.agents.get("/agents/checkin").sendMessage(
+    // Await the get() before calling methods on it — chaining the two calls
+    // in one expression fails on the script lane.
+    const agent = await itx.agents.get("/agents/checkin");
+    await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );
   }\`,

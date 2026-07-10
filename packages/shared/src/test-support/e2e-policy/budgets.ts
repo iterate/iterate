@@ -73,8 +73,14 @@ export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
  * scripts/preview/preview.ts). Sits just above a healthy lane (itx monolith
  * plus the heavy tests' own caps, running concurrently). Kills, never
  * retries: a lane that blows this is wedged, not slow.
+ *
+ * "Healthy" includes one absorbed heavy-test retry: since #1826 the agent
+ * processor spaces LLM retries 10/20/40s apart, so an agent test whose first
+ * attempt eats a Workers-AI rate-limit blip legitimately takes ~190s before
+ * its re-roll passes (observed on the slack-agent e2e). The old 360s ceiling
+ * killed an all-green lane bloated by exactly that.
  */
-export const OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS = 360;
+export const OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS = 480;
 
 /**
  * Watchdog on one whole preview e2e run (flake-hunt-loop.sh, marathon). A

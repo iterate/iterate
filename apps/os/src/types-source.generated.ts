@@ -307,17 +307,51 @@ export interface Agent {
   stream: Stream;
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  sendMessage(message: string): Promise<StreamEvent>;
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's \`from\` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * \`{ kind: "agent", path }\` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent>;
+  /**
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * that already ran (a plain last-write-wins update) AND on a path that has
+   * never existed — the append births the agent with the full default policy
+   * plus these overrides, and the batch claims the same idempotency keys the
+   * project worker's defaults lane uses, so whichever lane runs second
+   * dedupes instead of clobbering. On a subagent path a custom systemPrompt
+   * keeps the subagent contract: the "you are a subagent" suffix is appended
+   * after it (agents/agent-defaults.ts).
+   */
+  configure(input: AgentDefaultsOverrides): Promise<void>;
+  /**
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like \`message\`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget. NOT the tool for
+   * SUBAGENTS: they are prompted to report by messaging their parent (its
+   * inputs), never web chat, so an ask() at a subagent times out — use
+   * \`message()\` and read the report from your own inputs.
    */
   ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
@@ -442,7 +476,7 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (\`"/agents/<name>"\`). */
+  /** The agent control surface at a path (\`"/agents/<name>"\`, or relative to the calling scope — \`".."\` climbs). */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
@@ -1614,11 +1648,21 @@ export type AgentProcessorState = {
   autonomousTurnCount: number;
   requestGeneration: number;
   consecutiveLlmFailures: number;
+  lastLlmFailureRateLimited: boolean;
   llmRequests: Record<
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
+  subagents: { path: string; spawnedAt: string }[];
 };
+
+/**
+ * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
+ * base64 (optionally a full \`data:\` URL) — that is what Workers AI image
+ * models return, and the whole point of accepting strings is piping
+ * \`itx.ai.run\` output straight into storage.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
 export type StreamEvent = {
   type: string;
@@ -1652,13 +1696,11 @@ export type StreamEvent = {
   path: string;
 };
 
-/**
- * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
- * base64 (optionally a full \`data:\` URL) — that is what Workers AI image
- * models return, and the whole point of accepting strings is piping
- * \`itx.ai.run\` output straight into storage.
- */
-export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+/** Caller-supplied policy overrides, baked into the returned events. */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
+};
 
 export type AgentFileAttachment = {
   contentType: string;
@@ -2194,12 +2236,6 @@ export type FlattenedCapabilityInvocation = {
 
 /** One step of an {@link ItxExpression}: a property read, or a \`[method, ...args]\` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-
-/** Caller-supplied policy overrides, baked into the returned events. */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
 
 /** The default policy for one agent path: the named pieces plus the exact
  * event batch that applies them (idempotency-keyed, safe to re-append). */

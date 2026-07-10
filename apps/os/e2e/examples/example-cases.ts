@@ -254,20 +254,25 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   },
   "workspace-edit-and-push": {
     // Unique workspace per example × runtime: the path is durable identity
-    // (one Durable Object, one branch), so sharing one across the matrix
-    // would make the second runtime's edit() fail (oldString already
-    // replaced) and publishes race. Overlays clone nothing, but the publish
-    // still clones main — the budget covers a cold Artifacts clone with the
-    // 503-retry tail.
+    // (one Durable Object), so sharing one across the matrix would make the
+    // second runtime's edit() fail (oldString already replaced) and commits
+    // race. Overlays clone nothing, but the commit still clones main — the
+    // budget covers a cold Artifacts clone with the 503-retry tail.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
-    assert: (result, ctx, expect) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({
         readmePresent: true,
         edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
-        publishedBranch: `workspaces/examples/edit-${ctx.marker}`,
       });
-      const typed = result as { changes: { path: string }[]; commitOid: string };
+      const typed = result as {
+        changes: { path: string }[];
+        commitOid: string;
+        committedTo: string;
+      };
+      // #1831: commits land straight on the config repo's default branch —
+      // there is no per-workspace branch anymore.
+      expect(typed.committedTo).toMatch(/^\S+$/);
       expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
       expect(typed.changes.map((change) => change.path)).toContain("/notes/workspace-example.md");
     },
@@ -359,8 +364,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     }),
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
-        payload: { content: `hello ${marker}`, origin: "web" },
-        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: `hello ${marker}`, from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/message-received",
       });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },

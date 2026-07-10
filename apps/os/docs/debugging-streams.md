@@ -19,7 +19,7 @@ Append one event at a time so you can control offsets and timing:
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
   --context <prj_id> \
-  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/user-message-received", payload: { content: "Say hello via itx.chat.sendMessage.", origin: "web" } })'
+  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/message-received", payload: { content: "Say hello via itx.chat.sendMessage.", from: { kind: "user", origin: "web" } } })'
 ```
 
 Then wait for the agent response:
@@ -47,7 +47,7 @@ script that sends the user-visible response.
 ## Agent LLM turn inspection
 
 Use a fresh agent stream and send a message through `pnpm cli itx agent-smoke`
-or `itx.agents.get(path).sendMessage(message)`. Compare the stream events
+or `itx.agents.get(path).message(message)`. Compare the stream events
 around:
 
 - `events.iterate.com/agent/llm-request-started`
