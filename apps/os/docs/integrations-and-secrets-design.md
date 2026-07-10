@@ -140,19 +140,20 @@ What ships now:
   code never holds bytes.
 - **Provided integrations**: `provideCapability({ path: ["integrations",
 "<name>"] })` mounts project-authored integrations into the same collection
-  and address shape as built-ins (the waitrose echo e2e). Every seeded
-  project repo carries a real one — `integrations/waitrose/` (vendored
-  client, from `apps/os/project-repo-template`) — exposed through the project
-  worker's `waitrose` getter as `itx.worker.waitrose.<connection>.<method>()`:
-  durable by construction, no mount step (see integrations.md).
+  and address shape as built-ins (the ocado echo e2e). The other userspace
+  shape is a getter on the project worker (`itx.worker.<getter>.<method>()`):
+  durable by construction, no mount step — a project commits the dep + getter
+  to its own repo first (the worker-build e2e). Waitrose itself is a builtin
+  (`itx.integrations.waitrose`, vendored client in
+  `domains/integrations/waitrose-api.ts`); see integrations.md.
 - **Shared refresh strategies**: a standards-shaped userspace provider
   configures `oauth-refresh-token` with `clientCreds: "material"` — no worker
   needed (the petshop userspace e2e). A provider-specific dance is another
   small named strategy, not a framework: `waitrose-session` closes the
   username/password → session archetype (mint on first use, re-login on 401),
   proven against petshop's GraphQL session-login door — one more way into
-  petshop's one pets API — in the waitrose-session e2e lane. The seeded
-  waitrose integration itself talks to the real Waitrose.
+  petshop's one pets API — in the waitrose-session e2e lane. The waitrose
+  builtin itself talks to the real Waitrose.
 
 Deferred to the userspace-integrations PR (see ADR 0005):
 

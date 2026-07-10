@@ -134,6 +134,36 @@ export type AgentUiPresenceEntry = {
   processor?: AgentUiProcessorAnnouncement;
 };
 
+/**
+ * Token accounting folded from agent/token-usage-reported (the agent
+ * processor's normalized per-request reports): lifetime totals plus the most
+ * recent report, whose input+output against maxContextTokens is the context
+ * fullness the next turn starts from. A history-reset clears the last report
+ * — the conversation it measured is gone.
+ */
+export type AgentUiTokenUsage = {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCachedInputTokens: number;
+  totalReasoningOutputTokens: number;
+  lastReport: {
+    model: string;
+    maxContextTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+  } | null;
+};
+
+export function initialAgentUiTokenUsage(): AgentUiTokenUsage {
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCachedInputTokens: 0,
+    totalReasoningOutputTokens: 0,
+    lastReport: null,
+  };
+}
+
 export type AgentUiState = {
   /** The running activity (streaming thinking/code), or null when no work is active. */
   live: AgentUiActivity | null;
@@ -144,10 +174,19 @@ export type AgentUiState = {
   presence: AgentUiPresenceEntry[];
   /** Dense, monotonically increasing next agent_feed_items local_index. */
   nextLocalIndex: number;
+  /** Lifetime token totals + the latest report (context fullness). */
+  tokenUsage: AgentUiTokenUsage;
 };
 
 export function initialAgentUiState(): AgentUiState {
-  return { live: null, queuedUserMessages: [], eventCount: 0, presence: [], nextLocalIndex: 0 };
+  return {
+    live: null,
+    queuedUserMessages: [],
+    eventCount: 0,
+    presence: [],
+    nextLocalIndex: 0,
+    tokenUsage: initialAgentUiTokenUsage(),
+  };
 }
 
 /** One settled item to upsert at a dense list position. */
@@ -184,6 +223,8 @@ const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancel
 const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
 const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
+const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
+const AGENT_HISTORY_RESET = "events.iterate.com/agent/history-reset";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 // Historical journals (pre single-agent-processor) still stream under these
@@ -219,6 +260,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
   const state: AgentUiState = {
     ...previous,
     queuedUserMessages: previous.queuedUserMessages ?? [],
+    tokenUsage: previous.tokenUsage ?? initialAgentUiTokenUsage(),
     eventCount: previous.eventCount + 1,
   };
   const timestampMs = Date.parse(event.createdAt);
@@ -496,6 +538,36 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case AGENT_STATUS_UPDATED: {
       if (readString(event, "status") !== "idle") return state;
       return settleLiveIfIdle(state, timestampMs, ops);
+    }
+
+    case AGENT_TOKEN_USAGE_REPORTED: {
+      const model = readString(event, "model");
+      const maxContextTokens = readNumber(event, "maxContextTokens");
+      const inputTokens = readNumber(event, "inputTokens");
+      const outputTokens = readNumber(event, "outputTokens");
+      if (model == null || maxContextTokens == null || inputTokens == null || outputTokens == null)
+        return state;
+      const usage = state.tokenUsage;
+      return {
+        ...state,
+        tokenUsage: {
+          totalInputTokens: usage.totalInputTokens + inputTokens,
+          totalOutputTokens: usage.totalOutputTokens + outputTokens,
+          totalCachedInputTokens:
+            usage.totalCachedInputTokens + (readNumber(event, "cachedInputTokens") ?? 0),
+          totalReasoningOutputTokens:
+            usage.totalReasoningOutputTokens + (readNumber(event, "reasoningOutputTokens") ?? 0),
+          lastReport: { model, maxContextTokens, inputTokens, outputTokens },
+        },
+      };
+    }
+
+    case AGENT_HISTORY_RESET: {
+      // The last report measured a conversation that no longer exists; a
+      // stale red meter over a freshly compacted history would say the
+      // opposite of what just happened. Lifetime totals stay.
+      if (state.tokenUsage.lastReport === null) return state;
+      return { ...state, tokenUsage: { ...state.tokenUsage, lastReport: null } };
     }
 
     case SLACK_WEBHOOK_RECEIVED: {

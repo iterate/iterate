@@ -1,4 +1,4 @@
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 /**
  * The `iterate` dependency specifier the template ships with — pkg.pr.new's

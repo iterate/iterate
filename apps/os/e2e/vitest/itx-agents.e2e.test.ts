@@ -206,14 +206,14 @@ describe("itx", () => {
         [
           "get",
           {
-            // The seeded stateful app (the multi-app seed moved the counter
-            // class out of the root router into its own repo-backed module).
+            // The seeded stateful app: CounterApp is a named export of the
+            // one-file seeded worker.ts.
             className: "CounterApp",
             durableWorkerKey,
             path: agentPath,
             source: {
-              files: { include: ["apps/counter/**"], repoPath: "/repos/config", type: "repo" },
-              options: { entryPoint: "apps/counter/worker.ts" },
+              files: { repoPath: "/repos/config", type: "repo" },
+              options: { entryPoint: "worker.ts" },
             },
             type: "stateful",
           },

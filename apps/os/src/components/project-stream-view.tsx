@@ -33,11 +33,14 @@ import {
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import { AgentFeedView } from "~/components/agent-feed.tsx";
+import { AgentFeedView, AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
 import { FeedItemsView } from "~/components/feed-items-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
-import { StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
+import {
+  StreamProcessorsPanel,
+  type StreamRuntimeDebugState,
+} from "~/components/stream-processors-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -170,7 +173,9 @@ export function ProjectStreamView({
   // Feed-items presets apply whenever the mode shows raw feed_items.
   const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
   const defaultPreset = defaultPresetForMode(streamPath, activeMode);
-  const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
+  const activePreset = caps.rawPresets
+    ? (presets.find((preset) => preset.id === search.preset) ?? defaultPreset)
+    : defaultPreset;
   const feedSearch = search.q ?? "";
   const rawFilter = feedItemsFilterFromSearch(search, streamPath);
 
@@ -203,9 +208,10 @@ export function ProjectStreamView({
 
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
+      const stream = await resolvedStreamSource(streamPath);
       const [runtimeState, streamRuntimeState] = await Promise.all([
-        store.getProcessorRuntimeState({ subscriptionKey }),
-        store.runtimeState(),
+        stream.getProcessorRuntimeState({ subscriptionKey }),
+        stream.runtimeState(),
       ]);
       return {
         runtimeState,
@@ -215,7 +221,12 @@ export function ProjectStreamView({
           .maxOffset,
       };
     },
-    [store],
+    [resolvedStreamSource, streamPath],
+  );
+  const getStreamRuntimeState = useCallback(
+    async (): Promise<StreamRuntimeDebugState> =>
+      (await resolvedStreamSource(streamPath)).runtimeState(),
+    [resolvedStreamSource, streamPath],
   );
 
   const connectionLabel =
@@ -316,19 +327,24 @@ export function ProjectStreamView({
       </div>
 
       <div className="shrink-0 px-4 pb-4 pt-2.5">
-        <StreamViewComposer
-          autoFocusMessage={autoFocusMessageComposer}
-          {...(defaultComposerMode == null
-            ? caps.agentFeed
-              ? { defaultMode: "message" as const }
-              : { defaultMode: "raw" as const }
-            : { defaultMode: defaultComposerMode })}
-          interrupt={interrupt}
-          {...(messageComposer == null ? {} : { messageComposer })}
-          onNudgeDeliveries={nudgeDeliveries}
-          presence={presence}
-          store={store}
-        />
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-1">
+          {caps.agentFeed && agentUiState?.tokenUsage != null ? (
+            <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
+          ) : null}
+          <StreamViewComposer
+            autoFocusMessage={autoFocusMessageComposer}
+            {...(defaultComposerMode == null
+              ? caps.agentFeed
+                ? { defaultMode: "message" as const }
+                : { defaultMode: "raw" as const }
+              : { defaultMode: defaultComposerMode })}
+            interrupt={interrupt}
+            {...(messageComposer == null ? {} : { messageComposer })}
+            onNudgeDeliveries={nudgeDeliveries}
+            presence={presence}
+            store={store}
+          />
+        </div>
       </div>
     </div>
   );
@@ -349,6 +365,7 @@ export function ProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
+      getStreamRuntimeState={getStreamRuntimeState}
     />
   );
 

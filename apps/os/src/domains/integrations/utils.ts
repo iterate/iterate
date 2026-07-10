@@ -31,6 +31,7 @@ export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set([
   "google",
   "github",
   "telegram",
+  "waitrose",
 ]);
 
 /** Type-guard view of {@link BUILTIN_INTEGRATION_SLUGS}: narrows an arbitrary
@@ -175,6 +176,15 @@ export const GITHUB_CONNECTION_EGRESS_URLS = [
 /** Itx secret Durable Object path holding one Telegram connection's bot token. */
 export function telegramBotTokenSecretPath(connection: string): string {
   return `/secrets/integrations/telegram/${connection}/bot-token`;
+}
+
+/** The Waitrose connection secret: holds the account's `{ username, password }`
+ * and carries the `waitrose-session` refresh strategy, so the Secret DO mints
+ * an `accessToken` on first use and re-logins on 401 (Waitrose has no refresh
+ * grant — re-login IS the refresh). The vendored client rides this secret's
+ * substituting egress with an `accessToken` placeholder (waitrose-api.ts). */
+export function waitroseSessionSecretPath(connection: string): string {
+  return `/secrets/integrations/waitrose/${connection}/session`;
 }
 
 /**

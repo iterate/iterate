@@ -177,8 +177,8 @@ export interface Project {
   /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is \`workers.get(ref)\`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so \`itx.worker.slack.chat.postMessage(...)\`
-   * is one RPC end to end.
+   * invokeCapability in userspace, so a dotted call onto any getter the
+   * worker adds (\`itx.worker.<getter>.<method>(...)\`) is one RPC end to end.
    */
   worker: DynamicWorkerCapability<ProjectWorker>;
 }
@@ -623,7 +623,8 @@ export interface Files {
  * The \`itx.integrations\` collection.
  *
  * Connection-yielding dotted calls are \`{slug}.{connection}.{...method}\`.
- * Built-in slugs (\`slack\`, \`google\`, \`github\`) dispatch to deployment code —
+ * Built-in slugs (\`slack\`, \`google\`, \`github\`, \`telegram\`, \`waitrose\`)
+ * dispatch to deployment code —
  * \`itx.integrations.slack["main-slack"].chat.postMessage({...})\` reaches any
  * Slack Web API method (a real WebClient), \`itx.integrations.google["jonas"].gmail.request({...})\`
  * the Gmail REST proxy, and \`itx.integrations.github["jonas"]\` is a real
@@ -950,8 +951,8 @@ export interface WorkspaceCollection {
  * workers should be typed by callers through \`workers.get<T>(ref)\`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * \`invokeCapability\` in userspace and every dotted call — including any
- * nested surface a userland getter hands back (the seeded \`slack\` and
- * \`waitrose\` getters, an SDK client you add) — is one RPC.
+ * nested surface a userland getter hands back (an SDK client the project
+ * adds and installs through its \`package.json\`) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -966,7 +967,6 @@ export interface ProjectWorker {
    * the whole batch is redelivered later.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
-  slack: ProjectWorkerSlack;
 }
 
 /**
@@ -1227,22 +1227,6 @@ export interface Workspace {
   exists(path: string): Promise<boolean>;
   /** Git over this workspace's checkout. */
   git: WorkspaceGit;
-}
-
-/**
- * Slack Web API surface exposed by the seeded project worker
- * (\`itx.worker.slack.chat.postMessage({...})\`).
- *
- * The seeded repo implements this in userland with the real \`@slack/web-api\`
- * package (installed by the worker build pipeline from its \`package.json\`), so
- * any nested Web API method family resolves — the index signature reflects
- * that this tree is as wide as the SDK's.
- */
-export interface ProjectWorkerSlack {
-  chat: {
-    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
-  } & Record<string, unknown>;
-  [family: string]: unknown;
 }
 
 /**
@@ -1698,6 +1682,12 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
+  tokenUsage: {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCachedInputTokens: number;
+    totalReasoningOutputTokens: number;
+  };
 };
 
 /**
@@ -1827,7 +1817,7 @@ export type IntegrationConnectionListEntry =
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
 
 export type IntegrationConnectionStatus = {
   connected: boolean;
@@ -1867,7 +1857,10 @@ export type ConnectTelegramResult =
 /** The built-ins that connect via a redirect flow (OAuth code exchange or
  * GitHub App installation) — the \`startOAuthFlow\`/\`completeConnect\` pair.
  * Telegram is excluded: it connects by bot-token paste (\`connectTelegram\`),
- * with no redirect and no signed state. */
+ * with no redirect and no signed state. Waitrose is excluded too: it connects
+ * by writing the connection secret (username/password plus the
+ * \`waitrose-session\` refresh strategy) — the Secret DO logs in itself on
+ * first use. */
 export type OAuthProviderSlug = "github" | "google" | "slack";
 
 export type CompleteConnectResult =

@@ -5,7 +5,7 @@
 //   - `itx.agents.defaults.forPath(path)` (rpc-targets.ts) hands the policy to
 //     the project worker, which owns appending it — the seeded template reacts
 //     to `stream/child-stream-created` for `/agents/**` and appends
-//     `defaults.events` (see project-repo-template/worker.ts). Projects bend
+//     `defaults.events` (see config-repo-template/worker.ts). Projects bend
 //     policy by editing that reaction, not by forking the platform.
 //   - The project processor appends only MECHANICS (processor subscriptions);
 //     it no longer touches policy.
@@ -14,7 +14,7 @@
 // so at-least-once delivery to the worker and retried creates all collapse
 // into one durable birth certificate.
 
-import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
@@ -280,7 +280,7 @@ export function agentDefaultsForPath(input: {
           "Platform context for this agent:",
           `- Project id: ${projectId}`,
           `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
-          '- The project\'s config repo is at repo path "/repos/config" (itx.repo) — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus userland capability getters: an itx.worker.slack.* Slack SDK surface and itx.worker.waitrose.*), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time; platform capability types come from its `iterate` devDependency — import type { ... } from "iterate/sdk"), sdk.ts (the seeded IterateProjectWorker base class, re-exporting those types), AGENTS.md, and ONBOARDING.md.',
+          '- The project\'s config repo is at repo path "/repos/config" (itx.repo) — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (the WHOLE seeded worker in one file: a static homepage + router as the default export, the example apps as named exports — HelloApp (stateless), CounterApp (a stateful counter page with live WebSocket updates at /ws) — and the userspace invokeCapability walk that makes dotted itx.worker.<getter> calls one RPC), package.json (npm deps, installed at worker build time; platform capability types come from its `iterate` devDependency — import type { ... } from "iterate/sdk"), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>, Telegram chat agents under /agents/telegram/<connection>/chat-<chatId>; secrets under /secrets/**.",
           "- Message another agent with await itx.agents.get(path).message(text) — sent from your agent scope it arrives as that agent's input labeled with your path and how to reply to you, and replies land in your inputs. Paths without a leading / resolve relative to your own path with filesystem semantics ('..' climbs). To delegate work, message a CHILD AGENT into existence: await itx.agents.get('researcher').message(task) — the first message births an ordinary agent at <your path>/researcher. Put EVERYTHING the child needs in the message (role, task, how to report back); after delegating, end your turn — its report arrives as your input and wakes you. Pick its model with await itx.agents.get(path).configure({ model }); configure({ systemPrompt }) REPLACES the agent's entire platform prompt including how it acts, so leave it alone unless you mean exactly that.",
