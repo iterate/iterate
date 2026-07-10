@@ -243,10 +243,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // One shared sandbox name for the whole matrix: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
     // (the example's get-or-create makes reuse natural). No marker on
-    // purpose. 300s: a cold-host image pull + boot has a long tail even on
-    // the stock image; anything past that is a container stuck provisioning,
-    // and we'd rather fail and re-run than mask it.
-    completionTimeoutMs: 300_000,
+    // purpose. 150s: a healthy cold boot is well under a minute; a boot
+    // past this is a container stuck provisioning on a bad placement, and
+    // the retry's FRESH attempt re-rolls placement and typically lands in
+    // ~15s — waiting out a 300s budget just stretched both e2e lanes past
+    // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
+    // stalled the spec AND examples-matrix; the retry passed in 14.8s).
+    completionTimeoutMs: 150_000,
     vars: () => ({ sandboxName: "example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
