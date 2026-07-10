@@ -443,8 +443,10 @@ describe("itx", () => {
     });
 
     await expect(
+      // #1839 de-proxied the agent handle: a scope's dynamic capabilities
+      // live behind its capabilityHost property, not on the handle itself.
       // @ts-expect-error - mounted agent expression method root.
-      agent.exprAgentSomeMethod("ok"),
+      agent.capabilityHost.exprAgentSomeMethod("ok"),
     ).resolves.toBe("agent-aliased:ok");
     await expect(
       // @ts-expect-error - proves the alias was mounted on the agent host, not project root.
