@@ -5,14 +5,18 @@
 // scroll shell as the raw-events view.
 
 import { Link } from "@tanstack/react-router";
-import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
 import { createCapnwebStreamClient } from "../lib/capnweb-stream-browser-client.ts";
-import {
-  shouldSuppressUnreadBadgeDuringInitialTail,
-  useInitialTailScroll,
-} from "../lib/use-initial-tail-scroll.ts";
+import { useStickToBottom } from "../lib/use-stick-to-bottom.ts";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
@@ -140,7 +144,12 @@ function FeedItemRows({
     estimateSize: () => estimatedFeedRowHeight,
     getItemKey: (index) => index,
     anchorTo: "end",
-    followOnAppend: true,
+    // OFF — the stick owns tail-following in DOM truth (useStickToBottom):
+    // the library's follow gate reads its internal offset model, which the
+    // sticky in-scroller composer's growth silently skews (content height
+    // changes with no scroll event) until isAtEnd() goes false and follows
+    // stop. anchorTo stays for mid-history measurement compensation.
+    followOnAppend: false,
     ...(initialScrollOffset.current === 0 ? {} : { initialOffset: initialScrollOffset.current }),
     paddingStart: topScrollAffordanceHeight,
     scrollEndThreshold: 80,
@@ -160,16 +169,33 @@ function FeedItemRows({
     },
   });
   const virtualItems = virtualizer.getVirtualItems();
-  const initialTailScroll = useInitialTailScroll({
-    count: itemCount,
+  // The stick observes the virtualizer's sizer AND the sticky composer
+  // chrome: the composer lives INSIDE the scroller, so its growth changes
+  // content height with no scroll event, and input inside it (typing,
+  // clicking the textarea or the affordance buttons) is not leaving-the-tail
+  // intent — hence the release exemption.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const composerChromeRef = useRef<HTMLDivElement | null>(null);
+  const setVirtualContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      virtualizer.containerRef(node);
+      contentRef.current = node;
+    },
+    [virtualizer],
+  );
+  const { stuckRef, release } = useStickToBottom({
     scrollElementRef: parentRef,
-    virtualizer,
+    contentElementRefs: [contentRef, composerChromeRef],
+    releaseExemptElementRef: composerChromeRef,
   });
 
   useLayoutEffect(() => {
     const appendedCount = itemCount - previousItemCount.current;
     previousItemCount.current = itemCount;
-    if (shouldSuppressUnreadBadgeDuringInitialTail(initialTailScroll)) {
+    // While stuck the reader is AT the newest item by definition — nothing is
+    // unread. This also covers the initial replay: appends pouring in before
+    // the viewport converges must not count as unread.
+    if (stuckRef.current) {
       setNewItemCount(0);
       return;
     }
@@ -180,7 +206,7 @@ function FeedItemRows({
     if (!scrollPosition.isAtEnd) {
       setNewItemCount((current) => current + appendedCount);
     }
-  }, [itemCount, initialTailScroll, scrollPosition.isAtEnd]);
+  }, [itemCount, stuckRef, scrollPosition.isAtEnd]);
 
   useLayoutEffect(() => {
     if (scrollPosition.isAtEnd) setNewItemCount(0);
@@ -203,7 +229,7 @@ function FeedItemRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
-                initialTailScroll.markUserLeftTail("scroll-to-top-button");
+                release("scroll-to-top-button");
                 virtualizer.scrollToOffset(0);
               }}
             >
@@ -248,7 +274,16 @@ function FeedItemRows({
             </span>
           </div>
         ) : (
-          <div className="relative w-full flex-1" style={{ minHeight: virtualizer.getTotalSize() }}>
+          // directDomUpdates contract: the virtualizer owns this container's
+          // height (containerRef) and each row's translate — JSX must not
+          // write either. grow/shrink-0 with basis auto: the box honors the
+          // virtualizer's height when content is tall (flex-1's 0% basis
+          // would OVERRIDE the height style, leaving a short box whose
+          // absolute rows overflow invisibly — the stick's ResizeObserver
+          // watches this box, so it must be real) and still grows to fill
+          // the viewport when content is short, keeping the sticky composer
+          // pinned to the viewport bottom.
+          <div ref={setVirtualContainer} className="relative w-full grow shrink-0">
             <FeedItemWindow
               expandedLocalIndexes={expandedLocalIndexes}
               itemCount={itemCount}
@@ -270,7 +305,11 @@ function FeedItemRows({
             />
           </div>
         )}
-        <div className="sticky bottom-0 z-[2] bg-white" data-testid="stream-composer-chrome">
+        <div
+          ref={composerChromeRef}
+          className="sticky bottom-0 z-[2] bg-white"
+          data-testid="stream-composer-chrome"
+        >
           {showScrollToBottom ? (
             <div
               className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-[72px] -translate-y-full items-end justify-center pb-2.5"
@@ -297,7 +336,10 @@ function FeedItemRows({
                   type="button"
                   onClick={() => {
                     setNewItemCount(0);
-                    virtualizer.scrollToEnd();
+                    // Direct DOM write: lands at the exact bottom, and the
+                    // scroll event it fires re-engages the stick (≤2px).
+                    const scroller = parentRef.current;
+                    if (scroller != null) scroller.scrollTop = scroller.scrollHeight;
                   }}
                 >
                   <span className="text-base leading-none">↓</span>
@@ -404,8 +446,9 @@ function FeedItemWindow({
         data-index={virtualItem.index}
         data-testid="virtual-row"
         key={virtualItem.key}
-        ref={row === undefined ? undefined : measureElement}
-        style={{ transform: `translateY(${virtualItem.start}px)` }}
+        // Unconditional: directDomUpdates positions rows through the
+        // measurement cache, so unmeasured pending rows would never be placed.
+        ref={measureElement}
       >
         {row === undefined ? (
           <article

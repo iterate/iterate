@@ -95,6 +95,14 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
+    ...(env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
+      ? {}
+      : {
+          APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(
+            env.cloudflareAiGatewayResponseCacheTtlSeconds,
+          ),
+        }),
   };
 }
 
@@ -409,6 +417,12 @@ function localDevBindings() {
     ...bindings,
     vars: {
       ...bindings.vars,
+      // Local dev rides the BYOK lane with the response cache, same as the
+      // preview slots: agent-loop iteration replays yesterday's answers for
+      // free. In envShapedVars for deployed envs; spelled out here because
+      // local dev has no envs.ts entry.
+      APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
+      APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
