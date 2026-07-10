@@ -220,10 +220,15 @@ function AddRepoFromGithubWizard({
           `${input.path} already exists. To back an existing repo with GitHub, use the GitHub panel on that repo's page.`,
         );
       }
+      // Claim the path for this wizard instance BEFORE the create round-trip:
+      // the live repo list records the path the moment the repo's stream is
+      // born (its first append), seconds before create() resolves — without
+      // the exemption already in place, the taken-path gate red-flags the very
+      // repo this mutation is creating while it is still being seeded.
+      setCreatedHere((previous) => new Set(previous).add(input.path));
       // create is "create if it does not exist yet", so a retry after a
       // mid-flow failure is safe and finishes the job.
       await itx.repos.create({ path: input.path });
-      setCreatedHere((previous) => new Set(previous).add(input.path));
       const repo = itx.repos.get(input.path);
       const link = await repo.linkGithub({
         connection,
