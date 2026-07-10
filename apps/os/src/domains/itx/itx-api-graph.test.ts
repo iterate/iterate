@@ -21,7 +21,7 @@ describe("the generated graph", () => {
     // is invisible to the dumb search.
     const docless = ITX_API_DECLARATIONS.filter((d) => d.summary.trim() === "").map((d) => d.name);
     // Not yet zero — hold the line where it is and ratchet down.
-    expect(docless.length).toBeLessThanOrEqual(31);
+    expect(docless.length).toBeLessThanOrEqual(30);
   });
 
   test("the anchor declarations exist", () => {

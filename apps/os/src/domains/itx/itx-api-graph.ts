@@ -10,6 +10,10 @@
 // is the TypeScript grammar term, "summary" is the TSDoc term for the prose
 // before the first block tag, "referenced type names" are the identifiers a
 // declaration's signatures mention.
+//
+// The docs-door helpers that query the graph (search scoring, first-sentence
+// extraction) live here too: they are pure, unit-tested functions shared by
+// the docs RpcTarget and the generator.
 
 /**
  * One exported declaration of the public itx surface, as the itx api
@@ -41,15 +45,36 @@ export interface ItxApiDeclaration {
 
 /** A search hit from `itx.docs.search`, in relevance order. */
 export interface DocsSearchHit {
-  /** What kind of corpus entry matched: an e2e-tested example script, a type
-   * declaration, or a capability mounted in the caller's scope. */
+  /** What kind of corpus entry matched: an example script from the platform
+   * catalogue, a type declaration, or a capability mounted in the caller's
+   * scope. */
   kind: "example" | "type" | "capability";
   /** The name to fetch it by (example id, declaration name, or mount path). */
   name: string;
   /** One-line summary of the entry. */
   summary: string;
   /** The literal itx call that fetches the full entry — copy it verbatim. */
-  fetch: string;
+  fetchCall: string;
+}
+
+/**
+ * Budgets are expressed in tokens because that is the unit the consumer (an
+ * LLM context window) actually pays in; source text is roughly 4 characters
+ * per token.
+ */
+const CHARS_PER_TOKEN = 4;
+/** Bound on the frontier trailer, reserved out of the walk budget so a
+ * docs.get response never exceeds its maxTokens. Names average ~20 chars;
+ * 24 listed names plus the two trailer lines stay under this. */
+const TRAILER_RESERVE_CHARS = 600;
+const FRONTIER_NAMES_LISTED = 24;
+
+/** Index the graph by declaration name (names are unique — enforced by the
+ * generator and the graph freshness test). */
+export function declarationsByName(
+  declarations: readonly ItxApiDeclaration[],
+): Map<string, ItxApiDeclaration> {
+  return new Map(declarations.map((declaration) => [declaration.name, declaration]));
 }
 
 /**
@@ -70,21 +95,6 @@ interface TypeSlice {
 }
 
 /**
- * Budgets are expressed in tokens because that is the unit the consumer (an
- * LLM context window) actually pays in; source text is roughly 4 characters
- * per token.
- */
-const CHARS_PER_TOKEN = 4;
-
-/** Index the graph by declaration name (names are unique — enforced by the
- * generator and the graph freshness test). */
-export function declarationsByName(
-  declarations: readonly ItxApiDeclaration[],
-): Map<string, ItxApiDeclaration> {
-  return new Map(declarations.map((declaration) => [declaration.name, declaration]));
-}
-
-/**
  * Assemble the bounded reference closure of one declaration: breadth-first
  * over `referencedTypeNames` from the root, adding whole declarations in walk
  * order until the next one would exceed the budget, then stopping. The root
@@ -101,7 +111,10 @@ export function typeSlice(input: {
   if (!root) {
     throw new Error(`unknown type declaration "${input.rootName}"`);
   }
-  const budgetChars = input.maxTokens * CHARS_PER_TOKEN;
+  // The frontier trailer must fit INSIDE the caller's budget (it lists at
+  // most FRONTIER_NAMES_LISTED names, so its size is bounded); reserving it
+  // up front keeps the whole response under maxTokens.
+  const budgetChars = Math.max(0, input.maxTokens * CHARS_PER_TOKEN - TRAILER_RESERVE_CHARS);
 
   const includedNames: string[] = [];
   const parts: string[] = [];
@@ -125,7 +138,7 @@ export function typeSlice(input: {
 
   while (queue.length > 0) {
     const declaration = queue.shift()!;
-    const cost = declaration.sourceText.length + 2;
+    const cost = declaration.sourceText.length + 2; // +2 = the "\n\n" join separator
     if (!budgetExhausted && usedChars + cost <= budgetChars) {
       parts.push(declaration.sourceText);
       includedNames.push(declaration.name);
@@ -156,13 +169,21 @@ export function typeSlice(input: {
 
   const frontierNames = [...frontier].sort();
   if (frontierNames.length > 0) {
+    const listed = frontierNames.slice(0, FRONTIER_NAMES_LISTED);
+    const unlisted = frontierNames.length - listed.length;
     parts.push(
-      `// Not included: ${frontierNames.join(", ")}` +
-        `\n// Fetch any of them with: await itx.docs.get({ name: "${frontierNames[0]}" })`,
+      `// Not included: ${listed.join(", ")}${unlisted > 0 ? ` … and ${unlisted} more` : ""}` +
+        `\n// Fetch any referenced type with: await itx.docs.get({ name: "${listed[0]}" })`,
     );
   }
 
   return { sourceText: parts.join("\n\n"), includedNames, frontierNames };
+}
+
+/** First sentence of a prose string — what one-line summaries show. */
+export function firstSentence(text: string): string {
+  const collapsed = text.replaceAll(/\s+/g, " ").trim();
+  return collapsed.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? collapsed;
 }
 
 /**

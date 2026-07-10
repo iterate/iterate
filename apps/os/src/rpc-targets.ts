@@ -148,6 +148,7 @@ import { ITX_EXAMPLES } from "./itx/examples.ts";
 import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
 import {
   declarationsByName,
+  firstSentence,
   searchScore,
   typeSlice,
   type DocsSearchHit,
@@ -308,6 +309,8 @@ class IterateRpcTarget<Name extends string> extends RpcTarget {
 class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 
 type FetchOnly = Pick<Fetcher, "fetch">;
+
+const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
@@ -3904,7 +3907,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
-  docs: 'Find working code + types: search({ q: "many related words" }) over e2e-tested example scripts, type declarations, and mounted capabilities; get({ name }) fetches one.',
+  docs: 'Find working code + types: search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
@@ -3982,6 +3985,15 @@ type ProjectDurableObjectRpc = {
   touchStreamActivity(input: TouchInput): Promise<void>;
 };
 
+/**
+ * An itx: the project capability surface, scoped to one path (the project
+ * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
+ * integrations, sandboxes, scheduler, docs, ...) are project-global and
+ * identical at every scope; what differs by scope is the capability host
+ * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * Unknown dotted members dispatch dynamically against the scope's capability
+ * host, chaining up to the project root.
+ */
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -4025,6 +4037,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         "Built-ins are project-global and identical at every scope; `capabilities` is the full inventory (built-ins + dynamic mounts). " +
         "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
         'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
+      // The Project declaration alone is ~1.4k tokens; 2000 fits it plus a
+      // little of its closure, and the trailer names the rest.
       types: typeSlice({
         declarations: ITX_API_DECLARATIONS_BY_NAME,
         rootName: "Project",
@@ -4895,12 +4909,11 @@ export class StreamProcessorRpcTarget<
 // Session (what authenticate() returns), which an itx holder does not have.
 const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
 
-const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
-
 /**
  * The docs door: search + fetch over everything callable from this scope —
- * e2e-TESTED example scripts (each runs unattended in the platform's test
- * suite; copy them), the public type surface (the Itx Type Graph), and the
+ * the platform's example scripts (most are proven: the test suite runs them
+ * unattended against a live project on every change; the rest are marked
+ * interactive), the public type surface (the Itx Type Graph), and the
  * capabilities mounted in the caller's scope chain. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
@@ -4919,7 +4932,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Search + fetch over everything callable from this scope: e2e-tested example scripts (copy these), the public type surface, and this scope's mounted capabilities. " +
+        "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
         'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
         "get({ name }) fetches what a hit names: an example's full annotated code, or a type declaration with its referenced types.",
       children: {
@@ -4935,9 +4948,9 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * Find examples, types, and mounted capabilities. Pass MANY related words —
    * matching is dumb word overlap, so more synonyms means better recall:
    * `search({ q: "file upload attachment bytes store image" })`, not
-   * `search({ q: "files" })`. Example hits are e2e-tested scripts — prefer
-   * copying them over writing calls from scratch. Each hit's `fetch` field is
-   * the literal next call to make.
+   * `search({ q: "files" })`. Example hits are working scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetchCall`
+   * field is the literal next call to make.
    */
   async search(input: { q: string }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number }> = [];
@@ -4954,7 +4967,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
           kind: "example",
           name: example.id,
           summary: `${example.title} — ${example.description}`,
-          fetch: `await itx.docs.get({ name: ${JSON.stringify(example.id)} })`,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(example.id)} })`,
         },
       });
     }
@@ -4974,7 +4987,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
           kind: "type",
           name: declaration.name,
           summary: declaration.summary,
-          fetch: `await itx.docs.get({ name: ${JSON.stringify(declaration.name)} })`,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(declaration.name)} })`,
         },
       });
     }
@@ -4994,12 +5007,15 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
         hit: {
           kind: "capability",
           name: dottedPath,
-          summary: instructions.split(/(?<=[.!?])\s/)[0] ?? "(no instructions recorded)",
-          fetch: `await itx.${dottedPath}.__describe()`,
+          summary: firstSentence(instructions) || "(no instructions recorded)",
+          fetchCall: `await itx.${dottedPath}.__describe()`,
         },
       });
     }
 
+    // Equal-score tie-break mirrors the guidance: working examples first,
+    // scope-specific mounts next, type reference last; 12 hits is about one
+    // screenful for a model.
     const kindRank: Record<DocsSearchHit["kind"], number> = { example: 0, capability: 1, type: 2 };
     return scored
       .sort(
@@ -5014,17 +5030,21 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
 
   /**
    * Fetch one entry by the name a search hit gave you. An example name
-   * returns its full script (e2e-tested — runs unattended in the platform's
-   * test suite); a type declaration name returns its TypeScript source plus
-   * as much of its reference closure as fits `maxTokens` (default 1500),
-   * ending with a comment naming anything left out and how to fetch it.
+   * returns its full script, annotated with its provenance (most examples
+   * run unattended against a live project in the platform's test suite; the
+   * rest are marked interactive); a type declaration name returns its
+   * TypeScript source plus as much of its reference closure as fits
+   * `maxTokens` (default 1500), ending with a comment naming anything left
+   * out and how to fetch it.
    */
   async get(input: { name: string; maxTokens?: number }): Promise<string> {
     const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.name);
     if (example) {
       return [
         `// EXAMPLE ${JSON.stringify(example.id)}: ${example.title}`,
-        `// e2e-tested — this exact script runs unattended in the platform's test suite.`,
+        example.e2eProven === false
+          ? `// From the example catalogue (interactive: depends on a connected account or external service).`
+          : `// Proven: this exact script runs unattended against a live project in the platform's test suite.`,
         `// ${example.description}`,
         example.code,
       ].join("\n");

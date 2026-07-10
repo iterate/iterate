@@ -67,7 +67,7 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.search");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.get");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("MANY related words");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("e2e-TESTED example scripts");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("working example scripts");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("__describe()");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Never tell the user you lack access");

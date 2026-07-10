@@ -68,6 +68,15 @@ export interface Session {
   projects: ProjectCollection;
 }
 
+/**
+ * An itx: the project capability surface, scoped to one path (the project
+ * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
+ * integrations, sandboxes, scheduler, docs, ...) are project-global and
+ * identical at every scope; what differs by scope is the capability host
+ * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * Unknown dotted members dispatch dynamically against the scope's capability
+ * host, chaining up to the project root.
+ */
 export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
@@ -601,8 +610,9 @@ export interface EmailCapability {
 
 /**
  * The docs door: search + fetch over everything callable from this scope —
- * e2e-TESTED example scripts (each runs unattended in the platform's test
- * suite; copy them), the public type surface (the Itx Type Graph), and the
+ * the platform's example scripts (most are proven: the test suite runs them
+ * unattended against a live project on every change; the rest are marked
+ * interactive), the public type surface (the Itx Type Graph), and the
  * capabilities mounted in the caller's scope chain. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
@@ -616,17 +626,19 @@ export interface Docs {
    * Find examples, types, and mounted capabilities. Pass MANY related words —
    * matching is dumb word overlap, so more synonyms means better recall:
    * `search({ q: "file upload attachment bytes store image" })`, not
-   * `search({ q: "files" })`. Example hits are e2e-tested scripts — prefer
-   * copying them over writing calls from scratch. Each hit's `fetch` field is
-   * the literal next call to make.
+   * `search({ q: "files" })`. Example hits are working scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetchCall`
+   * field is the literal next call to make.
    */
   search(input: { q: string }): Promise<DocsSearchHit[]>;
   /**
    * Fetch one entry by the name a search hit gave you. An example name
-   * returns its full script (e2e-tested — runs unattended in the platform's
-   * test suite); a type declaration name returns its TypeScript source plus
-   * as much of its reference closure as fits `maxTokens` (default 1500),
-   * ending with a comment naming anything left out and how to fetch it.
+   * returns its full script, annotated with its provenance (most examples
+   * run unattended against a live project in the platform's test suite; the
+   * rest are marked interactive); a type declaration name returns its
+   * TypeScript source plus as much of its reference closure as fits
+   * `maxTokens` (default 1500), ending with a comment naming anything left
+   * out and how to fetch it.
    */
   get(input: { name: string; maxTokens?: number }): Promise<string>;
 }
@@ -1142,15 +1154,16 @@ export interface ProjectEgressIntercept extends Disposable {
 
 /** A search hit from `itx.docs.search`, in relevance order. */
 export interface DocsSearchHit {
-  /** What kind of corpus entry matched: an e2e-tested example script, a type
-   * declaration, or a capability mounted in the caller's scope. */
+  /** What kind of corpus entry matched: an example script from the platform
+   * catalogue, a type declaration, or a capability mounted in the caller's
+   * scope. */
   kind: "example" | "type" | "capability";
   /** The name to fetch it by (example id, declaration name, or mount path). */
   name: string;
   /** One-line summary of the entry. */
   summary: string;
   /** The literal itx call that fetches the full entry — copy it verbatim. */
-  fetch: string;
+  fetchCall: string;
 }
 
 /** One project file, addressed by path. */

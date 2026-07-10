@@ -28,9 +28,8 @@ test("itx-api.generated.ts is fresh (pnpm generate:itx-api)", () => {
 }, 60_000);
 
 test("itx-api-graph.generated.ts is fresh (pnpm generate:itx-api)", () => {
-  // The Itx Type Graph is the same content per-declaration; both artifacts
-  // come from one generator run, so freshness of one implies the other ONLY
-  // when both were committed together — check them independently.
+  // Both artifacts come from one generator run but are committed
+  // separately — check each against a fresh regeneration.
   const graphPath = fileURLToPath(new URL("./itx-api-graph.generated.ts", import.meta.url));
   expect(readFileSync(graphPath, "utf8")).toBe(
     generateItxApiGraphSource(readFileSync(generatedPath, "utf8")),

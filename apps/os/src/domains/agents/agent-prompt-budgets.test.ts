@@ -10,6 +10,7 @@
 import { expect, test } from "vitest";
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
 import { ITX_EXAMPLES } from "../../itx/examples.ts";
+import { EXEC_JS_DESCRIPTION } from "../inbound-mcp-server/exec-js-description.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import {
   EMAIL_AGENT_SYSTEM_PROMPT,
@@ -23,6 +24,10 @@ const DEFAULT_PROMPT_TOKEN_CEILING = 3_000;
 
 const CHANNEL_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
+  // The inbound MCP tool description is a prompt in all but name — it rides
+  // every MCP client conversation, so it obeys the same budget and
+  // name-resolution rules.
+  execJsTool: EXEC_JS_DESCRIPTION,
   email: EMAIL_AGENT_SYSTEM_PROMPT,
   slack: slackAgentSystemPrompt("main-slack"),
   telegram: telegramAgentSystemPrompt({
@@ -74,8 +79,10 @@ test("every docs name referenced in prompts and boot context resolves", () => {
   const corpus = [...Object.values(CHANNEL_PROMPTS), bootContent, policy.systemPrompt].join("\n");
 
   const referencedNames = [
+    // Both quoted docs.get names and backtick-quoted bare example ids
+    // (`ai-generate-image`) — a rename must not strand either spelling.
     ...corpus.matchAll(/docs\.get\(\{ name: "([^"]+)"/g),
-    ...corpus.matchAll(/docs\.get\(\{ name: ([A-Za-z-]+) \}\)/g),
+    ...corpus.matchAll(/`((?:[a-z0-9]+-)+[a-z0-9]+)`/g),
   ].map((match) => match[1]!);
   expect(referencedNames.length).toBeGreaterThan(0);
 
