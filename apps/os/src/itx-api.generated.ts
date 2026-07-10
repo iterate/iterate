@@ -318,7 +318,17 @@ export interface CfBrowserCapability {
  * ships everywhere this rule stands regardless.)
  */
 export interface Agent {
-  /** The agent scope's own capability host (provide/revoke/runScript/__describe). */
+  /**
+   * The agent scope's own capability host (provide/revoke/runScript/
+   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
+   * through a fetched handle: `agents.get(path).capabilityHost.someTool(args)`.
+   * That chain pipelines over workerd RPC because `capabilityHost` is a
+   * PROPERTY: workerd resolves property paths through the host's fallback
+   * Proxy (its traversal code special-cases proxies), whereas the handle
+   * itself must stay unproxied to be pipelinable at all (see the class
+   * comment). Inside the agent's own scripts the same capabilities are simply
+   * `itx.someTool(args)`.
+   */
   capabilityHost: CapabilityHost;
   /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent's scope). */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
@@ -499,7 +509,14 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
-  /** The agent control surface at a path (`"/agents/<name>"`, or relative to the calling scope — `".."` climbs). */
+  /**
+   * The agent control surface at a path (`"/agents/<name>"`, or relative to
+   * the calling scope — `".."` climbs). The returned handle is a plain,
+   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
+   * `itx.agents.get(path).message(text)` in one expression — over workerd RPC
+   * (the script lane); see Agent's class comment for the mechanism
+   * and `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
+   */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
