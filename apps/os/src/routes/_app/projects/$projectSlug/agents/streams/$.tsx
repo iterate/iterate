@@ -1,6 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { subagentParentPath } from "~/lib/subagent-paths.ts";
+import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
@@ -40,6 +41,33 @@ function ProjectAgentDetailPage() {
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
+
+  // THE onboarding-agent birth: the agent is deliberately not born during
+  // project bootstrap (it costs a real LLM turn), so opening its chat is what
+  // births it. configure({}) is the idempotent birth-with-defaults door — on a
+  // fresh path it establishes the full default policy (prompt, model, the
+  // "Start onboarding now" kickoff) in the SAME append that creates the
+  // stream, so there is no stock-defaults window; on an already-born agent
+  // every keyed event dedupes away. Retries cover the create-flow window where
+  // the itx session's claims may still be catching up.
+  useEffect(() => {
+    if (streamPath !== ONBOARDING_AGENT_PATH) return;
+    let cancelled = false;
+    void (async () => {
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+        try {
+          const itx = await connectItxBrowser({ projectId: project.id });
+          await itx.agents.get(ONBOARDING_AGENT_PATH).configure({});
+          return;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, streamPath]);
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is owned by project and
   // agent processor facts; sendMessage only appends the user-facing input fact.
@@ -78,24 +106,13 @@ function ProjectAgentDetailContent() {
     });
   }
 
-  const parentPath = subagentParentPath(streamPath);
-
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {parentPath === null ? null : (
-        <div className="border-b px-4 py-1.5 text-xs text-muted-foreground">
-          subagent of{" "}
-          <Link
-            to="/projects/$projectSlug/agents/streams/$"
-            params={{ projectSlug: project.slug, _splat: parentPath }}
-            search={{}}
-            className="font-mono underline underline-offset-2 hover:text-foreground"
-          >
-            {parentPath}
-          </Link>
-        </div>
-      )}
-      <div className="min-h-0 flex-1">
+      {/* Must be a flex column: the stream view sizes itself with flex-1 and
+          relies on this parent constraining it — in a block wrapper it grows
+          to content height, the feed never scrolls internally, and the
+          composer is pushed below the fold. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <ProjectStreamView
           autoFocusMessageComposer
           emptyLabel="No events on this agent stream yet."

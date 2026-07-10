@@ -39,6 +39,10 @@ async function attemptOnboardingSmoke(): Promise<void> {
   console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
 
   using agent = project.agents.get("/agents/onboarding");
+  // The onboarding agent births lazily on first use; the dashboard's chat page
+  // does exactly this configure({}) when it opens. This smoke is the ONE e2e
+  // entry point that intentionally pays the onboarding LLM turn.
+  await agent.configure({});
   const greeting = await agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/agents/web-message-sent"],
     timeoutMs: 90_000,

@@ -3,8 +3,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
-import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import { subagentParentPath } from "../../lib/subagent-paths.ts";
+import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -99,12 +98,12 @@ export class ProjectProcessor extends StreamProcessor<
           // round-trips (see tasks/os-cold-create-latency.md). The Slack
           // webhook router is NOT armed here: connection streams
           // (/integrations/slack/{connection}) are born at connect time by
-          // recordSlackConnection. The onboarding agent is deliberately NOT
-          // born here: its policy comes from the project worker, so birth
-          // waits for the repo-created lane below — after the worker
-          // readiness probe — where the pump delivers the birth announcement
-          // to an already-built worker and policy lands immediately instead
-          // of opening a stock-defaults window.
+          // recordSlackConnection. The onboarding agent is not born during
+          // bootstrap AT ALL: it births lazily on first use — opening its
+          // chat page (or any first append to its stream) creates the stream,
+          // and birth mechanics + policy follow through the ordinary
+          // child-stream-created lanes. Projects whose onboarding chat is
+          // never opened (CLI creates, test fixtures) never pay an LLM turn.
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -235,21 +234,21 @@ export class ProjectProcessor extends StreamProcessor<
             // config-repo-template/worker.ts and agents/agent-defaults.ts).
             // Slack/Telegram-agent wiring requires the full routed-path shape
             // — the connection segment is what replies authenticate with.
-            // Subagents are checked FIRST: the thread predicates are
-            // shape-loose (Slack matches any >=6-segment path under its
-            // connection, email matches by prefix), and a subagent nested
-            // under a thread agent must not inherit its transcriber.
-            const isSubagent = subagentParentPath(childPath) !== null;
-            const isSlack = !isSubagent && slackConnectionFromAgentPath(childPath) !== null;
-            const isTelegram = !isSubagent && telegramConnectionFromAgentPath(childPath) !== null;
+            // Child-agent paths are checked FIRST: the routed-agent predicates
+            // are shape-loose (Slack matches any >=6-segment path under its
+            // connection, email matches by prefix), and a child under a routed
+            // agent must not inherit its transcriber.
+            const isChildAgent = childAgentParentPath(childPath) !== null;
+            const isSlack = !isChildAgent && slackConnectionFromAgentPath(childPath) !== null;
+            const isTelegram = !isChildAgent && telegramConnectionFromAgentPath(childPath) !== null;
             await appendTo(
               childPath,
-              // Identical idempotency keys to the create-time onboarding
-              // subscriptions, so whichever lane runs second dedupes cleanly.
+              // Stable idempotency keys: retried deliveries and re-created
+              // child streams collapse into one durable subscription set.
               ...agentSubscriptionEvents({
                 childPath,
-                email: !isSubagent && isEmailAgentPath(childPath),
-                githubPr: !isSubagent && isPrAgentPath(childPath),
+                email: !isChildAgent && isEmailAgentPath(childPath),
+                githubPr: !isChildAgent && isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
                 telegram: isTelegram,
@@ -293,13 +292,6 @@ export class ProjectProcessor extends StreamProcessor<
               payload: state.createRequest!,
             }),
           );
-          // THE onboarding-agent birth, deliberately after the worker probe:
-          // the pump delivers the birth announcement to an already-built
-          // worker, so the policy (prompt, model, kickoff) lands
-          // immediately — no window where the agent runs on stock defaults.
-          await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
-            appendTo(ONBOARDING_AGENT_PATH, ...onboardingAgentStartEvents(this.deps)),
-          );
         });
         return;
       }
@@ -321,17 +313,6 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
-}
-
-function onboardingAgentStartEvents(deps: { itx: Pick<ProjectRpcTarget, "projectId"> }) {
-  // Mechanics only — the onboarding agent's policy (prompt, provider, the
-  // "Start onboarding now" kickoff input) is appended by the project worker
-  // once it first builds, via the same child-stream-created reaction as every
-  // other agent. Until then the agent answers with the stock defaults.
-  return agentSubscriptionEvents({
-    childPath: ONBOARDING_AGENT_PATH,
-    projectId: deps.itx.projectId,
-  });
 }
 
 /**

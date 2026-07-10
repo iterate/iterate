@@ -202,8 +202,10 @@ export class CounterApp extends DurableObject {
 
     // A mini client-side app: the count renders server-side, the button
     // POSTs /increment, and the WebSocket pushes every new value to every
-    // open tab. The button stays disabled until the socket is open, so a
-    // click always has a live update lane (and tests wait on exactly that).
+    // open tab. The button stays disabled — with a visible "connecting…"
+    // state — until the socket is open, so a click always has a live update
+    // lane and anyone (tests included) can SEE why the button isn't ready
+    // yet.
     return new Response(
       `<!doctype html>
         <html>
@@ -211,12 +213,13 @@ export class CounterApp extends DurableObject {
             <main>
               <p>count: <span id="n">${await this.current()}</span></p>
               <button id="b" disabled>increment</button>
+              <p id="s">connecting…</p>
             </main>
             <script>
               const button = document.getElementById("b");
               button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; };
+              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
               ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
             </script>
           </body>
