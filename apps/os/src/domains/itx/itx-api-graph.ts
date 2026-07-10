@@ -63,11 +63,10 @@ export interface DocsSearchHit {
  * per token.
  */
 const CHARS_PER_TOKEN = 4;
-/** Bound on the frontier trailer, reserved out of the walk budget so a
- * docs.get response never exceeds its maxTokens. Names average ~20 chars;
- * 24 listed names plus the two trailer lines stay under this. */
+/** Provisional walk-budget reserve for the frontier trailer (assembly then
+ * enforces the budget exactly) and the cap on the trailer's name listing. */
 const TRAILER_RESERVE_CHARS = 600;
-const FRONTIER_NAMES_LISTED = 24;
+const TRAILER_NAME_LIST_CHARS = 400;
 
 /** Index the graph by declaration name (names are unique — enforced by the
  * generator and the graph freshness test). */
@@ -111,10 +110,11 @@ export function typeSlice(input: {
   if (!root) {
     throw new Error(`unknown type declaration "${input.rootName}"`);
   }
-  // The frontier trailer must fit INSIDE the caller's budget (it lists at
-  // most FRONTIER_NAMES_LISTED names, so its size is bounded); reserving it
-  // up front keeps the whole response under maxTokens.
-  const budgetChars = Math.max(0, input.maxTokens * CHARS_PER_TOKEN - TRAILER_RESERVE_CHARS);
+  const budgetChars = input.maxTokens * CHARS_PER_TOKEN;
+  // The walk stops early enough to leave room for the frontier trailer; the
+  // assembly below then enforces the budget EXACTLY (drop or recut), so this
+  // reserve only has to be a decent guess, never precise.
+  const walkBudget = Math.max(0, budgetChars - TRAILER_RESERVE_CHARS);
 
   const includedNames: string[] = [];
   const parts: string[] = [];
@@ -136,23 +136,22 @@ export function typeSlice(input: {
     }
   };
 
+  // The root is always included, truncated if it alone exceeds the budget —
+  // a response that silently dropped the thing you asked for would read as
+  // "it does not exist". `rootTruncated` defers the actual cut to assembly,
+  // where the trailer's exact size is known.
+  let rootTruncated = false;
+
   while (queue.length > 0) {
     const declaration = queue.shift()!;
     const cost = declaration.sourceText.length + 2; // +2 = the "\n\n" join separator
-    if (!budgetExhausted && usedChars + cost <= budgetChars) {
+    if (!budgetExhausted && usedChars + cost <= walkBudget) {
       parts.push(declaration.sourceText);
       includedNames.push(declaration.name);
       usedChars += cost;
       enqueueReferences(declaration);
     } else if (includedNames.length === 0) {
-      // Root alone over budget: include truncated with a loud notice — a
-      // response that silently dropped the thing you asked for would read as
-      // "it does not exist". Its references still become frontier entries.
-      parts.push(
-        declaration.sourceText.slice(0, budgetChars) +
-          `\n// … truncated: "${declaration.name}" alone exceeds maxTokens ${input.maxTokens} — ` +
-          `retry with a larger maxTokens.`,
-      );
+      rootTruncated = true;
       includedNames.push(declaration.name);
       budgetExhausted = true;
       enqueueReferences(declaration);
@@ -167,17 +166,57 @@ export function typeSlice(input: {
     }
   }
 
-  const frontierNames = [...frontier].sort();
-  if (frontierNames.length > 0) {
-    const listed = frontierNames.slice(0, FRONTIER_NAMES_LISTED);
-    const unlisted = frontierNames.length - listed.length;
-    parts.push(
+  const trailerFor = (names: string[]): string => {
+    if (names.length === 0) return "";
+    const listed: string[] = [];
+    let listedChars = 0;
+    for (const name of names) {
+      if (listedChars + name.length + 2 > TRAILER_NAME_LIST_CHARS) break;
+      listed.push(name);
+      listedChars += name.length + 2;
+    }
+    const unlisted = names.length - listed.length;
+    return (
       `// Not included: ${listed.join(", ")}${unlisted > 0 ? ` … and ${unlisted} more` : ""}` +
-        `\n// Fetch any referenced type with: await itx.docs.get({ name: "${listed[0]}" })`,
+      `\n// Fetch any referenced type with: await itx.docs.get({ name: "${listed[0] ?? names[0]}" })`
     );
+  };
+
+  const assemble = (): { sourceText: string; frontierNames: string[] } => {
+    const frontierNames = [...frontier].sort();
+    const trailer = trailerFor(frontierNames);
+    const sourceText = [...parts, ...(trailer === "" ? [] : [trailer])].join("\n\n");
+    return { sourceText, frontierNames };
+  };
+
+  // Exact budget enforcement: drop whole declarations from the end (they
+  // rejoin the frontier) until the assembled text fits.
+  let assembled = assemble();
+  while (!rootTruncated && assembled.sourceText.length > budgetChars && parts.length > 1) {
+    parts.pop();
+    frontier.add(includedNames.pop()!);
+    assembled = assemble();
   }
 
-  return { sourceText: parts.join("\n\n"), includedNames, frontierNames };
+  if (rootTruncated) {
+    // Cut the root to exactly what remains after the notice and trailer.
+    const notice =
+      `\n// … truncated: "${root.name}" alone exceeds maxTokens ${input.maxTokens} — ` +
+      `retry with a larger maxTokens.`;
+    const trailer = trailerFor([...frontier].sort());
+    const cutLength = Math.max(
+      0,
+      budgetChars - notice.length - (trailer === "" ? 0 : trailer.length + 2) - 3,
+    );
+    const cut = root.sourceText.slice(0, cutLength);
+    // Close a block comment the cut may have opened, so the notice and
+    // trailer stay visible to a consumer rendering this as code.
+    const openComment = cut.lastIndexOf("/*") > cut.lastIndexOf("*/");
+    parts.unshift(cut + (openComment ? " */" : "") + notice);
+    assembled = assemble();
+  }
+
+  return { ...assembled, includedNames };
 }
 
 /** First sentence of a prose string — what one-line summaries show. */

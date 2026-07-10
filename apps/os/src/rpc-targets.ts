@@ -5050,10 +5050,16 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       ].join("\n");
     }
     if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
+      // Clamp instead of reject: an out-of-range value from a model should
+      // cost a degraded answer, not a wasted turn. The floor covers the
+      // trailer reserve plus one small declaration.
+      const maxTokens = Number.isFinite(input.maxTokens)
+        ? Math.min(Math.max(input.maxTokens!, 300), 10_000)
+        : 1500;
       return typeSlice({
         declarations: ITX_API_DECLARATIONS_BY_NAME,
         rootName: input.name,
-        maxTokens: input.maxTokens ?? 1500,
+        maxTokens,
       }).sourceText;
     }
     const nearest = (await this.search({ q: input.name })).slice(0, 3);
