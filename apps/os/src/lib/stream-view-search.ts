@@ -13,20 +13,15 @@ import { z } from "zod";
  * raw feed_items (with the event inspector). Filters encode both feed-item
  * *components* and contained raw *event types* (see stream-feed-filters.ts).
  */
-const StreamViewModeRaw = z.enum(["pretty", "pretty-raw", "raw", "pretty-debug"]);
+const StreamViewModeRaw = z.enum(["pretty", "pretty-raw", "raw"]);
 export type StreamViewMode = "pretty" | "pretty-raw" | "raw";
 
 export const StreamViewSearch = z.object({
   /**
    * Active view mode; omitted on the stream's default (pretty for agents, raw
-   * otherwise). `pretty-debug` is accepted as a legacy alias of `pretty-raw`.
+   * otherwise).
    */
   mode: StreamViewModeRaw.optional().catch(undefined),
-  /**
-   * Legacy Feed/State tab. Accepted so old links don't break; State is ignored
-   * (use panel/processor). Prefer `mode`.
-   */
-  tab: z.enum(["feed", "state"]).optional().catch(undefined),
   /** Feed-items domain preset id; omitted on default. */
   preset: z.string().optional().catch(undefined),
   /** Text query (agent feed and/or feed_items, depending on mode). */
@@ -41,8 +36,6 @@ export const StreamViewSearch = z.object({
    * `raw.group`, `raw.stream.woken`, `raw.stream.child-stream-created`.
    */
   components: z.array(z.string()).optional().catch(undefined),
-  /** Legacy Pretty+raw raw-rail toggle. Accepted so old links keep parsing. */
-  raw: z.boolean().optional().catch(undefined),
   /** Inclusive lower offset bound for feed_items. */
   from: z.number().optional().catch(undefined),
   /** Inclusive upper offset bound for feed_items. */
@@ -150,22 +143,13 @@ export function defaultModeForStream(streamPath: string): StreamViewMode {
   return streamPath.startsWith("/agents/") ? "pretty" : "raw";
 }
 
-/** Normalize legacy `pretty-debug` → `pretty-raw`. */
-function normalizeStreamViewMode(
-  mode: z.infer<typeof StreamViewModeRaw> | undefined,
-): StreamViewMode | undefined {
-  if (mode == null) return undefined;
-  if (mode === "pretty-debug") return "pretty-raw";
-  return mode;
-}
-
 /**
  * Resolve the active mode for a stream. Unknown or unsupported modes
  * (e.g. `pretty` on a secrets stream) fall back to the stream default so
  * filter/body surfaces stay consistent with the header.
  */
 export function streamViewMode(search: StreamViewSearch, streamPath: string): StreamViewMode {
-  const requested = normalizeStreamViewMode(search.mode);
+  const requested = search.mode;
   if (requested == null) return defaultModeForStream(streamPath);
   const offered = modesForStream(streamPath);
   // Non-agent streams have no mode tabs — only `raw` is valid (implicit).

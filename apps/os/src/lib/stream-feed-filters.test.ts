@@ -206,16 +206,6 @@ describe("feedFiltersActive", () => {
     expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
   });
 
-  it("accepts legacy pretty-debug as pretty-raw for filter activity", () => {
-    expect(feedFiltersActive({ mode: "pretty-debug", components: ["raw.group"] }, agentPath)).toBe(
-      true,
-    );
-  });
-
-  it("ignores the legacy raw=false toggle in pretty-raw", () => {
-    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(false);
-  });
-
   it("does not treat pretty mode on non-agent paths as pretty (clamped to raw)", () => {
     // Hand-edited ?mode=pretty on a secret stream must not hide raw filters.
     expect(feedFiltersActive({ mode: "pretty", types: ["a"] }, secretPath)).toBe(true);

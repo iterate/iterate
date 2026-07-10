@@ -210,7 +210,6 @@ export function StreamModeTabs({ streamPath }: { streamPath: string }) {
           mode: mode === defaultMode ? undefined : mode,
           types: undefined,
           components: undefined,
-          raw: undefined,
           from: undefined,
           to: undefined,
           preset: undefined,

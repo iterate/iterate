@@ -125,5 +125,3 @@ const ensureBrowserFeedSchema = createSchemaEnsurer({
     await deleteBrowserProcessorState({ sql, processorSlug: "browser-event-feed" });
   },
 });
-
-export { ensureBrowserFeedSchema };
