@@ -50,7 +50,10 @@ test(
       {
         description: "the proof event to land on the target stream",
         intervalMs: 1_000,
-        timeoutMs: 120_000,
+        // Kimi turns run 15-60s under preview-account load (measured live
+        // 2026-07-10: a healthy turn with a 31s LLM response); two turns plus
+        // boot must fit, so this sits just under the 240s test ceiling.
+        timeoutMs: 180_000,
       },
     );
 
@@ -70,22 +73,29 @@ test(
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
 
-    // Force a known Workers AI model for the assertion. What this test proves
-    // is the explicit-selection MECHANISM (llm-provider-selected wins over
-    // defaults), so it must name a CF-HOSTED model: openai/* partner models
-    // only run on the prd account — on a preview slot they answer
-    // "2021: Invalid User Credentials" and this test can never pass.
+    // Force an explicitly-selected model for the assertion — the model the
+    // DEPLOYMENT defaults to (itx.agents.defaults), not a hardcoded one.
+    // What this test proves is the explicit-selection MECHANISM
+    // (llm-provider-selected wins over defaults), not any particular vendor;
+    // asking the deployment keeps it green even if account model
+    // availability shifts again (the 2026-07-10 lesson: a hardcoded
+    // openai/gpt-5.5 pin was unrunnable on the preview account until
+    // unified billing was enabled, and watchdogged the whole lane).
+    using defaultsItx = handle.itx();
+    const policy = await defaultsItx.agents.defaults.forPath("/agents/e2e-model");
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires a model; a model-less
-      // append is schema-invalid and wedges the agent processor's ingest.
-      payload: { model: "@cf/moonshotai/kimi-k2.7-code" },
+      // The contract requires a model; a model-less append is schema-invalid
+      // and wedges the agent processor's ingest.
+      payload: { model: policy.model },
     });
 
     const response = await agent.ask({
       message: "Reply with a short greeting.",
-      // Workers AI under preview load can sit past the 45s default.
-      timeoutMs: 120_000,
+      // Workers AI under preview load can sit past the 45s default — a kimi
+      // turn alone measured 31s healthy, worse when the shared per-minute
+      // budget is saturated and the retry backoff (10/20/60s) is riding.
+      timeoutMs: 180_000,
     });
     expect(response.type).toBe("events.iterate.com/agents/web-message-sent");
 
