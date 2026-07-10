@@ -87,9 +87,16 @@ test(
           });
 
         // 4. Another method-returned surface entirely: capabilityHosts.get()
-        //    used to hand back a Proxy too — its class methods must pipeline.
-        const echoed = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
-          .describeCapabilities();
+        //    used to hand back a Proxy too — a declared CLASS method must
+        //    pipeline (__describe), and so must a DYNAMIC capability name
+        //    resolved by the same hop (proofAppend, mounted above).
+        const hostDescription = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
+          .__describe();
+        const [appendedViaHostsGet] = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
+          .proofAppend({
+            type: ${JSON.stringify(PROOF_TYPE)},
+            payload: { marker: ${JSON.stringify(marker)} + "-via-hosts-get" },
+          });
 
         return {
           messageOffset: sent.offset,
@@ -97,7 +104,8 @@ test(
           proofOffset: appended.offset,
           proofType: appended.type,
           proofViaHostOffset: appendedViaHost.offset,
-          hostCapabilityPaths: echoed.map((c) => c.path.join(".")),
+          proofViaHostsGetOffset: appendedViaHostsGet.offset,
+          hostPath: hostDescription.path,
         };
       }
     `);
@@ -110,12 +118,14 @@ test(
       messageOffset: number;
       proofOffset: number;
       proofViaHostOffset: number;
-      hostCapabilityPaths: string[];
+      proofViaHostsGetOffset: number;
+      hostPath: string;
     };
     expect(result.messageOffset).toBeGreaterThan(0);
     expect(result.proofOffset).toBeGreaterThan(0);
     expect(result.proofViaHostOffset).toBeGreaterThan(result.proofOffset);
-    expect(result.hostCapabilityPaths).toContain("proofAppend");
+    expect(result.proofViaHostsGetOffset).toBeGreaterThan(result.proofViaHostOffset);
+    expect(result.hostPath).toBe(agentPath);
 
     // The side effects are real, not just unthrown: the message folded into
     // the agent stream and the dynamic capability appended the proof event.
