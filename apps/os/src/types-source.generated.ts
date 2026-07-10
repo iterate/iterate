@@ -1308,7 +1308,15 @@ export interface WorkspaceGit {
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
-  get(): Promise<Project>;
+  /**
+   * The value delivered over the loopback is an RPC STUB of the project root,
+   * and stubs are disposable — typed honestly so worker code can (and
+   * should) write \`using itx = await this.env.ITX.get()\`: releasing the stub
+   * when the handler ends keeps workerd's "An RPC stub was not disposed
+   * properly" warning out of production logs. Values obtained THROUGH it
+   * hold their own references and survive its disposal.
+   */
+  get(): Promise<Project & Disposable>;
 };
 
 /**
