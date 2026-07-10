@@ -955,9 +955,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
    *
-   * Public repositories transfer server-side (any history size); private
-   * ones transfer in-process, where big histories need `depth`. `depth`
-   * prunes to the newest N commits — GitHub retains the full history, and a
+   * The history transfers in-process, so big histories need `depth` — it
+   * prunes to the newest N commits. GitHub retains the full history, and a
    * later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
@@ -1130,11 +1129,9 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * a no-op.
    */
   forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
-    const defaultModel = parseConfig(env).defaultAgentModel;
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
-      ...(defaultModel === undefined ? {} : { defaultModel }),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
@@ -3021,12 +3018,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * after it (agents/agent-defaults.ts).
    */
   async configure(input: AgentDefaultsOverrides): Promise<void> {
-    const defaultModel = parseConfig(env).defaultAgentModel;
     const defaults = agentDefaultsForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
       overrides: input,
-      ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     // The defaults batch (fixed keys) establishes policy on a fresh agent and
     // dedupes away on an existing one; the keyless events are the last word

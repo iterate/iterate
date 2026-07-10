@@ -31,6 +31,7 @@ test.describe("itx REPL catalogue examples", () => {
       await page.getByTestId("itx-repl-editor").locator(".cm-content").waitFor();
 
       const ctx = {
+        attemptSalt: crypto.randomUUID().slice(0, 8),
         marker: `playwright-${example.id}-${crypto.randomUUID().slice(0, 8)}`,
         projectId: fixture.project.id,
       };
