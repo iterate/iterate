@@ -242,8 +242,8 @@ test("project MCP OAuth opaque-token flow", async () => {
   expect(token.access_token.split(".").length, "token is opaque, not a JWT").toBe(1);
 
   // 8. Use the opaque token against the real OS MCP endpoint.
-  const mcp = async (body: unknown) => {
-    const res = await fetch(`${mcpOrigin}/`, {
+  const mcp = async (body: unknown, search = "") => {
+    const res = await fetch(`${mcpOrigin}/${search}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token.access_token}`,
@@ -277,6 +277,13 @@ test("project MCP OAuth opaque-token flow", async () => {
   expect(tools.status, "MCP tools/list").toBe(200);
   const toolNames = tools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
   expect(toolNames, "opaque token grants the project MCP tool surface").toContain("exec_js");
+  expect(toolNames, "assistant tool is hidden by default").not.toContain("ask_assistant");
+
+  const agentTools = await mcp({ jsonrpc: "2.0", id: 3, method: "tools/list" }, "?withAgent=true");
+  expect(agentTools.status, "MCP tools/list with agent opt-in").toBe(200);
+  const agentToolNames = agentTools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
+  expect(agentToolNames, "agent opt-in keeps exec_js").toContain("exec_js");
+  expect(agentToolNames, "agent opt-in exposes assistant tool").toContain("ask_assistant");
 
   console.log(
     `MCP OAuth e2e passed for ${osBaseUrl.toString()} (opaque token → tools: ${toolNames.join(", ")})`,

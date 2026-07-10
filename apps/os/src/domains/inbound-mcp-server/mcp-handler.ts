@@ -15,6 +15,7 @@ import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
 import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
+import { readInboundMcpToolOptions, type InboundMcpToolOptions } from "./mcp-tool-options.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
@@ -96,7 +97,11 @@ export async function handleInboundMcpRequest(input: {
   const auth = await resolveMcpAuth(input);
   if (auth instanceof Response) return auth;
 
-  const server = createServer({ ...input, auth });
+  const server = createServer({
+    ...input,
+    auth,
+    toolOptions: readInboundMcpToolOptions(input.request),
+  });
   const handler = createMcpHandler(server, {
     enableJsonResponse: true,
     route: MCP_START_MOUNT_PATH,
@@ -110,6 +115,7 @@ function createServer(input: {
   context: RequestContext;
   env: Env;
   request: Request;
+  toolOptions: InboundMcpToolOptions;
 }) {
   const server = new McpServer(
     { name: "os", version: packageJson.version },
@@ -117,7 +123,9 @@ function createServer(input: {
       instructions: [
         "This is an Iterate OS project MCP server.",
         "Use exec_js to run a JavaScript async arrow function against a project.",
-        "Use ask_assistant to ask the project's assistant agent in plain language.",
+        ...(input.toolOptions.withAgent
+          ? ["Use ask_assistant to ask the project's assistant agent in plain language."]
+          : []),
         "Prefer several small single-purpose calls (fetch data, return it, look at it, act) over one giant defensive script; use Promise.all inside a call to parallelize independent requests.",
       ].join("\n"),
     },
@@ -187,64 +195,66 @@ function createServer(input: {
     },
   );
 
-  server.registerTool(
-    "ask_assistant",
-    {
-      title: "Ask assistant",
-      description:
-        "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream; asks are a plain chat conversation, so send them one at a time — concurrent asks on one session interleave like two people typing into the same chat.",
-      inputSchema: AskAssistantInput,
-    },
-    async (rawInput) => {
-      const parsedInput = AskAssistantInput.parse(rawInput);
-      const project = await resolveProject(parsedInput.project);
-      const agentPath = await resolveSessionAgentPath();
+  if (input.toolOptions.withAgent) {
+    server.registerTool(
+      "ask_assistant",
+      {
+        title: "Ask assistant",
+        description:
+          "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream; asks are a plain chat conversation, so send them one at a time — concurrent asks on one session interleave like two people typing into the same chat.",
+        inputSchema: AskAssistantInput,
+      },
+      async (rawInput) => {
+        const parsedInput = AskAssistantInput.parse(rawInput);
+        const project = await resolveProject(parsedInput.project);
+        const agentPath = await resolveSessionAgentPath();
 
-      // agents.ask appends the message and waits for the agent's next chat
-      // reply server-side. Reply matching is by order on the session stream,
-      // not per-request correlation — the session belongs to this one MCP
-      // client, so interleaved replies are the client's own doing (same trust
-      // model as one person running exec_js mid-conversation).
-      let reply;
-      try {
-        const projectItx = await projectItxFor(project.id);
-        await ensureMcpSessionAgentReady({ agentPath, projectItx });
-        reply = await projectItx.agents.get(agentPath).ask({
-          message: parsedInput.message,
-          origin: "mcp",
-          timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `The assistant did not reply in time: ${message}. The session transcript is the ${agentPath} stream.`,
-            },
-          ],
-          isError: true,
-        };
-      }
+        // agents.ask appends the message and waits for the agent's next chat
+        // reply server-side. Reply matching is by order on the session stream,
+        // not per-request correlation — the session belongs to this one MCP
+        // client, so interleaved replies are the client's own doing (same trust
+        // model as one person running exec_js mid-conversation).
+        let reply;
+        try {
+          const projectItx = await projectItxFor(project.id);
+          await ensureMcpSessionAgentReady({ agentPath, projectItx });
+          reply = await projectItx.agents.get(agentPath).ask({
+            message: parsedInput.message,
+            origin: "mcp",
+            timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `The assistant did not reply in time: ${message}. The session transcript is the ${agentPath} stream.`,
+              },
+            ],
+            isError: true,
+          };
+        }
 
-      const message = reply.payload?.message;
-      if (typeof message !== "string" || message.trim() === "") {
+        const message = reply.payload?.message;
+        if (typeof message !== "string" || message.trim() === "") {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Assistant reply event ${reply.offset} did not include a message. The session transcript is the ${agentPath} stream.`,
+              },
+            ],
+            isError: true,
+          };
+        }
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Assistant reply event ${reply.offset} did not include a message. The session transcript is the ${agentPath} stream.`,
-            },
-          ],
-          isError: true,
+          content: [{ type: "text" as const, text: message }],
+          isError: false,
         };
-      }
-      return {
-        content: [{ type: "text" as const, text: message }],
-        isError: false,
-      };
-    },
-  );
+      },
+    );
+  }
 
   return server;
 }
