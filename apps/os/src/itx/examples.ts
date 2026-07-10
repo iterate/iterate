@@ -327,10 +327,11 @@ const greeter = await itx.workers.get({
   },
 });
 
-return {
-  greeting: await greeter.hello({ name: "world" }),
-  sum: await greeter.add(2, 3),
-};
+const [greeting, sum] = await Promise.all([
+  greeter.hello({ name: "world" }),
+  greeter.add(2, 3),
+]);
+return { greeting, sum };
 `.trim(),
   },
   {
@@ -341,7 +342,9 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const counter = await itx.workers.get({
+// Sequential dependent calls: keep the handle (un-awaited — calls pipeline
+// through it), await each step because the next depends on it.
+const counter = itx.workers.get({
   type: "stateful",
   className: "CounterDurableObject",
   // The durable identity: reuse the key to come back to the same state.

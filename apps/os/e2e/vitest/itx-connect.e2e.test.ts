@@ -34,8 +34,9 @@ describe("itx", () => {
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
       const specUrl = `${api.url}/openapi.json`;
 
-      // Cap'n Web promise pipelining lets dynamic operation members be called
-      // before connect() resolves.
+      // Three call shapes exercised DELIBERATELY: pipelined on the un-awaited
+      // connect() promise, on an awaited handle, and as a one-expression
+      // chain — all three lanes must keep working.
       const directPromise = project.openapi.connect({ headers, specUrl });
       await expect(
         // @ts-expect-error - OpenAPI operations are derived at runtime.
@@ -118,8 +119,8 @@ describe("itx", () => {
 
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
 
-      // Cap'n Web promise pipelining lets dynamic tool members be called before
-      // connect() resolves.
+      // Same three-lane coverage as the OpenAPI test above: un-awaited
+      // promise, awaited handle, one-expression chain.
       const directPromise = project.mcp.connect({ headers, url: mcp.url });
       await expect(
         // @ts-expect-error - MCP tools are derived at runtime.

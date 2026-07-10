@@ -299,8 +299,16 @@ script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`
 and `await itx.agents.get(path).message(...)` work as one expression (the
 dynamic-capability fallback lives on the classes' prototype chains, so the
 returned instances are genuine RpcTargets; see
-`installPrototypeInvokeCapabilityFallback`). Keep an intermediate handle only
-when you reuse it.
+`installPrototypeInvokeCapabilityFallback`). For several calls on one
+surface, take the handle WITHOUT awaiting it and fan out — the capnweb
+pattern:
+
+```ts
+using agent = itx.agents.get(path); // no await
+const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
+```
+
+Await a handle itself only when you truly need the settled stub.
 
 ## Agents
 
