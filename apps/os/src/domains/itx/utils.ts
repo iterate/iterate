@@ -317,12 +317,43 @@ export function createInvokeCapabilityPathProxy(
  * - Instances stay clean of own properties, so Workers RPC's
  *   instance-property protection needs no `getOwnPropertyDescriptor` help.
  *
- * Call ONCE per class, immediately after the class declaration. Constructor
- * inheritance (`super()`) is untouched — only `Class.prototype`'s parent link
- * changes, and the hop forwards everything it doesn't intercept.
+ * Call ONCE per class (the registry block at the bottom of rpc-targets.ts).
+ * Constructor inheritance (`super()`) is untouched — only `Class.prototype`'s
+ * parent link changes, and the hop forwards everything it doesn't intercept.
+ *
+ * DECISION RULE, recorded for future simplifiers: if/when workerd fixes the
+ * pipeline classifier upstream (cloudflare/workerd#6873) so instance-wrapping
+ * Proxies pipeline again, do NOT revert to constructor-returned Proxies —
+ * they split identity (`this` !== what callers hold), trap EVERY property
+ * get (the hop only traps misses), and remain hostage to native brand checks
+ * elsewhere. The hop stays correct under either upstream resolution.
+ *
+ * KNOWN QUIRKS (accepted, by parity with the old wrapper or by design):
+ * - No `has` trap: `"x" in instance` reflects DECLARED members only, while
+ *   `instance.x` conjures a dispatcher — feature-detect with access, not `in`.
+ * - `super.someUndeclaredName` inside these classes resolves through the hop
+ *   like any other miss.
+ * - A typo'd built-in (`itx.strems`) is a syntactically valid dynamic
+ *   dispatch that fails at the capability table, not a crisp missing-method
+ *   error — inherent to dynamic fallback, identical under the old wrapper.
  */
 /** Prototypes that already carry a fallback hop (idempotence guard). */
 const PROTOTYPE_FALLBACK_HOPS = new WeakSet<object>();
+
+/**
+ * Names common protocols LOOK UP on arbitrary objects and CALL if callable:
+ * JSON.stringify (toJSON), vitest/jest equality (asymmetricMatch),
+ * chai/loupe (inspect). A dynamic fallback answering them turns every
+ * stringify/assert/log of a capability surface into a live invokeCapability
+ * dispatch (observed: a floating rejection from stringifying a handle).
+ *
+ * Deliberately scoped to the HOP (the class surface) and NOT added to
+ * RESERVED_DYNAMIC_PATH_SEGMENTS: that set applies at every depth of a
+ * dotted path, where names like `inspect` are legitimate userspace
+ * capability methods (`itx.agentProbe.inspect(...)`). Policy: any string
+ * key a common protocol probes on the SURFACE belongs here.
+ */
+const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch", "inspect"]);
 
 export function installPrototypeInvokeCapabilityFallback<
   T extends abstract new (...args: never[]) => object,
@@ -342,9 +373,16 @@ export function installPrototypeInvokeCapabilityFallback<
   const isReserved = options.isReserved ?? isReservedDynamicPathSegment;
   const invokerFor =
     options.invokerFor ?? ((instance) => instance as unknown as InvokeCapabilityTarget);
-  // Idempotent: installing twice (a module re-evaluated by a test runner, a
-  // future careless second call) must not stack hops.
-  if (PROTOTYPE_FALLBACK_HOPS.has(cls.prototype as object)) return;
+  // A second install is a programmer error: silently returning would discard
+  // the second caller's options (a different invokerFor/isReserved) with no
+  // trace, and stacking hops would double-dispatch. Module re-evaluation (test
+  // runners, HMR) redefines the class and gets a fresh prototype, so this
+  // only fires on a genuine duplicate call.
+  if (PROTOTYPE_FALLBACK_HOPS.has(cls.prototype as object)) {
+    throw new Error(
+      `installPrototypeInvokeCapabilityFallback: ${cls.name} already has a fallback hop installed`,
+    );
+  }
   const parentPrototype = Object.getPrototypeOf(cls.prototype) as object;
   const hop = new Proxy(Object.create(parentPrototype) as object, {
     get(hopTarget, key, receiver) {
@@ -357,7 +395,7 @@ export function installPrototypeInvokeCapabilityFallback<
       if (typeof key === "symbol" || key in hopTarget) {
         return Reflect.get(hopTarget, key, receiver);
       }
-      if (isReserved(key)) return undefined;
+      if (isReserved(key) || PROTOCOL_PROBE_KEYS.has(key)) return undefined;
       // The dynamic fallback exists for INSTANCES. A lookup whose receiver is
       // not one — someone probing `Class.prototype.foo` directly, a framework
       // walking prototypes — must see plain "undefined", not conjure a
@@ -366,8 +404,15 @@ export function installPrototypeInvokeCapabilityFallback<
       if (!(receiver instanceof (cls as unknown as abstract new (...args: never[]) => object))) {
         return undefined;
       }
+      // invokerFor resolves at CALL time, not trap time: the trap can fire
+      // mid-construction (a property miss on `this` inside a base-class
+      // constructor, before field initializers ran), and a dispatcher built
+      // over half-initialized state must not be baked into the path proxy.
       return createInvokeCapabilityPathProxy(
-        invokerFor(receiver as InstanceType<T>),
+        {
+          invokeCapability: (call) =>
+            invokerFor(receiver as InstanceType<T>).invokeCapability(call),
+        },
         [key],
         isReserved,
       );

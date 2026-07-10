@@ -133,7 +133,7 @@ describe("prototype-chain dynamic fallback", () => {
     expect(target.calls).toEqual([{ args: [], path: ["someMount", "sub", "__describe"] }]);
   });
 
-  it("is idempotent: a second install must not stack hops", () => {
+  it("throws on a second install — silent no-op would discard the new options", () => {
     class Once extends RpcTarget {
       calls: DynamicCall[] = [];
       invokeCapability(call: DynamicCall) {
@@ -143,12 +143,72 @@ describe("prototype-chain dynamic fallback", () => {
     }
     installPrototypeInvokeCapabilityFallback(Once);
     const hopAfterFirst = Object.getPrototypeOf(Once.prototype) as object;
-    installPrototypeInvokeCapabilityFallback(Once);
+    expect(() => installPrototypeInvokeCapabilityFallback(Once)).toThrow(
+      /already has a fallback hop/,
+    );
     expect(Object.getPrototypeOf(Once.prototype)).toBe(hopAfterFirst);
 
     const target = new Once();
     (target as unknown as { tool(): unknown }).tool();
     expect(target.calls).toEqual([{ args: [], path: ["tool"] }]);
+  });
+
+  it("JSON.stringify and test-framework probes must not fire capability dispatches", () => {
+    // JSON.stringify LOOKS UP toJSON and CALLS it if callable; vitest/jest
+    // equality probes asymmetricMatch; chai/loupe probes inspect. Each of
+    // those reaching the dynamic fallback would turn a stringify/assert/log
+    // into a live invokeCapability call (observed: a floating rejection from
+    // stringifying a handle). Blocked at the HOP only — deeper path segments
+    // named e.g. `inspect` stay valid capability methods (see
+    // PROTOCOL_PROBE_KEYS in utils.ts).
+    const target = new HostTarget();
+    expect(JSON.stringify(target)).toBe(JSON.stringify({ calls: [], ownField: "private" }));
+    expect((target as unknown as { toJSON: unknown }).toJSON).toBeUndefined();
+    expect((target as unknown as { asymmetricMatch: unknown }).asymmetricMatch).toBeUndefined();
+    expect((target as unknown as { inspect: unknown }).inspect).toBeUndefined();
+    expect(target.calls).toEqual([]);
+
+    // ...but at DEPTH the same names are ordinary capability methods.
+    const probe = target as unknown as { agentProbe: { inspect(v: string): unknown } };
+    expect(probe.agentProbe.inspect("deep")).toBe("dynamic:agentProbe.inspect:deep");
+    expect(target.calls).toEqual([{ args: ["deep"], path: ["agentProbe", "inspect"] }]);
+  });
+
+  it("resolves the invoker at CALL time, not lookup time (mid-construction safety)", () => {
+    // A property miss on `this` during a base-class constructor fires the
+    // trap before field initializers ran. The dispatcher it hands back must
+    // not bake in that half-initialized state.
+    const recorded: DynamicCall[] = [];
+    class LateHost extends RpcTarget {
+      host: { invokeCapability(call: DynamicCall): unknown } | undefined;
+
+      constructor() {
+        super();
+        // Simulates a feature-detect miss during construction: the trap runs
+        // while `host` is still undefined.
+        void (this as unknown as { probedDuringConstruction: unknown }).probedDuringConstruction;
+        this.host = {
+          invokeCapability(call: DynamicCall) {
+            recorded.push(call);
+            return "late";
+          },
+        };
+      }
+    }
+    installPrototypeInvokeCapabilityFallback(LateHost, {
+      invokerFor: (instance) => {
+        const host = (instance as LateHost).host;
+        if (host === undefined) throw new Error("invoker resolved before construction finished");
+        return host;
+      },
+    });
+
+    const instance = new LateHost();
+    // The dispatcher grabbed during construction still works, because the
+    // invoker resolves now — after construction — not when the trap fired.
+    const early = (instance as unknown as { earlyTool(): unknown }).earlyTool;
+    expect(early()).toBe("late");
+    expect(recorded).toEqual([{ args: [], path: ["earlyTool"] }]);
   });
 
   it("does not conjure dispatchers for non-instance receivers (prototype probes)", () => {
