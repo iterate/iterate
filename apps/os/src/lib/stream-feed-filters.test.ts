@@ -95,7 +95,7 @@ describe("feedItemsFilterFromSearch", () => {
     });
   });
 
-  it("ignores stale raw filters in pretty-raw so the grouped rail stays complete", () => {
+  it("honors raw group type filters in pretty-raw without applying pretty search", () => {
     expect(
       feedItemsFilterFromSearch(
         {
@@ -108,8 +108,8 @@ describe("feedItemsFilterFromSearch", () => {
         "/agents/x",
       ),
     ).toEqual({
-      eventTypes: null,
-      components: null,
+      eventTypes: ["events.iterate.com/stream/woken"],
+      components: ["stream.woken"],
       eventTypePrefix: null,
       searchQuery: null,
       offsetFrom: null,
@@ -154,14 +154,14 @@ describe("feedFiltersActive", () => {
   it("signals raw filter deviations including components", () => {
     expect(feedFiltersActive({ mode: "raw", preset: "everything" }, agentPath)).toBe(true);
     expect(feedFiltersActive({ mode: "raw", q: "boom" }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ mode: "pretty-raw", components: ["group"] }, agentPath)).toBe(false);
+    expect(feedFiltersActive({ mode: "pretty-raw", components: ["group"] }, agentPath)).toBe(true);
     expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
     expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
   });
 
   it("accepts legacy pretty-debug as pretty-raw for filter activity", () => {
     expect(feedFiltersActive({ mode: "pretty-debug", components: ["group"] }, agentPath)).toBe(
-      false,
+      true,
     );
   });
 

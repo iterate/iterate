@@ -75,8 +75,8 @@ const DOMAIN_PRESETS: { pathPrefix: string; preset: StreamFeedPreset }[] = [
 ];
 
 /**
- * Feed-items presets for Raw. FIRST is the domain default. Pretty+raw renders
- * the raw grouped rail unfiltered, regardless of URL filter params.
+ * Feed-items presets for Raw. FIRST is the domain default. Pretty+raw starts
+ * from Everything, then applies explicit component/event-type selections.
  */
 export function presetsForStream(streamPath: string): StreamFeedPreset[] {
   const presets: StreamFeedPreset[] = [];
@@ -88,8 +88,8 @@ export function presetsForStream(streamPath: string): StreamFeedPreset[] {
 }
 
 /**
- * Default feed-items preset for a mode. Pretty+raw is unscoped (Everything)
- * because its raw rail always shows the full stream; Raw uses the domain default.
+ * Default feed-items preset for a mode. Pretty+raw is unscoped (Everything) so
+ * its raw rail starts from the full stream; Raw uses the domain default.
  */
 export function defaultPresetForMode(
   streamPath: string,
@@ -114,17 +114,13 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
     return caps.search && hasQuery;
   }
 
-  if (mode === "pretty-raw") {
-    return caps.search && hasQuery;
-  }
-
   const defaultPreset = defaultPresetForMode(streamPath, mode);
   const activePreset =
     presetsForStream(streamPath).find((preset) => preset.id === search.preset) ?? defaultPreset;
 
   return (
     (caps.search && hasQuery) ||
-    activePreset.id !== defaultPreset.id ||
+    (caps.rawPresets && activePreset.id !== defaultPreset.id) ||
     (caps.rawEventTypes && (search.types?.length ?? 0) > 0) ||
     (caps.rawComponents && (search.components?.length ?? 0) > 0) ||
     (caps.rawOffsets && (search.from != null || search.to != null))
@@ -195,8 +191,8 @@ export function feedItemsFilterFromSearch(
   const mode = streamViewMode(search, streamPath);
   if (mode === "pretty-raw") {
     return {
-      eventTypes: null,
-      components: null,
+      eventTypes: search.types ?? null,
+      components: search.components ?? null,
       eventTypePrefix: null,
       searchQuery: null,
       offsetFrom: null,

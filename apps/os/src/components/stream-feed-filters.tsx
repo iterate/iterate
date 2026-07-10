@@ -159,21 +159,10 @@ export function StreamFeedFilterRow({
         <TypeFilterPanel
           database={feedDatabase}
           eventTypePrefix={activePreset.eventTypePrefix ?? null}
-          mode={mode}
           components={search.components ?? null}
           eventTypes={search.types ?? null}
-          rawEnabled={search.raw !== false}
           onComponentsChange={(components) => setSearch({ components: components ?? undefined })}
           onEventTypesChange={(types) => setSearch({ types: types ?? undefined })}
-          onRawEnabledChange={(enabled) =>
-            setSearch({
-              raw: enabled ? undefined : false,
-              // Clear raw-only filters when hiding the rail so they don't stick.
-              ...(enabled
-                ? {}
-                : { types: undefined, from: undefined, to: undefined, event: undefined }),
-            })
-          }
         />
       ) : null}
     </div>
@@ -183,25 +172,18 @@ export function StreamFeedFilterRow({
 function TypeFilterPanel({
   database,
   eventTypePrefix,
-  mode,
   components,
   eventTypes,
-  rawEnabled,
   onComponentsChange,
   onEventTypesChange,
-  onRawEnabledChange,
 }: {
   database: StreamBrowserDatabase;
   eventTypePrefix: string | null;
-  mode: StreamViewMode;
   components: readonly string[] | null;
   eventTypes: readonly string[] | null;
-  rawEnabled: boolean;
   onComponentsChange: (components: string[] | null) => void;
   onEventTypesChange: (eventTypes: string[] | null) => void;
-  onRawEnabledChange: (enabled: boolean) => void;
 }) {
-  const allowHideRaw = mode === "pretty-raw";
   const componentOptions = useComponentOptions(database);
   const eventTypeOptions = useEventTypeOptions(database, eventTypePrefix);
 
@@ -218,41 +200,21 @@ function TypeFilterPanel({
           onChange={onComponentsChange}
           dataTestId="stream-feed-components-grid"
         />
-        <div className={cn("flex min-h-0 flex-col gap-2", !rawEnabled && "opacity-60")}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xs font-semibold text-foreground">Raw event types</div>
-              <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                Primary event type inside a feed item (group eventType or singleton).
-              </p>
-            </div>
-            {allowHideRaw ? (
-              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={rawEnabled}
-                  onChange={(event) => onRawEnabledChange(event.target.checked)}
-                  data-testid="stream-feed-raw-enabled"
-                  className="size-3.5 rounded border-border"
-                />
-                Show raw events
-              </label>
-            ) : null}
-          </div>
-          {rawEnabled ? (
-            <TypeCheckboxGrid
-              emptyLabel="No event types in the mirror yet."
-              options={eventTypeOptions}
-              shortLabel={shortEventType}
-              value={eventTypes}
-              onChange={onEventTypesChange}
-              dataTestId="stream-feed-event-types-grid"
-            />
-          ) : (
-            <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-              Raw events are hidden. Turn them back on to filter by event type.
+        <div className="flex min-h-0 flex-col gap-2">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-foreground">Raw event types</div>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Primary event type inside a feed item (group eventType or singleton).
             </p>
-          )}
+          </div>
+          <TypeCheckboxGrid
+            emptyLabel="No event types in the mirror yet."
+            options={eventTypeOptions}
+            shortLabel={shortEventType}
+            value={eventTypes}
+            onChange={onEventTypesChange}
+            dataTestId="stream-feed-event-types-grid"
+          />
         </div>
       </div>
     </div>

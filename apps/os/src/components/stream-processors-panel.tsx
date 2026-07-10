@@ -9,6 +9,7 @@ import type {
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
+import type { Stream } from "../itx-api.generated.ts";
 import {
   hashString,
   presenceColorClasses,
@@ -60,24 +61,7 @@ export function PresenceAvatar({
  * a facet of "the stream's consumers". Overview lists every consumer with
  * (simulated) RTT/lag; clicking one drills into its announced contract.
  */
-export type StreamRuntimeDebugState = {
-  coreProcessorState: unknown;
-  runtime: {
-    connections: Record<string, unknown>;
-    subscriptions: Record<string, SubscriptionRuntimeState>;
-  };
-};
-
-type SubscriptionRuntimeState = {
-  mode: "wake" | "push" | "webhook";
-  ackedOffset: number;
-  lag: number;
-  attempt: number;
-  nextAttemptAt: number | null;
-  lastError: string | null;
-  parkedAtOffset: number | null;
-  connected: boolean;
-};
+export type StreamRuntimeDebugState = Awaited<ReturnType<Stream["runtimeState"]>>;
 
 type ProcessorPanelEntry = {
   subscriptionKey: string;
@@ -89,7 +73,7 @@ type ProcessorPanelEntry = {
   subscriptionType?: "configured" | "ephemeral";
   deliveryMode?: "wake" | "push" | "webhook";
   configuredAtOffset?: number;
-  runtimeSubscription?: SubscriptionRuntimeState;
+  runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: Record<string, unknown>;
 };
 

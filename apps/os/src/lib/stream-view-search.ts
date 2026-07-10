@@ -106,8 +106,8 @@ const PRETTY_RAW_CAPS: StreamModeCapabilities = {
   filters: true,
   search: true,
   rawPresets: false,
-  rawEventTypes: false,
-  rawComponents: false,
+  rawEventTypes: true,
+  rawComponents: true,
   rawOffsets: false,
 };
 
