@@ -271,7 +271,7 @@ export function feedItemsFilterFromSearch(
     eventTypes: search.types ?? null,
     components: search.components ?? activePreset.components ?? null,
     eventTypePrefix: activePreset.eventTypePrefix ?? null,
-    searchQuery: (search.q ?? "") === "" ? null : (search.q ?? null),
+    searchQuery: (search.q ?? "").trim() === "" ? null : (search.q ?? "").trim(),
     offsetFrom: search.from ?? null,
     offsetTo: search.to ?? null,
   };

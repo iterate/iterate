@@ -162,7 +162,9 @@ export function ProjectStreamView({
   const activePreset = caps.rawPresets
     ? (presets.find((preset) => preset.id === search.preset) ?? defaultPreset)
     : defaultPreset;
-  const feedSearch = search.q ?? "";
+  // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
+  // pattern of spaces that hides every row.
+  const feedSearch = (search.q ?? "").trim();
   const rawFilter = feedItemsFilterFromSearch(search, streamPath);
 
   // The server is about to append: verify deliveries actually arrive and
