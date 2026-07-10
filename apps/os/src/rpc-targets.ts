@@ -53,7 +53,7 @@ import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts"
 import {
   describeNode,
   rejectBuiltinCollision,
-  withInvokeCapabilityFallback,
+  installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
@@ -1086,9 +1086,11 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
    * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
-   * `itx.agents.get(path).message(text)` in one expression — over workerd RPC
-   * (the script lane); see AgentRpcTarget's class comment for the mechanism
-   * and `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
+   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
+   * expression — over workerd RPC (the script lane); dynamic members resolve
+   * through the prototype-chain fallback. See AgentRpcTarget's class comment
+   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
+   * guard.
    */
   get(path: string): AgentRpcTarget {
     const resolved = resolveAgentPath(path, this.props.sourceScopePath);
@@ -2025,7 +2027,6 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    return withInvokeCapabilityFallback(this);
   }
 
   // The project-root capability table: unknown slugs resolve there, and
@@ -2938,31 +2939,28 @@ type AgentRpcTargetProps = {
 /**
  * Agent capability surface for message loops and agent-local dynamic tools.
  *
- * DELIBERATELY NOT wrapped in `withInvokeCapabilityFallback`, unlike the other
- * itx surfaces — and this is load-bearing, not an omission. This is the one
- * surface routinely returned FROM A METHOD CALL (`itx.agents.get(path)`), and
- * workerd's RPC classifies a call result for promise pipelining with native
+ * Instances are DELIBERATELY plain — never wrapped in a Proxy. This is the
+ * surface most routinely returned FROM A METHOD CALL (`itx.agents.get(path)`),
+ * and workerd RPC classifies a call result for promise pipelining with native
  * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
  * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
  * pipelined call on the result dies with the baffling "The RPC receiver does
- * not implement the method ..."). A plain class instance classifies as a
- * single stub and pipelines fine — which is what lets model code write the
- * natural one-liners over the script lane (`env.ITX` loopback):
+ * not implement the method ..." — cloudflare/workerd#6873). A plain class
+ * instance classifies as a single stub and pipelines fine, which is what lets
+ * model code write the natural one-liners over the script lane (`env.ITX`
+ * loopback):
  *
- *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get("researcher").message(task);
+ *   await itx.agents.get(path).someTool(args);
  *   await itx.agents.get(path).capabilityHost.someTool(args);
  *
- * The second line is how DYNAMIC capabilities are reached through a fetched
- * handle: `capabilityHost` is a property (workerd resolves property PATHS
- * through proxies — `tryGetProperty` has an explicit `isProxyOfRpcTarget`
- * walk — the gap is only in classifying METHOD RESULTS), so the proxied
- * CapabilityHostRpcTarget behind it still does dotted dynamic dispatch.
- * Inside the agent's own scope nothing changes: scope capabilities live on
- * the root itx (`itx.someTool(...)`), whose proxy is never a call result.
- *
- * Keep it this way: never return a proxied target from a method callers will
- * pipeline on. (Upstream fix proposed for the workerd classifier; until it
- * ships everywhere this rule stands regardless.)
+ * The dynamic-tool spellings (lines 2 and 3 are equivalent) come from the
+ * PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
+ * this file: unknown members walk the prototype chain into a proxied hop and
+ * dispatch through this agent scope's capability host, while the instance
+ * itself stays a genuine, natively-branded RpcTarget. See
+ * installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
+ * mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
  */
 class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
@@ -2982,14 +2980,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
-   * through a fetched handle: `agents.get(path).capabilityHost.someTool(args)`.
-   * That chain pipelines over workerd RPC because `capabilityHost` is a
-   * PROPERTY: workerd resolves property paths through the host's fallback
-   * Proxy (its traversal code special-cases proxies), whereas the handle
-   * itself must stay unproxied to be pipelinable at all (see the class
-   * comment). Inside the agent's own scripts the same capabilities are simply
-   * `itx.someTool(args)`.
+   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
+   * shorthand `agents.get(path).someTool(args)` resolves through the same
+   * host via the handle's prototype-chain fallback; both pipeline over
+   * workerd RPC. Inside the agent's own scripts the same capabilities are
+   * simply `itx.someTool(args)`.
    */
   get capabilityHost(): CapabilityHostRpcTarget {
     return this.#props.capabilityHost;
@@ -3214,7 +3210,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   > {
     return describeNode({
       instructions:
-        "One agent: the narrow control surface for the agent stream at this path. This surface has ONLY the members listed below — the agent scope's dynamic capabilities are reached through `capabilityHost` (e.g. agents.get(path).capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
+        "One agent: the control surface for the agent stream at this path. Besides the members below, the agent scope's dynamic capabilities dispatch directly on this handle — agents.get(path).someTool(args) (equivalently capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
@@ -3315,7 +3311,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    return withInvokeCapabilityFallback(this);
   }
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
@@ -3775,9 +3770,6 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.#props = { ...props, path: normalizePath(props.path) };
-    // The host itself gets the dotted-path fallback too: host.foo.bar(x) is
-    // host.invokeCapability({ path: ["foo", "bar"], args: [x] }).
-    return withInvokeCapabilityFallback(this);
   }
 
   /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */
@@ -3970,9 +3962,10 @@ type ProjectRpcTargetProps = {
  *
  * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
- * in the isolate; only unknown roots fall through `withInvokeCapabilityFallback`
- * to the capability host's dynamic table (which itself chains up to enclosing
- * scopes). So the common `itx.streams.get(...)` path never makes a round trip
+ * in the isolate; only unknown roots fall through the prototype-chain
+ * fallback (the registry block at the bottom of this file) to the capability
+ * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
  * (`rejectBuiltinCollision` enforces this at provide time). If we end up needing
@@ -4007,7 +4000,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
-    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   /** The project this itx is scoped into. */
@@ -5396,7 +5388,6 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
     },
   ) {
     super();
-    return withInvokeCapabilityFallback(this);
   }
 
   async __describe(): Promise<Description> {
@@ -5487,7 +5478,6 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
       const spec = await fetchSpec(props.config, props.egress);
       return { operations: listOpenApiOperations(spec), spec };
     });
-    return withInvokeCapabilityFallback(this);
   }
 
   async __describe(): Promise<Description> {
@@ -5652,3 +5642,52 @@ function requestBase(props: OpenApiConnectInput, spec: Record<string, unknown>):
 function ensureTrailingSlash(url: string): string {
   return url.endsWith("/") ? url : `${url}/`;
 }
+
+// =============================================================================
+// Dynamic-capability fallbacks — the registry.
+//
+// Every surface listed here answers UNKNOWN dotted members by dispatching an
+// `invokeCapability({ path, args })` against its scope's capability table
+// (`itx.someTool(...)`, `host.foo.bar(x)`, `mcpClient.someToolName(args)`).
+// The fallback lives on each class's PROTOTYPE CHAIN — one proxied hop
+// between `Class.prototype` and its parent — NOT as a Proxy around instances:
+// workerd RPC brand-checks a method call's RESULT when classifying it for
+// promise pipelining, a Proxy never passes, and every pipelined call on it
+// then fails with "The RPC receiver does not implement the method ..."
+// (cloudflare/workerd#6873). With the hop, instances are genuine RpcTargets —
+// `itx.capabilityHosts.get(p).runScript(s)`, `itx.workers.get(ref).ping()`,
+// `itx.mcp.connect(url).someToolName(args)` all pipeline in one expression —
+// while unknown-name lookups still walk the prototype chain into the hop.
+// Mechanism details: installPrototypeInvokeCapabilityFallback (domains/itx/
+// utils.ts).
+// =============================================================================
+
+// The root itx / `projects.get(id)`: unknown roots dispatch via the scope's
+// capability host (mounted capabilities, `itx.someTool(...)`).
+installPrototypeInvokeCapabilityFallback(ProjectRpcTarget, {
+  invokerFor: (project) => project.capabilityHost,
+});
+// `capabilityHosts.get(path)` and every `capabilityHost` getter: the host IS
+// the invoker — `host.foo.bar(x)` is `host.invokeCapability({ path: ["foo",
+// "bar"], args: [x] })`.
+installPrototypeInvokeCapabilityFallback(CapabilityHostRpcTarget);
+// `itx.integrations`: userspace connections mount under provider slugs
+// (`itx.integrations.waitrose.mum.search(...)`).
+installPrototypeInvokeCapabilityFallback(ProjectIntegrationsRpcTarget);
+// `workers.get(ref)`: dotted paths flatten into one invokeCapability against
+// the dynamic worker (the userspace `invokeCapability` walk).
+installPrototypeInvokeCapabilityFallback(DynamicWorkerRpcTarget);
+// `mcp.connect(url)`: tool names are only known at runtime (tools/list), so
+// every tool call is a dynamic member by construction.
+installPrototypeInvokeCapabilityFallback(McpClientRpcTarget);
+// `openapi.connect(specUrl)`: operationIds are runtime-discovered, same shape
+// as MCP tools.
+installPrototypeInvokeCapabilityFallback(OpenApiRpcTarget);
+// `agents.get(path)`: an agent scope's mounted tools directly on the handle —
+// `itx.agents.get(path).someTool(args)` — dispatched via the agent's own
+// capability host (the explicit `agent.capabilityHost.someTool(...)` spelling
+// resolves identically). #1839 removed the instance Proxy to make handles
+// pipelinable; the hop restores the sugar without giving that back.
+installPrototypeInvokeCapabilityFallback(AgentRpcTarget, {
+  invokerFor: (agent) => agent.capabilityHost,
+});

@@ -294,9 +294,21 @@ loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the
 default repo's `worker.ts`.
 
-Note: in script isolates, Workers RPC does not pipeline through unresolved
-returns — `await itx.workers.get(...)` / `await itx.agents.get(...)` before
-calling methods on them.
+Note: method-returned itx surfaces pipeline on every transport, including
+script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`
+and `await itx.agents.get(path).message(...)` work as one expression (the
+dynamic-capability fallback lives on the classes' prototype chains, so the
+returned instances are genuine RpcTargets; see
+`installPrototypeInvokeCapabilityFallback`). For several calls on one
+surface, take the handle WITHOUT awaiting it and fan out — the capnweb
+pattern:
+
+```ts
+using agent = itx.agents.get(path); // no await
+const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
+```
+
+Await a handle itself only when you truly need the settled stub.
 
 ## Agents
 
