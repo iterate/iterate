@@ -37,8 +37,8 @@ export const StreamViewSearch = z.object({
    */
   types: z.array(z.string()).optional().catch(undefined),
   /**
-   * Feed-item *component* filter (any-of) — `feed_items.component` values such
-   * as `group`, `stream.woken`, `stream.child-stream-created`.
+   * Raw feed-item *kind* filter (any-of) — `feed_items.kind` values such as
+   * `raw.group`, `raw.stream.woken`, `raw.stream.child-stream-created`.
    */
   components: z.array(z.string()).optional().catch(undefined),
   /** Legacy Pretty+raw raw-rail toggle. Accepted so old links keep parsing. */
@@ -63,11 +63,11 @@ export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
 
 /** What filter / body surfaces a mode exposes. Modes encode this as the preset. */
 type StreamModeCapabilities = {
-  /** Agent chat collection (agent_feed_items). */
+  /** Agent chat rows (feed_items kind `agent.*`). */
   agentFeed: boolean;
-  /** Include agent-ui debug kinds (wakes, etc.) in the agent feed. */
+  /** Include agent debug kinds (wakes, etc.) in the agent rows. */
   agentShowDebug: boolean;
-  /** Grouped raw feed_items collection. */
+  /** Raw rows (feed_items kind `raw.*`). */
   rawFeed: boolean;
   /** Raw event inspector (`?event=`) is meaningful. */
   eventInspector: boolean;
@@ -79,7 +79,7 @@ type StreamModeCapabilities = {
   rawPresets: boolean;
   /** Event-type multi-select (types inside feed items). */
   rawEventTypes: boolean;
-  /** Component multi-select (feed_items.component). */
+  /** Raw kind multi-select (feed_items.kind, raw.* family). */
   rawComponents: boolean;
   /** Offset from/to bounds. */
   rawOffsets: boolean;

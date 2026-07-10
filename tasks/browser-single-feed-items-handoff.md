@@ -1,5 +1,5 @@
 ---
-state: todo
+state: done
 priority: high
 size: large
 tags: [os, streams, browser-feed, sqlite, agent-feed]

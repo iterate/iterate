@@ -1,14 +1,5 @@
-import {
-  memo,
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { memo, useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -27,7 +18,6 @@ import type {
   AgentUiLlmStep,
   AgentUiMessageItem,
   AgentUiMessageVia,
-  AgentUiState,
   AgentUiStep,
   AgentUiTokenUsage,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -37,332 +27,17 @@ import {
   MessageResponse,
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
-import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
-import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
-/** How many rows past the virtualizer's window the tail query prefetches. */
-const TAIL_PREFETCH_ROWS = 32;
-/** Cap on rows retained across window shifts (memory bound for long feeds). */
-const MAX_RETAINED_ROWS = 2000;
 
-/**
- * The clean agent chat feed: user and assistant messages plus archived
- * activity rows ("Ran code 2× · 3 requests · 7.4 s").
- *
- * Settled items are `agent_feed_items` rows written by the agent-ui
- * processor; the TanStack virtual list windows over them with reactive
- * SQLite queries. Active LLM/script work is the list's trailing virtual item,
- * rendered straight from the processor's reduced state, so the virtualizer's
- * end anchoring tracks its growth natively.
- *
- * Callers must remount this component when pointing it at a different
- * database (key it by the database identity): the virtualizer's measurement
- * and scroll state are only valid for one stream's history.
- */
-/** Agent-ui item kinds hidden in Pretty mode (shown when showDebug is true). */
-const DEBUG_KINDS_SQL = `kind NOT IN ('stream-woken')`;
-
-export function AgentFeedView({
-  database,
-  liveState,
-  search = "",
-  showDebug = false,
-  emptyLabel = "No messages yet.",
-  isPending = false,
-  isInterruptingQueuedMessages = false,
-  onInterruptQueuedMessages,
-  projectSlug,
-}: {
-  database: StreamBrowserDatabase;
-  liveState: AgentUiState | null;
-  search?: string;
-  /** When false (Pretty), hide debug-only rows like stream-woken. */
-  showDebug?: boolean;
-  emptyLabel?: string;
-  isPending?: boolean;
-  isInterruptingQueuedMessages?: boolean;
-  onInterruptQueuedMessages?: () => Promise<void> | void;
-  projectSlug?: string;
-}) {
-  const query = search.trim().toLowerCase();
-  const clauses: string[] = [];
-  const params: string[] = [];
-  if (!showDebug) clauses.push(DEBUG_KINDS_SQL);
-  if (query !== "") {
-    clauses.push(`json(data) LIKE ?`);
-    params.push(`%${query}%`);
-  }
-  const whereSql = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
-  const countResult = useStreamQuery(
-    database,
-    `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE}${whereSql}`,
-    params,
-  );
-  const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const live = liveState?.live ?? null;
-  const queuedUserMessages = liveState?.queuedUserMessages ?? [];
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // Ids whose disclosure the user flipped away from its default state.
-  // Activities and live-rail steps default collapsed (has(id) = expanded);
-  // steps inside an expanded settled activity default expanded when their
-  // detail has content (has(id) = collapsed).
-  const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
-
-  // The live in-flight activity and the queued-messages panel are the list's
-  // trailing items so they're inside the virtualizer's size model: their
-  // growth shows up in getTotalSize()/the sizer's height, which is what the
-  // stick's ResizeObserver follows and what anchorTo's mid-history
-  // compensation measures. Rendering them outside the list would hide their
-  // height from both.
-  const liveCount = live == null ? 0 : 1;
-  const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
-  const totalCount = itemCount + liveCount + queuedCount;
-
-  // Settled rows are append-only at dense indices, so the index is a stable
-  // key for them. The live activity and queued panel keep their own keys:
-  // their index shifts up every time a settled row lands, and keying them by
-  // index would hand the (often tall) live block's cached measurement to the
-  // new settled row — a visible jump right when a turn settles.
-  const hasLive = live != null;
-  const getItemKey = useCallback(
-    (index: number) => {
-      if (index < itemCount) return index;
-      return hasLive && index === itemCount ? "live" : "queued";
-    },
-    [itemCount, hasLive],
-  );
-
-  const virtualizer = useVirtualizer({
-    count: totalCount,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 56,
-    getItemKey,
-    anchorTo: "end",
-    // followOnAppend stays OFF — the stick owns the tail (useStickToBottom).
-    // The library's follow cannot own it here because its gate is isAtEnd():
-    // every time the composer below this feed grows (multi-line draft,
-    // attachment chips), the viewport shrinks with NO scroll event, so
-    // distance-from-end silently accumulates — past scrollEndThreshold the
-    // library concludes the reader left the tail and stops following appends
-    // altogether. Rect changes never re-pin (observeElementRect only updates
-    // scrollRect and recalculates the range). Running follow AND the stick
-    // concurrently is two writers where follow's scroll-reconcile loop is
-    // uncancellable (TanStack/virtual#1221), so the stick is the only writer.
-    followOnAppend: false,
-    scrollEndThreshold: 80,
-    overscan: 16,
-    // The feed's breathing room above/below the messages lives HERE, not as
-    // wrapper padding. Vertical chrome the virtualizer can't see would shift
-    // its coordinate space off the scroll element's: every scrollToEnd /
-    // isAtEnd / followOnAppend would then resolve that many px above the real
-    // DOM bottom, leaving the newest message hidden below the fold.
-    paddingStart: 20,
-    paddingEnd: 24,
-    // Deliberately NOT directDomUpdates: in that mode the virtualizer owns
-    // each row's transform and the container height, and this feed's async
-    // row loading (SQL windows resolving after the rows render) triggers
-    // remeasurement storms the direct-DOM path loses track of — the browser
-    // clamps scrollTop against a stale container height and the end anchor
-    // strands mid-history. The classic mode below (JSX-owned styles) rides
-    // the same anchorTo/followOnAppend machinery and holds the pin.
-  });
-
-  const virtualItems = virtualizer.getVirtualItems();
-  const first = virtualItems[0]?.index ?? 0;
-  const last = virtualItems.at(-1)?.index ?? -1;
-  // Dense virtual indices (search and/or Pretty debug filter) use LIMIT/OFFSET;
-  // the unfiltered Pretty+debug path can address rows by local_index directly.
-  const denseWindow = query !== "" || !showDebug;
-  const windowLimit = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
-  // While the feed is opening (initial end-pin below), anchor the row window
-  // to the TAIL regardless of the virtualizer's not-yet-scrolled range: the
-  // opening jump must land on rows with real measured sizes, or estimate
-  // error makes the total shrink under the clamped scroll offset and strands
-  // the reader mid-history. Once pinned, the virtualizer's range drives the
-  // window again.
-  const [initialPinDone, setInitialPinDone] = useState(false);
-  const windowStart = initialPinDone ? first : Math.max(0, itemCount - windowLimit);
-  const rowClauses: string[] = [];
-  const rowParams: Array<string | number> = [];
-  if (!showDebug) rowClauses.push(DEBUG_KINDS_SQL);
-  if (query !== "") {
-    rowClauses.push(`json(data) LIKE ?`);
-    rowParams.push(`%${query}%`);
-  }
-  const rowsResult = useStreamQuery(
-    database,
-    denseWindow
-      ? `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
-         ${rowClauses.length === 0 ? "" : `WHERE ${rowClauses.join(" AND ")}`}
-         ORDER BY local_index ASC
-         LIMIT ? OFFSET ?`
-      : `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
-         WHERE local_index >= ? AND local_index < ?
-         ORDER BY local_index ASC`,
-    denseWindow
-      ? [...rowParams, windowLimit, windowStart]
-      : [windowStart, windowStart + windowLimit],
-  );
-  // Retain rows across range re-queries by MERGING each resolved window into
-  // the previously-loaded rows (bounded below). Replacing the map with just
-  // the latest window would forget loaded rows the moment the window shifts;
-  // rows scrolled back into view would then re-render as skeletons, and the
-  // skeleton's measurement would overwrite the row's real size — with an
-  // end-anchored virtualizer those size collapses cascade into the total
-  // thrashing and the scroll position stranding mid-history. The retained
-  // rows are only valid for the filter they were fetched under — reusing
-  // them across a filter change would briefly show unfiltered rows.
-  const filterKey = `${showDebug ? "debug" : "pretty"}:${query}`;
-  const lastRowsRef = useRef<{
-    filterKey: string;
-    rows: Map<number, { raw: string; item: AgentUiItem }>;
-  } | null>(null);
-  const itemsByIndex = useMemo(() => {
-    const retained =
-      lastRowsRef.current?.filterKey === filterKey
-        ? lastRowsRef.current.rows
-        : new Map<number, { raw: string; item: AgentUiItem }>();
-    if (rowsResult.status !== "ok") return retained;
-    const rows = new Map(retained);
-    rowsResult.data.forEach((row, position) => {
-      const index = denseWindow ? windowStart + position : Number(row.local_index);
-      const raw = String(row.data);
-      // Identity stability is load-bearing: rows re-parse (new object) ONLY
-      // when their JSON changed. Handing memoized rows fresh-but-equal items
-      // on every window re-query re-renders their markdown, whose async
-      // re-parse collapses the row to empty for a frame — and a burst of
-      // rows momentarily measuring ~16px is exactly the kind of size storm
-      // that breaks the virtualizer's end anchor.
-      if (rows.get(index)?.raw === raw) return;
-      try {
-        rows.set(index, { raw, item: JSON.parse(raw) as AgentUiItem });
-      } catch {
-        // Skip unparseable rows; the row stays a skeleton.
-      }
-    });
-    // Keep memory bounded on very long histories: drop the oldest-inserted
-    // entries once well past what any viewport plus overscan can show.
-    if (rows.size > MAX_RETAINED_ROWS) {
-      const excess = rows.size - MAX_RETAINED_ROWS;
-      let dropped = 0;
-      for (const key of rows.keys()) {
-        if (dropped >= excess) break;
-        rows.delete(key);
-        dropped++;
-      }
-    }
-    lastRowsRef.current = { filterKey, rows };
-    return rows;
-  }, [rowsResult.data, rowsResult.status, filterKey, windowStart, denseWindow]);
-
-  // All SCROLLING at the tail is owned by the stick (see the hook's docs):
-  // it opens the feed at the newest content, holds the bottom through async
-  // row loads AND viewport resizes (the composer below has variable height),
-  // and releases on real user input. This effect only governs which rows we
-  // FETCH while opening — it flips the row window from tail-anchored to
-  // virtualizer-driven once the tail row's real data has rendered (or the
-  // reader released the stick and took over, via onRelease below).
-  useLayoutEffect(() => {
-    if (initialPinDone || totalCount === 0) return;
-    const tailRowLoaded = itemCount === 0 || itemsByIndex.has(itemCount - 1);
-    if (tailRowLoaded && virtualizer.isAtEnd()) setInitialPinDone(true);
-  }, [initialPinDone, totalCount, itemCount, itemsByIndex, virtualizer]);
-
-  const contentRef = useRef<HTMLDivElement>(null);
-  useStickToBottom({
-    scrollElementRef: scrollRef,
-    contentElementRef: contentRef,
-    onRelease: () => setInitialPinDone(true),
-  });
-
-  // Stable identity so the memoized settled rows skip the per-chunk re-renders
-  // driven by the live streaming state.
-  const toggleExpanded = useCallback((id: string) => {
-    setToggledIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      {/* Horizontal chrome only — vertical spacing is the virtualizer's
-          paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
-      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
-        {totalCount === 0 ? (
-          <Empty className="min-h-48">
-            <EmptyHeader>
-              {isPending ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>{isPending ? "Connecting to the stream" : "Nothing here yet"}</EmptyTitle>
-              {isPending ? null : <EmptyDescription>{emptyLabel}</EmptyDescription>}
-            </EmptyHeader>
-          </Empty>
-        ) : null}
-        <div
-          ref={contentRef}
-          className="relative w-full"
-          style={{ height: virtualizer.getTotalSize() }}
-        >
-          {virtualItems.map((virtualItem) => {
-            const index = virtualItem.index;
-            const isLiveItem = live != null && index === itemCount;
-            const isQueuedItem = index === itemCount + liveCount && queuedCount > 0;
-            const item = index < itemCount ? itemsByIndex.get(index)?.item : undefined;
-            return (
-              <div
-                key={virtualItem.key}
-                data-index={index}
-                ref={virtualizer.measureElement}
-                className="absolute left-0 top-0 w-full"
-                style={{ transform: `translateY(${virtualItem.start}px)` }}
-              >
-                {isLiveItem ? (
-                  <AgentLiveActivity
-                    live={live}
-                    toggledIds={toggledIds}
-                    onToggle={toggleExpanded}
-                  />
-                ) : isQueuedItem ? (
-                  <QueuedMessagesPanel
-                    messages={queuedUserMessages}
-                    isInterrupting={isInterruptingQueuedMessages}
-                    onInterrupt={onInterruptQueuedMessages}
-                  />
-                ) : item == null ? (
-                  // Not-yet-loaded rows must measure exactly estimateSize
-                  // (56px, margins don't count toward offsetHeight): the
-                  // initial jump to the end renders these before their SQL
-                  // window resolves, and if they measured smaller the total
-                  // size would shrink under the scroll offset and break the
-                  // end anchor before the real rows arrive.
-                  <div className="h-14 py-2">
-                    <div className="h-full rounded-xl bg-muted/40" />
-                  </div>
-                ) : (
-                  <AgentFeedItemRow
-                    item={item}
-                    toggledIds={toggledIds}
-                    onToggle={toggleExpanded}
-                    projectSlug={projectSlug}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
+// The clean agent chat rows: user and assistant messages plus archived
+// activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
+// activity tail. The rows are `agent.*` feed_items written by the browser-feed
+// projector; the virtualized list that windows over them lives in
+// stream-feed-view.tsx — this file owns only how each item renders.
 
 /**
  * One-line token accounting for the agent, folded from the agent processor's
@@ -413,7 +88,7 @@ export function AgentTokenUsageStrip({ tokenUsage }: { tokenUsage: AgentUiTokenU
 // rows (markdown, highlighted code) must not re-render along with it. Item
 // objects keep their identity between ticks — the row map is only rebuilt when
 // the underlying SQLite snapshot actually changes.
-const AgentFeedItemRow = memo(function AgentFeedItemRow({
+export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
   toggledIds,
   onToggle,
@@ -685,7 +360,7 @@ function AgentActivityRow({
   );
 }
 
-function QueuedMessagesPanel({
+export function QueuedMessagesPanel({
   messages,
   isInterrupting,
   onInterrupt,
@@ -1026,11 +701,11 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Rendered below the virtual list whenever work is in flight. Receives the
+ * The virtual list's trailing item whenever work is in flight. Receives the
  * live reduced state on every chunk: finished steps collapse upward into quiet
  * rows while current requests or scripts keep the busy indicator visible.
  */
-function AgentLiveActivity({
+export function AgentLiveActivity({
   live,
   toggledIds,
   onToggle,
