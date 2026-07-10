@@ -40,67 +40,12 @@ test.describe("itx REPL catalogue examples", () => {
       const entries = page.getByTestId("itx-repl-entry");
       const entryIndex = await entries.count();
 
-      let code = example.code;
-      if (exampleCase.vars) {
-        const json = JSON5.stringify(exampleCase.vars(ctx), null, 2);
-        code = `const vars = ${json};\n\n${example.code}`;
-      }
-
-      const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
-      await editor.fill(code);
-
-      await page.getByRole("button", { name: "Run", exact: true }).click();
-
-      const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
-      // An errored entry must fail NOW with the real error text — waiting the
-      // full success budget over a visible error burned 2×150s per attempt on
-      // a transient sandbox-runtime error (marathon zqqp1b9qd5 run 4) and let
-      // the retry start that much later.
-      const errorEntry = page.locator(`[data-entry-index="${entryIndex}"][data-status="error"]`);
-      const failFastOnError = async (budgetMs: number) => {
-        // Both branches swallow their own rejection (the loser's timeout must
-        // not surface as an unhandled rejection after the winner settles).
-        const outcome = await Promise.race([
-          entry.waitFor({ timeout: budgetMs }).then(
-            () => "success" as const,
-            () => "timeout" as const,
-          ),
-          errorEntry.waitFor({ timeout: budgetMs }).then(
-            () => "error" as const,
-            () => "timeout" as const,
-          ),
-        ]);
-        if (outcome === "error") {
-          const message = await errorEntry.textContent();
-          throw new Error(`REPL entry errored: ${message?.slice(0, 500)}`);
-        }
-        if (outcome === "timeout") {
-          throw new Error(
-            `REPL entry neither succeeded nor errored within ${budgetMs}ms (still running)`,
-          );
-        }
-      };
-      if (exampleCase.completionTimeoutMs) {
-        // spinner-waiter caps "spinner still visible" waits at 30s, which is
-        // exactly the state a long-running example is in — bypass it and wait
-        // for the entry directly with the example's own budget.
-        await spinnerWaiter.settings.run({ disabled: true }, () =>
-          failFastOnError(exampleCase.completionTimeoutMs!),
-        );
-      } else {
-        await failFastOnError(30_000);
-      }
-
-      const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
-      const result = JSON.parse(resultJson!);
-
-      exampleCase.assert(result, ctx, expect as never);
-      const visibleResult = entry.getByTestId("itx-repl-visible-result");
-      await visibleResult.locator(".cm-SerializedObjectCodeBlock .cm-content").waitFor();
-
-      if (exampleCase.cleanup) {
-        // Best-effort slot hygiene (e.g. destroy the example's sandbox
-        // container) — never turns a green spec red.
+      // In a FINALLY: failed attempts are exactly the ones whose resources
+      // must not leak (a stuck sandbox container from a timed-out attempt
+      // keeps holding slot capacity while the retry mints a fresh
+      // attemptSalt). Best-effort — never turns the spec's own outcome.
+      const cleanup = async () => {
+        if (!exampleCase.cleanup) return;
         try {
           using admin = await connectAdminItx(baseURL!);
           using project = admin.projects.get(fixture.project.id);
@@ -108,6 +53,68 @@ test.describe("itx REPL catalogue examples", () => {
         } catch (error) {
           console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
         }
+      };
+
+      try {
+        let code = example.code;
+        if (exampleCase.vars) {
+          const json = JSON5.stringify(exampleCase.vars(ctx), null, 2);
+          code = `const vars = ${json};\n\n${example.code}`;
+        }
+
+        const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
+        await editor.fill(code);
+
+        await page.getByRole("button", { name: "Run", exact: true }).click();
+
+        const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
+        // An errored entry must fail NOW with the real error text — waiting the
+        // full success budget over a visible error burned 2×150s per attempt on
+        // a transient sandbox-runtime error (marathon zqqp1b9qd5 run 4) and let
+        // the retry start that much later.
+        const errorEntry = page.locator(`[data-entry-index="${entryIndex}"][data-status="error"]`);
+        const failFastOnError = async (budgetMs: number) => {
+          // Both branches swallow their own rejection (the loser's timeout must
+          // not surface as an unhandled rejection after the winner settles).
+          const outcome = await Promise.race([
+            entry.waitFor({ timeout: budgetMs }).then(
+              () => "success" as const,
+              () => "timeout" as const,
+            ),
+            errorEntry.waitFor({ timeout: budgetMs }).then(
+              () => "error" as const,
+              () => "timeout" as const,
+            ),
+          ]);
+          if (outcome === "error") {
+            const message = await errorEntry.textContent();
+            throw new Error(`REPL entry errored: ${message?.slice(0, 500)}`);
+          }
+          if (outcome === "timeout") {
+            throw new Error(
+              `REPL entry neither succeeded nor errored within ${budgetMs}ms (still running)`,
+            );
+          }
+        };
+        if (exampleCase.completionTimeoutMs) {
+          // spinner-waiter caps "spinner still visible" waits at 30s, which is
+          // exactly the state a long-running example is in — bypass it and wait
+          // for the entry directly with the example's own budget.
+          await spinnerWaiter.settings.run({ disabled: true }, () =>
+            failFastOnError(exampleCase.completionTimeoutMs!),
+          );
+        } else {
+          await failFastOnError(30_000);
+        }
+
+        const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
+        const result = JSON.parse(resultJson!);
+
+        exampleCase.assert(result, ctx, expect as never);
+        const visibleResult = entry.getByTestId("itx-repl-visible-result");
+        await visibleResult.locator(".cm-SerializedObjectCodeBlock .cm-content").waitFor();
+      } finally {
+        await cleanup();
       }
     });
   }
