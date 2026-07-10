@@ -168,7 +168,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
 
   // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.ts" });
-  expect(workerSource?.content).toContain("const APPS");
+  expect(workerSource?.content).toContain("export default class ProjectWorker");
   const tree = await project.repo.listFiles();
   expect(tree.paths).toEqual(expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]));
   // The seed is ONE worker file — the example apps are named exports of it.

@@ -21,10 +21,10 @@ installed at build time. The platform's capability types come from the
 It's a devDependency here (worker code only imports types from it); run
 `npm install` to get typechecking and editor support.
 
-The example apps are named exports of the same `worker.ts`, routed by its
-APPS map: `HelloApp` (stateless WorkerEntrypoint) and `CounterApp` (a
-stateful Durable Object serving a mini client-side app whose count updates
-live over a WebSocket at `/ws`).
+The example apps are named exports of the same `worker.ts`, routed by the
+default export's `fetch`: `HelloApp` (stateless WorkerEntrypoint) and
+`CounterApp` (a stateful Durable Object serving a mini client-side app whose
+count updates live over a WebSocket at `/ws`).
 The router dispatches every app request through `this.env.ITX.fetch(...)`
 with the app's ref in the `x-iterate-worker-dispatch` header — the platform's
 fetch-native worker lane. Keep that shape: it is what lets WebSocket upgrades
