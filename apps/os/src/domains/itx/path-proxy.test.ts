@@ -155,23 +155,31 @@ describe("prototype-chain dynamic fallback", () => {
 
   it("JSON.stringify and test-framework probes must not fire capability dispatches", () => {
     // JSON.stringify LOOKS UP toJSON and CALLS it if callable; vitest/jest
-    // equality probes asymmetricMatch; chai/loupe probes inspect. Each of
-    // those reaching the dynamic fallback would turn a stringify/assert/log
-    // into a live invokeCapability call (observed: a floating rejection from
-    // stringifying a handle). Blocked at the HOP only — deeper path segments
-    // named e.g. `inspect` stay valid capability methods (see
+    // equality probes asymmetricMatch. Each of those reaching the dynamic
+    // fallback would turn a stringify/assert into a live invokeCapability
+    // call. Blocked at the HOP only — and the block list is deliberately
+    // tiny: the hop also mediates first-party dispatch walks, so plausible
+    // method names (`inspect`!) must stay dispatchable at EVERY level (see
     // PROTOCOL_PROBE_KEYS in utils.ts).
     const target = new HostTarget();
     expect(JSON.stringify(target)).toBe(JSON.stringify({ calls: [], ownField: "private" }));
     expect((target as unknown as { toJSON: unknown }).toJSON).toBeUndefined();
     expect((target as unknown as { asymmetricMatch: unknown }).asymmetricMatch).toBeUndefined();
-    expect((target as unknown as { inspect: unknown }).inspect).toBeUndefined();
     expect(target.calls).toEqual([]);
 
-    // ...but at DEPTH the same names are ordinary capability methods.
+    // `inspect` stays dispatchable at BOTH levels: capability dispatch walks
+    // remaining path segments through this trap, and mounted capabilities
+    // legitimately expose methods named inspect (itx.agentProbe.inspect —
+    // blocking it at the hop broke that in preview e2e).
+    expect((target as unknown as { inspect(v: string): unknown }).inspect("surface")).toBe(
+      "dynamic:inspect:surface",
+    );
     const probe = target as unknown as { agentProbe: { inspect(v: string): unknown } };
     expect(probe.agentProbe.inspect("deep")).toBe("dynamic:agentProbe.inspect:deep");
-    expect(target.calls).toEqual([{ args: ["deep"], path: ["agentProbe", "inspect"] }]);
+    expect(target.calls).toEqual([
+      { args: ["surface"], path: ["inspect"] },
+      { args: ["deep"], path: ["agentProbe", "inspect"] },
+    ]);
   });
 
   it("resolves the invoker at CALL time, not lookup time (mid-construction safety)", () => {

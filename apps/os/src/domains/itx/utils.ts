@@ -342,18 +342,22 @@ const PROTOTYPE_FALLBACK_HOPS = new WeakSet<object>();
 
 /**
  * Names common protocols LOOK UP on arbitrary objects and CALL if callable:
- * JSON.stringify (toJSON), vitest/jest equality (asymmetricMatch),
- * chai/loupe (inspect). A dynamic fallback answering them turns every
- * stringify/assert/log of a capability surface into a live invokeCapability
- * dispatch (observed: a floating rejection from stringifying a handle).
+ * JSON.stringify (toJSON) and vitest/jest equality (asymmetricMatch). A
+ * dynamic fallback answering them turns every stringify/assert of a
+ * capability surface into a live invokeCapability dispatch.
  *
- * Deliberately scoped to the HOP (the class surface) and NOT added to
- * RESERVED_DYNAMIC_PATH_SEGMENTS: that set applies at every depth of a
- * dotted path, where names like `inspect` are legitimate userspace
- * capability methods (`itx.agentProbe.inspect(...)`). Policy: any string
- * key a common protocol probes on the SURFACE belongs here.
+ * Scoped to the HOP and NOT added to RESERVED_DYNAMIC_PATH_SEGMENTS (which
+ * applies at every depth of a dotted path). Membership bar is HIGH, because
+ * the hop is not only a caller-facing surface: capability dispatch resolves
+ * an expression to a target and then walks the REMAINING path segments by
+ * plain property access — through this very trap. Blocking `inspect` here
+ * broke `itx.agentProbe.inspect(...)` in preview e2e (the mounted worker's
+ * method is reached via the DynamicWorkerRpcTarget hop). So: only names
+ * that are (a) probed-and-called by ubiquitous protocols AND (b)
+ * implausible as capability/method names belong here. `inspect` fails (b);
+ * chai/loupe probing it during error formatting is the lesser evil.
  */
-const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch", "inspect"]);
+const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch"]);
 
 export function installPrototypeInvokeCapabilityFallback<
   T extends abstract new (...args: never[]) => object,
