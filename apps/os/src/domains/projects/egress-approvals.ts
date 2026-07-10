@@ -25,7 +25,7 @@ import { z } from "zod";
 // =============================================================================
 
 /** Matchers of one egress rule. Absent fields match everything. */
-export const EgressRuleMatch = z.object({
+const EgressRuleMatch = z.object({
   /** Hostnames, with `*.` wildcard support: "api.stripe.com", "*.stripe.com". */
   hosts: z.array(z.string()).optional(),
   /** HTTP methods (case-insensitive): ["POST", "DELETE"]. */
@@ -89,7 +89,7 @@ export const HumanApprovalRequestedPayload = z.object({
 
 export type HumanApprovalRequestedPayload = z.output<typeof HumanApprovalRequestedPayload>;
 
-export type ApprovalDecision = "granted" | "rejected";
+type ApprovalDecision = "granted" | "rejected";
 
 /** A held request's identity is the offset of its requested event — no minted ids. */
 export const HumanApprovalResolutionPayload = z.object({
