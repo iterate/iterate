@@ -293,10 +293,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       }
       // Compaction: a turn's usage report says how full the context ran. Past
-      // the threshold, summarize the conversation into a history-reset. A
-      // droppable ATTEMPT like the LLM turn itself: the report is the durable
-      // evidence, and if this incarnation dies mid-summary the next
-      // over-threshold report re-triggers.
+      // the threshold, STOP THE WORLD and summarize the conversation into a
+      // history-reset: blockProcessorWhile holds the checkpoint and every
+      // later delivery until the reset lands, so no turn can start against
+      // the history being replaced. A slow summary just means the agent
+      // pauses — the same trade every stop-the-world compactor makes.
       case "events.iterate.com/agent/token-usage-reported": {
         const usage = event.payload;
         const contextTokens = usage.inputTokens + usage.outputTokens;
@@ -304,10 +305,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           usage.maxContextTokens * AGENT_COMPACTION_TRIGGER_FRACTION,
         );
         if (contextTokens < thresholdTokens) return;
-        runInBackground(() =>
+        blockProcessorWhile(() =>
           this.#compactHistory({
             contextTokens,
             llmRequestOffset: usage.llmRequestOffset,
+            state,
             thresholdTokens,
             triggerOffset: event.offset,
           }),
@@ -319,40 +321,36 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
   }
 
-  /** True while this incarnation has a summary in flight. Skip, don't queue:
-   * the lane is best-effort and the next over-threshold report re-triggers,
-   * so a second concurrent trigger has nothing to add. */
+  /** True while this incarnation has a summary in flight. Blocking work
+   * registered by one batch runs concurrently (the base gathers it in a
+   * Promise.all), so a batch carrying two over-threshold reports would
+   * otherwise summarize twice; one compaction per batch is plenty. */
   #compactionInFlight = false;
 
   /**
-   * One compaction attempt: summarize the whole model-visible conversation
-   * with the agent's own model, then replace history with the summary (plus
-   * any turns that landed while the summary ran, carried forward verbatim).
-   * Best-effort by design — every early return leaves the journal untouched
-   * and a later over-threshold report retries:
-   *
-   * - a reset landed since the measured prompt was built → the trigger is
-   *   stale. This one check also covers redelivery: a re-run of an already
-   *   compacted trigger finds its own earlier reset.
-   * - history was rewritten mid-run (concurrent reset) → drop the summary
-   * - the summary call itself fails → nothing durable changed; the base's
-   *   runInBackground catch logs the error
+   * One stop-the-world compaction: summarize the model-visible conversation
+   * (the fold at the triggering report) with the agent's own model, then
+   * replace history with the summary. Messages that landed while the summary
+   * ran are carried forward verbatim behind it — queued input, processed
+   * after compaction. Best-effort: every early return (and the catch) leaves
+   * the journal untouched and releases the world; the next over-threshold
+   * report retries. The one durable guard handles redelivery and recovery: a
+   * reset anywhere after the measured prompt means this trigger describes a
+   * history that is already gone.
    */
   async #compactHistory(input: {
     contextTokens: number;
     llmRequestOffset: number;
+    state: AgentState;
     thresholdTokens: number;
     triggerOffset: number;
   }): Promise<void> {
-    const { contextTokens, llmRequestOffset, thresholdTokens, triggerOffset } = input;
+    const { contextTokens, llmRequestOffset, state, thresholdTokens, triggerOffset } = input;
     const ai = this.deps.ai;
-    if (ai === undefined) return;
+    if (ai === undefined || state.history.length === 0) return;
     if (this.#compactionInFlight) return;
     this.#compactionInFlight = true;
     try {
-      // The report measured the prompt built at llmRequestOffset; any reset
-      // after that point means the measurement describes a history that is
-      // already gone (including this trigger's own reset, on redelivery).
       const resetsSinceMeasurement = await this.stream.getEvents({
         afterOffset: llmRequestOffset,
         eventTypes: ["events.iterate.com/agent/history-reset"],
@@ -360,8 +358,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       });
       if (resetsSinceMeasurement.length > 0) return;
 
-      const state = reduceAgentEvents(await this.#readConsumedEvents());
-      if (state.history.length === 0) return;
       const transcript = state.history
         .map(
           (message) =>
@@ -379,19 +375,13 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         onChunk: async () => {},
       });
 
-      // Re-fold: turns that landed while the summary ran are carried forward
-      // verbatim behind the summary; a rewritten prefix means another reset
-      // won the race and this summary describes a conversation that no longer
-      // exists.
       const stateNow = reduceAgentEvents(await this.#readConsumedEvents());
-      const prefix = stateNow.history.slice(0, state.history.length);
-      if (JSON.stringify(prefix) !== JSON.stringify(state.history)) return;
       const carriedForward = stateNow.history.slice(state.history.length);
       await this.append({
         type: "events.iterate.com/agent/history-reset",
         idempotencyKey: this.idempotencyKey(`history-reset@${triggerOffset}`),
         payload: {
-          systemPrompt: stateNow.systemPrompt,
+          systemPrompt: state.systemPrompt,
           history: [
             {
               role: "user" as const,
@@ -402,6 +392,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
         },
       });
+    } catch {
+      // A throw here would fail the whole batch into redelivery and stall the
+      // agent behind delivery backoff — for a best-effort lane, releasing the
+      // world and letting the next over-threshold report retry is strictly
+      // better than blocking everything on a flaky summary.
     } finally {
       this.#compactionInFlight = false;
     }

@@ -1804,13 +1804,14 @@ describe("token usage and history reset", () => {
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
-    // Delivering the usage report trips the compaction trigger; the summary
-    // runs as a background attempt and appends the reset itself.
+    // Delivering the usage report trips the compaction trigger. Stop the
+    // world: the delivery itself blocks until the summary lands, so the reset
+    // is already in the journal when deliver() returns.
     await deliver();
-    const reset = await stream.waitForEvent({
-      eventTypes: ["events.iterate.com/agent/history-reset"],
-      timeoutMs: 5_000,
-    });
+    const reset = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/history-reset",
+    )!;
+    expect(reset).toBeDefined();
 
     const compactionCalls = () =>
       aiCalls.filter((call) =>
