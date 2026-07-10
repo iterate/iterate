@@ -194,11 +194,11 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 then appends the create-request onto the project's root stream. The project
 processor seeds the config repo at `/repos/config` (an ordinary repo on its
 own stream — `itx.repo` is the shorthand) from the template folder at
-`apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`
-— platform types come from its `iterate` devDependency's `iterate/sdk` export,
-re-exported by the small seeded `sdk.ts` alongside the `IterateProjectWorker`
-base class — `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
-`domains/repos/project-repo-template.generated.ts` in sync), builds and loads
+`apps/os/config-repo-template` (ONE TypeScript `worker.ts` — the router as
+its default export plus the example apps as named exports — and `package.json`
+— platform types come from its `iterate` devDependency's `iterate/sdk` export
+— `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`domains/repos/config-repo-template.generated.ts` in sync), builds and loads
 the seeded project worker through the worker build pipeline, boots the
 onboarding agent,
 and only then emits `events.iterate.com/project/created`. The config repo's

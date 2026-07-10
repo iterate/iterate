@@ -73,6 +73,7 @@ import {
   slackBotTokenSecretPath,
   telegramBotTokenSecretPath,
   telegramWebhookSecretToken,
+  waitroseSessionSecretPath,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -1028,6 +1029,28 @@ export async function getConnectionStatus(input: {
         },
       };
     }
+    case "waitrose": {
+      // Waitrose has no connect flow and journals no lifecycle facts: a
+      // connection IS its session secret (username/password + the
+      // waitrose-session refresh strategy), so status is whether that secret
+      // currently holds material. describe() answers hasMaterial only, never
+      // the ciphertext.
+      const description = await itxEnv.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          path: waitroseSessionSecretPath(input.connection),
+          projectId: input.projectId,
+        }),
+      )
+        .describe()
+        .catch(() => null);
+      if (!description?.hasMaterial) return notConnectedStatus();
+      return {
+        connected: true,
+        displayName: input.connection,
+        externalId: null,
+        metadata: {},
+      };
+    }
   }
 }
 
@@ -1045,7 +1068,31 @@ export async function disconnectProvider(input: {
       return await disconnectGoogle(input);
     case "telegram":
       return await disconnectTelegram(input);
+    case "waitrose":
+      return await disconnectWaitrose(input);
   }
+}
+
+/**
+ * Waitrose has nothing provider-side to revoke (no refresh grant, no webhook)
+ * and no lifecycle fact to append (nothing was journaled on connect — the
+ * connection is its secret): disconnect just makes the stored credential
+ * unusable by emptying the connection secret's egress allowlist, the same
+ * secret half every other disconnect performs.
+ */
+async function disconnectWaitrose(input: {
+  connection: string;
+  projectId: string;
+}): Promise<{ success: true }> {
+  await itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({
+      path: waitroseSessionSecretPath(input.connection),
+      projectId: input.projectId,
+    }),
+  )
+    .update({ egress: { urls: [] } })
+    .catch(() => null);
+  return { success: true };
 }
 
 /**
