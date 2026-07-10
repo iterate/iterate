@@ -1376,7 +1376,10 @@ const view = await itx.scheduler.set({
     // A fixed path = one long-lived agent accumulating context. For a fresh
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
-    await itx.agents.get("/agents/checkin").message(
+    // Await the get() before calling methods on it — chaining the two calls
+    // in one expression fails on the script lane.
+    const agent = await itx.agents.get("/agents/checkin");
+    await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );
   }\`,
