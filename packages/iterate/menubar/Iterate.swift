@@ -263,11 +263,16 @@ final class ApprovalController: ObservableObject {
       }
     case "submitted":
       // A grant landed (this app's or another approver's): show the row
-      // awaiting the door rather than a fresh prompt.
-      setSubmitting(event["offset"] as? Int, true)
+      // awaiting the door rather than a fresh prompt, and pull any delivered
+      // banner so its Reject can't fire a stray veto against the winning grant.
+      if let offset = event["offset"] as? Int {
+        setSubmitting(offset, true)
+        ApprovalNotifications.withdraw(offset)
+      }
     case "settled":
       if let offset = event["offset"] as? Int {
         requests.removeAll { $0.offset == offset }
+        ApprovalNotifications.withdraw(offset)
       }
     case "error":
       lastError = event["message"] as? String
@@ -311,7 +316,7 @@ final class ApprovalController: ObservableObject {
         content.attachments = [attachment]
       }
       let notification = UNNotificationRequest(
-        identifier: "approval-\(request.offset)", content: content, trigger: nil)
+        identifier: ApprovalNotifications.identifier(request.offset), content: content, trigger: nil)
       UNUserNotificationCenter.current().add(notification)
       return
     }
@@ -431,6 +436,8 @@ struct RequestRow: View {
 enum ApprovalNotifications {
   static let categoryId = "APPROVAL"
 
+  static func identifier(_ offset: Int) -> String { "approval-\(offset)" }
+
   static func register(_ center: UNUserNotificationCenter) {
     let approve = UNNotificationAction(identifier: "APPROVE", title: "Approve", options: [.foreground])
     let reject = UNNotificationAction(
@@ -439,6 +446,14 @@ enum ApprovalNotifications {
       UNNotificationCategory(
         identifier: categoryId, actions: [approve, reject], intentIdentifiers: [], options: [])
     ])
+  }
+
+  /// Pull a delivered banner once its request is no longer answerable here — a
+  /// grant landed or it settled — so a stale Reject tap can't append a veto the
+  /// door has already passed (egress released on the winning grant).
+  static func withdraw(_ offset: Int) {
+    UNUserNotificationCenter.current().removeDeliveredNotifications(
+      withIdentifiers: [identifier(offset)])
   }
 }
 

@@ -72,6 +72,13 @@ export async function runApprovalJson(input: {
   // The held requests announced but not yet resolved — kept so a "granted"
   // decision has the payload to sign over.
   const pending = new Map<number, RequestedPayload>();
+  // Offsets the door RELEASED (a `settled` landed). `settled` is authoritative:
+  // the door acts on the first resolution and settles only on release, so a
+  // released offset can no longer be vetoed — a later `rejected` is a stray.
+  const released = new Set<number>();
+  // Offsets that reached any terminal outcome this session (released or an
+  // authoritative rejection). A decision on one of these is refused.
+  const resolved = new Set<number>();
 
   // Reconcile the backlog: replay history once, emit still-open requests (a
   // grant already on the stream shows the row submitted, not a fresh prompt),
@@ -102,6 +109,14 @@ export async function runApprovalJson(input: {
     }
     const offset = decision.offset;
     if (typeof offset !== "number") return;
+    // The door acts on the first resolution; once a request has settled or been
+    // rejected, a late decision (e.g. Reject on a stale notification banner after
+    // a grant already released) can't take effect and must not append a
+    // contradictory event. Refuse it — the row is already gone from the view.
+    if (resolved.has(offset)) {
+      emit({ type: "error", offset, message: "already resolved" });
+      return;
+    }
     try {
       if (decision.decision === "rejected") {
         await reject(appendStream, offset);
@@ -146,15 +161,18 @@ export async function runApprovalJson(input: {
       throw error;
     }
     tail = event.offset;
-    dispatch(event, pending);
+    dispatch(event, { pending, released, resolved });
   }
 }
 
-function dispatch(event: StreamEvent, pending: Map<number, RequestedPayload>): void {
+function dispatch(
+  event: StreamEvent,
+  state: { pending: Map<number, RequestedPayload>; released: Set<number>; resolved: Set<number> },
+): void {
   if (event.type === EVENT.requested) {
     const payload = event.payload as RequestedPayload;
     if (Date.parse(payload.expiresAt) <= Date.now()) return;
-    pending.set(event.offset, payload);
+    state.pending.set(event.offset, payload);
     emitRequested(event.offset, payload, false);
     return;
   }
@@ -169,13 +187,25 @@ function dispatch(event: StreamEvent, pending: Map<number, RequestedPayload>): v
   // A grant is not terminal: mark the row submitted (awaiting the door), keep
   // it pending. Only settled/rejected remove it.
   if (event.type === EVENT.granted) {
-    if (pending.has(offset)) emit({ type: "submitted", offset });
+    if (state.pending.has(offset)) emit({ type: "submitted", offset });
     return;
   }
-  pending.delete(offset);
   if (event.type === EVENT.rejected) {
+    // The door acts on the first resolution and settles only on release, so a
+    // released offset can't be vetoed — a `rejected` that arrives after (a
+    // second approver racing a grant that already won) is a stray. Ignore it.
+    if (state.released.has(offset)) return;
+    state.resolved.add(offset);
+    state.pending.delete(offset);
     emit({ type: "settled", offset, outcome: "rejected", reason: outcome.reason ?? "human" });
-  } else if (outcome.error !== undefined) {
+    return;
+  }
+  // settled — authoritative: released or a delivery failure. This also corrects
+  // a row a stray reject removed just before, if the two raced.
+  state.released.add(offset);
+  state.resolved.add(offset);
+  state.pending.delete(offset);
+  if (outcome.error !== undefined) {
     emit({ type: "settled", offset, outcome: "delivery-failed", error: outcome.error });
   } else {
     emit({ type: "settled", offset, outcome: "released", status: outcome.status ?? 0 });

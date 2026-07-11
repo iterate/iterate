@@ -15,7 +15,13 @@ import {
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,
 } from "../../../apps/os/src/domains/projects/egress-approvals.ts";
-import type { ItxAuthCredentials, Project, Session, Stream } from "./itx-api.generated.ts";
+import type {
+  ItxAuthCredentials,
+  Project,
+  Session,
+  Stream,
+  StreamEvent,
+} from "./itx-api.generated.ts";
 import { createApprovalKey, signApprovalMessage, type StoredApprovalKey } from "./approval-keys.ts";
 
 export const EVENT = {
@@ -200,31 +206,59 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
   return { open, cursor };
 }
 
+/** A `settled` event's outcome — released with the upstream status, or a delivery failure. */
+function settledOutcome(
+  event: StreamEvent,
+): Extract<Settlement, { kind: "released" | "delivery-failed" }> {
+  const outcome = event.payload as { status?: number; error?: string };
+  return outcome.error !== undefined
+    ? { kind: "delivery-failed", error: outcome.error }
+    : { kind: "released", status: outcome.status ?? 0 };
+}
+
 /**
  * Read back what the egress door did with a request: released (with the
  * upstream status), delivery-failed, rejected, or — if nothing lands in the
  * window — unsettled (an unverifiable signature is ignored server-side, so
  * the hold waits for a good grant or expiry).
+ *
+ * `settled` is authoritative. The door acts on the FIRST resolution and appends
+ * `settled` ONLY after it releases egress, so a `settled` for this offset always
+ * means a grant won — even if a second approver raced in a `rejected`. On seeing
+ * a rejection we therefore give the door a brief grace to confirm with a settled
+ * before trusting the veto; released beats a stray reject every time.
  */
 export async function awaitSettlement(
   stream: RpcStub<Stream>,
   offset: number,
   timeoutMs = 30_000,
 ): Promise<Settlement> {
+  const forThisRequest = (candidate: StreamEvent) =>
+    (candidate.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
+    offset;
   try {
     const event = await stream.waitForEvent({
       afterOffset: offset,
       eventTypes: [EVENT.settled, EVENT.rejected],
-      predicate: (candidate) =>
-        (candidate.payload as { approvalRequestEventOffset?: number })
-          .approvalRequestEventOffset === offset,
+      predicate: forThisRequest,
       timeoutMs,
     });
-    const outcome = event.payload as { status?: number; error?: string; reason?: string };
-    if (event.type === EVENT.rejected)
-      return { kind: "rejected", reason: outcome.reason ?? "human" };
-    if (outcome.error !== undefined) return { kind: "delivery-failed", error: outcome.error };
-    return { kind: "released", status: outcome.status ?? 0 };
+    if (event.type === EVENT.settled) return settledOutcome(event);
+
+    // A rejection: authoritative only if no grant won. Re-scan from the request
+    // offset for a `settled` (already committed, or landing within the grace) —
+    // its presence means egress released and this reject is a stray veto.
+    try {
+      const settled = await stream.waitForEvent({
+        afterOffset: offset,
+        eventTypes: [EVENT.settled],
+        predicate: forThisRequest,
+        timeoutMs: 5_000,
+      });
+      return settledOutcome(settled);
+    } catch {
+      return { kind: "rejected", reason: (event.payload as { reason?: string }).reason ?? "human" };
+    }
   } catch {
     return { kind: "unsettled" };
   }
