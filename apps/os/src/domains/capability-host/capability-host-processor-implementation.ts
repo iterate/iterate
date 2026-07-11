@@ -51,13 +51,33 @@ const INVALID_PATH_SEGMENTS = new Set([
   "onRpcBroken",
 ]);
 
+/** ~4k tokens: how much of a mount's types `__describe` shows before
+ * deferring to docs.get's budgeted reader. */
+const MAX_DESCRIBED_TYPES_CHARS = 16_000;
+
+function truncatedTypes(types: string, mountPoint: string): string {
+  if (types.length <= MAX_DESCRIBED_TYPES_CHARS) return types;
+  const cut = types.slice(0, MAX_DESCRIBED_TYPES_CHARS);
+  // Close a block comment the cut may have opened, so the notice stays
+  // visible to a consumer rendering this as code (same rule as typeSlice).
+  const openComment = cut.lastIndexOf("/*") > cut.lastIndexOf("*/");
+  return (
+    cut +
+    (openComment ? " */" : "") +
+    `\n// … truncated — read slices with itx.docs.get({ name: ${JSON.stringify(mountPoint)}, maxTokens: 4000 })`
+  );
+}
+
 const samePath = (a: string[], b: string[]) =>
   a.length === b.length && a.every((segment, index) => segment === b[index]);
 
 const liveKey = (path: string[]) => JSON.stringify(path);
 
 function assertCapabilityPath(path: string[]) {
-  if (!Array.isArray(path) || path.length === 0) {
+  if (!Array.isArray(path)) {
+    throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
+  }
+  if (path.length === 0) {
     throw new Error("capability path must contain at least one segment");
   }
   for (const segment of path) {
@@ -266,17 +286,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async provideCapability(input: ProvideCapabilityInput) {
     const { path } = input;
     assertCapabilityPath(path);
-    // Authored types must compile before they enter the journal — a typo'd
-    // declaration rejected here is a fixable error; one journaled durably is
-    // silent rot every docs read and typecheck inherits.
-    if (input.types !== undefined) {
-      const problems = (await this.#validateCapabilityTypes?.(input.types)) ?? [];
-      if (problems.length > 0) {
-        throw new Error(
-          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
-        );
-      }
-    }
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     let record: CapabilityProvidedPayload;
@@ -298,6 +307,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         target: input.capability,
       };
     } else if (input.type === "itx-expression") {
+      if (!Array.isArray(input.expression)) {
+        throw new Error(
+          '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
+            'walked over itx, e.g. ["streams", ["get", "/"]] — not JavaScript source. ' +
+            'Copy the recipe from itx.docs.get({ name: "typed-capability-mount" }).',
+        );
+      }
       assertExpressionDoesNotReferenceOwnMount(input);
       record = {
         expression: input.expression,
@@ -310,6 +326,19 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     } else {
       input satisfies never;
       throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
+    }
+    // Authored types must compile before they enter the journal — a typo'd
+    // declaration rejected here is a fixable error; one journaled durably is
+    // silent rot every docs read and typecheck inherits. This runs AFTER the
+    // cheap structural checks above so a malformed payload never costs a
+    // network-bound compile before its real error surfaces.
+    if (input.types !== undefined) {
+      const problems = (await this.#validateCapabilityTypes?.(input.types)) ?? [];
+      if (problems.length > 0) {
+        throw new Error(
+          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
+        );
+      }
     }
     const nextLive =
       nextLiveInput !== undefined
@@ -477,7 +506,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         record.instructions ?? `A dynamic ${record.type} capability mounted at "${mountPoint}".`,
         dispatch + nestedNote,
       ].join("\n\n"),
-      types: record.types ?? "",
+      // __describe is the identity card, never big: a giant declaration
+      // (authors can journal hundreds of KB) is truncated here; the budgeted
+      // reader is `itx.docs.get({ name: "<mount path>", maxTokens })`.
+      types: truncatedTypes(record.types ?? "", mountPoint),
       children: {},
       parent: `the capability host at scope "${this.#path}" (mounted at "${mountPoint}", providedAtOffset ${record.providedAtOffset})`,
     };

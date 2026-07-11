@@ -148,7 +148,7 @@ import { ITX_EXAMPLES } from "./itx/examples.ts";
 import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
 import {
   declarationsByName,
-  firstSentence,
+  oneLineSummary,
   mountDeclaration,
   searchScore,
   weightedDeclarationScore,
@@ -157,7 +157,8 @@ import {
 } from "./domains/itx/itx-api-graph.ts";
 import {
   mcpCapabilityTypeDeclaration,
-  openApiCapabilityTypeDeclaration,
+  openApiCapabilityTypeInline,
+  openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
@@ -506,7 +507,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
-    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */
+    /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle> {
     // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
@@ -674,7 +675,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
         "outcome is an event on this stream.",
       children: {
         cancel: "Remove a Schedule by key (idempotent).",
-        kill: "Abort this Scheduler Durable Object incarnation; the next request boots it again.",
+        kill: "Restart the scheduler's server-side object; the next request boots it fresh.",
         list: "Every Schedule, reduced from the stream.",
         processor: "The scheduler stream processor (snapshot/state).",
         set: "Upsert a Schedule: { key, recurrence, script, metadata? }.",
@@ -721,7 +722,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     return this.#durableObjectStub.cancelSchedule(key);
   }
 
-  /** Abort this Scheduler Durable Object incarnation; the next request boots it again. */
+  /** Restart the scheduler's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.#durableObjectStub.kill());
   }
@@ -828,7 +829,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
-        kill: "Abort this Repo Durable Object incarnation; the next request boots it again.",
+        kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
@@ -881,7 +882,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return this.#durableObjectStub.whoami();
   }
 
-  /** Abort this Repo Durable Object incarnation; the next request boots it again. */
+  /** Restart the repo's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.#durableObjectStub.kill());
   }
@@ -1412,7 +1413,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         exists: "Whether a path exists.",
         git: "Commit surface: status (changes vs main), commit (changes → the config repo's main), log (main's history).",
         glob: "Files matching a glob pattern.",
-        kill: "Abort this Workspace Durable Object incarnation; the next request boots it again.",
+        kill: "Restart the workspace's server-side object; the next request boots it fresh.",
         listAllFiles: "Every file path in the merged view (sorted).",
         mkdir: "Create a directory ({ recursive } for parents).",
         mv: "Move/rename a file or directory.",
@@ -1452,7 +1453,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.durableObjectStub.whoami();
   }
 
-  /** Abort this Workspace Durable Object incarnation; the next request boots it again. */
+  /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
@@ -1658,7 +1659,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
         fetch: "Egress fetch with secret placeholders substituted server-side.",
-        kill: "Abort this Secret Durable Object incarnation; the next request boots it again.",
+        kill: "Restart the secret's server-side object; the next request boots it fresh.",
         update: "Set the value, egress URLs, and/or refresh strategy.",
       },
       parent: "itx.secrets.get(path)",
@@ -1686,7 +1687,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return this.durableObjectStub.fetch(request);
   }
 
-  /** Abort this Secret Durable Object incarnation; the next request boots it again. */
+  /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
@@ -1806,7 +1807,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. TEXT generation (summarize, draft, classify, answer) is the common case: run a 'Text Generation' model from models() with { messages: [{ role, content }, …] } and read result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation.",
@@ -2961,31 +2962,28 @@ type AgentRpcTargetProps = {
 };
 
 /**
- * Agent capability surface for message loops and agent-local dynamic tools.
- *
- * Instances are DELIBERATELY plain — never wrapped in a Proxy. This is the
- * surface most routinely returned FROM A METHOD CALL (`itx.agents.get(path)`),
- * and workerd RPC classifies a call result for promise pipelining with native
- * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
- * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
- * pipelined call on the result dies with the baffling "The RPC receiver does
- * not implement the method ..." — cloudflare/workerd#6873). A plain class
- * instance classifies as a single stub and pipelines fine, which is what lets
- * model code write the natural one-liners over the script lane (`env.ITX`
- * loopback):
- *
- *   await itx.agents.get("researcher").message(task);
- *   await itx.agents.get(path).someTool(args);
- *   await itx.agents.get(path).capabilityHost.someTool(args);
- *
- * The dynamic-tool spellings (lines 2 and 3 are equivalent) come from the
- * PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
- * this file: unknown members walk the prototype chain into a proxied hop and
- * dispatch through this agent scope's capability host, while the instance
- * itself stays a genuine, natively-branded RpcTarget. See
- * installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
- * mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
+ * One agent: message loops and agent-local dynamic tools. Chain calls
+ * directly off `get` — `await itx.agents.get("researcher").message(task)`.
+ * Unknown members dispatch through the agent scope's capability host, so
+ * `agents.get(path).someTool(args)` and
+ * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside
+ * the agent's own scripts the same tools are simply `itx.someTool(args)`.
  */
+// Engineering note (docs consumers never need this): instances are
+// DELIBERATELY plain — never wrapped in a Proxy. This is the surface most
+// routinely returned FROM A METHOD CALL, and workerd RPC classifies a call
+// result for promise pipelining with native brand checks a JS Proxy can
+// never pass (`serializeJsValueWithPipeline` in workerd's worker-rpc.c++
+// falls through to `NonPipelinable`, so EVERY pipelined call on the result
+// dies with the baffling "The RPC receiver does not implement the method
+// ..." — cloudflare/workerd#6873). A plain class instance classifies as a
+// single stub and pipelines fine. The dynamic-tool spellings come from the
+// PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
+// this file: unknown members walk the prototype chain into a proxied hop and
+// dispatch through this agent scope's capability host, while the instance
+// itself stays a genuine, natively-branded RpcTarget. See
+// installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
+// mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
 class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -3244,7 +3242,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         chat: "The agent's web-chat door (sendMessage).",
         configure:
           "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
-        kill: "Abort this Agent Durable Object incarnation; the next request boots it again.",
+        kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
         processor: "The agent stream processor (snapshot/state).",
@@ -3259,7 +3257,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
-  /** Abort this Agent Durable Object incarnation; the next request boots it again. */
+  /** Restart the agent's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
@@ -3380,7 +3378,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
         'To ask the worker to describe ITSELF (boots it; only works if its code implements `__describe`), call `invokeCapability({ path: ["__describe"] })`.',
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
-        kill: "Abort the stateful worker Durable Object incarnation; stateless worker refs reject.",
+        kill: "Restart the stateful worker's server-side object; stateless worker refs reject.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -3420,7 +3418,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     });
   }
 
-  /** Abort the stateful worker Durable Object incarnation; stateless worker refs reject. */
+  /** Restart the stateful worker's server-side object; stateless worker refs reject. */
   async kill(): Promise<void> {
     if (this.#ref.type !== "stateful") {
       throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
@@ -3857,7 +3855,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       children: {
         invokeCapability:
           "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
-        kill: "Abort this Capability Host Durable Object incarnation; the next request boots it again.",
+        kill: "Restart this scope's server-side object; the next request boots it fresh.",
         provideCapability: "Mount a capability on THIS scope; returns a revoke handle.",
         revokeCapability: "Remove a mount from THIS scope.",
         runScript: "Run an async (itx) => {...} script in this scope.",
@@ -3877,7 +3875,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return await this.#durableObject.runScript(code);
   }
 
-  /** Abort this Capability Host Durable Object incarnation; the next request boots it again. */
+  /** Restart this scope's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.#durableObject.kill());
   }
@@ -3910,10 +3908,9 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
   }
 }
 /**
- * THE one table of project built-ins: member name -> one-line blip. Everything
- * else derives from it — the capability inventory rows in `__describe()`
- * (via PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS) and the `children` map — so
- * adding a built-in is one entry here plus the getter on ProjectRpcTarget.
+ * THE one table of project built-ins: member name -> one-line blip. The
+ * `children` map in `__describe()` derives from it, so adding a built-in is
+ * one entry here plus the getter on ProjectRpcTarget.
  */
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
@@ -3932,7 +3929,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
     'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
-  kill: "Abort this Project Durable Object incarnation; the next request boots it again.",
+  kill: "Restart the project's server-side object; the next request boots it fresh.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
@@ -3956,16 +3953,6 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   workspaces:
     'Durable workspace filesystems by path: get("/") is the read-only root (always latest main of the project repo); get("/workspaces/<name>") is an instant private overlay over it (read/write/edit + git publish). An agent\'s own workspace is itx.workspace.',
 };
-
-// The shortcut methods are children (callable members) but not capability
-// PATHS — they alias capabilityHost, which already has an inventory row.
-const PROJECT_BUILTIN_NON_PATHS = new Set(["provideCapability", "revokeCapability"]);
-
-const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] = Object.entries(
-  PROJECT_BUILTIN_BLIPS,
-)
-  .filter(([name]) => !PROJECT_BUILTIN_NON_PATHS.has(name))
-  .map(([name, instructions]) => ({ instructions, path: [name], type: "builtin" as const }));
 
 type ProjectRpcTargetProps = {
   auth: ItxAuth;
@@ -4054,7 +4041,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return describeNode({
       instructions:
         `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
-        "Built-ins are project-global and identical at every scope; `capabilities` is the full inventory (built-ins + dynamic mounts). " +
+        "Built-ins are project-global and identical at every scope — `children` below lists them; `capabilities` lists this scope's dynamic mounts. " +
         "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
         'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
       // The Project declaration alone is ~1.4k tokens; 2000 fits it plus a
@@ -4074,7 +4061,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           : {}),
       },
       parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
-      capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
+      // Dynamic mounts only: the builtins are already the `children` map, and
+      // repeating their rows (and their types) turned the identity card into
+      // a 16KB wall that printed the same 29 members three times.
+      capabilities: mountedCapabilities,
       name: project.name,
       projectId: project.projectId,
     });
@@ -4103,7 +4093,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     ].join("\n");
   }
 
-  /** Abort this Project Durable Object incarnation; the next request boots it again. */
+  /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
@@ -4126,7 +4116,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
   }
 
-  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (DO-backed). */
+  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
   get liveDemo(): LiveDemoRpcTarget {
     return new LiveDemoRpcTarget(() => this.#projectDo.incrementLiveDemo());
   }
@@ -4348,22 +4338,19 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * "The project processes this event batch" — the first-party dispatch point
-   * every project-scoped stream's birth-certificate feed names
-   * (`expression: ["processEventBatch"]`). Today it delegates verbatim to the
-   * repo-backed project worker; it exists so the persisted expression names
-   * the INTENT rather than the implementation. That indirection is the
-   * platform's adaptation point: envelope evolution happens here in
-   * deployment code instead of by patching user repos, and future first-party
-   * per-event work (policy, metrics, indexing feeds) can join the same
-   * ordered, checkpointed delivery — with one rule when it does: platform
-   * steps must be idempotent and must never throw; only the worker delegation
-   * may reject into the spine's retry/park machinery. The streams index is the
-   * first such step (see `#indexStreamActivity`).
-   *
-   * Same trust model as `worker.processEventBatch` itself: any project
-   * principal may call it.
+   * Platform dispatch point: streams deliver committed event batches here
+   * for the project worker. Scripts should not call this — subscribe to a
+   * stream (or configure a subscription) instead.
    */
+  // Why it exists (engineering, not caller-facing): every project-scoped
+  // stream's subscription expression names `["processEventBatch"]` — the
+  // INTENT, not the implementation — so envelope evolution happens here in
+  // deployment code instead of by patching user repos, and first-party
+  // per-event work (the streams index via #indexStreamActivity; future
+  // policy/metrics feeds) joins the same ordered, checkpointed delivery.
+  // Rule for such steps: idempotent and never-throwing; only the worker
+  // delegation may reject into the spine's retry/park machinery. Same trust
+  // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
     try {
@@ -5044,7 +5031,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
         hit: {
           kind: "capability",
           name: dottedPath,
-          summary: firstSentence(instructions) || "(no instructions recorded)",
+          summary: oneLineSummary(instructions) || "(no instructions recorded)",
           fetchCall: `await itx.docs.get({ name: ${JSON.stringify(dottedPath)} })`,
         },
       });
@@ -5508,7 +5495,9 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
       // server's own tool inputSchemas become the types. provideCapability
       // stamps this onto a durable mount, so docs and the typechecker see
       // third-party tools like builtins.
-      types: this.props.description?.types ?? mcpCapabilityTypeDeclaration(tools),
+      types:
+        this.props.description?.types ??
+        mcpCapabilityTypeDeclaration(tools, `MCP server ${this.props.config.url}`),
       children: Object.fromEntries(
         tools.map((tool) => [tool.name, tool.description ?? "MCP tool"]),
       ),
@@ -5600,9 +5589,18 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
       instructions:
         this.props.description?.instructions ??
         "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
-      // Connect-time auto-typing from the spec's operations — see the MCP
-      // client's __describe for the full story.
-      types: this.props.description?.types ?? openApiCapabilityTypeDeclaration(operations, spec),
+      // Connect-time auto-typing, reference-style: one line naming the spec
+      // (the typechecker materializes the full declaration at check time —
+      // schemas never enter the journal or an agent's context). Only a spec
+      // that itself NEEDS auth headers journals inline — same predicate as
+      // fetchSpec, so "we fetched it bare" and "the sidecar can fetch it
+      // bare" cannot drift. A public spec with an auth'd API (the common
+      // split) keeps the reference.
+      types:
+        this.props.description?.types ??
+        (Object.keys(specFetchHeaders(this.props.config)).length > 0
+          ? openApiCapabilityTypeInline(operations, spec, this.props.config.specUrl)
+          : openApiCapabilityTypeReference(this.props.config.specUrl)),
       children: Object.fromEntries(
         operations.map((operation) => [
           operation.operationId,
@@ -5640,17 +5638,29 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   }
 }
 
+/**
+ * The connection's headers apply to the SPEC fetch only when the spec lives
+ * on the API's own host — the common split (public spec, auth'd API à la
+ * Stripe) sends nothing to the spec. This predicate decides both how
+ * `fetchSpec` fetches AND whether auto-typing must journal inline: a spec
+ * fetched bare here is equally fetchable by the typechecker's bare fetch,
+ * so it can journal the small `openapi:` reference.
+ */
+function specFetchHeaders(props: OpenApiConnectInput): Record<string, string> {
+  const specHost = new URL(props.specUrl).host;
+  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
+  return specHost === apiHost ? (props.headers ?? {}) : {};
+}
+
 async function fetchSpec(
   props: OpenApiConnectInput,
   egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
-  const specHost = new URL(props.specUrl).host;
-  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
   // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(
-    new Request(props.specUrl, { headers: specHost === apiHost ? (props.headers ?? {}) : {} }),
+    new Request(props.specUrl, { headers: specFetchHeaders(props) }),
   );
   if (!response.ok) {
     throw new Error(`Fetching the OpenAPI spec at ${props.specUrl} returned ${response.status}.`);

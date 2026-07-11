@@ -35,6 +35,11 @@
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
+//   ai-generate-text
+//                   depends on remote Workers AI model availability and
+//                   billing; interactive reading material.
+//   egress-fetch    fetches a public website through project egress; external
+//                   service, so keep it interactive.
 //   connect-public-mcp
 //                   explicitly connects to Exa's public MCP server; external
 //                   service and rate limited, so keep it interactive.
@@ -138,12 +143,24 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "describe-project": {
     assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ projectId });
+      // Built-ins ARE the children map; `capabilities` holds dynamic mounts
+      // only. The matrix shares one fixture project, so sibling examples may
+      // have left durable mounts — assert the shape, not emptiness.
       const builtins = (result as { builtins: string[] }).builtins;
       expect(builtins).toEqual(
-        expect.arrayContaining(["streams", "repo", "workers", "secrets", "ai"]),
+        expect.arrayContaining([
+          "streams",
+          "repo",
+          "workers",
+          "secrets",
+          "ai",
+          "capabilityHost",
+          "integrations",
+        ]),
       );
-      const children = (result as { children: string[] }).children;
-      expect(children).toEqual(expect.arrayContaining(["capabilityHost", "integrations"]));
+      const mounted = (result as { mounted: string[] }).mounted;
+      expect(mounted.every((path) => typeof path === "string")).toBe(true);
+      expect(mounted).not.toContain("streams"); // builtins never appear here
     },
   },
   "discover-tree": {

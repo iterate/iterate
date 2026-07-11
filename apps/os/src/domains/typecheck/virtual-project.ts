@@ -10,13 +10,24 @@ import type { CapabilityDescription } from "../itx/describe.ts";
 import { firstExportedTypeName } from "../itx/capability-type-declarations.ts";
 import { declarationsByName, referencedPlatformTypeNames } from "../itx/itx-api-graph.ts";
 import { itxTypesFileText } from "../itx/itx-types-text.ts";
-import type { TypecheckDiagnostic } from "./run-typecheck.ts";
+import type { TypecheckDiagnostic, TypecheckResult } from "./run-typecheck.ts";
 
 /** The minimal typechecker interface — `env.TYPECHECKER` satisfies it, and
  * tests satisfy it with a local tswasm compiler. */
 export interface Typechecker {
-  check(input: { files: Record<string, string> }): Promise<{ diagnostics: TypecheckDiagnostic[] }>;
+  check(input: { files: Record<string, string> }): Promise<TypecheckResult>;
 }
+
+/** Scripts bigger than this get a clean problem instead of a compile — a
+ * multi-megabyte "script" is never a real check, only a CPU burn. */
+const MAX_SCRIPT_CHARS = 200_000;
+
+/** What the agent runtime's extractor accepts — keep in lockstep with
+ * extractAsyncJsSnippet (agent-processor-implementation.ts): `async (…)`,
+ * `async function`, or the parenthesized `(async (…)` form. The checker
+ * enforces the same rule, or a pre-flighted green script would bounce at
+ * run time. */
+const RUNTIME_SCRIPT_SHAPE = /^(?:async\s*(?:function|\()|\(async\s*\()/;
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
@@ -122,16 +133,35 @@ export async function checkCapabilityTypes(input: {
   types: string;
   typechecker: Typechecker;
 }): Promise<string[]> {
+  if (input.types.length > MAX_SCRIPT_CHARS) {
+    return [
+      `types — ${input.types.length} characters is over the ${MAX_SCRIPT_CHARS}-character check limit.`,
+    ];
+  }
   const fileName = mountFileName("provided");
   const moduleText = mountModuleText(input.types);
-  const { diagnostics } = await input.typechecker.check({
+  const { diagnostics, notes } = await input.typechecker.check({
     files: { ...SHARED_FILES, [fileName]: moduleText },
   });
-  return formatProblems(diagnostics, {
+  const problems = formatProblems(diagnostics, {
     label: "types",
     primaryFile: fileName,
     lineOffset: moduleText === input.types ? 0 : -1, // the injected import line
   });
+  // A declaration that compiles but exports no top-level type is an authoring
+  // mistake, not a typed mount: the first exported type IS the contract, and
+  // without one the mount would silently degrade to `any` (or worse — the
+  // namespace-nested case used to poison the whole scope's typecheck).
+  if (problems.length === 0 && firstExportedTypeName(input.types) === undefined) {
+    problems.push(
+      "types — compiles but exports no top-level type/interface/class/enum; " +
+        "the FIRST exported declaration names the mount's type.",
+    );
+  }
+  // Notes are CONTEXT for failures (a budget-tripped npm package reads as a
+  // plain typo without them), never verdicts: typm warns on perfectly
+  // successful acquisitions, and a warning must not fail a compiling mount.
+  return problems.length > 0 ? [...problems, ...notes] : [];
 }
 
 /**
@@ -144,6 +174,21 @@ export async function checkItxScript(input: {
   code: string;
   typechecker: Typechecker;
 }): Promise<string[]> {
+  if (typeof input.code !== "string") {
+    return [`script — code must be a string (got ${typeof input.code}).`];
+  }
+  if (input.code.length > MAX_SCRIPT_CHARS) {
+    return [
+      `script — ${input.code.length} characters is over the ${MAX_SCRIPT_CHARS}-character check limit; split the script.`,
+    ];
+  }
+  if (!RUNTIME_SCRIPT_SHAPE.test(input.code.trim())) {
+    return [
+      "script — the runtime only accepts a block that starts with `async (` / " +
+        "`async function` (or the same wrapped in parens); remove anything " +
+        "before it, comments included.",
+    ];
+  }
   const files: Record<string, string> = { ...SHARED_FILES };
   // Each mount is its own single-path intersection term: `{ tools: { weather:
   // T } } & { tools: U }` merges correctly even when one mount's path prefixes
@@ -174,14 +219,16 @@ export async function checkItxScript(input: {
   ];
   files["script.ts"] = [...prelude, input.code, ");"].join("\n");
 
-  const { diagnostics } = await input.typechecker.check({ files });
-  return formatProblems(diagnostics, {
+  const { diagnostics, notes } = await input.typechecker.check({ files });
+  const problems = formatProblems(diagnostics, {
     label: "script",
     primaryFile: "script.ts",
     // The script's first line is preceded by the prelude lines, so subtract
     // them: reported positions match the code the caller sent.
     lineOffset: -prelude.length,
   });
+  // Notes only contextualize failures — see checkCapabilityTypes.
+  return problems.length > 0 ? [...problems, ...notes] : [];
 }
 
 /**

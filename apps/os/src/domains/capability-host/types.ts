@@ -38,8 +38,9 @@ export type FlattenedCapabilityTarget = {
  * mount — and read by `itx.docs` (search/get) and `itx.docs.typecheck`. An
  * itx-expression mount provided WITHOUT types EVALUATES the expression once
  * at provide time to ask the capability's `__describe()` and keeps what it
- * reports (the MCP/OpenAPI connect doors generate theirs from tool schemas
- * and spec operations) — pass `types` explicitly when the expression has
+ * reports (MCP doors generate a declaration from tool schemas; OpenAPI doors
+ * journal a one-line `import("openapi:<specUrl>")` reference the typechecker
+ * resolves at check time) — pass `types` explicitly when the expression has
  * side effects.
  */
 export type ProvideCapabilityInput =
