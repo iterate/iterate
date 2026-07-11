@@ -566,6 +566,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscriber-connected": {
         const event = parse("events.iterate.com/stream/subscriber-connected", args.event);
         const { subscriptionKey, subscriber, subscriptionType } = event.payload;
+        // Ephemeral connections are runtime facts, not reduced state: their
+        // lifetime is the live socket, tracked in #subscribers. Folding them
+        // here would leave dead roster entries whenever a disconnect fact is
+        // lost (eviction, deploy rollover), and nothing reads them.
+        if (subscriptionType === "ephemeral") {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
         next = {
           ...next,
           connectionsByKey: {

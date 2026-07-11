@@ -649,7 +649,12 @@ function buildProcessorPanelEntries(
     });
   }
 
-  return [...entries.values()].sort(compareProcessorEntries);
+  // Dead ephemeral consumers are noise: an ephemeral connection IS its live
+  // socket, so a disconnected one is just a tab that left. Durable entries
+  // keep showing while disconnected (asleep/parked is real state).
+  return [...entries.values()]
+    .filter((entry) => entry.kind !== "consumer" || entry.connected)
+    .sort(compareProcessorEntries);
 }
 
 function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<{
@@ -675,7 +680,7 @@ function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<
     },
     {
       title: "Ephemeral consumers",
-      emptyLabel: "No ephemeral consumers have connected yet.",
+      emptyLabel: "No ephemeral consumers are connected.",
       entries: entries.filter((entry) => entry.kind === "consumer"),
     },
   ];

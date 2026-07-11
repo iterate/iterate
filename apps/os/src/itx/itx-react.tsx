@@ -75,6 +75,7 @@
 // oxlint-disable react/only-export-components -- the itx hooks are colocated with ItxProvider by design (see module header); this file is the whole itx React surface, not a Fast Refresh component module.
 import {
   createContext,
+  Suspense,
   use,
   useCallback,
   useEffect,
@@ -239,9 +240,9 @@ function useSocket(context: string | undefined): ItxHandle {
   return use(promise);
 }
 
-function ItxPrewarm({ context, children }: { context: string | undefined; children: ReactNode }) {
+function ItxPrewarm({ context }: { context: string | undefined }) {
   useSocket(context);
-  return <>{children}</>;
+  return null;
 }
 
 /**
@@ -254,8 +255,11 @@ function ItxPrewarm({ context, children }: { context: string | undefined; childr
  *   <ItxProvider />                          → global (home / projects list / admin)
  *   <ItxProvider projectId={projectSlug} />  → a project (the 99% case)
  *
- * The pre-warm suspends and never SSRs, so render it under an `ssr: false` route
- * (or `<ClientOnly>`) with a `<Suspense>` fallback.
+ * The pre-warm dials the socket in a SIBLING Suspense boundary, so children
+ * render immediately: only the components that actually read through itx
+ * suspend, each into its own nearest boundary. It never SSRs (dialing throws
+ * on the server), so render the provider under an `ssr: false` route (or
+ * `<ClientOnly>`).
  */
 export function ItxProvider({
   projectId,
@@ -269,12 +273,14 @@ export function ItxProvider({
     () => ({ projectId, path, baseUrl }),
     [projectId, path, baseUrl],
   );
-  // Pre-warm by default: suspend in a child so toggling prewarm mounts/unmounts
-  // that hook tree instead of changing this component's hook order. Routes with
-  // their own inner itx boundary can opt out to paint route chrome first.
   return (
     <ItxAddressContext value={address}>
-      {prewarm ? <ItxPrewarm context={projectId}>{children}</ItxPrewarm> : children}
+      {prewarm ? (
+        <Suspense fallback={null}>
+          <ItxPrewarm context={projectId} />
+        </Suspense>
+      ) : null}
+      {children}
     </ItxAddressContext>
   );
 }
