@@ -180,10 +180,33 @@ async function connectAndProvide(
 }
 
 const HEALTH_CHECK_INTERVAL_MS = 8_000;
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 
-/** Call the mount over the FULL agent path (`itx.<name>.__ping()`) — the same route an agent uses. */
-function pingMount(itx: RpcStub<Project>, name: string): Promise<{ ok: true }> {
-  return (itx as unknown as Record<string, { __ping(): Promise<{ ok: true }> }>)[name].__ping();
+/**
+ * Call the mount over the FULL agent path (`itx.<name>.__ping()`) — the same
+ * route an agent uses — bounded by a timeout so a STALLED round-trip (a wedged
+ * connection that never errors) is treated as a failure and triggers recovery,
+ * instead of hanging the keepalive loop forever.
+ */
+async function pingMount(itx: RpcStub<Project>, name: string): Promise<void> {
+  const ping = (itx as unknown as Record<string, { __ping(): Promise<{ ok: true }> }>)[
+    name
+  ].__ping();
+  ping.catch(() => {}); // a rejection that lands after we've timed out must not go unhandled
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      ping,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("mount ping timed out")),
+          HEALTH_CHECK_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
