@@ -25,6 +25,7 @@ import type {
 import { shareMyComputer } from "./use-my-computer.ts";
 import { runApprovalCli } from "./approve.ts";
 import { emitNeedsLogin, runApprovalJson } from "./approve-json.ts";
+import { launchMenubarApp } from "./menubar-app.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -1154,6 +1155,13 @@ const launcherProcedures = {
           .describe(
             "Machine mode for the menu-bar app: NDJSON events on stdout, {offset,decision} on stdin. Never opens a browser — emits a needs-login line instead.",
           ),
+        menubar: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "macOS: build (on first use, from the shipped Swift source) and launch the menu-bar approver app for this project, then exit.",
+          ),
       }),
     )
     .meta({
@@ -1162,6 +1170,24 @@ const launcherProcedures = {
     })
     .handler(async ({ input }) => {
       const resolved = resolveConfig(process.cwd(), { throw: true });
+
+      // --menubar just builds + launches the GUI app; it needs no auth here (the
+      // app signs in itself). Handle it first, and standalone.
+      if (input.menubar) {
+        if (input.json || input.enroll || input.keys || input.revoke || input.native) {
+          throw new Error("--menubar is standalone; run it without the other flags.");
+        }
+        const project = input.project ?? resolved.config.defaultProject;
+        if (!project) {
+          throw new Error("--menubar needs --project or a configured defaultProject.");
+        }
+        await launchMenubarApp({
+          configName: resolved.name,
+          project,
+          log: (message) => console.error(message),
+        });
+        return;
+      }
 
       // --json is listen-and-decide only; the setup flags are for the terminal
       // form. Reject the combination loudly rather than silently ignoring it.

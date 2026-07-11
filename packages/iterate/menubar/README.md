@@ -12,20 +12,32 @@ menu bar app  ──spawns, NDJSON──▶  iterate approve --json  ──shell
   (this dir)    events ↓ / clicks ↑    (transport, auth, sign)            (Touch ID)
 ```
 
-## Build
+## Easiest: from the CLI
+
+```bash
+iterate approve --project <id-or-slug> --menubar
+```
+
+This compiles the app from source on first use (cached by source hash next to
+your config), writes `menubar.json` pointing at this CLI + project, and
+launches it. The published npm package ships only the Swift source — the
+binary is built on your Mac, so there's no bloat. Needs the Xcode
+command-line tools (`xcode-select --install`) for `swiftc`.
+
+## Build by hand
 
 ```bash
 ./build-menubar-app.sh            # → build/Iterate Approvals.app
 open "build/Iterate Approvals.app"
 ```
 
-Needs the Xcode command-line tools (`xcode-select --install`) for `swiftc`.
 The 𝑖 icon is drawn from the brand logo's own vector paths (see
 `IterateIcon.swift`) — no asset catalog.
 
 ## Configure
 
-On launch the app reads `~/.config/iterate/menubar.json`:
+`iterate approve --menubar` writes this for you. To point the app by hand, the
+app reads `~/.config/iterate/menubar.json` on launch:
 
 ```jsonc
 {
