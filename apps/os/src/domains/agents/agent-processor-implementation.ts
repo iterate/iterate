@@ -236,7 +236,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
               payload: {
                 content:
-                  "Your code block did NOT run: the block's content must START with `async` — a single `async (itx) => { ... }` with no comments or statements before it. Resend it with the function first (move any leading comments inside the function body).",
+                  "Your code block did NOT run. Only a ```js fence whose content STARTS with `async` executes — a single `async (itx) => { ... }`, JavaScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
                 llmRequestPolicy: { behaviour: "after-current-request" },
               },
             });
@@ -1269,10 +1269,11 @@ type SnippetExtraction =
   // option — the model believes everything it wrote will run — so the caller
   // rejects the whole output with corrective feedback instead.
   | { kind: "multiple"; count: number }
-  // A fenced block exists but its content does not start with `async` —
-  // leading comments or statements before the arrow function. Nothing can
-  // run; the caller sends corrective feedback (models habitually open code
-  // with a comment line, and silence here reads as the platform hanging).
+  // A fenced block exists but nothing runnable came out of it: leading
+  // comments or statements before the arrow function, or a non-JavaScript
+  // language tag the extraction regex refuses. Nothing can run; the caller
+  // sends corrective feedback (models habitually open code with a comment
+  // line, and silence here reads as the platform hanging).
   | { kind: "malformed" }
   | { kind: "none" };
 
@@ -1290,9 +1291,12 @@ function extractAsyncJsSnippet(content: string): SnippetExtraction {
   if (/^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)) {
     return { kind: "script", code };
   }
-  // An unfenced non-script response is a deliberate no-op turn; a fenced one
-  // is a malformed script attempt.
-  return fenced ? { kind: "malformed" } : { kind: "none" };
+  // Any response carrying a line-start fence that did not yield a runnable
+  // script is a malformed attempt — including fences with a non-JS language
+  // tag, which FENCED_SNIPPET_RE refuses to match. Only a fence-free
+  // non-script response is a deliberate no-op turn; the system prompt
+  // promises rejection-with-feedback for everything else.
+  return fenced !== null || /^[ \t]*```/m.test(content) ? { kind: "malformed" } : { kind: "none" };
 }
 
 // The "tool result" half of the codemode loop: a finished script execution

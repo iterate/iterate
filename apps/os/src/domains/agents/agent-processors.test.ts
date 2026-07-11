@@ -462,11 +462,28 @@ describe("minimal web-chat agent processors", () => {
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload?.content === "string" &&
-        event.payload.content.includes("must START with `async`"),
+        event.payload.content.includes("STARTS with `async`"),
     );
     expect(corrective?.payload).toMatchObject({
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
+
+    // A fence with a non-JS language tag is the same mistake in a different
+    // costume — the extraction regex refuses it, and the system prompt
+    // promises rejection-with-feedback, not silence.
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: "```python\nprint('hello')\n```" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    expect(
+      stream.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/agent/input-added" &&
+          typeof event.payload?.content === "string" &&
+          event.payload.content.includes("STARTS with `async`"),
+      ),
+    ).toHaveLength(2);
 
     // Plain prose with no fence stays a deliberate no-op turn (no feedback).
     await stream.append({
@@ -478,9 +495,9 @@ describe("minimal web-chat agent processors", () => {
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload?.content === "string" &&
-        event.payload.content.includes("must START with"),
+        event.payload.content.includes("STARTS with"),
     );
-    expect(feedbackEvents).toHaveLength(1);
+    expect(feedbackEvents).toHaveLength(2);
   });
 
   it("treats MCP-origin messages like any other inbound user message", async () => {
