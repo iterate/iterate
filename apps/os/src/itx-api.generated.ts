@@ -1816,7 +1816,8 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
 
 /** One committed event on a durable stream: type, JSON payload, offset,
  * idempotency key, and provenance (processor stamp / cross-post chain), plus
- * the commit-time `createdAt` and stream `path`. */
+ * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
+ * second-class row (see `StreamEventInput`). */
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -2267,7 +2268,11 @@ export type SubscriptionKey = string;
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. */
+ * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * second-class row: excluded from range reads unless `includeEphemeral`,
+ * never delivered to durable subscribers (wake/push/webhook), and evictable —
+ * for transient signals (LLM streaming chunks) whose durable truth lands as
+ * its own event. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;

@@ -715,9 +715,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         })),
         model,
         onChunk: async (chunk, index) => {
-          // Ephemeral: chunks reach live subscribers (browser feed, TUI) but
-          // are excluded from default reads and evictable — the durable truth
-          // is the `output-added` / `llm-request-completed` pair below.
+          // Ephemeral: the durable truth is the output-added /
+          // llm-request-completed pair below.
           await this.append({
             type: "events.iterate.com/agent/llm-response-chunk",
             ephemeral: true,

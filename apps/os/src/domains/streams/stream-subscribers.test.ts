@@ -1331,10 +1331,12 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
 
-    // Ephemeral-only append while connected: the pump advances its cursor and
-    // delivers nothing.
-    h.append({ ...evt(4, "chunk"), ephemeral: true as const });
-    h.subscribers.wake();
+    // Ephemeral-only append while connected, delivered through the FRESH TAIL
+    // fast path (what the DO's commit hands over — raw, flags included): the
+    // pump advances its cursor and delivers nothing.
+    const fresh: StreamEvent = { ...evt(4, "chunk"), ephemeral: true };
+    h.append(fresh);
+    h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
     await h.settle();
     expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
   });

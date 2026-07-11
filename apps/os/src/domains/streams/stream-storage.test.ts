@@ -134,9 +134,65 @@ describe("StreamEventLog.getRange", () => {
     expect(offsets(read(log, { afterOffset: 0, limit: 10, includeEphemeral: true }))).toEqual([
       1, 2, 3,
     ]);
+    // Both interpolated WHERE clauses at once (ephemeral + type filter).
+    expect(
+      offsets(
+        read(log, {
+          afterOffset: 0,
+          limit: 10,
+          eventTypes: ["events.iterate.com/test/chunk"],
+          includeEphemeral: true,
+        }),
+      ),
+    ).toEqual([2]);
+    expect(
+      offsets(
+        read(log, { afterOffset: 0, limit: 10, eventTypes: ["events.iterate.com/test/chunk"] }),
+      ),
+    ).toEqual([]);
     // Point reads are an explicit request — no flag needed.
     expect(log.getByOffset(2)).toEqual(chunk);
     expect(log.getByIdempotencyKey("chunk-2")).toEqual(chunk);
+  });
+
+  it("adopts a pre-ephemeral events table in place (the live-stream deploy path)", () => {
+    const db = new DatabaseSync(":memory:");
+    // The exact table shape every live stream's constructor DDL created
+    // before the ephemeral column existed, with a row already in it.
+    db.exec(`
+      create table events (
+        offset integer primary key autoincrement,
+        type text not null,
+        created_at text not null,
+        idempotency_key text unique
+      );
+      create table event_chunks (
+        offset integer not null,
+        chunk_index integer not null,
+        chunk_bytes blob not null,
+        primary key (offset, chunk_index),
+        foreign key (offset) references events(offset) on delete cascade
+      ) without rowid;
+    `);
+    db.prepare("insert into events (offset, type, created_at) values (1, 'legacy', '1970')").run();
+
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([{ ...event(2, "events.iterate.com/test/chunk"), ephemeral: true }]);
+    log.insert([event(3, "events.iterate.com/test/durable")]);
+    // Legacy row reads as durable (default 0 backfill); the filter works.
+    expect(
+      log.getRange({ afterOffset: 1, beforeOffset: 100, limit: 10 }).map((entry) => entry.offset),
+    ).toEqual([3]);
+  });
+
+  it("highestAssignedOffset survives deletion of the highest row (the eviction allocator floor)", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([event(1, "events.iterate.com/test/durable")]);
+    log.insert([{ ...event(2, "events.iterate.com/test/chunk"), ephemeral: true }]);
+    db.prepare("delete from events where offset = 2").run();
+    expect(log.highestOffset()).toBe(1);
+    expect(log.highestAssignedOffset()).toBe(2);
   });
 
   it("adds the stream path when reading legacy stored events", () => {

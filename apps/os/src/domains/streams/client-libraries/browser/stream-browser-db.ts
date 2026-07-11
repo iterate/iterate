@@ -17,12 +17,6 @@ export type StreamDatabaseInfo = {
   crossOriginIsolated: boolean;
 };
 
-type StreamDatabaseEventSummary = {
-  count: number;
-  minOffset: number | null;
-  maxOffset: number | null;
-};
-
 export type SqliteQueryStatus = "pending" | "ok" | "error";
 
 export type SqliteQuerySnapshot<T> = {
@@ -142,32 +136,6 @@ export class StreamBrowserDatabase implements Disposable {
   ): Promise<void> {
     await this.#ready;
     await this.#call("batch", { statements, transaction: options.transaction ?? false });
-  }
-
-  async maxOffset(): Promise<number> {
-    if (!(await this.#eventsTableExists())) return -1;
-    const [row] = await this.exec(`SELECT MAX(offset) AS max_offset FROM events`);
-    return Number(row?.max_offset ?? -1);
-  }
-
-  async eventSummary(): Promise<StreamDatabaseEventSummary> {
-    if (!(await this.#eventsTableExists())) {
-      return { count: 0, minOffset: null, maxOffset: null };
-    }
-    const [row] = await this.exec(
-      `SELECT COUNT(*) AS event_count, MIN(offset) AS min_offset, MAX(offset) AS max_offset
-       FROM events`,
-    );
-    const count = Number(row?.event_count ?? 0);
-    const minOffset =
-      row?.min_offset === null || row?.min_offset === undefined ? null : Number(row.min_offset);
-    const maxOffset =
-      row?.max_offset === null || row?.max_offset === undefined ? null : Number(row.max_offset);
-
-    // No continuity claim: offsets legitimately have gaps (ephemeral events
-    // consume offsets without ever being replayable), so count vs maxOffset
-    // says nothing about mirror health.
-    return { count, minOffset, maxOffset };
   }
 
   notifyChanged(change: StreamDbChange = { kind: "append", minOffset: 0, maxOffset: 0 }) {
@@ -380,10 +348,6 @@ export class StreamBrowserDatabase implements Disposable {
         error: error instanceof Error ? error : new Error(String(error)),
       };
     }
-  }
-
-  async #eventsTableExists(): Promise<boolean> {
-    return this.#tableExists("events");
   }
 
   async #tableExists(name: string): Promise<boolean> {

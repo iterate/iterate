@@ -42,8 +42,10 @@ export class StreamEventLog {
     this.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
-      -- ephemeral marks second-class rows: range reads exclude them unless asked,
-      -- and the stream may evict them in the future (their offsets stay consumed).
+      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
+      -- the stream may evict them in the future. Eviction keeps offsets consumed
+      -- (highestAssignedOffset reads AUTOINCREMENT's sqlite_sequence, which survives
+      -- row deletion) but forgets their idempotency keys.
       create table if not exists events (
         offset integer primary key autoincrement,
         type text not null,
@@ -78,6 +80,22 @@ export class StreamEventLog {
         .exec<{ offset: number | null }>("select max(offset) as offset from events")
         .toArray()[0]?.offset ?? 0
     );
+  }
+
+  /**
+   * The highest offset ever INSERTED, even if its row was since deleted —
+   * AUTOINCREMENT's sqlite_sequence row is updated by every insert (explicit
+   * offsets included) and survives row deletion. This is the offset
+   * allocator's recovery floor: a future ephemeral-row eviction sweep may
+   * delete the highest row, and reseeding the allocator from max(offset)
+   * would then reissue offsets that live subscribers already saw.
+   */
+  highestAssignedOffset(): number {
+    const sequence =
+      this.sql
+        .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
+        .toArray()[0]?.seq ?? 0;
+    return Math.max(this.highestOffset(), sequence);
   }
 
   /**

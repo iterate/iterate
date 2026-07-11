@@ -22,8 +22,9 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
 
   // The schema ensurer also handles version resets (drop table + clear checkpoint),
   // so it must run before the checkpoint is first read — otherwise a stale offset
-  // gets memoized and reported to the server as the replay cursor, and the first
-  // insert into the freshly-reset table trips the continuity trigger.
+  // gets memoized and reported to the server as the replay cursor, and the mirror
+  // silently rebuilds without the skipped prefix (the gap-tolerant trigger
+  // accepts the hole; nothing ever refetches it).
   protected override async prepare(): Promise<void> {
     await ensureBrowserRawEventsSchema(this.deps.sql);
   }
@@ -31,6 +32,17 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
   ): Promise<void> {
+    // Gaps are legal only once server-side ephemeral eviction exists; until
+    // then every delivered batch is dense, so an observed gap is a real lost
+    // delivery the relaxed trigger would otherwise swallow silently. Log it.
+    const [head] = await this.deps.sql.exec(`SELECT MAX(offset) AS max_offset FROM events`);
+    const localHead = Number(head?.max_offset ?? 0);
+    const firstOffset = args.events[0]?.offset;
+    if (firstOffset !== undefined && localHead > 0 && firstOffset > localHead + 1) {
+      console.error(
+        `[browser-raw-events] offset gap in mirror: local head ${localHead}, batch starts at ${firstOffset} — lost delivery or server-side eviction`,
+      );
+    }
     await this.deps.sql.batch(
       args.events.map((event) => ({
         sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
@@ -48,9 +60,10 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
     if (Number(schemaVersion?.user_version ?? 0) !== BROWSER_RAW_EVENTS_SCHEMA_VERSION) {
       // The resume checkpoint lives in processor_state, not in the events table,
       // so it must be cleared together with the table. A stale checkpoint over an
-      // empty table would skip historical replay and then trip the continuity
-      // trigger on the first new event. Deleted before the user_version write so
-      // a crash in between re-runs this reset on the next load.
+      // empty table would skip historical replay and silently rebuild the mirror
+      // without the skipped prefix (the gap-tolerant trigger accepts the hole).
+      // Deleted before the user_version write so a crash in between re-runs this
+      // reset on the next load.
       await deleteBrowserProcessorState({ sql, processorSlug: BrowserRawEventsContract.slug });
       await sql.batch(
         [
@@ -72,11 +85,10 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             --
             -- local_index is deliberately separate from offset. Today it is offset - 1,
             -- because server offsets are one-based and TanStack Virtual indexes are
-            -- zero-based. Keeping a separate local list position gives us room to age
-            -- server events out later. It is NOT guaranteed dense: the server may
-            -- evict ephemeral rows (their offsets stay consumed), so replays can
-            -- carry permanent gaps (consumers ORDER BY local_index and paginate
-            -- with LIMIT/OFFSET, which is gap-proof).
+            -- zero-based. Neither column is guaranteed dense: the server may evict
+            -- ephemeral rows (their offsets stay consumed), so replays can carry
+            -- permanent gaps. The actual consumers (inspector panels' offset point
+            -- reads and ORDER BY offset walks) are gap-proof.
             CREATE TABLE IF NOT EXISTS events (
               local_index INTEGER PRIMARY KEY,
               raw_jsonb BLOB NOT NULL,

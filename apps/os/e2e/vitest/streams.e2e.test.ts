@@ -231,7 +231,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await subscription.unsubscribe();
 });
 
-test("ephemeral events are second-class rows: excluded from default reads, invisible to durable lanes, delivered on ephemeral subscriptions", async () => {
+test("ephemeral events are second-class rows: excluded from default reads, delivered on ephemeral subscriptions", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/ephemeral/${marker}`;
   const ephemeralType = `${STREAM_EVENT_TYPE}/chunk`;

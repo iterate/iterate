@@ -136,16 +136,21 @@ breaker, same pause door), with two deliberate demotions:
 The demotions are a license the stream keeps: because nothing durable can
 depend on an ephemeral row, a future sweep may EVICT them (memory pressure,
 DO-startup cleanup), leaving permanent offset gaps that every read path —
-including the browser mirror — already tolerates. Use them for transient
-signals whose durable truth lands separately: the canonical case is LLM
-streaming chunks (`agent/llm-response-chunk`), superseded by the durable
+including the browser mirror — already tolerates. Two constraints on that
+future sweep are pre-paid here: the offset allocator survives head-row
+eviction (`highestAssignedOffset()` reads AUTOINCREMENT's `sqlite_sequence`,
+which row deletion does not reset — reissuing a seen offset would wedge every
+offset-keyed consumer), and eviction forgets idempotency keys (a swept key
+dedupes nothing on re-append). Use ephemeral events for transient signals
+whose durable truth lands separately: the canonical case is LLM streaming
+chunks (`agent/llm-response-chunk`), superseded by the durable
 `output-added`. `stream/*` control facts cannot be ephemeral — config,
 presence, and park state may never be forgotten.
 
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
-rides this). Ephemeral batch results are disposed **unpulled**, so those
-subscriptions generate zero subscriber-originated return frames (a
+rides this). Batch results on the ephemeral lane are disposed **unpulled**, so
+those subscriptions generate zero subscriber-originated return frames (a
 `ReadableStream` could never do this: its per-chunk acks ARE its flow
 control — see the `FlowController` in
 [capnweb](https://github.com/cloudflare/capnweb)); durable batch results are

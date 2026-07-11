@@ -979,8 +979,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         beforeOffset: highestOffset + 1,
         limit: 500,
         // Ephemeral rows folded on append (counters + circuit breaker), so a
-        // rebuild must re-fold them for the same state. Evicted rows simply
-        // stop counting — fine, the fold is monotonic bookkeeping.
+        // rebuild must re-fold them for the same state.
         includeEphemeral: true,
       });
       if (page.length === 0) break;
@@ -989,6 +988,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         next = this.#reduce({ event, state: next }, "replay");
       }
     }
+    // The fold recovers maxOffset from surviving rows; the assigned floor
+    // covers rows a future ephemeral eviction sweep deleted. Without it a
+    // rebuild after head-row eviction would reissue offsets that live
+    // subscribers already saw (the browser mirror hard-ABORTs on a reused
+    // offset carrying different JSON).
+    const assignedFloor = this.#log.highestAssignedOffset();
+    if (assignedFloor > next.maxOffset) next = { ...next, maxOffset: assignedFloor };
     return next;
   }
 
@@ -1090,6 +1096,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   /**
    * One-shot convenience over `subscribe()`: replay from the requested cursor,
    * then live-tail until a caller predicate accepts an event.
+   *
+   * Rides an ephemeral subscription, so it CAN match ephemeral events —
+   * remember their rows may be evicted later if you record the offset.
    *
    * Intentionally not a durable waiter. If the RPC caller or this DO
    * incarnation dies, the wait dies too; callers that need retry semantics

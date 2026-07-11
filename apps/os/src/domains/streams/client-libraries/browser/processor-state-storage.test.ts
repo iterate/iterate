@@ -2,8 +2,9 @@
 // browser-raw-events schema version reset, running against real SQLite via
 // node:sqlite. The key regression: bumping BROWSER_RAW_EVENTS_SCHEMA_VERSION
 // drops the events table, so it must also clear the processor_state checkpoint —
-// a stale checkpoint over an empty mirror would skip historical replay and then
-// wedge on the append-continuity trigger.
+// a stale checkpoint over an empty mirror would skip historical replay and
+// silently rebuild without the skipped prefix (the gap-tolerant trigger accepts
+// the hole).
 
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -151,8 +152,8 @@ describe("browser raw events schema version reset", () => {
     // Second "page load" (fresh SqlClient, so the schema ensurer re-runs): the
     // version reset must clear the checkpoint, not just drop the table.
     // Before the fix this snapshot reported offset 2 over an empty mirror, so
-    // the server skipped historical replay and the first new insert hit the
-    // append-continuity trigger.
+    // the server skipped historical replay — a permanent silent hole in the
+    // mirror (the gap-tolerant trigger accepts it).
     const secondLoad = createRawEventsProcessor(wrap(db));
     expect(await secondLoad.snapshot()).toMatchObject({ offset: 0 });
 
@@ -178,8 +179,8 @@ describe("browser raw events schema version reset", () => {
 
     // Straight to ingest, no snapshot() first: prepare() must still run the
     // version reset before the stale checkpoint is memoized. Without that,
-    // offsets 1-2 are filtered out against the stale cursor and inserting
-    // offset 3 into the freshly-reset table trips the continuity trigger.
+    // offsets 1-2 are filtered out against the stale cursor and the mirror
+    // keeps a permanent silent hole below offset 3.
     const secondLoad = createRawEventsProcessor(wrap(db));
     await secondLoad.ingest({
       events: [rawEvent(1), rawEvent(2), rawEvent(3)],
@@ -208,7 +209,7 @@ describe("browser raw events schema version reset", () => {
     expect(rows.map((row) => Number(row.offset))).toEqual([1, 2, 3]);
   });
 
-  it("the trigger accepts gaps (ephemeral offsets never replay) but rejects out-of-order inserts", async () => {
+  it("the trigger accepts gaps (evicted ephemeral offsets never replay) but rejects out-of-order inserts", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     await ensureBrowserRawEventsSchema(sql);
 
@@ -219,8 +220,9 @@ describe("browser raw events schema version reset", () => {
       ]);
 
     await insert(1);
-    // Offset 2 was an ephemeral event: it consumed the offset server-side but
-    // has no row to replay, so the mirror must accept the gap.
+    // Offset 2 was an ephemeral event later evicted server-side: the offset
+    // stays consumed but there is no row to replay, so the mirror must accept
+    // the gap.
     await insert(3);
     const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
     expect(rows.map((row) => Number(row.offset))).toEqual([1, 3]);
