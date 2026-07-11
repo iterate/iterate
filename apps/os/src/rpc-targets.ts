@@ -47,6 +47,7 @@ import {
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
+import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
@@ -1175,20 +1176,27 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
 
 /**
  * Human-facing project facts for an agent's boot context, best-effort from
- * the project directory: name, slug, and the served hostname. Absent (id-only
- * boot line) when the directory has no record yet — never a birth blocker.
+ * the project directory: name, slug, and the served worker URL (via the
+ * canonical builder, so loopback bases keep their scheme/port and wildcard
+ * bases normalize). Absent (id-only boot line) when the directory has no
+ * record yet — never a birth blocker.
  */
 async function agentBootProjectFacts(
   projectId: string,
-): Promise<{ project?: { name: string; slug: string; hostname?: string } }> {
+): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
   const record = await readProjectById(env.PROJECT_DIRECTORY, projectId).catch(() => null);
   if (record === null) return {};
-  const hostnameBase = parseConfig(env).projectHostnameBases[0];
+  const config = parseConfig(env);
+  const workerUrl = buildProjectWorkerUrl({
+    projectSlug: record.slug,
+    projectHostnameBases: config.projectHostnameBases,
+    ...(config.baseUrl === undefined ? {} : { appBaseUrl: config.baseUrl }),
+  });
   return {
     project: {
       name: record.name,
       slug: record.slug,
-      ...(hostnameBase === undefined ? {} : { hostname: `${record.slug}.${hostnameBase}` }),
+      ...(workerUrl === null ? {} : { workerUrl }),
     },
   };
 }

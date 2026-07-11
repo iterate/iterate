@@ -238,7 +238,7 @@ export function agentDefaultsForPath(input: {
    * context could give. Optional because some hosts (tests, bare births)
    * have no directory at hand — the id-only line still works.
    */
-  project?: { name: string; slug: string; hostname?: string };
+  project?: { name: string; slug: string; workerUrl?: string };
   overrides?: AgentDefaultsOverrides;
 }): AgentDefaultPolicy {
   const { agentPath, projectId, project } = input;
@@ -291,7 +291,7 @@ export function agentDefaultsForPath(input: {
           "Platform context for this agent:",
           project === undefined
             ? `- Project id: ${projectId}`
-            : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.hostname === undefined ? "" : ` — the project worker/website serves https://${project.hostname}`}`,
+            : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
           `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
           // One seed list, marked non-exhaustive, and ONE rule for choosing
           // between the two write doors — the model was repeating this line

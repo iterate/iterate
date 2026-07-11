@@ -17,7 +17,7 @@ function defaultsFor(
 
 describe("agentDefaultsForPath", () => {
   it("boot context names the project when directory facts are supplied — id-only without", () => {
-    const bootContent = (project?: { name: string; slug: string; hostname?: string }) => {
+    const bootContent = (project?: { name: string; slug: string; workerUrl?: string }) => {
       const events = agentDefaultsForPath({
         agentPath: "/agents/demo",
         projectId: PROJECT_ID,
@@ -31,7 +31,11 @@ describe("agentDefaultsForPath", () => {
 
     // The very first real prd question was "which project is this?" — the
     // context must answer with the human name, not only the hex id.
-    const named = bootContent({ name: "Snake Game", slug: "snake", hostname: "snake.iterate.app" });
+    const named = bootContent({
+      name: "Snake Game",
+      slug: "snake",
+      workerUrl: "https://snake.iterate.app",
+    });
     expect(named).toContain('"Snake Game" (slug snake');
     expect(named).toContain("https://snake.iterate.app");
     expect(named).toContain(PROJECT_ID);
