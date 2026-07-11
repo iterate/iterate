@@ -267,6 +267,15 @@ test("an unreachable / hung sidecar at provide time allows the mount (deadline, 
       deadlineMs: 25,
     }),
   ).toEqual([]);
+
+  // The export-less rule is LOCAL (no compiler) — a permissive checker failure
+  // must NOT let an export-less declaration slip into the journal as `any`.
+  const exportLess = await checkCapabilityTypes({
+    types: "export const x = 1;",
+    typechecker: unreachable,
+  });
+  expect(exportLess).toHaveLength(1);
+  expect(exportLess[0]).toContain("exports no top-level type");
 });
 
 test("a pathologically nested type is REJECTED at provide time (durable — must not wedge future checks)", async () => {
