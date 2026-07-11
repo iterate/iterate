@@ -605,9 +605,12 @@ export interface Docs {
    * Find examples, types, and mounted capabilities. Pass MANY related words —
    * matching is dumb word overlap, so more synonyms means better recall:
    * `search({ q: "file upload attachment bytes store image" })`, not
-   * `search({ q: "files" })`. Example hits are working scripts — prefer
-   * copying them over writing calls from scratch. Each hit's `fetchCall`
-   * field is the literal next call to make.
+   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as
+   * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
+   * `"worker"`, or `"agents"` rank their subject first instead of every row
+   * that mentions the word. Example hits are working scripts — prefer copying
+   * them over writing calls from scratch. Each hit's `fetchCall` field holds
+   * the ready-made docs.get call that fetches its full doc.
    */
   search(input: { q: string }): Promise<DocsSearchHit[]>;
   /**
