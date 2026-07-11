@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import { CheckIcon, CopyIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
@@ -106,11 +107,15 @@ export function LlmRequestInspectorPanel({
           title="Copy the request's messages as JSON"
           onClick={async () => {
             if (replay == null) return;
-            await navigator.clipboard.writeText(
-              JSON.stringify({ messages: replay.messages }, null, 2),
-            );
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
+            try {
+              await navigator.clipboard.writeText(
+                JSON.stringify({ messages: replay.messages }, null, 2),
+              );
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 2_000);
+            } catch {
+              toast.error("Failed to copy to clipboard");
+            }
           }}
         >
           {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
