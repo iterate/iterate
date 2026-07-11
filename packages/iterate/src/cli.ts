@@ -24,6 +24,7 @@ import type {
 } from "./itx-api.generated.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
 import { runApprovalCli } from "./approve.ts";
+import { emitNeedsLogin, runApprovalJson } from "./approve-json.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -1146,6 +1147,13 @@ const launcherProcedures = {
           .describe(
             "Revoke this machine's approval key (append key-revoked, destroy local material) and exit.",
           ),
+        json: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Machine mode for the menu-bar app: NDJSON events on stdout, {offset,decision} on stdin. Never opens a browser — emits a needs-login line instead.",
+          ),
       }),
     )
     .meta({
@@ -1156,7 +1164,8 @@ const launcherProcedures = {
       const resolved = resolveConfig(process.cwd(), { throw: true });
 
       // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
-      // the stored `iterate login` session, kicking off a browser login if none.
+      // the stored `iterate login` session. In JSON mode we never open a
+      // browser — a missing session is reported so the app can drive login.
       const envAuth = osAuthFromEnvironment();
       let authHeaders: OsAuthHeaders | undefined;
       if (!envAuth) {
@@ -1164,6 +1173,10 @@ const launcherProcedures = {
           authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
         } catch (error) {
           if (!shouldAutoLoginForChat(error)) throw error;
+          if (input.json) {
+            emitNeedsLogin();
+            return;
+          }
           console.error(
             `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
           );
@@ -1181,6 +1194,16 @@ const launcherProcedures = {
         configuredDefaultProject: resolved.config.defaultProject,
         explicitProject: input.project,
       });
+
+      if (input.json) {
+        await runApprovalJson({
+          auth: auth.credentials,
+          baseUrl: resolved.config.osBaseUrl,
+          projectId,
+          headers: headersRecord(auth.requestHeaders),
+        });
+        return;
+      }
 
       await runApprovalCli({
         auth: auth.credentials,
