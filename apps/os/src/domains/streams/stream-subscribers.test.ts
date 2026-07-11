@@ -147,6 +147,9 @@ type ConfiguredEntry = {
 function makeHarness() {
   let now = 0;
   const log: StreamEvent[] = [];
+  // maxOffset override for ephemeral-head scenarios: the allocator sits past
+  // the durable log when ephemeral events consumed the offsets in between.
+  let allocatorHead: number | undefined;
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
   const armedAlarms: number[] = [];
@@ -210,7 +213,9 @@ function makeHarness() {
         CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
-          maxOffset: log.at(-1)?.offset ?? 0,
+          maxOffset: allocatorHead ?? log.at(-1)?.offset ?? 0,
+          // The harness log holds only durable events.
+          maxDurableOffset: log.at(-1)?.offset ?? 0,
           configuredSubscribersByKey: configured,
         }),
       store,
@@ -256,6 +261,9 @@ function makeHarness() {
     log,
     settle,
     append: (...events: StreamEvent[]) => log.push(...events),
+    setAllocatorHead: (offset: number | undefined) => {
+      allocatorHead = offset;
+    },
     storageReads: () => storageReads,
     now: () => now,
     advanceTo: (ms: number) => {
@@ -1171,7 +1179,8 @@ describe("StreamSubscribers", () => {
     // an empty window THROUGH the tail check, which self-disqualifies there).
     const fresh = [evt(1, "a"), evt(2, "b")];
     h.append(...fresh);
-    h.subscribers.wake(fresh.map((event) => ({ event, byteLength: 64 })));
+    const sizedFresh = fresh.map((event) => ({ event, byteLength: 64 }));
+    h.subscribers.wake({ durable: sizedFresh, durableAfterOffset: 0, live: sizedFresh });
     await h.settle();
 
     expect(h.pushes).toHaveLength(1);
@@ -1275,5 +1284,79 @@ describe("StreamSubscribers", () => {
       h.pushes.every((batch) => batch.events.map((event) => event.offset).join(",") === "1,2,3"),
     ).toBe(true);
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
+  });
+
+  it("z. ephemeral events reach live subscriptions only; the durable lane delivers around the gap", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+
+    // A live watcher opened BEFORE the commit (live-from-now via empty log).
+    const batches: StreamEventBatch[] = [];
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: (batch) => {
+        batches.push(batch);
+      },
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+
+    // One commit: durable offset 1, ephemeral offset 2, durable offset 3.
+    // Storage (the harness log) only ever holds the durable rows; the
+    // ephemeral event exists solely in the handed-over live tail — exactly
+    // what the Stream DO's append produces.
+    const durable = [evt(1, "a"), evt(3, "b")];
+    const ephemeral: StreamEvent = { ...evt(2, "chunk"), ephemeral: true };
+    h.append(...durable);
+    h.setAllocatorHead(3);
+    const sized = (event: StreamEvent) => ({ event, byteLength: 64 });
+    h.subscribers.wake({
+      durable: durable.map(sized),
+      durableAfterOffset: 0,
+      live: [sized(durable[0]!), sized(ephemeral), sized(durable[1]!)],
+    });
+    await h.settle();
+
+    // The ephemeral connection saw the whole batch, flagged, in offset order.
+    const live = batches.flatMap((batch) => batch.events);
+    expect(live.map((event) => [event.offset, event.ephemeral === true])).toEqual([
+      [1, false],
+      [2, true],
+      [3, false],
+    ]);
+
+    // The push lane delivered only the durable events (its input universe is
+    // the durable tail / storage) and acked past the gap in one step.
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1, 3]);
+    expect(h.pushes[0]!.streamMaxOffset).toBe(3); // the durable head
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
+  it("z2. an ephemeral head is caught up, not lag: no drain, no poke, lag reads the durable head", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+
+    // Ephemeral appends advance the allocator past the durable head. Their
+    // fan-out must not re-drain (or, for wake mode, poke) a caught-up
+    // subscriber once per LLM chunk — the events can never reach this lane.
+    h.setAllocatorHead(5);
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.subscribers.subscriptionRuntimeState().k?.lag).toBe(0);
+
+    // Same caught-up check guards the wake lane's poke.
+    const w = makeHarness();
+    w.configure(wakePayload(), 0);
+    w.setAllocatorHead(5);
+    w.subscribers.wake();
+    await w.settle();
+    expect(w.pokes).toHaveLength(0);
   });
 });

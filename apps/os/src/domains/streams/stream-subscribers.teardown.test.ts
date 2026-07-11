@@ -125,6 +125,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           projectId: "p1",
           path: "/t",
           maxOffset: log.length,
+          maxDurableOffset: log.length,
           eventCount: log.length,
           configuredSubscribersByKey: configured,
         }),

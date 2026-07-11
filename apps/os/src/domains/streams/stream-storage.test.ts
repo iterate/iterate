@@ -118,6 +118,18 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
   });
 
+  it("accepts explicit gapped offsets and reads across the gap (ephemeral events never persist)", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    // Offset 2 was an ephemeral event: assigned, delivered live, never a row.
+    log.insert([event(1, "events.iterate.com/test/durable")]);
+    log.insert([event(3, "events.iterate.com/test/durable")]);
+    expect(log.highestOffset()).toBe(3);
+    expect(log.getByOffset(2)).toBeUndefined();
+    expect(
+      log.getRange({ afterOffset: 0, beforeOffset: 100, limit: 10 }).map((entry) => entry.offset),
+    ).toEqual([1, 3]);
+  });
+
   it("adds the stream path when reading legacy stored events", () => {
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
     const log = new StreamEventLog(sql, "/legacy/stream");

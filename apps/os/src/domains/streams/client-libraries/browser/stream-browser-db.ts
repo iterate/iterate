@@ -21,7 +21,6 @@ type StreamDatabaseEventSummary = {
   count: number;
   minOffset: number | null;
   maxOffset: number | null;
-  isContinuous: boolean;
 };
 
 export type SqliteQueryStatus = "pending" | "ok" | "error";
@@ -153,7 +152,7 @@ export class StreamBrowserDatabase implements Disposable {
 
   async eventSummary(): Promise<StreamDatabaseEventSummary> {
     if (!(await this.#eventsTableExists())) {
-      return { count: 0, minOffset: null, maxOffset: null, isContinuous: true };
+      return { count: 0, minOffset: null, maxOffset: null };
     }
     const [row] = await this.exec(
       `SELECT COUNT(*) AS event_count, MIN(offset) AS min_offset, MAX(offset) AS max_offset
@@ -165,12 +164,10 @@ export class StreamBrowserDatabase implements Disposable {
     const maxOffset =
       row?.max_offset === null || row?.max_offset === undefined ? null : Number(row.max_offset);
 
-    return {
-      count,
-      minOffset,
-      maxOffset,
-      isContinuous: count === 0 || (minOffset === 1 && maxOffset === count),
-    };
+    // No continuity claim: offsets legitimately have gaps (ephemeral events
+    // consume offsets without ever being replayable), so count vs maxOffset
+    // says nothing about mirror health.
+    return { count, minOffset, maxOffset };
   }
 
   notifyChanged(change: StreamDbChange = { kind: "append", minOffset: 0, maxOffset: 0 }) {

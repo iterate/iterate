@@ -17,12 +17,14 @@ describe("parseBrowserCoreProcessorState", () => {
       createdAt: "2026-07-01T00:00:00.000Z",
       incarnationId: "b3aa1c8e-0000-0000-0000-000000000000",
       maxOffset: 42,
+      maxDurableOffset: 42,
       eventCount: 42,
     });
 
     expect(parseBrowserCoreProcessorState(coreProcessorState)).toEqual({
       createdAt: "2026-07-01T00:00:00.000Z",
       maxOffset: 42,
+      maxDurableOffset: 42,
     });
   });
 
@@ -30,7 +32,10 @@ describe("parseBrowserCoreProcessorState", () => {
     // The empty core fold: no created event has been committed, so there is no
     // createdAt and maxOffset defaults to 0.
     const emptyState = CoreProcessorContract.stateSchema.parse({});
-    expect(parseBrowserCoreProcessorState(emptyState)).toEqual({ maxOffset: 0 });
+    expect(parseBrowserCoreProcessorState(emptyState)).toEqual({
+      maxOffset: 0,
+      maxDurableOffset: 0,
+    });
   });
 
   it("rejects shapes the mirror cannot reconcile against", () => {

@@ -5,7 +5,7 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 5;
 
 export type BrowserRawEventsState = Record<string, never>;
 
@@ -73,7 +73,10 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             -- local_index is deliberately separate from offset. Today it is offset - 1,
             -- because server offsets are one-based and TanStack Virtual indexes are
             -- zero-based. Keeping a separate local list position gives us room to age
-            -- server events out later while still rendering a dense local list.
+            -- server events out later. It is NOT dense: ephemeral events consume
+            -- offsets without ever being persisted server-side, so a mirror that
+            -- replays from server storage has permanent gaps (consumers ORDER BY
+            -- local_index and paginate with LIMIT/OFFSET, which is gap-proof).
             CREATE TABLE IF NOT EXISTS events (
               local_index INTEGER PRIMARY KEY,
               raw_jsonb BLOB NOT NULL,
@@ -97,7 +100,10 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             -- 1. Identical replay is accepted and ignored, preserving inserted_at as
             --    "first stored locally".
             -- 2. Same offset with different JSON is a conflicting duplicate.
-            -- 3. New rows must append continuously, so a missed offset fails loudly.
+            -- 3. New rows must append in increasing offset order. Gaps are legal:
+            --    ephemeral events consume offsets but are never replayed from server
+            --    storage, so a strict-continuity check would wedge every reload of a
+            --    stream that streamed chunks.
             CREATE TRIGGER IF NOT EXISTS events_before_insert
             BEFORE INSERT ON events
             BEGIN
@@ -113,8 +119,8 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
                   FROM events
                   WHERE offset = NEW.offset
                 ) THEN RAISE(ABORT, 'stream browser mirror replay changed an existing offset')
-                WHEN NEW.offset != COALESCE((SELECT MAX(offset) + 1 FROM events), 1)
-                  THEN RAISE(ABORT, 'stream browser mirror offsets must append continuously')
+                WHEN NEW.offset <= COALESCE((SELECT MAX(offset) FROM events), 0)
+                  THEN RAISE(ABORT, 'stream browser mirror offsets must increase')
               END;
             END
           `,

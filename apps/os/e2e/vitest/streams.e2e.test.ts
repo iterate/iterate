@@ -231,6 +231,130 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await subscription.unsubscribe();
 });
 
+test("ephemeral events consume offsets, ride live subscriptions, and never persist", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/os-port/ephemeral/${marker}`;
+  const ephemeralType = `${STREAM_EVENT_TYPE}/chunk`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `os-stream-ephemeral-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(streamPath);
+
+  // A live watcher attached BEFORE the appends: the only lane ephemeral
+  // events are ever delivered on.
+  const live: StreamEvent[] = [];
+  using liveSubscription = await stream.subscribe({
+    processEventBatch: (batch) => {
+      live.push(...batch.events);
+    },
+  });
+
+  const [before] = await stream.append({
+    type: STREAM_EVENT_TYPE,
+    payload: { marker, position: "before" },
+  });
+  const [chunk] = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    payload: { marker },
+  });
+  const [after] = await stream.append({
+    type: STREAM_EVENT_TYPE,
+    payload: { marker, position: "after" },
+  });
+
+  // The ephemeral event consumed a real offset between its durable neighbors
+  // and the committed event self-describes.
+  expect(chunk!.offset).toBe(before!.offset + 1);
+  expect(after!.offset).toBe(chunk!.offset + 1);
+  expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
+
+  // The durable log has a permanent gap where the chunk was.
+  const read = await stream.getEvents({ afterOffset: before!.offset - 1 });
+  expect(read.map((event) => event.offset)).toEqual([before!.offset, after!.offset]);
+
+  // The live watcher saw all three, in offset order, the chunk flagged.
+  await waitFor(
+    () => live.some((event) => event.offset === after!.offset),
+    () =>
+      `live tail through offset ${after!.offset}; saw ${JSON.stringify(live.map((e) => e.offset))}`,
+  );
+  const window = live.filter((event) => event.offset >= before!.offset);
+  expect(window.map((event) => [event.offset, event.ephemeral === true])).toEqual([
+    [before!.offset, false],
+    [chunk!.offset, true],
+    [after!.offset, false],
+  ]);
+
+  // A catch-up subscriber replaying from 0 never sees it: replay reads
+  // storage, and storage never had it.
+  const replayed: StreamEvent[] = [];
+  using replaySubscription = await stream.subscribe({
+    replayAfterOffset: 0,
+    processEventBatch: (batch) => {
+      replayed.push(...batch.events);
+    },
+  });
+  await waitFor(
+    () => replayed.some((event) => event.offset === after!.offset),
+    () =>
+      `replay through offset ${after!.offset}; saw ${JSON.stringify(replayed.map((e) => e.offset))}`,
+  );
+  expect(replayed.some((event) => event.offset === chunk!.offset)).toBe(false);
+
+  // The accounting splits: eventCount excludes the chunk (its offset is a
+  // permanent gap), while the allocator head counted it. Presence facts from
+  // the subscriptions above keep appending, so assert relatively: exactly one
+  // gap, and a durable event at the head right now.
+  const runtimeState = await stream.runtimeState();
+  const state = coreState(runtimeState.coreProcessorState);
+  expect(state.maxOffset).toBeGreaterThanOrEqual(after!.offset);
+  expect(state.eventCount).toBe(state.maxOffset - 1);
+  expect((runtimeState.coreProcessorState as { maxDurableOffset?: number }).maxDurableOffset).toBe(
+    state.maxOffset,
+  );
+
+  // Ephemeral appends reject the durable-only knobs loudly.
+  await expect(
+    stream.append({
+      type: ephemeralType,
+      ephemeral: true,
+      idempotencyKey: "chunk-dedup",
+      payload: { marker },
+    }),
+  ).rejects.toThrow(/idempotencyKey/);
+  await expect(
+    stream.append({
+      type: "events.iterate.com/stream/paused",
+      ephemeral: true,
+      payload: { reason: "nope" },
+    }),
+  ).rejects.toThrow(/cannot be ephemeral/);
+
+  await liveSubscription.unsubscribe();
+  await replaySubscription.unsubscribe();
+
+  // Restart safety: ephemeral offsets are never reused. Kill the Durable
+  // Object right after an ephemeral burst (inside the checkpoint debounce
+  // window) — the durable log alone cannot recover the allocator past the
+  // burst, the maxOffsetFloor KV key must.
+  const burst = await stream.append(
+    { type: ephemeralType, ephemeral: true, payload: { marker, sequence: 1 } },
+    { type: ephemeralType, ephemeral: true, payload: { marker, sequence: 2 } },
+  );
+  const burstHead = burst.at(-1)!.offset;
+  await stream.kill().catch(() => undefined);
+  const [reborn] = await stream.append({
+    type: STREAM_EVENT_TYPE,
+    payload: { marker, position: "post-kill" },
+  });
+  expect(reborn!.offset).toBeGreaterThan(burstHead);
+});
+
 test("crossPostTo copies matching events with source provenance", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post/source/${marker}`;

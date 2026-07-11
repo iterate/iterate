@@ -98,6 +98,13 @@ export type StreamEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /**
+   * The lane's own head at delivery time. Configured (wake) connections get
+   * the DURABLE head — "the offset storage can catch you up to", which is
+   * what at-head gates compare checkpoints against (an ephemeral head is
+   * unreachable through the durable lane). Ephemeral subscriptions get the
+   * allocator head, which counts ephemeral events.
+   */
   streamMaxOffset: number;
   state: unknown;
 };
@@ -125,6 +132,7 @@ export type StreamPushEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /** The DURABLE head (ephemeral events never reach the push lane). */
   streamMaxOffset: number;
   subscriptionKey: SubscriptionKey;
   /**
@@ -198,6 +206,7 @@ export type StreamSubscriberWakeRequest = {
   stream: {
     projectId: string | null;
     path: string;
+    /** The DURABLE head — the catch-up horizon a checkpoint can reach. */
     streamMaxOffset: number;
   };
   subscriptionKey: SubscriptionKey;

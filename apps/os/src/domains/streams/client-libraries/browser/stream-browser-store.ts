@@ -824,13 +824,17 @@ function createStreamRuntime(
               `stream incarnation changed (${reconciledIncarnation} -> ${coreProcessorState.createdAt}); subscription is orphaned`,
             );
           }
+          // Compare against the DURABLE head: ephemeral events advance
+          // maxOffset but are delivered at-most-once, so a missed one on a
+          // then-quiet stream would read as a stall forever.
+          const serverDurableHead =
+            coreProcessorState.maxDurableOffset ?? coreProcessorState.maxOffset;
           const stalled =
-            coreProcessorState.maxOffset > lastDeliveredOffset &&
-            deliveryArrivals === probePreviousArrivals;
+            serverDurableHead > lastDeliveredOffset && deliveryArrivals === probePreviousArrivals;
           probePreviousArrivals = deliveryArrivals;
           if (stalled) {
             throw new Error(
-              `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived since the last probe (applied through ${lastDeliveredOffset}); subscription is orphaned`,
+              `server is at durable offset ${serverDurableHead} but no delivery arrived since the last probe (applied through ${lastDeliveredOffset}); subscription is orphaned`,
             );
           }
         } catch (error) {
@@ -885,7 +889,9 @@ function createStreamRuntime(
       if (disposed || stream !== connection) return;
       if (
         coreProcessorState.createdAt === reconciledIncarnation &&
-        coreProcessorState.maxOffset <= lastDeliveredOffset
+        // Durable head, not maxOffset: a missed ephemeral event is not a
+        // stale mirror (see the liveness probe above).
+        (coreProcessorState.maxDurableOffset ?? coreProcessorState.maxOffset) <= lastDeliveredOffset
       ) {
         return; // mirror is current
       }

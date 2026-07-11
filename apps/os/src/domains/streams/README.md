@@ -117,6 +117,33 @@ webhook is the same cursor machinery pointed at plain HTTP:
 | replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
 | filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
 
+### Ephemeral events
+
+`append({ ..., ephemeral: true })` commits an event that rides the streaming
+infrastructure without ever becoming a durable fact. "Ephemeral" bundles two
+properties, enforced at two independent seams:
+
+- **Retention** (`stream-durable-object.ts`): the event consumes an offset —
+  the durable log keeps a permanent gap — but is never written to SQLite,
+  never counted in `eventCount`, never replayed. `maxOffset` is the allocator
+  head (recovered across restarts via the `maxOffsetFloor` KV key); the new
+  `maxDurableOffset` is the persisted head every durable-lane consumer
+  reconciles against.
+- **Effect eligibility** (`stream-subscribers.ts`): the durable lanes (wake /
+  push / webhook) read exclusively from the durable fresh tail or storage,
+  and ephemeral events exist in neither — so subscription-fed processors
+  structurally cannot fold them or side-effect on them. There is no filter to
+  forget. Only ephemeral `subscribe()` connections (and `waitForEvent`)
+  receive them, live and at-most-once: a pump that lags past one wake falls
+  back to storage and silently skips them.
+
+Use them for transient signals whose durable truth lands separately — the
+canonical case is LLM streaming chunks (`agent/llm-response-chunk`), superseded
+by the durable `output-added`. `ephemeral` + `idempotencyKey` is rejected
+(dedup is a property of the durable log), as are ephemeral `stream/*` control
+facts. Ephemeral appends still charge the circuit breaker and still respect
+the pause door.
+
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
 rides this). Ephemeral batch results are disposed **unpulled**, so those

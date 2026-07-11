@@ -23,6 +23,13 @@ import { z } from "zod";
 const BrowserCoreProcessorState = z.object({
   createdAt: z.string().optional(),
   maxOffset: z.number().int().min(0).default(0),
+  /**
+   * The server's durable head (see core-processor-contract.ts). Liveness
+   * checks compare against THIS, not `maxOffset`: ephemeral events advance
+   * `maxOffset` but are delivered at-most-once, so a missed one would
+   * otherwise read as a permanently stalled subscription.
+   */
+  maxDurableOffset: z.number().int().min(0).optional(),
 });
 
 type BrowserCoreProcessorState = z.infer<typeof BrowserCoreProcessorState>;

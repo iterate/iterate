@@ -89,7 +89,7 @@ export type SubscriptionRuntimeState = {
   mode: SubscriptionDelivery["mode"];
   /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
   ackedOffset: number;
-  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  /** `maxDurableOffset - ackedOffset` — the Kafka lag number, per subscriber. */
   lag: number;
   attempt: number;
   nextAttemptAt: number | null;
@@ -238,15 +238,36 @@ export class StreamSubscribers {
   // ===========================================================================
 
   /**
-   * The just-committed events of the most recent append, handed over by the
-   * commit path so caught-up pumps and drains consume them directly instead
-   * of re-reading (and re-parsing) them from SQLite once per delivery lane.
+   * The just-committed DURABLE events of the most recent append, handed over
+   * by the commit path so caught-up pumps and drains consume them directly
+   * instead of re-reading (and re-parsing) them from SQLite once per delivery
+   * lane. Byte-for-byte what a storage read-back would return — which is why
+   * ephemeral events must never enter it: the spine's durable lanes
+   * (wake/push/webhook) read ONLY this tail or storage, and that closed input
+   * universe is the structural guarantee that subscription-fed processors
+   * never see (let alone side-effect on) an ephemeral event.
    * Correctness is offset-gated, never freshness-gated: `#readBatch` uses the
-   * tail only when its first offset is exactly `afterOffset + 1`, so a stale
-   * tail (more appends since, a rewound cursor) either still IS the right
-   * contiguous window or self-disqualifies and falls back to storage.
+   * tail only when the reader is exactly at it, so a stale tail (more appends
+   * since, a rewound cursor) either still IS the right contiguous window or
+   * self-disqualifies and falls back to storage.
    */
   #freshTail: SizedStreamEvent[] = [];
+  /**
+   * The durable head BEFORE the fresh tail's batch. With ephemeral events the
+   * durable log has gaps, so "exactly at the tail" is no longer
+   * `first === afterOffset + 1`: any cursor in (durableAfterOffset, first)
+   * points into a gap that holds only ephemeral offsets storage never had,
+   * and is therefore exactly at the tail too.
+   */
+  #freshTailAfterOffset = 0;
+  /**
+   * The most recent append's WHOLE batch — durable + ephemeral in offset
+   * order. The only source ephemeral events are ever delivered from, and only
+   * to ephemeral subscriptions: a pump that lags past one wake falls back to
+   * storage and silently skips them (at-most-once, by design — the durable
+   * truth lands as its own event).
+   */
+  #freshLiveTail: SizedStreamEvent[] = [];
 
   /**
    * Re-arm every live connection's pump and reconcile durable subscriptions
@@ -257,8 +278,16 @@ export class StreamSubscribers {
    * committed (already sized by the log write) so tailing consumers skip the
    * storage round trip.
    */
-  wake(freshTail?: SizedStreamEvent[]): void {
-    if (freshTail !== undefined && freshTail.length > 0) this.#freshTail = freshTail;
+  wake(freshTail?: {
+    durable: SizedStreamEvent[];
+    durableAfterOffset: number;
+    live: SizedStreamEvent[];
+  }): void {
+    if (freshTail !== undefined && freshTail.live.length > 0) {
+      this.#freshTail = freshTail.durable;
+      this.#freshTailAfterOffset = freshTail.durableAfterOffset;
+      this.#freshLiveTail = freshTail.live;
+    }
     for (const connection of this.#connections.values()) connection.wake();
     if (this.#tearingDown) return;
     try {
@@ -331,12 +360,15 @@ export class StreamSubscribers {
       const row = this.#hooks.store.get(subscriptionKey);
       if (row === undefined) continue; // unreachable after ensure; defensive
       if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
-      // "Caught up" trusts the monotonic watermark. A subscriber that
+      // "Caught up" trusts the monotonic watermark, against the DURABLE head:
+      // ephemeral offsets past it can never be delivered to this lane, so
+      // counting them as lag would poke hibernating subscriber DOs awake once
+      // per LLM chunk for events they cannot receive. A subscriber that
       // discarded its checkpoint (schema-change refold) and lost its
       // connection mid-replay parks here at a partial refold until the next
       // append or dial moves the head — self-healing, but slow on a quiet
       // stream; the subscriber's own keepalive covers the DO-death variant.
-      if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
+      if (row.ackedOffset >= state.maxDurableOffset) continue; // caught up; nothing to say
 
       if (config.delivery.mode === "wake") {
         if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
@@ -368,7 +400,14 @@ export class StreamSubscribers {
     const state = this.#hooks.coreState();
     if (state.projectId === undefined || state.path === undefined) return;
     const request: StreamSubscriberWakeRequest = {
-      stream: { projectId: state.projectId, path: state.path, streamMaxOffset: state.maxOffset },
+      // The durable head: "the offset storage reads can catch you up to",
+      // which is what every consumer of streamMaxOffset actually uses it for
+      // (at-head gates, lag). The allocator head would be unreachable.
+      stream: {
+        projectId: state.projectId,
+        path: state.path,
+        streamMaxOffset: state.maxDurableOffset,
+      },
       subscriptionKey,
       ...(delivery.processorSlug === undefined ? {} : { processorSlug: delivery.processorSlug }),
     };
@@ -531,7 +570,7 @@ export class StreamSubscribers {
                 projectId: state.projectId,
                 path: state.path,
                 events: matched,
-                streamMaxOffset: state.maxOffset,
+                streamMaxOffset: state.maxDurableOffset,
                 subscriptionKey,
                 deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
                 attempt: row.attempt + 1,
@@ -578,13 +617,25 @@ export class StreamSubscribers {
    * handed-over fresh events instead of re-reading them from SQLite — the
    * committed objects are byte-for-byte what a read-back would parse (append
    * strict-parses the body and stamps `path` before commit).
+   *
+   * `lane` decides the input universe. `"durable"` (the spine: push, webhook,
+   * configured wake connections) reads the durable tail or storage — ephemeral
+   * events do not exist in either, so durable consumers are structurally blind
+   * to them. `"live"` (ephemeral subscriptions) reads the whole-batch live
+   * tail when exactly contiguous; its storage fallback is the same durable
+   * read, which is where a lagging live consumer's at-most-once miss happens.
    */
-  #readBatch(afterOffset: number, limit: number): StreamEvent[] {
+  #readBatch(
+    afterOffset: number,
+    limit: number,
+    lane: "durable" | "live" = "durable",
+  ): StreamEvent[] {
+    const tail = this.#tailWindow(afterOffset, lane);
     const sized =
-      this.#freshTail[0]?.event.offset === afterOffset + 1
-        ? this.#freshTail.length > limit
-          ? this.#freshTail.slice(0, limit)
-          : this.#freshTail
+      tail !== undefined
+        ? tail.length > limit
+          ? tail.slice(0, limit)
+          : tail
         : this.#hooks.readEvents({ afterOffset, limit });
     if (sized.length <= 1) return sized.map((entry) => entry.event);
     let bytes = 0;
@@ -595,6 +646,25 @@ export class StreamSubscribers {
       }
     }
     return sized.map((entry) => entry.event);
+  }
+
+  /** The fresh tail iff the reader at `afterOffset` is exactly at it (per lane). */
+  #tailWindow(afterOffset: number, lane: "durable" | "live"): SizedStreamEvent[] | undefined {
+    if (lane === "live") {
+      // The live tail is offset-dense (it is the whole batch), so contiguity
+      // is exact equality.
+      return this.#freshLiveTail[0]?.event.offset === afterOffset + 1
+        ? this.#freshLiveTail
+        : undefined;
+    }
+    const first = this.#freshTail[0]?.event.offset;
+    if (first === undefined) return undefined;
+    // Gap-aware contiguity: offsets in (durableAfterOffset, first) hold only
+    // ephemeral events storage never had, so a durable reader anywhere in
+    // that window has seen everything before the tail.
+    return afterOffset >= this.#freshTailAfterOffset && afterOffset < first
+      ? this.#freshTail
+      : undefined;
   }
 
   /**
@@ -864,8 +934,15 @@ export class StreamSubscribers {
           if (deliverEvents) {
             // Same byte-capped read as the push drain: 100 near-2MB events in
             // one live batch would blow the RPC frame limit and turn into a
-            // delivery failure the subscriber can never get past.
-            const readEvents = this.#readBatch(cursor, 100);
+            // delivery failure the subscriber can never get past. Configured
+            // (wake) connections read the durable lane — hosted processors
+            // must never see ephemeral events; ephemeral subscriptions read
+            // the live lane and get them.
+            const readEvents = this.#readBatch(
+              cursor,
+              100,
+              subscriptionType === "configured" ? "durable" : "live",
+            );
             const lastOffset = readEvents.at(-1)?.offset;
             if (lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain
@@ -898,7 +975,15 @@ export class StreamSubscribers {
             projectId: currentState.projectId,
             path: currentState.path,
             events,
-            streamMaxOffset: currentState.maxOffset,
+            // The lane's own head: hosted processors gate reconcile on
+            // "checkpoint >= streamMaxOffset", and an ephemeral head is
+            // unreachable through the durable lane — stamping the allocator
+            // head would defer their reconcilers forever. Ephemeral
+            // subscriptions get the allocator head (live semantics).
+            streamMaxOffset:
+              subscriptionType === "configured"
+                ? currentState.maxDurableOffset
+                : currentState.maxOffset,
             // Read in the same synchronous block as streamMaxOffset, so the
             // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
             state: currentState,
@@ -1025,7 +1110,7 @@ export class StreamSubscribers {
           {
             mode: entry.latestConfiguredEvent.payload.delivery.mode,
             ackedOffset,
-            lag: Math.max(0, state.maxOffset - ackedOffset),
+            lag: Math.max(0, state.maxDurableOffset - ackedOffset),
             attempt: row?.attempt ?? 0,
             nextAttemptAt: row?.nextAttemptAt ?? null,
             lastError: row?.lastError ?? null,
@@ -1082,12 +1167,12 @@ export class StreamSubscribers {
     // loop just appended, so the next reconcile is a no-op instead of an
     // immediate re-poke. Safe: the watermark is observational (the
     // subscriber's own checkpoint is the truth), and after >= idleTeardownMs
-    // of append silence the pumps were long since drained, so maxOffset holds
-    // nothing the sink has not already seen except our own facts.
-    const maxOffset = this.#hooks.coreState().maxOffset;
+    // of append silence the pumps were long since drained, so the durable
+    // head holds nothing the sink has not already seen except our own facts.
+    const maxDurableOffset = this.#hooks.coreState().maxDurableOffset;
     for (const subscriptionKey of keys) {
       if (wedgedKeys.has(subscriptionKey)) continue;
-      this.#hooks.store.ack(subscriptionKey, maxOffset);
+      this.#hooks.store.ack(subscriptionKey, maxDurableOffset);
     }
     if (wedgedKeys.size > 0) queueMicrotask(() => this.wake());
   }

@@ -1844,6 +1844,7 @@ export type StreamEvent = {
       }
     | undefined;
   idempotencyKey?: string | undefined;
+  ephemeral?: true | undefined;
   offset: number;
   createdAt: string;
   path: string;
@@ -2294,6 +2295,7 @@ export type StreamEventInput = {
       }
     | undefined;
   idempotencyKey?: string | undefined;
+  ephemeral?: true | undefined;
 };
 
 /** The read window accepted by `Stream.getEvents` / `Stream.readEvents`. */

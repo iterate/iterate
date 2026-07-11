@@ -208,7 +208,7 @@ describe("browser raw events schema version reset", () => {
     expect(rows.map((row) => Number(row.offset))).toEqual([1, 2, 3]);
   });
 
-  it("the continuity trigger rejects a gap in mirrored offsets", async () => {
+  it("the trigger accepts gaps (ephemeral offsets never replay) but rejects out-of-order inserts", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     await ensureBrowserRawEventsSchema(sql);
 
@@ -219,6 +219,12 @@ describe("browser raw events schema version reset", () => {
       ]);
 
     await insert(1);
-    await expect(insert(3)).rejects.toThrow(/append continuously/);
+    // Offset 2 was an ephemeral event: it consumed the offset server-side but
+    // has no row to replay, so the mirror must accept the gap.
+    await insert(3);
+    const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
+    expect(rows.map((row) => Number(row.offset))).toEqual([1, 3]);
+    // Order still holds: a new row below the local head is a delivery bug.
+    await expect(insert(2)).rejects.toThrow(/offsets must increase/);
   });
 });

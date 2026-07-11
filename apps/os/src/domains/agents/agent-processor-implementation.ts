@@ -715,9 +715,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         })),
         model,
         onChunk: async (chunk, index) => {
+          // Ephemeral: chunks stream to live subscribers (browser feed, TUI)
+          // but never become journal rows — the durable truth is the
+          // `output-added` / `llm-request-completed` pair below. No
+          // idempotency key (rejected on ephemeral appends); a retried
+          // attempt simply re-streams, and `llmRequestOffset` + `sequence`
+          // are the consumer-side identity.
           await this.append({
             type: "events.iterate.com/agent/llm-response-chunk",
-            idempotencyKey: this.idempotencyKey(`llm-response-chunk@${llmRequestOffset}:${index}`),
+            ephemeral: true,
             payload: { chunk: jsonCompatible(chunk), llmRequestOffset, sequence: index },
           });
         },

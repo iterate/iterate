@@ -34,6 +34,14 @@ const textEncoder = new TextEncoder();
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
 
+/**
+ * Size one committed event the same way `StreamEventLog.insert` does, for
+ * events that never reach the log (ephemeral commits joining the live tail).
+ */
+export function sizeEvent(event: StreamEvent): SizedStreamEvent {
+  return { event, byteLength: textEncoder.encode(JSON.stringify(event)).byteLength };
+}
+
 export class StreamEventLog {
   constructor(
     readonly sql: SqlStorage,
