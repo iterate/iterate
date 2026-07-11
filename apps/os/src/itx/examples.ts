@@ -725,6 +725,54 @@ return {
 `.trim(),
   },
   {
+    id: "secret-collect-from-user",
+    e2eProven: false,
+    title: "Connect to an API that needs a key: collect the secret from the user",
+    description:
+      "The full flow for connecting to an external API (an OpenAPI server, a REST endpoint, anything) that needs a bearer token or API key only the user has. NEVER ask for credentials in chat — chat is not a secret store, and you must never see the value. itx.secrets.collectFromUser mints a deep link to a minimal form; the user enters the value there, it is stored write-only and pinned to the egress hosts you chose, and YOU get a message the moment they submit. Needs a human to click the link — interactive-only.",
+    context: "agent",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Scenario: the user said "connect me to https://api.somewhere.com" (spec at
+// /openapi.json) and the API wants "authorization: Bearer <key>".
+//
+// ---- TURN 1: mint the collection link, send it, END YOUR TURN ----
+const secretPath = vars.secretPath ?? "/secrets/somewhere-api";
+const apiOrigin = vars.apiOrigin ?? "https://api.somewhere.com";
+
+const link = await itx.secrets.collectFromUser({
+  path: secretPath,
+  egress: { urls: [apiOrigin] },
+  description: "API key for " + apiOrigin + " (sent as a Bearer token)",
+});
+
+await itx.chat.sendMessage(
+  "That API needs an API key. [Click here to enter it](" + link.url + ") — " +
+    "it is stored write-only and can only ever be sent to " + apiOrigin + ". " +
+    "I can't see the value; I'll pick up automatically once you've saved it.",
+);
+// End the turn WITHOUT waiting: because you called collectFromUser from your
+// agent scope, the page messages you when the user submits, and that message
+// starts your next turn.
+return;
+
+// ---- TURN 2 (after 'I submitted the secret at "..."' arrives) ----
+// The value never reaches you. Reference it with a getSecret placeholder —
+// substituted server-side at egress, only toward the pinned hosts:
+//
+// const api = await itx.openapi.connect({
+//   specUrl: apiOrigin + "/openapi.json",
+//   headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' },
+// });
+// return await api.__describe(); // operations list — then call them by operationId
+//
+// The same placeholder works on raw requests: itx.egress.fetch(new Request(
+//   apiOrigin + "/v1/me",
+//   { headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' } },
+// ));
+`.trim(),
+  },
+  {
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:

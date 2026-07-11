@@ -19,6 +19,36 @@ export type SecretUpdateInput = {
 };
 
 /**
+ * Input to `itx.secrets.collectFromUser`: which path the secret should land
+ * at, the egress origins its material may ever be substituted into, and an
+ * optional human-facing note the collection page shows the user (what the
+ * key is for, where to find it).
+ */
+export type CollectSecretInput = {
+  path: string;
+  /** The egress allowlist the secret is born pinned to — the user sees these
+   * origins on the collection page as the promise of where the value can go.
+   * Must be non-empty http(s) URLs; validated at mint so a bad list fails on
+   * the agent that can fix it, not in the user's face at submit time. */
+  egress: { urls: string[] };
+  /** Shown to the user on the collection page (e.g. "API key for
+   * api.somewhere.com — found under Settings → API"). */
+  description?: string;
+};
+
+/**
+ * What `itx.secrets.collectFromUser` returns: the normalized secret path and
+ * the deep link to the chrome-free collection page. Send the URL to the user;
+ * when they submit, the secret is stored (material + egress pin in one update)
+ * and — when the caller was an agent scope — that agent receives a message
+ * that the secret at this path is ready.
+ */
+export type CollectSecretLink = {
+  path: string;
+  url: string;
+};
+
+/**
  * A reference to a deployment-owned platform credential, resolved from typed
  * AppConfig in trusted platform code — never stored in project material, never
  * readable. Each known config path carries its own allowed-origin list

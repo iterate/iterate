@@ -869,6 +869,18 @@ export interface SecretCollection {
   __describe(): Promise<Description>;
   /** The secret at a path. */
   get(path: string): Secret;
+  /**
+   * Mint a deep link where the USER enters a secret value themselves — the
+   * door for credentials an agent must never see in chat. The page (a
+   * minimal, chrome-free form) shows the description and the egress origins
+   * the value is pinned to; on submit it stores material + egress in one
+   * update, so the secret is born already pinned. When the caller is an
+   * agent scope, the page also messages that agent ("The user submitted the
+   * secret at …"), which starts its next turn — send the URL to the user,
+   * end the turn, and act on the notification. Nothing is created until the
+   * user submits; the link itself is stateless.
+   */
+  collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   /** Known secrets, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
 }
@@ -2188,6 +2200,36 @@ export type ScheduleView = {
   runCount: number;
   /** When this version of the Schedule was set. */
   setAt: string;
+};
+
+/**
+ * Input to `itx.secrets.collectFromUser`: which path the secret should land
+ * at, the egress origins its material may ever be substituted into, and an
+ * optional human-facing note the collection page shows the user (what the
+ * key is for, where to find it).
+ */
+export type CollectSecretInput = {
+  path: string;
+  /** The egress allowlist the secret is born pinned to — the user sees these
+   * origins on the collection page as the promise of where the value can go.
+   * Must be non-empty http(s) URLs; validated at mint so a bad list fails on
+   * the agent that can fix it, not in the user's face at submit time. */
+  egress: { urls: string[] };
+  /** Shown to the user on the collection page (e.g. "API key for
+   * api.somewhere.com — found under Settings → API"). */
+  description?: string;
+};
+
+/**
+ * What `itx.secrets.collectFromUser` returns: the normalized secret path and
+ * the deep link to the chrome-free collection page. Send the URL to the user;
+ * when they submit, the secret is stored (material + egress pin in one update)
+ * and — when the caller was an agent scope — that agent receives a message
+ * that the secret at this path is ready.
+ */
+export type CollectSecretLink = {
+  path: string;
+  url: string;
 };
 
 /** Command object for committing a batch of repo file mutations. */
