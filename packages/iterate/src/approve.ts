@@ -92,46 +92,22 @@ export async function runApprovalCli(input: {
       ? "No local approval key: grants will be plain events. Run with --enroll to sign approvals."
       : `Grants are signed with ${key.kind} key ${key.keyId} (${key.label}).`,
   );
-  prompts.log.step(
-    native
-      ? "Waiting for held egress requests — approvals pop native dialogs... (Ctrl-C to stop)"
-      : "Waiting for held egress requests... (Ctrl-C to stop)",
-  );
-
-  // Live tail from "now"; after the first event the cursor makes every
-  // waitForEvent replay-from-offset, so nothing lands unseen while a prompt
-  // is open. Each wait is a one-shot with a bounded timeout — timeouts just
-  // re-arm from the same cursor.
-  let cursor: number | undefined;
-  while (true) {
-    let event: StreamEvent;
-    try {
-      event = await stream.waitForEvent({
-        ...(cursor === undefined ? {} : { afterOffset: cursor }),
-        eventTypes: [EVENT.requested],
-        timeoutMs: 60_000,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("Timed out waiting for stream event")) {
-        continue;
-      }
-      throw error;
-    }
-    cursor = event.offset;
-    const payload = event.payload as RequestedPayload;
-
+  // Offer one held request until a terminal outcome, or return "stop" if the
+  // human cancels (Ctrl-C) so the caller can exit. Shared by the backlog pass
+  // and the live tail. A grant the door ignores (unenrolled/revoked key →
+  // "unsettled") is re-offered rather than dropped; declining leaves it held.
+  const offerHeldRequest = async (
+    offset: number,
+    payload: RequestedPayload,
+  ): Promise<"stop" | "next"> => {
     if (Date.parse(payload.expiresAt) <= Date.now()) {
-      prompts.log.warn(`Skipping #${event.offset} ${payload.method} ${payload.url} — expired.`);
-      continue;
+      prompts.log.warn(`Skipping #${offset} ${payload.method} ${payload.url} — expired.`);
+      return "next";
     }
 
-    renderHeldRequest(event.offset, payload);
+    renderHeldRequest(offset, payload);
 
-    // Offer this request until it reaches a terminal outcome. A grant the door
-    // ignores (unenrolled/revoked key → "unsettled") re-offers rather than
-    // silently dropping it; the human can decline the retry to leave it held.
-    let stopped = false;
-    while (!stopped && Date.parse(payload.expiresAt) > Date.now()) {
+    while (Date.parse(payload.expiresAt) > Date.now()) {
       // The human moment. Native mode: one dialog whose Approve button leads
       // straight into the Touch ID sheet. Terminal mode: y/n, then sign.
       let signature: string | undefined;
@@ -140,17 +116,17 @@ export async function runApprovalCli(input: {
         // thrown is structural — broken helper, bad blob — and stops the loop.
         const verdict = await promptNativeApproval({
           key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
-          message: messageFor(input.projectId, event.offset, payload),
+          message: messageFor(input.projectId, offset, payload),
           request: payload,
         });
         if (verdict.decision === "ignored") {
-          prompts.log.info(`Ignored #${event.offset} — it can be answered elsewhere or expire.`);
-          break;
+          prompts.log.info(`Ignored #${offset} — it can be answered elsewhere or expire.`);
+          return "next";
         }
         if (verdict.decision === "rejected") {
-          await reject(stream, event.offset);
-          prompts.log.warn(`Rejected #${event.offset}.`);
-          break;
+          await reject(stream, offset);
+          prompts.log.warn(`Rejected #${offset}.`);
+          return "next";
         }
         signature = verdict.signature;
       } else {
@@ -160,12 +136,12 @@ export async function runApprovalCli(input: {
         });
         if (prompts.isCancel(approved)) {
           prompts.outro("Stopped. Held requests will auto-reject on their timeouts.");
-          return;
+          return "stop";
         }
         if (!approved) {
-          await reject(stream, event.offset);
-          prompts.log.warn(`Rejected #${event.offset}.`);
-          break;
+          await reject(stream, offset);
+          prompts.log.warn(`Rejected #${offset}.`);
+          return "next";
         }
       }
 
@@ -180,37 +156,109 @@ export async function runApprovalCli(input: {
             : "Signing...",
       );
       try {
-        await grant({
-          stream,
-          projectId: input.projectId,
-          key,
-          offset: event.offset,
-          payload,
-          signature,
-        });
+        await grant({ stream, projectId: input.projectId, key, offset, payload, signature });
         spinner.stop("Signed.");
       } catch (error) {
         spinner.stop("Signing failed.");
         prompts.log.error(error instanceof Error ? error.message : String(error));
-        break;
+        return "next";
       }
 
       // Granting is a claim, not a fact — the door verifies and settles.
-      const settlement = await awaitSettlement(stream, event.offset);
-      reportSettlement(event.offset, settlement);
-      if (settlement.kind !== "unsettled") break; // released / rejected → done
+      const settlement = await awaitSettlement(stream, offset);
+      reportSettlement(offset, settlement);
+      if (settlement.kind !== "unsettled") return "next"; // released / rejected → done
 
       // The door didn't accept the grant. Let the human retry or leave it held.
       const retry = await prompts.confirm({
-        message: `Grant for #${event.offset} wasn't accepted (key enrolled? \`--keys\`). Retry?`,
+        message: `Grant for #${offset} wasn't accepted (key enrolled? \`--keys\`). Retry?`,
         initialValue: false,
       });
       if (prompts.isCancel(retry) || !retry) {
-        prompts.log.warn(`Left #${event.offset} held — it will expire on its timeout.`);
-        stopped = true;
+        prompts.log.warn(`Left #${offset} held — it will expire on its timeout.`);
+        return "next";
       }
     }
+    return "next";
+  };
+
+  // Answer requests already held before we connected (oldest first), THEN live-
+  // tail new ones. Without this backlog pass a hold parked before the command
+  // started would never surface — its caller's fetch left hanging until expiry.
+  // The --json front-end reconciles for the same reason.
+  const { held, cursor: from } = await heldBacklog(stream);
+  for (const request of held) {
+    if ((await offerHeldRequest(request.offset, request.payload)) === "stop") return;
   }
+
+  prompts.log.step(
+    native
+      ? "Waiting for held egress requests — approvals pop native dialogs... (Ctrl-C to stop)"
+      : "Waiting for held egress requests... (Ctrl-C to stop)",
+  );
+
+  // Live tail from the reconciled cursor: after the first wait every
+  // waitForEvent replays-from-offset, so nothing lands unseen while a prompt is
+  // open. Bounded one-shots — a timeout just re-arms from the same cursor.
+  let cursor = from;
+  while (true) {
+    let event: StreamEvent;
+    try {
+      event = await stream.waitForEvent({
+        afterOffset: cursor,
+        eventTypes: [EVENT.requested],
+        timeoutMs: 60_000,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Timed out waiting for stream event")) {
+        continue;
+      }
+      throw error;
+    }
+    cursor = event.offset;
+    if ((await offerHeldRequest(event.offset, event.payload as RequestedPayload)) === "stop") {
+      return;
+    }
+  }
+}
+
+/**
+ * Scan the stream once for requests still held — a `requested` with no matching
+ * `settled`/`rejected` that hasn't expired — so the backlog pass can answer
+ * holds parked before the command started. A bare grant is NOT terminal (the
+ * door may ignore an unverifiable one), so granted-but-unsettled requests stay
+ * held and are re-offered. Returns them oldest first plus the highest offset
+ * seen, so the live tail resumes exactly past it with no gap and no replay.
+ */
+async function heldBacklog(
+  stream: RpcStub<Stream>,
+): Promise<{ held: Array<{ offset: number; payload: RequestedPayload }>; cursor: number }> {
+  const requests = new Map<number, RequestedPayload>();
+  const resolved = new Set<number>(); // settled or rejected — terminal
+  let cursor = 0;
+  while (true) {
+    const page = await stream.getEvents({
+      afterOffset: cursor,
+      eventTypes: [EVENT.requested, EVENT.settled, EVENT.rejected],
+    });
+    if (page.length === 0) break;
+    for (const event of page) {
+      cursor = event.offset;
+      if (event.type === EVENT.requested) {
+        requests.set(event.offset, event.payload as RequestedPayload);
+        continue;
+      }
+      const ref = (event.payload as { approvalRequestEventOffset?: number })
+        .approvalRequestEventOffset;
+      if (typeof ref === "number") resolved.add(ref);
+    }
+  }
+  const held = [...requests]
+    .filter(
+      ([offset, payload]) => !resolved.has(offset) && Date.parse(payload.expiresAt) > Date.now(),
+    )
+    .map(([offset, payload]) => ({ offset, payload }));
+  return { held, cursor };
 }
 
 /** `--keys`: the project's enrolled approval keys, with this machine's marked. */
