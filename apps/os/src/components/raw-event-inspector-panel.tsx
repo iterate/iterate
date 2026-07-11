@@ -47,9 +47,13 @@ export function RawEventInspectorPanel({
     `SELECT offset, created_at FROM events WHERE offset > ? ORDER BY offset ASC LIMIT 1`,
     [offset],
   );
+  // Offsets are dense (local_index = offset - 1 is a table CHECK), so the
+  // selected event's 1-based position IS its offset; the total comes from the
+  // trigger-maintained counts. The old COUNT(*) range scan re-ran on every
+  // delivered batch while the panel was open and rescanned the mirror.
   const positionResult = useStreamQuery(
     database,
-    `SELECT COUNT(*) AS position, (SELECT COUNT(*) FROM events) AS total FROM events WHERE offset <= ?`,
+    `SELECT ? AS position, (SELECT COALESCE(SUM(n), 0) FROM event_type_counts) AS total`,
     [offset],
   );
 
