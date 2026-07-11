@@ -1650,7 +1650,6 @@ describe("token usage and history reset", () => {
   it("longest-prefix matches context windows, with a conservative default", () => {
     expect(contextWindowTokens("openai/gpt-5.5")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5-2026-01-15")).toBe(272_000);
-    expect(contextWindowTokens("@cf/moonshotai/kimi-k2.7-code")).toBe(256_000);
     expect(contextWindowTokens("@cf/qwen/qwen3-coder-plus")).toBe(128_000);
   });
 

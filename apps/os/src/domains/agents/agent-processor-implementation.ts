@@ -1174,12 +1174,10 @@ const AGENT_COMPACTION_PROMPT = [
  * inherit their family's window. The OpenAI figures are our OPERATING window,
  * not the documented one: gpt-5.5's real window is 1.05M tokens, but 272k is
  * where OpenAI's pricing doubles, so compaction should treat that as full.
- * Kimi's documented window is 262,144; 256k is the safe round-down.
  */
 const MODEL_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
   "openai/gpt-5.5": 272_000,
   "openai/gpt-5": 272_000,
-  "@cf/moonshotai/kimi-k2.7-code": 256_000,
 };
 
 /** Conservative floor for models not in the map. */

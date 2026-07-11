@@ -59,7 +59,7 @@ describe("runWorkersAiAttempt", () => {
         return { response: "ok" };
       },
     };
-    for (const model of ["openai/gpt-5.5", "@cf/moonshotai/kimi-k2.7-code"]) {
+    for (const model of ["openai/gpt-5.5", "@cf/test/non-openai-model"]) {
       await runWorkersAiAttempt({
         ai,
         deadlineMs: 1_000,
@@ -231,7 +231,7 @@ describe("the BYOK gateway lane", () => {
       },
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
-      model: "@cf/moonshotai/kimi-k2.7-code",
+      model: "@cf/test/non-openai-model",
       onChunk: async () => {},
       transport: { kind: "byok", gatewayId: "default", openaiApiKey: "sk-test" },
     });
