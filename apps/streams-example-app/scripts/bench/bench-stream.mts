@@ -141,9 +141,13 @@ if (cmd === "state") {
   let total = 0;
   const t0 = performance.now();
   while (cursor < to) {
-    const page = (await stream.getEvents({ afterOffset: cursor, limit: pageSize })) as {
-      offset: number;
-    }[];
+    // beforeOffset bounds the window: without it the final page can spill past
+    // `to` on a stream whose tail keeps growing, over-counting the read rate.
+    const page = (await stream.getEvents({
+      afterOffset: cursor,
+      beforeOffset: to + 1,
+      limit: pageSize,
+    })) as { offset: number }[];
     if (page.length === 0) break;
     total += page.length;
     cursor = page.at(-1)!.offset;

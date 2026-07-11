@@ -691,11 +691,25 @@ function createStreamRuntime(
         // requested, so the server can never outrun the mirror here — and a
         // page failure just reconnects and resumes from the checkpoint.
         let catchUpOffset = checkpoint.offset;
-        if (serverMaxOffset - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
+        let serverHead = serverMaxOffset;
+        if (serverHead - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
           console.info(
-            `[stream ${args.streamPath} ${slug}] mirror is ${serverMaxOffset - catchUpOffset} events behind; pull-paging before subscribing`,
+            `[stream ${args.streamPath} ${slug}] mirror is ${serverHead - catchUpOffset} events behind; pull-paging before subscribing`,
           );
-          while (serverMaxOffset - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
+          for (;;) {
+            if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) {
+              // The head we were chasing was captured before these pages
+              // applied. A stream that kept appending meanwhile could be far
+              // ahead of it — re-read the live head before trusting the exit,
+              // or the subscription would dump the accumulated gap after all.
+              const { coreProcessorState: rawHeadState } = await withDeadline(
+                "catch-up head re-read",
+                election.connection.runtimeState(),
+              );
+              if (!ownsRuntime()) return undefined;
+              serverHead = parseBrowserCoreProcessorState(rawHeadState).maxOffset;
+              if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) break;
+            }
             const page = (await withDeadline(
               "catch-up page read",
               election.connection.getEvents({
@@ -708,7 +722,7 @@ function createStreamRuntime(
             deliveryArrivals += 1;
             lastBatchEvents = page.length;
             totalDeliveredEvents += page.length;
-            await processor.ingest({ events: page, streamMaxOffset: serverMaxOffset });
+            await processor.ingest({ events: page, streamMaxOffset: serverHead });
             if (!ownsRuntime()) return undefined;
             catchUpOffset = page.at(-1)!.offset;
             lastDeliveredOffset = catchUpOffset;
