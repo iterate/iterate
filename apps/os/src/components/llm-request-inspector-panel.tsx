@@ -160,6 +160,13 @@ export function LlmRequestInspectorPanel({
             <ReplayResponseSection replay={replay} renderMode={renderMode} />
             <ReplayMetricsSection stats={replay.stats} />
           </div>
+        ) : eventsResult.status === "error" || chunksResult.status === "error" ? (
+          // An errored query never resolves on its own — say so instead of
+          // presenting a permanent "opening" state as progress.
+          <p className="px-5 py-3 text-sm text-destructive">
+            Reading the local event mirror failed:{" "}
+            {(eventsResult.error ?? chunksResult.error)?.message ?? "unknown error"}
+          </p>
         ) : !loaded ? (
           <p className="px-5 py-3 text-sm text-muted-foreground">Opening local SQLite mirror…</p>
         ) : (
