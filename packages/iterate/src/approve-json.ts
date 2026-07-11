@@ -7,6 +7,13 @@
 // announces what happens next. stdin decisions append grant/reject events on
 // a SEPARATE stream handle, so a click never waits behind the 60s tail.
 //
+// Once a grant is seen for a row (this app's or another approver's), the door's
+// verdict — read via awaitSettlement, which treats `settled` as final over a
+// stray reject — is the SOLE authority on the outcome; raw stream rejects for
+// that row are not surfaced. So a second approver's veto can't shadow a release,
+// and a grant the door ignores surfaces as `unsettled` (re-offer) instead of
+// spinning to expiry.
+//
 // Out (stdout):
 //   {"type":"status","loggedIn":true,"principal":"jane@acme.com",
 //    "projectId":"prj_…","key":{"kind":"secure-enclave","keyId":"…"}|null}
@@ -16,6 +23,7 @@
 //   {"type":"submitted","offset":42}   // a grant landed; the row is now awaiting the door
 //   {"type":"settled","offset":42,"outcome":"released","status":200}
 //   {"type":"settled","offset":42,"outcome":"rejected","reason":"expired"}
+//   {"type":"unsettled","offset":42}   // grant ignored (key not enrolled?); re-offer Approve/Reject
 //   {"type":"error","offset":42,"message":"…"}
 //
 // In (stdin):
@@ -29,6 +37,7 @@ import type { RpcStub } from "capnweb";
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
 import { loadApprovalKey } from "./approval-keys.ts";
 import {
+  awaitSettlement,
   connectApproval,
   EVENT,
   grant,
@@ -72,13 +81,44 @@ export async function runApprovalJson(input: {
   // The held requests announced but not yet resolved — kept so a "granted"
   // decision has the payload to sign over.
   const pending = new Map<number, RequestedPayload>();
-  // Offsets the door RELEASED (a `settled` landed). `settled` is authoritative:
-  // the door acts on the first resolution and settles only on release, so a
-  // released offset can no longer be vetoed — a later `rejected` is a stray.
-  const released = new Set<number>();
-  // Offsets that reached any terminal outcome this session (released or an
-  // authoritative rejection). A decision on one of these is refused.
+  // Offsets that reached a terminal outcome this session (released /
+  // delivery-failed / rejected). A late decision on one is refused, and the
+  // tail won't re-surface it.
   const resolved = new Set<number>();
+  // Offsets a grant has been seen for, with a settlement watch in flight. While
+  // watched, the door (via awaitSettlement) is the sole authority on the row's
+  // outcome — the tail does NOT surface raw settled/rejected for it.
+  const watching = new Set<number>();
+
+  // Watch the door's verdict for a granted request and emit the authoritative
+  // outcome exactly once. awaitSettlement treats a `settled` as final over a
+  // stray reject, and returns `unsettled` when the door ignored an unverifiable
+  // grant — surfaced so the app can re-offer instead of spinning to expiry.
+  function watchSettlement(offset: number): void {
+    if (watching.has(offset) || resolved.has(offset)) return;
+    watching.add(offset);
+    // A dedicated handle so a settlement wait never queues behind the tail or an
+    // append on their handles.
+    const watchStream = project.streams.get("/") as unknown as RpcStub<Stream>;
+    void awaitSettlement(watchStream, offset).then((settlement) => {
+      watching.delete(offset);
+      if (settlement.kind === "unsettled") {
+        // The grant didn't take (unenrolled/revoked key) and the hold is still
+        // open — clear the spinner so Approve/Reject return, like the terminal.
+        emit({ type: "unsettled", offset });
+        return;
+      }
+      resolved.add(offset);
+      pending.delete(offset);
+      if (settlement.kind === "released") {
+        emit({ type: "settled", offset, outcome: "released", status: settlement.status });
+      } else if (settlement.kind === "delivery-failed") {
+        emit({ type: "settled", offset, outcome: "delivery-failed", error: settlement.error });
+      } else {
+        emit({ type: "settled", offset, outcome: "rejected", reason: settlement.reason });
+      }
+    });
+  }
 
   // Reconcile the backlog: replay history once, emit still-open requests (a
   // grant already on the stream shows the row submitted, not a fresh prompt),
@@ -87,6 +127,8 @@ export async function runApprovalJson(input: {
   for (const request of open) {
     pending.set(request.offset, request.payload);
     emitRequested(request.offset, request.payload, request.submitted);
+    // A backlog grant is awaiting the door too — watch for its outcome.
+    if (request.submitted) watchSettlement(request.offset);
   }
 
   // Decisions run one at a time: signing pops Touch ID, and two enclave
@@ -161,13 +203,18 @@ export async function runApprovalJson(input: {
       throw error;
     }
     tail = event.offset;
-    dispatch(event, { pending, released, resolved });
+    dispatch(event, { pending, resolved, watching, watchSettlement });
   }
 }
 
 function dispatch(
   event: StreamEvent,
-  state: { pending: Map<number, RequestedPayload>; released: Set<number>; resolved: Set<number> },
+  state: {
+    pending: Map<number, RequestedPayload>;
+    resolved: Set<number>;
+    watching: Set<number>;
+    watchSettlement: (offset: number) => void;
+  },
 ): void {
   if (event.type === EVENT.requested) {
     const payload = event.payload as RequestedPayload;
@@ -184,28 +231,27 @@ function dispatch(
   };
   const offset = outcome.approvalRequestEventOffset;
   if (typeof offset !== "number") return;
-  // A grant is not terminal: mark the row submitted (awaiting the door), keep
-  // it pending. Only settled/rejected remove it.
+  // A grant (this app's or another approver's) is not terminal: mark the row
+  // submitted and hand the outcome to the door's verdict — a settlement watch
+  // that treats `settled` as final over a stray reject.
   if (event.type === EVENT.granted) {
-    if (state.pending.has(offset)) emit({ type: "submitted", offset });
+    if (state.pending.has(offset)) {
+      emit({ type: "submitted", offset });
+      state.watchSettlement(offset);
+    }
     return;
   }
-  if (event.type === EVENT.rejected) {
-    // The door acts on the first resolution and settles only on release, so a
-    // released offset can't be vetoed — a `rejected` that arrives after (a
-    // second approver racing a grant that already won) is a stray. Ignore it.
-    if (state.released.has(offset)) return;
-    state.resolved.add(offset);
-    state.pending.delete(offset);
-    emit({ type: "settled", offset, outcome: "rejected", reason: outcome.reason ?? "human" });
-    return;
-  }
-  // settled — authoritative: released or a delivery failure. This also corrects
-  // a row a stray reject removed just before, if the two raced.
-  state.released.add(offset);
+  // settled / rejected. If a grant was seen, the settlement watch owns the
+  // outcome — a raw reject here would be a stray veto against a winning grant,
+  // and a raw settled is what the watch is already awaiting. Don't double-emit.
+  if (state.watching.has(offset) || state.resolved.has(offset)) return;
   state.resolved.add(offset);
   state.pending.delete(offset);
-  if (outcome.error !== undefined) {
+  if (event.type === EVENT.rejected) {
+    // No grant seen for this row — a rejection is authoritative (nothing to
+    // release), so surface the veto.
+    emit({ type: "settled", offset, outcome: "rejected", reason: outcome.reason ?? "human" });
+  } else if (outcome.error !== undefined) {
     emit({ type: "settled", offset, outcome: "delivery-failed", error: outcome.error });
   } else {
     emit({ type: "settled", offset, outcome: "released", status: outcome.status ?? 0 });

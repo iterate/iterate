@@ -274,6 +274,13 @@ final class ApprovalController: ObservableObject {
         requests.removeAll { $0.offset == offset }
         ApprovalNotifications.withdraw(offset)
       }
+    case "unsettled":
+      // The door ignored the grant (key not enrolled / revoked) and the hold is
+      // still open — clear the spinner so Approve/Reject return, and say why.
+      if let offset = event["offset"] as? Int {
+        setSubmitting(offset, false)
+      }
+      lastError = "A grant wasn’t accepted — is this Mac’s approval key enrolled? (iterate approve --keys)"
     case "error":
       lastError = event["message"] as? String
       // A signing/append failure (e.g. cancelled Touch ID) leaves the request
