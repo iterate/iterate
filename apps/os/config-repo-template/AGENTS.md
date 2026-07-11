@@ -16,21 +16,25 @@ per-stream order — `event.path` says which stream), and reaches the project's
 capabilities through `await this.env.ITX.get()`. The worker is built by the
 platform's worker build pipeline: multi-file TypeScript works (the bundler
 follows imports), and npm dependencies declared in `package.json` are
-installed at build time. The platform's capability types come from the
-`iterate` package — `import type { Project, StreamEvent } from "iterate/sdk"`.
-It's a devDependency here (worker code only imports types from it); run
-`npm install` to get typechecking and editor support.
+installed at build time. The platform's capability types and worker base
+classes come from the `iterate` package — `import { BaseProjectEntrypoint,
+type StreamEvent } from "iterate/sdk"`. It's a devDependency here: the
+platform supplies `iterate/sdk` to every worker build as a virtual module, so
+the build never installs it; run `npm install` to get typechecking and editor
+support.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless WorkerEntrypoint) and
 `CounterApp` (a stateful Durable Object serving a mini client-side app whose
 count updates live over a WebSocket at `/ws`).
-The router dispatches every app request through `this.env.ITX.fetch(...)`
-with the app's ref in the `x-iterate-worker-dispatch` header — the platform's
-fetch-native worker lane. Keep that shape: it is what lets WebSocket upgrades
-and streaming responses tunnel through (an `app.fetch(req)` RPC method call
-cannot carry a socket). When an app outgrows the shared file, move its class
-into its own module and point the ref's `entryPoint` at it.
+The router dispatches every app request through `this.fetchDynamicWorker(req,
+ref)` — inherited from `BaseProjectEntrypoint` (iterate/sdk) — which forwards
+over the platform's fetch-native worker lane (`env.ITX.fetch` with the app's
+ref in the `x-iterate-worker-dispatch` header). Keep that shape: it is what
+lets WebSocket upgrades and streaming responses tunnel through (an
+`app.fetch(req)` RPC method call cannot carry a socket — the method's
+docstring has the full story). When an app outgrows the shared file, move its
+class into its own module and point the ref's `entryPoint` at it.
 
 An app's HTTP handler MUST literally be a method named `fetch` on the
 exported class (a stateless `WorkerEntrypoint` or a stateful `DurableObject`)

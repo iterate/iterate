@@ -1,5 +1,10 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import type { DynamicWorkerRef, ItxBinding, StreamEvent, StreamEventBatch } from "iterate/sdk";
+import {
+  BaseProjectEntrypoint,
+  type ItxBinding,
+  type StreamEvent,
+  type StreamEventBatch,
+} from "iterate/sdk";
 
 // The whole seeded worker in ONE file, so reading this module is reading the
 // whole system: the root project worker (default export) routes HTTP and
@@ -14,12 +19,15 @@ import type { DynamicWorkerRef, ItxBinding, StreamEvent, StreamEventBatch } from
  * calls, `fetch()` for HTTP into sibling workers. */
 type Env = { ITX: ItxBinding };
 
-export default class ProjectWorker extends WorkerEntrypoint<Env> {
+export default class ProjectWorker extends BaseProjectEntrypoint {
   async fetch(req: Request): Promise<Response> {
     // Each app is a repo-backed dynamic worker; ingress selects one via the
     // trusted x-iterate-app header (hosts like hello--<slug>.<base> or
     // <app>.<custom-hostname>). Requests with no app selected get the static
-    // homepage below.
+    // homepage below. `fetchDynamicWorker` (from BaseProjectEntrypoint,
+    // iterate/sdk) dispatches over the platform's fetch-native worker lane —
+    // its docstring explains why app HTTP must ride a real fetch hop, never
+    // an RPC method call.
     const app = req.headers.get("x-iterate-app");
     if (app === "hello") {
       return this.fetchDynamicWorker(req, {
@@ -69,23 +77,6 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
         </html>`,
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
-  }
-
-  /**
-   * Every app request — pages, APIs, streaming bodies, WebSocket upgrades —
-   * dispatches over the platform's fetch-native worker lane: `env.ITX.fetch`
-   * with the target ref in the x-iterate-worker-dispatch header (JSON
-   * { ref, buildBudgetMs? } — same ref shape as project.workers.get). Real
-   * fetch hops are what let a 101 upgrade tunnel through; an `app.fetch(req)`
-   * RPC method call cannot carry one. A cold build answers a 503 building
-   * page that refreshes itself (marked with x-iterate-worker-building —
-   * intercept it here to render your own). Method calls on apps still go
-   * through `project.workers.get(ref)` RPC dispatch; HTTP never does.
-   */
-  private async fetchDynamicWorker(req: Request, ref: DynamicWorkerRef): Promise<Response> {
-    const headers = new Headers(req.headers);
-    headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
-    return await this.env.ITX.fetch(new Request(req, { headers }));
   }
 
   /**

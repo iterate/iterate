@@ -29,17 +29,20 @@ test("template is one worker file with no vendor SDK cruft", () => {
   expect(templatePackageJson.dependencies).toEqual({});
 });
 
-test("template gets the platform types from iterate/sdk, not a committed snapshot", () => {
+test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
   // Seeded repos used to carry a 2000-line sdk.ts, a copy of the itx contract
   // frozen at seed time (later a small runtime companion). Now worker.ts
-  // imports its types straight from the published `iterate` package —
-  // pkg.pr.new's @main URL resolves to the latest build published from main
-  // (.github/workflows/pkg-pr-new.yml), so `npm install` in a seeded repo
-  // always gets the contract the platform currently speaks — and the batch
-  // unpacking the old IterateProjectWorker base class did is inlined as
-  // processEventBatch on the worker itself.
+  // imports straight from `iterate/sdk`: types resolve through the published
+  // package (pkg.pr.new's @main URL resolves to the latest build published
+  // from main — .github/workflows/pkg-pr-new.yml — so `npm install` in a
+  // seeded repo always gets the contract the platform currently speaks), and
+  // the RUNTIME import (BaseProjectEntrypoint) is satisfied at build time by
+  // the platform-injected virtual module (worker-loader.ts), never by an npm
+  // install. The batch unpacking the old IterateProjectWorker base class did
+  // is inlined as processEventBatch on the worker itself.
   const worker = templateFile("worker.ts");
   expect(worker).toContain('from "iterate/sdk"');
+  expect(worker).toContain("extends BaseProjectEntrypoint");
   expect(worker).toContain("async processEventBatch(");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
