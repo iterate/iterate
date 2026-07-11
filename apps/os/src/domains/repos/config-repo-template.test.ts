@@ -51,6 +51,20 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   // them in prose but must not reimplement them.
   expect(worker).not.toContain("async processEventBatch(");
   expect(worker).not.toContain("async invokeCapability(");
+});
+
+test("template carries the exact-string anchors the worker-build e2e edits against", () => {
+  // worker-build.e2e.test.ts ("A project adds its own Slack SDK surface")
+  // edits the SEEDED files with exact-string repo.edit calls. Those anchors
+  // only fail at preview-e2e time — a whole CI cycle after a template edit —
+  // so this fast-lane test pins them: if it breaks, update the template AND
+  // the e2e's oldString/newString anchors together.
+  const worker = templateFile("worker.ts");
+  expect(worker).toContain(
+    'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
+  );
+  expect(worker).toContain("export default class ProjectWorker extends IterateWorkerEntrypoint {");
+  expect(templateFile("package.json")).toContain('"dependencies": {},');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     devDependencies: Record<string, string>;

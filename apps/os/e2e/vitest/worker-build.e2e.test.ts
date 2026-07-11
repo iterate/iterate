@@ -102,9 +102,10 @@ describe("worker builds", () => {
         });
         await project.repo.edit({
           path: "worker.ts",
-          oldString: 'import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";',
+          oldString:
+            'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
           newString: [
-            'import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";',
+            'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
             'import { WebClient } from "@slack/web-api";',
           ].join("\n"),
           message: "Import the Slack SDK",
