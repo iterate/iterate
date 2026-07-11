@@ -182,6 +182,30 @@ describe("prototype-chain dynamic fallback", () => {
     ]);
   });
 
+  it("probes are blocked at DEPTH too — stringify of a path proxy must not dispatch", () => {
+    // JSON.stringify probes toJSON on CALLABLES as well: the path proxies the
+    // hop hands out are functions, so a stringify of any dangling dispatcher
+    // (a logged itx.someMount, a handle.someTool in a report object) used to
+    // fire a live invokeCapability at depth ≥ 1 even after the hop-level fix.
+    // asymmetricMatch is worse than noise: vitest treats any object with a
+    // callable asymmetricMatch as a matcher, and a truthy-Promise dispatcher
+    // makes equalities SPURIOUSLY PASS.
+    const target = new HostTarget();
+    const mount = (target as unknown as Record<string, unknown>).someMount as Record<
+      string,
+      unknown
+    >;
+    // A path proxy is a function, so stringify OMITS it (functions aren't
+    // JSON) — the load-bearing part is that the probe didn't dispatch.
+    expect(JSON.stringify({ mount })).toBe("{}");
+    expect(mount.toJSON).toBeUndefined();
+    expect(mount.asymmetricMatch).toBeUndefined();
+    expect("asymmetricMatch" in (mount as object)).toBe(false);
+    const deeper = (mount as { sub: Record<string, unknown> }).sub;
+    expect(deeper.toJSON).toBeUndefined();
+    expect(target.calls).toEqual([]);
+  });
+
   it("resolves the invoker at CALL time, not lookup time (mid-construction safety)", () => {
     // A property miss on `this` during a base-class constructor fires the
     // trap before field initializers ran. The dispatcher it hands back must
