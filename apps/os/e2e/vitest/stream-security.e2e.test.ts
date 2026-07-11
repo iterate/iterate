@@ -94,8 +94,11 @@ test("append accepts an offset assertion on a subscription-configured core event
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the
 // boundary. Before the fix it was cast unchecked, so a malformed descriptor blew
 // up inside the reducer while appending the subscriber-connected fact — the
-// append was swallowed, leaving a live connection with NO presence-roster entry
-// (the runtime map and the event-sourced roster silently disagree).
+// append was swallowed, leaving a live connection nothing could account for.
+// Ephemeral connections no longer fold into the reduced roster at all (core
+// state v14; the runtime connection table is their only home), so the
+// invariants here are: a rejected subscribe leaves NO runtime connection
+// behind, and the reduced roster never carries ephemeral entries.
 test("subscribe rejects a malformed subscriber descriptor instead of corrupting the roster", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/security/bad-subscriber/${marker}`;
@@ -108,21 +111,35 @@ test("subscribe rejects a malformed subscriber descriptor instead of corrupting 
   using project = itx.projects.create({ slug: `sec-subscriber-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  await expect(
-    stream.subscribe({
-      // incarnationId must be a non-empty string; the reducer's schema would
-      // reject this, but only after the connection is already live.
-      subscriber: { incarnationId: "" } as unknown,
+  // An explicit key makes the rejected attempt identifiable in the state
+  // snapshot below — ambient connections (e.g. the project's stream mirror)
+  // dial in on their own schedule, so whole-map comparisons race them.
+  const rejectedKey = `bad-subscriber-${marker}`;
+  // The async-closure form makes the await real: expect(stub).rejects on a
+  // capnweb pipeline stub can pass vacuously, which is how this test's old
+  // probe (an unknown `incarnationId` key the schema merely STRIPS) sat green
+  // while asserting nothing.
+  await expect(async () => {
+    await stream.subscribe({
+      subscriptionKey: rejectedKey,
+      // description must be a string; the boundary parse rejects this before
+      // any connection opens.
+      subscriber: { description: 123 } as unknown,
       processEventBatch: () => {},
-    }),
-  ).rejects.toThrow();
+    });
+  }).rejects.toThrow();
 
-  // The roster must not contain a half-open connection from the rejected attempt.
-  const runtimeState = (await stream.runtimeState()) as {
-    coreProcessorState: { connectionsByKey?: Record<string, unknown> };
+  const state = (await stream.runtimeState()) as {
+    coreProcessorState: {
+      connectionsByKey?: Record<string, { subscriptionType?: string }>;
+    };
     runtime: { connections: Record<string, unknown> };
   };
-  const runtimeKeys = Object.keys(runtimeState.runtime.connections);
-  const rosterKeys = Object.keys(runtimeState.coreProcessorState.connectionsByKey ?? {});
-  expect(runtimeKeys).toEqual(rosterKeys);
+  // Nothing half-open from the rejected attempt, in either table.
+  expect(state.runtime.connections[rejectedKey]).toBeUndefined();
+  expect(state.coreProcessorState.connectionsByKey?.[rejectedKey]).toBeUndefined();
+  // The reduced roster tracks configured subscriptions only (core state v14).
+  for (const [key, connection] of Object.entries(state.coreProcessorState.connectionsByKey ?? {})) {
+    expect(connection.subscriptionType, `roster entry ${key}`).toBe("configured");
+  }
 });
