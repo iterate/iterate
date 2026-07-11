@@ -7,6 +7,7 @@ import type { CapabilityDescription } from "../itx/describe.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import type { JsonValue } from "../workers/schemas.ts";
 import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
+import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -131,6 +132,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   #now: (() => number) | undefined;
   #parent: ParentCapabilityHost | undefined;
   #validateCapabilityTypes: ((types: string) => Promise<string[]>) | undefined;
+  #typecheckScript:
+    | ((input: {
+        capabilities: CapabilityDescription[];
+        code: string;
+      }) => Promise<ScriptExecutionCheck>)
+    | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
@@ -151,6 +158,16 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
        * test harness runs without one, which skips validation.
        */
       validateCapabilityTypes?: (types: string) => Promise<string[]>;
+      /**
+       * Pre-execution typecheck of a requested script against this scope's
+       * capability types (checkItxScriptForExecution in production; absent in
+       * the node test harness, which skips the gate). Only a `problems`
+       * verdict blocks the run — see ScriptExecutionCheck.
+       */
+      typecheckScript?: (input: {
+        capabilities: CapabilityDescription[];
+        code: string;
+      }) => Promise<ScriptExecutionCheck>;
     },
   ) {
     super(args);
@@ -160,6 +177,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#now = args.now;
     this.#parent = args.parent;
     this.#validateCapabilityTypes = args.validateCapabilityTypes;
+    this.#typecheckScript = args.typecheckScript;
   }
 
   protected override reduce({
@@ -260,7 +278,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       if (this.#liveExecutions.has(executionId)) continue;
       if (execution.status === "requested" && now < execution.expiresAt) {
         this.#liveExecutions.add(executionId);
-        args.runInBackground(() => this.#executeScript({ code: execution.code, executionId }));
+        // The batch's own fold, NOT this.state: the durable checkpoint (and
+        // the state getter behind it) advances only after this hook returns,
+        // and the typecheck gate must see capabilities provided in the same
+        // batch as the request or it would judge the script against a stale
+        // scope.
+        const capabilities = args.state.capabilities;
+        args.runInBackground(() =>
+          this.#executeScript({ capabilities, code: execution.code, executionId }),
+        );
         continue;
       }
       settle.push({
@@ -520,8 +546,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   // declared at. A nearer scope shadows a farther one at the same path (same rule
   // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
   // it can invoke — sees exactly one entry per reachable path and where it lives.
-  async describeCapabilities(): Promise<CapabilityDescription[]> {
-    const local: CapabilityDescription[] = this.state.capabilities.map((record) => ({
+  describeCapabilities(): Promise<CapabilityDescription[]> {
+    return this.#describeCapabilitiesFrom(this.state.capabilities);
+  }
+
+  async #describeCapabilitiesFrom(records: CapabilityRecord[]): Promise<CapabilityDescription[]> {
+    const local: CapabilityDescription[] = records.map((record) => ({
       instructions: record.instructions,
       path: record.path,
       providedAtOffset: record.providedAtOffset,
@@ -564,8 +594,48 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return completed;
   }
 
-  async #executeScript(input: { code: string; executionId: string }) {
+  /**
+   * The pre-execution typecheck gate: a script whose OWN code provably
+   * mis-calls a typed surface settles as an error completion without running
+   * — the model reads compiler errors instead of paying a failed run.
+   * Permissive everywhere the checker lacks knowledge (unknown types,
+   * unchecked verdicts, checker failures): the gate may only ever block on
+   * proof. Returns the completion error, or null to proceed.
+   */
+  async #typecheckRejection(code: string, records: CapabilityRecord[]): Promise<string | null> {
+    const typecheckScript = this.#typecheckScript;
+    if (typecheckScript === undefined) return null;
     try {
+      const capabilities = await this.#describeCapabilitiesFrom(records);
+      const checked = await typecheckScript({ capabilities, code });
+      if (checked.verdict !== "problems") return null;
+      return [
+        "Script was NOT executed: it does not typecheck against this scope's capability types.",
+        ...checked.problems,
+        "Fix the type errors and resend the whole corrected script.",
+      ].join("\n");
+    } catch (error) {
+      // The gate must never fail a script for the checker's own failure — an
+      // unreachable sidecar or a parent-scope dial error means unchecked.
+      console.warn("[capability-host] script typecheck skipped", { error });
+      return null;
+    }
+  }
+
+  async #executeScript(input: {
+    capabilities: CapabilityRecord[];
+    code: string;
+    executionId: string;
+  }) {
+    try {
+      // The typecheck gate runs BEFORE the started evidence: it has no side
+      // effects, so a rejected script provably never ran (requested →
+      // completed, no started event) and the reconciler doctrine is untouched.
+      const rejection = await this.#typecheckRejection(input.code, input.capabilities);
+      if (rejection !== null) {
+        await this.#appendCompletion({ executionId: input.executionId, error: rejection });
+        return;
+      }
       // Started-evidence lands durably BEFORE the script body runs, so the
       // fold can always tell "provably never ran" (requested, startable late)
       // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
