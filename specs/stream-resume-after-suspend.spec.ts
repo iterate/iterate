@@ -1,0 +1,290 @@
+import { expect, type Page } from "@playwright/test";
+import { connectAdminItx } from "./test-support/forged-session.ts";
+import { test } from "./test-support/test.ts";
+
+// Repro for the "stream feed wedges after browser suspend" production report:
+// the stream view's runtime factory closes over the itx capnweb handle captured
+// at mount (project-stream-view.tsx), acquireStreamRuntime dedupes by
+// (projectId, streamPath, slug) and ignores fresh factories on re-acquire
+// (stream-browser-store.ts), so once the /api WebSocket dies the runtime's
+// reconnect loop keeps dialing through the dead capnweb session forever. The
+// itx socket map itself re-dials fine — only the stream runtimes stay wedged
+// until a full page reload.
+//
+// Assertions ride window.__streamRuntimeDebug() (stream-browser-store.ts's
+// debug registry) — transport-level truth, immune to UI-layer noise.
+
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
+
+// Two liveness-probe intervals (LIVENESS_PROBE_INTERVAL_MS = 10s): a clean
+// socket close is invisible to the runtime (the view's factory never wires
+// onConnectionStatusChange), so only the probe's two consecutive failures
+// notice the dead session and enter the reconnect loop.
+const PROBE_NOTICE_MS = 25_000;
+
+// Fresh streams' first post-subscribe delivery can stall and needs the ~10s
+// probe self-heal (see reactivity.spec.ts's DELIVERY_WAIT rationale), so the
+// healthy-path window is 30s, not the theoretical "instant".
+const HEALTHY_DELIVERY_MS = 30_000;
+const WEDGED_DELIVERY_MS = 60_000;
+
+// The stream view mounts two browser runtimes on the agent stream (raw events
+// mirror + feed projector); the feed one paints the chat. Debug-registry keys
+// are `${projectId} ${streamPath} ${slug}` (stream-browser-store.ts).
+function runtimeDebugKeys(projectId: string) {
+  return [
+    `${projectId} ${ONBOARDING_AGENT_PATH} browser-raw-events`,
+    `${projectId} ${ONBOARDING_AGENT_PATH} browser-feed`,
+  ];
+}
+
+type RuntimeDebug = {
+  connectionStatus?: string;
+  connectionError?: string;
+  lastDeliveredOffset?: number;
+  [key: string]: unknown;
+};
+type DebugSnapshot = Record<string, RuntimeDebug>;
+
+function readDebugSnapshot(page: Page): Promise<DebugSnapshot> {
+  return page.evaluate(() => {
+    const read = (window as { __streamRuntimeDebug?: () => Record<string, unknown> })
+      .__streamRuntimeDebug;
+    return (typeof read === "function" ? read() : {}) as Record<string, never>;
+  });
+}
+
+async function waitForSubscribed(page: Page, keys: string[], timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last: DebugSnapshot = {};
+  for (;;) {
+    last = await readDebugSnapshot(page);
+    if (keys.every((key) => last[key]?.connectionStatus === "subscribed")) return last;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out waiting for runtimes ${keys.join(", ")} to reach "subscribed". Last __streamRuntimeDebug:\n${JSON.stringify(last, null, 2)}`,
+      );
+    }
+    await page.waitForTimeout(500);
+  }
+}
+
+/** Poll until every runtime's lastDeliveredOffset reaches `offset`. Never throws. */
+async function pollDelivered(page: Page, keys: string[], offset: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  let last: DebugSnapshot = {};
+  for (;;) {
+    last = await readDebugSnapshot(page);
+    const delivered = keys.every((key) => (last[key]?.lastDeliveredOffset ?? -1) >= offset);
+    if (delivered || Date.now() > deadline) return { delivered, snapshot: last };
+    await page.waitForTimeout(1_000);
+  }
+}
+
+/**
+ * Registry of live main-thread WebSockets + a kill switch for the /api ones
+ * (the itx capnweb transport — the stream runtimes ride it too). Must be
+ * installed BEFORE navigation. Only /api sockets are closed: killing the Vite
+ * HMR socket would make the dev client reload the page on reconnect, which is
+ * exactly the recovery the bug report says users are forced into.
+ */
+function installSocketKillSwitch(page: Page) {
+  return page.addInitScript(() => {
+    const registry = new Set<WebSocket>();
+    const NativeWebSocket = window.WebSocket;
+    class TrackedWebSocket extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        registry.add(this);
+        this.addEventListener("close", () => registry.delete(this));
+      }
+    }
+    window.WebSocket = TrackedWebSocket as typeof WebSocket;
+    (window as { __closeAllApiSockets?: () => string[] }).__closeAllApiSockets = () => {
+      const closed: string[] = [];
+      for (const ws of [...registry]) {
+        let pathname = "";
+        try {
+          pathname = new URL(ws.url).pathname;
+        } catch {
+          continue;
+        }
+        if (pathname === "/api" || pathname.startsWith("/api/")) {
+          closed.push(ws.url);
+          ws.close();
+        }
+      }
+      return closed;
+    };
+  });
+}
+
+/** The store logs its reconnect decisions under "[stream …]"; keep them as evidence. */
+function captureStreamConsole(page: Page) {
+  const lines: string[] = [];
+  page.on("console", (message) => {
+    const text = message.text();
+    if (text.includes("[stream") || text.includes("[vite]")) {
+      lines.push(`${new Date().toISOString()} ${message.type()}: ${text}`);
+    }
+  });
+  return lines;
+}
+
+function dumpEvidence(label: string, snapshot: DebugSnapshot, consoleLines: string[]) {
+  console.log(`--- ${label}: __streamRuntimeDebug() ---`);
+  console.log(JSON.stringify(snapshot, null, 2));
+  console.log(`--- ${label}: [stream …] console lines ---`);
+  console.log(consoleLines.join("\n") || "(none)");
+}
+
+test("control: appended event is delivered to a live stream feed", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(240_000);
+  await using fixture = await helpers.createFixture("suspend-control");
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  const consoleLines = captureStreamConsole(page);
+
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  const keys = runtimeDebugKeys(fixture.project.id);
+  await waitForSubscribed(page, keys);
+
+  const [marker] = await agent.stream.append({
+    type: MARKER_EVENT_TYPE,
+    payload: { marker: "control" },
+  });
+  const { delivered, snapshot } = await pollDelivered(
+    page,
+    keys,
+    marker!.offset,
+    HEALTHY_DELIVERY_MS,
+  );
+  dumpEvidence("control", snapshot, consoleLines);
+  expect(
+    delivered,
+    `marker at offset ${marker!.offset} should be delivered to a healthy subscription`,
+  ).toBe(true);
+});
+
+test("feed resumes after the /api WebSocket dies (clean close)", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(240_000);
+  await using fixture = await helpers.createFixture("suspend-socket");
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await installSocketKillSwitch(page);
+  const consoleLines = captureStreamConsole(page);
+
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  const keys = runtimeDebugKeys(fixture.project.id);
+  await waitForSubscribed(page, keys);
+
+  // Kill the itx transport from inside the page — the "close event delivered"
+  // lane of the bug (mobile Safari suspend, proxy idle timeout, …). The itx
+  // socket map drops its entry and re-dials on the next read; the stream
+  // runtimes hold the mount-time factory and cannot follow.
+  const closed = await page.evaluate(() =>
+    (window as unknown as { __closeAllApiSockets: () => string[] }).__closeAllApiSockets(),
+  );
+  console.log(`closed sockets: ${JSON.stringify(closed)}`);
+  expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
+
+  // Give the liveness probe two intervals to notice and enter its reconnect loop.
+  await page.waitForTimeout(PROBE_NOTICE_MS);
+  console.log("--- after probe window ---");
+  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
+
+  const [marker] = await agent.stream.append({
+    type: MARKER_EVENT_TYPE,
+    payload: { marker: "after-socket-death" },
+  });
+  const { delivered, snapshot } = await pollDelivered(
+    page,
+    keys,
+    marker!.offset,
+    WEDGED_DELIVERY_MS,
+  );
+  dumpEvidence("after socket death", snapshot, consoleLines);
+  // EXPECTED TO FAIL TODAY: the runtimes sit in connectionStatus
+  // "reconnecting" with connectionError "connect failed: …" forever, because
+  // connect() dials through the dead mount-time capnweb session.
+  expect(
+    delivered,
+    `marker at offset ${marker!.offset} should be delivered after the browser re-dials /api — see the __streamRuntimeDebug dump above for the reconnect wedge`,
+  ).toBe(true);
+});
+
+test("feed resumes after page freeze + socket death (mobile suspend shape)", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(240_000);
+  await using fixture = await helpers.createFixture("suspend-freeze");
+  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await installSocketKillSwitch(page);
+  const consoleLines = captureStreamConsole(page);
+
+  using admin = await connectAdminItx(baseURL);
+  using project = admin.projects.get(fixture.project.id);
+  using agent = project.agents.get(ONBOARDING_AGENT_PATH);
+
+  await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
+  const keys = runtimeDebugKeys(fixture.project.id);
+  await waitForSubscribed(page, keys);
+
+  // Mobile suspend ≈ frozen page + the OS reaping the TCP connection. Script
+  // execution is suspended while frozen, so the socket close must happen
+  // BEFORE Page.setWebLifecycleState (page.evaluate would hang otherwise);
+  // setOffline while frozen additionally models the radio dropping, though
+  // CDP's emulateNetworkConditions does not reliably kill established
+  // WebSockets on its own — the explicit close is the guaranteed death.
+  const cdp = await page.context().newCDPSession(page);
+  const closed = await page.evaluate(() =>
+    (window as unknown as { __closeAllApiSockets: () => string[] }).__closeAllApiSockets(),
+  );
+  console.log(`closed sockets: ${JSON.stringify(closed)}`);
+  expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
+  await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
+  await page.context().setOffline(true);
+  await page.waitForTimeout(25_000);
+  await page.context().setOffline(false);
+  await cdp.send("Page.setWebLifecycleState", { state: "active" });
+
+  // Timers were suspended while frozen: the probe strikes only start now.
+  await page.waitForTimeout(PROBE_NOTICE_MS);
+  console.log("--- after thaw + probe window ---");
+  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
+
+  const [marker] = await agent.stream.append({
+    type: MARKER_EVENT_TYPE,
+    payload: { marker: "after-freeze" },
+  });
+  const { delivered, snapshot } = await pollDelivered(
+    page,
+    keys,
+    marker!.offset,
+    WEDGED_DELIVERY_MS,
+  );
+  dumpEvidence("after freeze", snapshot, consoleLines);
+  // EXPECTED TO FAIL TODAY: same wedge as the clean-close test — the frozen
+  // window only delays when the liveness probe notices.
+  expect(
+    delivered,
+    `marker at offset ${marker!.offset} should be delivered after the page thaws — see the __streamRuntimeDebug dump above for the reconnect wedge`,
+  ).toBe(true);
+});

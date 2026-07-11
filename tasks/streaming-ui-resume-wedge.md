@@ -82,3 +82,16 @@ interacts with T1.
 
 - 2026-07-11: Theories drafted from code reading; T1 confirmed statically
   (factory capture + registry dedupe + eviction rules). Repro specs next.
+- 2026-07-11 (later): **T1 confirmed empirically** on local dev via
+  `specs/stream-resume-after-suspend.spec.ts`:
+  - control (healthy append → delivery): PASS, 6.5s.
+  - clean WS close: FAIL as predicted — probe notices at ~20s
+    (`connection failed its liveness probe; reconnecting Error: Peer closed
+WebSocket: 1005`), then both runtimes wedge forever in
+    `connectionStatus: "reconnecting"`,
+    `connectionError: "connect failed: Peer closed WebSocket: 1005"`,
+    `hasConnection: false`; server-appended marker never delivered in 60s.
+  - freeze (CDP `Page.setWebLifecycleState`) + offline + thaw: FAIL with the
+    identical wedge signature.
+    The itx socket map re-dials fine (page chrome recovers); only the stream
+    runtimes stay dead — precisely the reported UX.
