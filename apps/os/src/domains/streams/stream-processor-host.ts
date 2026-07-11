@@ -361,6 +361,10 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
     const pageSize = options.catchUpPageSize ?? 500;
     try {
       const { offset } = await entry.processor.snapshot();
+      // Default read = durable rows only. Load-bearing: catch-up must fold
+      // exactly what the wake lane delivers (which drops ephemeral events),
+      // or a refold would diverge from the live fold. Do not add
+      // includeEphemeral here.
       using pager = options.stream.readEvents({ afterOffset: offset, limit: pageSize });
       // One page of lookahead, so every non-final batch carries a
       // streamMaxOffset PAST its own tail. Reconcilers defer side effects
@@ -535,12 +539,18 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         // Wake-lane batches are consumes-FILTERED but stamped with the RAW
         // stream head, so a delivered batch can leave the checkpoint behind
         // streamMaxOffset with nothing ever delivering the difference (a
-        // non-consumed tail event — a presence fact, another processor's
-        // chunk — produces no further push). The reconcilers' at-head gate
-        // rightly defers on such folds, so every behind batch gets a trailing
-        // UNFILTERED catch-up: it checkpoints through the non-consumed tail
-        // and its final page is at-head, guaranteeing the deferred
-        // reconciliation runs. Already-at-head batches pay one snapshot read.
+        // non-consumed tail event — a presence fact — produces no further
+        // push). The reconcilers' at-head gate rightly defers on such folds,
+        // so every behind batch gets a trailing type-unfiltered catch-up: it
+        // checkpoints through the non-consumed DURABLE tail and its final
+        // page reports its own tail as the head, so its reconciliation runs.
+        // One honest hole: an EPHEMERAL tail (a mid-turn chunk run) is
+        // invisible to this pull too — the checkpoint parks below the raw
+        // head and the deferred reconcile waits for the next durable fact.
+        // Every producer pattern ends with one (chunks → output-added;
+        // revival appends `revived`), so the deferral is bounded by design:
+        // reconciliation is guaranteed relative to the DURABLE head, not the
+        // allocator head. Already-at-head batches pay one snapshot read.
         keepalive.track(
           attempt.then(
             async () => {

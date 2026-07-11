@@ -220,18 +220,19 @@ function replayResponse(input: {
     break;
   }
 
-  const deltas = input.chunkEvents
-    .map((event) =>
-      event.type === LLM_RESPONSE_CHUNK_EVENT_TYPE
-        ? ChunkPayloadSlice.safeParse(event.payload)
-        : null,
-    )
-    .flatMap((parsed) =>
-      parsed?.success && parsed.data.llmRequestOffset === input.llmRequestOffset
-        ? [parsed.data]
-        : [],
-    )
-    .sort((a, b) => a.sequence - b.sequence);
+  // Deduped by sequence, first occurrence wins: chunk rows are ephemeral and
+  // evictable, so a swept-then-restreamed attempt can leave two rows per
+  // sequence in a mirror — concatenating both would double the text.
+  const deltasBySequence = new Map<number, z.infer<typeof ChunkPayloadSlice>>();
+  for (const event of input.chunkEvents) {
+    if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) continue;
+    const parsed = ChunkPayloadSlice.safeParse(event.payload);
+    if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
+    if (!deltasBySequence.has(parsed.data.sequence)) {
+      deltasBySequence.set(parsed.data.sequence, parsed.data);
+    }
+  }
+  const deltas = [...deltasBySequence.values()].sort((a, b) => a.sequence - b.sequence);
   let streamedText = "";
   let thinkingText = "";
   for (const delta of deltas) {

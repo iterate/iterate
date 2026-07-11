@@ -176,6 +176,37 @@ return { appended, count: events.length };
 `.trim(),
   },
   {
+    id: "ephemeral-events",
+    title: "Ephemeral events: transient signals whose durable truth lands separately",
+    description:
+      "append({ ephemeral: true }) commits a second-class event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, durable subscribers — processors and the project worker's processEventBatch feed — never receive it, and the stream may evict the row later. Use it for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable fact as its own ordinary event.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Transient signal: live subscribers see it; nothing durable ever will.
+const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
+const [tick] = await stream.append({
+  type: "events.iterate.repl/progress-ticked",
+  ephemeral: true,
+  payload: { percent: 50 },
+});
+
+// The durable truth is its own ordinary event — THIS is what processors fold.
+const [done] = await stream.append({
+  type: "events.iterate.repl/work-completed",
+  payload: { result: "ok" },
+});
+
+const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
+const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
+return {
+  tickOffset: tick.offset, // ephemeral rows consume offsets like any commit
+  defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
+  rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
+};
+`.trim(),
+  },
+  {
     id: "run-script",
     title: "Run a script server-side with itx.runScript",
     description:

@@ -292,6 +292,13 @@ export const CoreProcessorContract = defineProcessorContract({
     path: z.string().trim().min(1).optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
+    /**
+     * Events folded so far — durable AND ephemeral (both reduce). A rebuild
+     * after ephemeral-row eviction counts only survivors, so this may
+     * DECREASE across a rebuild; never compare it to `maxOffset`. Its one
+     * load-bearing read is the constructor's `=== 0` birth check, which is
+     * eviction-proof (`stream/created` can never be ephemeral).
+     */
     eventCount: z.number().int().min(0).default(0),
     maxOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),

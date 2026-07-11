@@ -714,6 +714,11 @@ function createStreamRuntime(
               "catch-up page read",
               election.connection.getEvents({
                 afterOffset: catchUpOffset,
+                // The mirror stores ephemeral rows too (the subscription lane
+                // delivers them); a default read here would skip every chunk
+                // run — losing streamed text the mirror promises to keep and
+                // false-firing the raw-events gap detector on each one.
+                includeEphemeral: true,
                 limit: CATCHUP_PAGE_LIMIT,
               }),
             )) as StreamEvent[];
@@ -788,6 +793,12 @@ function createStreamRuntime(
       });
   }
 
+  // Batches are applied strictly one at a time (see ingestWithSelfHeal). The
+  // chain is runtime-wide: batches from a superseded election no-op inside
+  // their slot via the ownership re-check, so they can never block or
+  // interleave with the current election's.
+  let ingestChain: Promise<void> = Promise.resolve();
+
   // Browsers are an inbound (fire-and-forget) subscriber: the server advances its delivery
   // cursor regardless of whether our ingest succeeded and never closes the connection on an
   // ingest error. So if applying a batch throws (a transient OPFS/SQLite error, or a
@@ -827,11 +838,24 @@ function createStreamRuntime(
     deliveryArrivals += 1;
     lastBatchEvents = batch.events.length;
     totalDeliveredEvents += batch.events.length;
-    try {
+    // Serialize the apply and RE-CHECK ownership inside the slot. The entry
+    // guard above is not enough: two rapid batches both pass it, then batch
+    // A's failure schedules a reconnect while batch B already holds the next
+    // slot in the processor's own chain — B would apply over the failure,
+    // advancing the checkpoint PAST A's rows. The relaxed (gap-tolerant)
+    // mirror trigger accepts that hole, so nothing would ever repair it; the
+    // strict trigger used to fail B loudly by accident. `scheduleReconnect`
+    // clears `stream` synchronously, so a re-check inside the slot sees it.
+    const run = ingestChain.then(async () => {
+      if (disposed || stream !== election.connection) return;
       await processor.ingest(batch);
       pendingIngestEvents = Math.max(0, pendingIngestEvents - batch.events.length);
       ingestFailureCount = 0;
       lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
+    });
+    ingestChain = run.catch(() => undefined);
+    try {
+      await run;
     } catch (error) {
       // Only the connection that is still current self-heals; a stale callback bails.
       if (disposed || stream !== election.connection) throw error;
