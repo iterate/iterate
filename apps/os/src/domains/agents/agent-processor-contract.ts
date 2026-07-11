@@ -106,7 +106,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "}",
   "```",
   "",
-  'Each hit\'s `fetchCall` field is the literal next call. `await itx.docs.get({ name: "gmail-search-inbox" })` returns a paste-ready example script — its inputs sit in a `vars` object inside the function; replace them with real values. `get({ name: "Stream" })` returns a type declaration plus referenced types. `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.',
+  'Every hit carries a `fetchCall` string — the exact call that fetches its full doc, e.g. `await itx.docs.get({ name: "gmail-search-inbox" })`; copy it verbatim as your next call. Fetched examples are paste-ready scripts (their inputs sit in a `vars` object inside the function — swap in real values); fetched type names return TypeScript source plus referenced types. `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.',
   "",
   "OTHER AGENTS — delegation is messaging:",
   '- Agents live at paths. `await itx.agents.get(path).message(task)` appends to that agent\'s stream — and messaging a fresh path BIRTHS the agent; there is no separate create step or subagent machinery. A relative name (`itx.agents.get("researcher")`) addresses a child under YOUR path; an absolute one (`itx.agents.get("/agents/bugs")`) a shared project agent.',
