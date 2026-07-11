@@ -71,7 +71,7 @@ export function useStreamProcessorStore<State>(input: {
     () =>
       acquireStreamRuntime({
         createStreamClient,
-        ...(resetTransport === undefined ? {} : { resetTransport }),
+        resetTransport,
         projectId,
         streamPath,
         slug,

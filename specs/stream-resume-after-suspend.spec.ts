@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { spinnerWaiter } from "middlewright";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -58,7 +59,7 @@ function readDebugSnapshot(page: Page): Promise<DebugSnapshot> {
   return page.evaluate(() => {
     const read = (window as { __streamRuntimeDebug?: () => Record<string, unknown> })
       .__streamRuntimeDebug;
-    return (typeof read === "function" ? read() : {}) as Record<string, never>;
+    return (typeof read === "function" ? read() : {}) as DebugSnapshot;
   });
 }
 
@@ -117,6 +118,12 @@ function installSocketKillSwitch(page: Page) {
         if (muted.has(this)) return;
         super.send(data);
       }
+      // Muting rides an addEventListener wrapper, which is sound for capnweb's
+      // browser build specifically: it attaches message listeners as FUNCTIONS
+      // via addEventListener (never `onmessage =`, never handleEvent objects)
+      // and never removes them (the wrapper identity break would defeat
+      // removeEventListener). Re-verify on a capnweb bump or this spec's
+      // half-open lane silently stops muting.
       override addEventListener(
         type: string,
         listener: EventListenerOrEventListenerObject,
@@ -385,4 +392,20 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     delivered,
     `marker at offset ${marker!.offset} should be delivered after the transport is evicted and re-dialed — see the __streamRuntimeDebug dump above`,
   ).toBe(true);
+
+  // The user's half of the story: after recovery, a send from the BROWSER
+  // composer must settle and paint. Historically eviction only unmapped the
+  // dead session (never closed it), so a send could hang forever on the ghost
+  // even while the feed looked recovered. The feed's live "Thinking…" state
+  // renders two spinner-matching elements, so spinner-waiter sits this out
+  // (same per-call override as agent-chat.spec.ts).
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    const sent = `resumed-${Date.now()}`;
+    await page.getByPlaceholder("Message this agent").fill(sent);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await page
+      .locator('[data-testid="agent-feed-message"][data-kind="user"]')
+      .getByText(sent)
+      .waitFor({ timeout: 30_000 });
+  });
 });

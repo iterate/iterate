@@ -49,7 +49,7 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, evictItxSocket } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -135,8 +135,13 @@ export function ProjectStreamView({
     [projectId, streamSource],
   );
   const streamClientFactory = useMemo(
-    () => async (input: { streamPath: string }) =>
-      asBrowserStreamClient(await resolvedStreamSource(input.streamPath), () => {}),
+    () => async (input: { streamPath: string }) => {
+      const stub = await resolvedStreamSource(input.streamPath);
+      // The stub's REAL dispose, so every reconnect releases its stream export
+      // on the (possibly long-lived, healthy) session instead of stranding one
+      // per reconnect in the cap table on both sides.
+      return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
+    },
     [resolvedStreamSource],
   );
   // The half-open lane: a suspended page's socket can die without a close
@@ -149,7 +154,7 @@ export function ProjectStreamView({
     () =>
       resetStreamSourceTransport ??
       (streamSource === undefined
-        ? () => reconnectItx(projectId == null ? {} : { projectId })
+        ? () => evictItxSocket(projectId == null ? {} : { projectId })
         : undefined),
     [resetStreamSourceTransport, streamSource, projectId],
   );

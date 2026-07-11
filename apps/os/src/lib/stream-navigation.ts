@@ -7,7 +7,7 @@ import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, evictItxSocket } from "~/itx/itx-react.tsx";
 
 /**
  * Where stream-tree nodes get their state: path → subscribable stream handle.
@@ -129,5 +129,5 @@ export function useAdminStreamSource(projectId: string) {
 
 /** Stable identity: consumers put this in hook deps. Admin sources ride the global socket. */
 function resetAdminTransport() {
-  reconnectItx();
+  evictItxSocket();
 }

@@ -111,3 +111,26 @@ WebSocket: 1005`), then both runtimes wedge forever in
   connect backoff. All four specs green locally (clean close ~30s recovery,
   freeze ~56s, half-open ~40s — the mute-the-socket trick simulates a
   suspend-killed TCP connection with no close frame).
+- 2026-07-12 (thermo hardening): two thermo-nuclear reviews (structure +
+  edge-case lenses), both NOT APPROVED first pass; all blockers fixed:
+  - Election-chain timeouts now evict (a cached corpse "dials" instantly, so
+    the election is where a not-subscribed half-open death manifests —
+    previously an eviction-free 16s reconnect loop forever). One
+    `reconnectAfterError` decision point replaces the scattered
+    `instanceof StepTimeoutError` checks.
+  - `reconnectItx` now CLOSES the WebSocket (it disposed only the derived
+    stub; capnweb tears a session down on transport close only) — pending
+    composer sends/queries reject instead of hanging on a ghost session, and
+    evicted sockets no longer leak.
+  - New `evictItxSocket` (young-socket guard, <15s can't be the corpse)
+    prevents the two runtimes' staggered strikes from killing each other's
+    fresh dials.
+  - Followers (Web-Lock losers, no probe) now recover: `callWhenReady` wraps
+    calls in a 20s deadline + broken-session classification that clears the
+    corpse, and `onResume` gives followers a two-strike transport check.
+  - Nudge held to the probe's two-strike standard (single 5s timeout no
+    longer rips the shared socket); `pageshow` no longer restarts a young
+    in-flight dial; stream stubs get their real dispose (cap-table leak).
+  - Transport = ONE value ({createStreamClient, resetTransport}) refreshed
+    wholesale on re-acquire via the registry (off the public store type).
+    All specs green incl. new composer-send-after-recovery assertion.
