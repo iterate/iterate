@@ -197,6 +197,84 @@ test("random bulk insert creates multiple filterable event types and shows filte
   await expect(eventMeta(page, selectedType).first()).toBeVisible();
 });
 
+// Regression for the OPFS wedge that made high-throughput sessions look like they "lost"
+// events: navigating to a different stream kills the previous page's DB worker, which
+// releases its Web Lock immediately but can leave its OPFS sync access handles open for a
+// while. The next page's OPFSCoopSyncVFS init sweeps stale `.ahp-*` temp directories and —
+// before patches/@journeyapps__wa-sqlite@1.7.0.patch — a removeEntry hitting that window
+// threw NoModificationAllowedError, fatally rejecting VFS creation. Every reconnect
+// re-failed the same way, so the new page showed no events and every append died, until a
+// much later reload. The patch makes the sweep best-effort; this test drives the exact
+// trigger: leave a page mid-bulk-ingest, then require the next stream to mirror and append.
+test("navigating to a new stream mid-ingest still opens the new mirror and appends", async ({
+  page,
+}) => {
+  const busyPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: busyPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  // Big enough that the mirror is still ingesting when we navigate away.
+  await page.getByLabel("Count").fill("20000");
+  await page.getByLabel("Batch size").fill("1000");
+  await page.getByLabel("Seconds").fill("0");
+  await page.getByRole("button", { name: "Stream random events" }).click();
+
+  const nextPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: nextPath }));
+
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible({
+    timeout: 15_000,
+  });
+  const type = "events.iterate.com/debug/playwright-post-navigation";
+  await appendComposerEvent(page, { type, payload: { nextPath } });
+  await expect(eventMeta(page, type).first()).toBeVisible();
+});
+
+// Deterministic version of the wedge above: plant exactly the OPFS state the dead worker
+// leaves behind — a `.ahp-*` temp directory whose Web Lock nobody holds but whose file has
+// an open sync access handle (held here by a worker in a second tab, standing in for a
+// terminated worker whose handles the browser has not released yet). The stream page's VFS
+// sweep then deterministically hits NoModificationAllowedError on removeEntry; unpatched
+// wa-sqlite turned that into "no database can open on this origin".
+test("stale OPFS temp directory with open handles does not block the mirror", async ({
+  context,
+  page,
+}) => {
+  const handleHolder = await context.newPage();
+  await handleHolder.goto("/blank");
+  await handleHolder.evaluate(async () => {
+    const workerSource = `
+      (async () => {
+        const root = await navigator.storage.getDirectory();
+        const dir = await root.getDirectoryHandle(".ahp-e2e-stale", { create: true });
+        const file = await dir.getFileHandle("0.tmp", { create: true });
+        // Held open for the page's lifetime; only sync access handles make
+        // removeEntry throw NoModificationAllowedError.
+        globalThis.heldHandle = await file.createSyncAccessHandle();
+        postMessage("ready");
+      })();
+    `;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerSource])));
+    await new Promise((resolve, reject) => {
+      worker.onmessage = resolve;
+      worker.onerror = (event) => reject(new Error(event.message));
+    });
+  });
+
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible({
+    timeout: 15_000,
+  });
+  const type = "events.iterate.com/debug/playwright-stale-ahp";
+  await appendComposerEvent(page, { type, payload: { streamPath } });
+  await expect(eventMeta(page, type).first()).toBeVisible();
+
+  // Release the handle and remove the planted directory so later tests' sweeps
+  // are not left deleting it (best-effort; the sweep also cleans it up).
+  await handleHolder.close();
+});
+
 // Regression for initial tail anchoring from persisted local SQLite rows. A stream page that
 // already has enough rows to scroll should mount at the newest rows after a reload, not at
 // local_index 0. This is separate from "follow while appending": reload reconstructs the
