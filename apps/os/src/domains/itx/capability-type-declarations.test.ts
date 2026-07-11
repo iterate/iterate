@@ -235,4 +235,12 @@ test("firstExportedTypeName picks the first TOP-LEVEL export in CODE and tolerat
   expect(firstExportedTypeName("export const enum Mode { A }")).toBe("Mode");
   // Value-only exports export no TYPE.
   expect(firstExportedTypeName("export const x = 1;")).toBeUndefined();
+  // Braces inside string-literal types must not skew the depth count —
+  // "/user/{id}" carries an unbalanced brace.
+  expect(
+    firstExportedTypeName('type Internal = { route: "/user/{id}" };\nexport type Real = Internal;'),
+  ).toBe("Real");
+  expect(firstExportedTypeName("export type T = `prefix-${string}`;\nexport type U = 1;")).toBe(
+    "T",
+  );
 });

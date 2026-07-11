@@ -241,12 +241,14 @@ function withGeneratedBudget(input: { members: string[]; source: string }): stri
  * Top-level matters: `export interface Inner` nested inside an
  * `export namespace NS { … }` is not importable by bare name — picking it
  * produced an unresolvable type reference that broke typechecking for the
- * WHOLE scope. Brace depth is counted on comment-stripped text (a lone
- * unbalanced brace inside a string literal type can fool it; template-literal
- * placeholders are balanced and cannot).
+ * WHOLE scope. Brace depth is counted on text with comments stripped AND
+ * string-literal contents blanked: `type Route = "/user/{id}"` carries an
+ * unbalanced brace that would otherwise strand every later export.
  */
 export function firstExportedTypeName(typesText: string): string | undefined {
-  const codeOnly = stripComments(typesText);
+  // Declaration names never sit inside strings, so matching on the blanked
+  // text keeps positions and depth counting on the same coordinates.
+  const codeOnly = stripComments(typesText).replaceAll(/(["'`])(?:\\.|(?!\1).)*\1/g, '""');
   const declaration =
     /export\s+(?:declare\s+)?(?:abstract\s+)?(?:const\s+)?(?:type|interface|class|enum)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
   for (const match of codeOnly.matchAll(declaration)) {
