@@ -99,6 +99,9 @@ final class ApprovalController: ObservableObject {
     self.stdinHandle = stdin.fileHandleForWriting
     self.stdoutHandle = stdout.fileHandleForReading
 
+    // This session's identity: a chunk that lands after the session ends
+    // (generation moved on) is stale and must not touch state.
+    let session = generation
     stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
       // Empty data means EOF: clear the handler so it stops firing (otherwise
@@ -107,7 +110,10 @@ final class ApprovalController: ObservableObject {
         handle.readabilityHandler = nil
         return
       }
-      DispatchQueue.main.async { self?.ingest(chunk) }
+      DispatchQueue.main.async {
+        guard let self, self.generation == session else { return }  // stale chunk
+        self.ingest(chunk)
+      }
     }
     process.terminationHandler = { [weak self] _ in
       DispatchQueue.main.async { self?.watcherExited() }
@@ -128,6 +134,8 @@ final class ApprovalController: ObservableObject {
   /// connected (emitted a status) and still believes it's signed in — bounded,
   /// so a watcher that never connects or keeps dying fast won't hot-loop.
   private func watcherExited() {
+    generation += 1  // end this session so any late stdout chunk is ignored
+    detachIO()  // drop the dead pipes/handle so a click can't write to a corpse
     requests = []
     connected = false  // no live watcher until one reconnects and emits status
     if Date().timeIntervalSince(sessionStart) > 10 { reconnectAttempts = 0 }  // it was stable
@@ -152,13 +160,17 @@ final class ApprovalController: ObservableObject {
     process?.terminationHandler = nil
     process?.terminate()
     process = nil
-    stdinHandle = nil
-    // Detach the old pipe's reader so a late chunk can't land in the next
-    // watcher's buffer.
+    detachIO()
+    requests = []
+  }
+
+  /// Drop the current session's pipes/handles and any half-read line, so no
+  /// late chunk or stray write can touch the next session.
+  private func detachIO() {
     stdoutHandle?.readabilityHandler = nil
     stdoutHandle = nil
-    requests = []
-    buffer = Data()  // a partial line from the old watcher must not bleed into the next
+    stdinHandle = nil
+    buffer = Data()
   }
 
   /// Kick off `iterate login` (browser OAuth), then restart the watcher. Stop
