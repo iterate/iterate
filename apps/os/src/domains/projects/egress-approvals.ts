@@ -122,27 +122,31 @@ export function matchEgressRule(
   rules: readonly EgressRule[],
   request: { method: string; url: string; secretPaths: readonly string[] },
 ): EgressRule | undefined {
-  let url: URL;
-  try {
-    url = new URL(request.url);
-  } catch {
-    // An unparseable URL can't match host/path rules; don't throw out of the
-    // gate — treat it as no match and let the egress lanes handle the bad URL.
-    return undefined;
-  }
+  // An unparseable URL doesn't throw out of the gate and doesn't waive
+  // policy: it only disables the host/path matchers (which need a URL). A rule
+  // matching on method or secretPaths still applies — so a bad-URL request
+  // that spends a held secret is still caught.
+  const url = ((): URL | null => {
+    try {
+      return new URL(request.url);
+    } catch {
+      return null;
+    }
+  })();
   const method = request.method.toUpperCase();
   return rules.find((rule) => {
     const match = rule.match;
-    if (match.hosts !== undefined && !match.hosts.some((host) => hostMatches(url.hostname, host))) {
-      return false;
+    if (match.hosts !== undefined) {
+      if (url === null || !match.hosts.some((host) => hostMatches(url.hostname, host)))
+        return false;
+    }
+    if (match.pathPrefix !== undefined) {
+      if (url === null || !url.pathname.startsWith(match.pathPrefix)) return false;
     }
     if (
       match.methods !== undefined &&
       !match.methods.some((candidate) => candidate.toUpperCase() === method)
     ) {
-      return false;
-    }
-    if (match.pathPrefix !== undefined && !url.pathname.startsWith(match.pathPrefix)) {
       return false;
     }
     if (

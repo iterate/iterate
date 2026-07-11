@@ -78,10 +78,27 @@ describe("matchEgressRule", () => {
     expect(matchEgressRule([rule({ ruleKey: "all" })], request())?.ruleKey).toBe("all");
   });
 
-  test("an unparseable URL never throws — it's a no-match, not a gate crash", () => {
-    const all = rule({ ruleKey: "all" });
-    expect(() => matchEgressRule([all], request({ url: "not a url" }))).not.toThrow();
-    expect(matchEgressRule([all], request({ url: "not a url" }))).toBeUndefined();
+  test("an unparseable URL never throws, and only disables host/path matchers", () => {
+    const bad = request({ url: "not a url", secretPaths: ["/secrets/stripe/prod"] });
+    expect(() => matchEgressRule([rule({ ruleKey: "all" })], bad)).not.toThrow();
+    // Host / pathPrefix rules can't match a URL we can't parse.
+    expect(
+      matchEgressRule([rule({ ruleKey: "h", match: { hosts: ["api.stripe.com"] } })], bad),
+    ).toBeUndefined();
+    expect(
+      matchEgressRule([rule({ ruleKey: "p", match: { pathPrefix: "/v1" } })], bad),
+    ).toBeUndefined();
+    // But method / secretPath rules still apply — a bad-URL request that spends
+    // a held secret is still caught, not waived.
+    expect(
+      matchEgressRule(
+        [rule({ ruleKey: "s", match: { secretPaths: ["/secrets/stripe/prod"] } })],
+        bad,
+      )?.ruleKey,
+    ).toBe("s");
+    expect(
+      matchEgressRule([rule({ ruleKey: "m", match: { methods: ["POST"] } })], bad)?.ruleKey,
+    ).toBe("m");
   });
 });
 
