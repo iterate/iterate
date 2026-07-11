@@ -3,29 +3,35 @@ import { CheckIcon, CopyIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
+import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { formatDateTime, formatSeconds } from "~/lib/feed-format.ts";
+import { formatDateTime, formatSeconds, looksLikeCode } from "~/lib/feed-format.ts";
 import {
   LLM_REPLAY_EVENT_TYPES,
+  LLM_RESPONSE_CHUNK_EVENT_TYPE,
   replayLlmRequest,
   type LlmRequestReplay,
   type LlmRequestReplayMessage,
 } from "~/lib/llm-request-replay.ts";
 
 /**
- * LLM-request inspection side panel: the EXACT context one request sent to
- * the model, replayed locally from the raw-event mirror. The processor never
- * stores request bodies — it rebuilds them from committed history per attempt
- * — so this panel runs the same pure fold (see ~/lib/llm-request-replay.ts)
- * over the same events and shows the resulting messages verbatim, including
- * the flattened attachment hint lines. Works retroactively for every request
- * in the journal, at zero storage cost.
+ * LLM trace side panel: the EXACT request one LLM call sent to the model and
+ * the response it made, replayed locally from the raw-event mirror. The
+ * processor never stores request bodies — it rebuilds them from committed
+ * history per attempt — so this panel runs the same pure fold (see
+ * ~/lib/llm-request-replay.ts) over the same events and shows the resulting
+ * messages verbatim, including the flattened attachment hint lines. The
+ * response side comes from the same journal: the committed output when the
+ * turn settled, re-assembled streamed chunks (reasoning included) when it
+ * didn't — which also makes an in-flight request's trace grow live as chunk
+ * events land. Works retroactively for every request in the journal, at zero
+ * storage cost.
  *
- * Fidelity caveat: the replay is exact as long as the deployed fold semantics
- * match the ones that built the original request — the trade we make for not
- * duplicating every prompt into the journal.
+ * Fidelity caveat: the request replay is exact as long as the deployed fold
+ * semantics match the ones that built the original request — the trade we
+ * make for not duplicating every prompt into the journal.
  */
 export function LlmRequestInspectorPanel({
   database,
@@ -41,7 +47,7 @@ export function LlmRequestInspectorPanel({
   // The whole consumed subset, unbounded above: the fold self-filters to
   // offsets ≤ llmRequestOffset, and the request's outcome (completed /
   // cancelled) lands ABOVE it. Bulk emitted-only types (response chunks)
-  // never leave SQLite.
+  // stay out of this transfer — the query below fetches only THIS request's.
   const eventsResult = useStreamQuery(
     database,
     `SELECT json(raw_jsonb) AS raw_json FROM events
@@ -49,15 +55,35 @@ export function LlmRequestInspectorPanel({
      ORDER BY offset ASC`,
     [...LLM_REPLAY_EVENT_TYPES],
   );
+  // This request's streamed chunks: reasoning text lives only here, and for a
+  // request that never settled with an output (cancelled / failed / still in
+  // flight) the re-assembled deltas are the only copy of the response.
+  const chunksResult = useStreamQuery(
+    database,
+    `SELECT json(raw_jsonb) AS raw_json FROM events
+     WHERE type = ? AND json_extract(raw_jsonb, '$.payload.llmRequestOffset') = ?
+     ORDER BY offset ASC`,
+    [LLM_RESPONSE_CHUNK_EVENT_TYPE, llmRequestOffset],
+  );
   const replay = useMemo(
     () =>
       eventsResult.status === "ok"
         ? replayLlmRequest({
             rawEventJsons: eventsResult.data.map((sqlRow) => String(sqlRow.raw_json)),
+            chunkEventJsons:
+              chunksResult.status === "ok"
+                ? chunksResult.data.map((sqlRow) => String(sqlRow.raw_json))
+                : [],
             llmRequestOffset,
           })
         : null,
-    [eventsResult.status, eventsResult.data, llmRequestOffset],
+    [
+      eventsResult.status,
+      eventsResult.data,
+      chunksResult.status,
+      chunksResult.data,
+      llmRequestOffset,
+    ],
   );
 
   const [renderMode, setRenderMode] = useState<"markdown" | "plain">("markdown");
@@ -72,17 +98,17 @@ export function LlmRequestInspectorPanel({
       <div className="flex shrink-0 items-start gap-2 px-5 pb-2 pt-4">
         <div className="min-w-0 flex-1">
           <div className="truncate font-mono text-sm font-semibold">
-            LLM request #{llmRequestOffset}
+            LLM trace #{llmRequestOffset}
             {replay == null ? "" : ` · ${replay.model}`}
           </div>
           <div className="text-xs text-muted-foreground">
             {replay == null ? (
-              "The exact context sent to the model"
+              "The exact request sent to the model, and its response"
             ) : (
               <>
                 {formatDateTime(Date.parse(replay.requestedAt))} ·{" "}
                 {replay.messages.length.toLocaleString()} messages ·{" "}
-                {(totalChars ?? 0).toLocaleString()} chars
+                {(totalChars ?? 0).toLocaleString()} chars in
                 <OutcomeBadge outcome={replay.outcome} />
               </>
             )}
@@ -134,6 +160,7 @@ export function LlmRequestInspectorPanel({
             {replay.messages.map((message) => (
               <ReplayMessageSection key={message.id} message={message} renderMode={renderMode} />
             ))}
+            <ReplayResponseSection replay={replay} renderMode={renderMode} />
           </div>
         ) : eventsResult.status === "pending" ? (
           <p className="px-5 py-3 text-sm text-muted-foreground">Opening local SQLite mirror…</p>
@@ -222,4 +249,88 @@ const ReplayMessageSection = memo(
     previous.renderMode === next.renderMode &&
     previous.message.id === next.message.id &&
     previous.message.content === next.message.content,
+);
+
+/**
+ * The trace's response half: reasoning ("thinking") first when the model
+ * streamed any, then the response text — as a code block when it's a codemode
+ * script (matching the feed's treatment), else through the markdown/plain
+ * toggle. A failed request shows its error here too; the "(partial…)" label
+ * marks chunk-reassembled text that never settled into a committed output.
+ */
+const ReplayResponseSection = memo(
+  function ReplayResponseSection({
+    replay,
+    renderMode,
+  }: {
+    replay: LlmRequestReplay;
+    renderMode: "markdown" | "plain";
+  }) {
+    const { response, outcome } = replay;
+    return (
+      <section className="border-b border-border/60 bg-muted/20 px-5 py-3">
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+            response
+          </span>
+          {response == null ? null : (
+            <span className="font-mono text-[10px] text-muted-foreground/60">
+              {response.text.length.toLocaleString()} chars
+              {response.source === "chunks" && outcome != null
+                ? " · partial (re-assembled from streamed chunks)"
+                : response.source === "chunks"
+                  ? " · streaming"
+                  : ""}
+            </span>
+          )}
+        </div>
+        {response == null || response.thinkingText === "" ? null : (
+          <div className="mb-2 max-w-full whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-sm italic leading-relaxed text-muted-foreground">
+            {response.thinkingText}
+          </div>
+        )}
+        {response == null || response.text === "" ? null : looksLikeCode(response.text) ? (
+          <SourceCodeBlock
+            code={response.text}
+            language="typescript"
+            className="max-h-96"
+            showCopyButton
+            showLineNumbers={false}
+            plainChrome
+          />
+        ) : renderMode === "markdown" ? (
+          <MessageResponse
+            className="min-w-0 max-w-full overflow-hidden text-sm"
+            mode="static"
+            parseIncompleteMarkdown={false}
+          >
+            {response.text}
+          </MessageResponse>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
+            {response.text}
+          </pre>
+        )}
+        {outcome?.errorMessage == null ? null : (
+          <pre className="mt-2 overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
+            {outcome.errorMessage}
+          </pre>
+        )}
+        {response == null && outcome?.errorMessage == null ? (
+          <p className="text-sm text-muted-foreground">
+            {outcome == null
+              ? "Nothing has streamed back yet."
+              : "The model returned no text for this request."}
+          </p>
+        ) : null}
+      </section>
+    );
+  },
+  (previous, next) =>
+    previous.renderMode === next.renderMode &&
+    previous.replay.response?.text === next.replay.response?.text &&
+    previous.replay.response?.thinkingText === next.replay.response?.thinkingText &&
+    previous.replay.response?.source === next.replay.response?.source &&
+    previous.replay.outcome?.status === next.replay.outcome?.status &&
+    previous.replay.outcome?.errorMessage === next.replay.outcome?.errorMessage,
 );

@@ -119,6 +119,80 @@ describe("replayLlmRequest", () => {
     });
   });
 
+  it("returns the committed output as the response, with thinking from chunks", () => {
+    const chunkRows = [
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        {
+          chunk: { choices: [{ delta: { reasoning_content: "let me think" } }] },
+          llmRequestOffset: 3,
+          sequence: 0,
+        },
+        50,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "hi " } }] }, llmRequestOffset: 3, sequence: 1 },
+        51,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "there" } }] }, llmRequestOffset: 3, sequence: 2 },
+        52,
+      ),
+    ];
+    const replay = replayLlmRequest({
+      rawEventJsons: conversationRows(),
+      chunkEventJsons: chunkRows,
+      llmRequestOffset: 3,
+    });
+    // The committed output-added text is authoritative over the streamed
+    // concatenation; thinking only ever exists in the chunks.
+    expect(replay?.response).toEqual({
+      text: "hi there",
+      thinkingText: "let me think",
+      source: "output",
+    });
+  });
+
+  it("re-assembles a partial response from chunks when no output committed", () => {
+    // Request 7 was cancelled mid-stream: chunks are the only copy. Sequence
+    // order wins even when rows arrive shuffled.
+    const chunkRows = [
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "world" } }] }, llmRequestOffset: 7, sequence: 1 },
+        60,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        {
+          chunk: { choices: [{ delta: { content: "hello " } }] },
+          llmRequestOffset: 7,
+          sequence: 0,
+        },
+        61,
+      ),
+      // Another request's chunk must not bleed in.
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "NOPE" } }] }, llmRequestOffset: 3, sequence: 0 },
+        62,
+      ),
+    ];
+    const replay = replayLlmRequest({
+      rawEventJsons: conversationRows(),
+      chunkEventJsons: chunkRows,
+      llmRequestOffset: 7,
+    });
+    expect(replay?.response).toEqual({ text: "hello world", thinkingText: "", source: "chunks" });
+  });
+
+  it("reports no response when nothing streamed or committed", () => {
+    const replay = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 7 });
+    expect(replay?.response).toBeNull();
+  });
+
   it("returns null when the offset has no llm-request-requested event", () => {
     expect(replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 2 })).toBeNull();
     expect(
