@@ -31,6 +31,7 @@ import {
   grant,
   messageFor,
   reject,
+  safeHost,
   type RequestedPayload,
   type Settlement,
 } from "./approve-core.ts";
@@ -126,63 +127,89 @@ export async function runApprovalCli(input: {
 
     renderHeldRequest(event.offset, payload);
 
-    // The human moment. Native mode: one dialog whose Approve button leads
-    // straight into the Touch ID sheet — reading and signing are the same
-    // gesture. Terminal mode: y/n, then sign.
-    if (native) {
-      // A cancelled Touch ID sheet comes back as "ignored"; anything else
-      // thrown is structural — broken helper, bad blob — and stops the loop.
-      const verdict = await promptNativeApproval({
-        key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
-        message: messageFor(input.projectId, event.offset, payload),
-        request: payload,
-      });
-      if (verdict.decision === "ignored") {
-        prompts.log.info(`Ignored #${event.offset} — it can be answered elsewhere or expire.`);
-        continue;
+    // Offer this request until it reaches a terminal outcome. A grant the door
+    // ignores (unenrolled/revoked key → "unsettled") re-offers rather than
+    // silently dropping it; the human can decline the retry to leave it held.
+    let stopped = false;
+    while (!stopped && Date.parse(payload.expiresAt) > Date.now()) {
+      // The human moment. Native mode: one dialog whose Approve button leads
+      // straight into the Touch ID sheet. Terminal mode: y/n, then sign.
+      let signature: string | undefined;
+      if (native) {
+        // A cancelled Touch ID sheet comes back as "ignored"; anything else
+        // thrown is structural — broken helper, bad blob — and stops the loop.
+        const verdict = await promptNativeApproval({
+          key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
+          message: messageFor(input.projectId, event.offset, payload),
+          request: payload,
+        });
+        if (verdict.decision === "ignored") {
+          prompts.log.info(`Ignored #${event.offset} — it can be answered elsewhere or expire.`);
+          break;
+        }
+        if (verdict.decision === "rejected") {
+          await reject(stream, event.offset);
+          prompts.log.warn(`Rejected #${event.offset}.`);
+          break;
+        }
+        signature = verdict.signature;
+      } else {
+        const approved = await prompts.confirm({
+          message: `Approve ${payload.method} ${safeHost(payload.url)}?`,
+          initialValue: false,
+        });
+        if (prompts.isCancel(approved)) {
+          prompts.outro("Stopped. Held requests will auto-reject on their timeouts.");
+          return;
+        }
+        if (!approved) {
+          await reject(stream, event.offset);
+          prompts.log.warn(`Rejected #${event.offset}.`);
+          break;
+        }
       }
-      if (verdict.decision === "rejected") {
-        await reject(stream, event.offset);
-        prompts.log.warn(`Rejected #${event.offset}.`);
-        continue;
-      }
-      await grant({
-        stream,
-        projectId: input.projectId,
-        key,
-        offset: event.offset,
-        payload,
-        signature: verdict.signature,
-      });
-    } else {
-      const approved = await prompts.confirm({
-        message: `Approve ${payload.method} ${new URL(payload.url).host}?`,
-        initialValue: false,
-      });
-      if (prompts.isCancel(approved)) {
-        prompts.outro("Stopped. Held requests will auto-reject on their timeouts.");
-        return;
-      }
-      if (!approved) {
-        await reject(stream, event.offset);
-        prompts.log.warn(`Rejected #${event.offset}.`);
-        continue;
-      }
+
+      // Native already signed inside the dialog (signature set); the terminal
+      // path signs here, which is where Touch ID pops for an enclave key.
       const spinner = prompts.spinner();
-      spinner.start(key?.kind === "secure-enclave" ? "Signing — check Touch ID..." : "Signing...");
+      spinner.start(
+        signature !== undefined
+          ? "Submitting…"
+          : key?.kind === "secure-enclave"
+            ? "Signing — check Touch ID..."
+            : "Signing...",
+      );
       try {
-        await grant({ stream, projectId: input.projectId, key, offset: event.offset, payload });
+        await grant({
+          stream,
+          projectId: input.projectId,
+          key,
+          offset: event.offset,
+          payload,
+          signature,
+        });
         spinner.stop("Signed.");
       } catch (error) {
         spinner.stop("Signing failed.");
         prompts.log.error(error instanceof Error ? error.message : String(error));
-        continue;
+        break;
+      }
+
+      // Granting is a claim, not a fact — the door verifies and settles.
+      const settlement = await awaitSettlement(stream, event.offset);
+      reportSettlement(event.offset, settlement);
+      if (settlement.kind !== "unsettled") break; // released / rejected → done
+
+      // The door didn't accept the grant. Let the human retry or leave it held.
+      const retry = await prompts.confirm({
+        message: `Grant for #${event.offset} wasn't accepted (key enrolled? \`--keys\`). Retry?`,
+        initialValue: false,
+      });
+      if (prompts.isCancel(retry) || !retry) {
+        prompts.log.warn(`Left #${event.offset} held — it will expire on its timeout.`);
+        stopped = true;
       }
     }
-
-    // Granting is a claim, not a fact — the egress door verifies the signature
-    // and settles the request. Report what actually happened.
-    reportSettlement(event.offset, await awaitSettlement(stream, event.offset));
   }
 }
 

@@ -29,6 +29,15 @@ export const EVENT = {
 
 export type RequestedPayload = HumanApprovalRequestedPayload;
 
+/** The request's host for display — falls back to the raw URL when unparseable. */
+export function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 /** The canonical bytes a grant for this request signs over. */
 export function messageFor(
   projectId: string,

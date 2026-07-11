@@ -28,7 +28,14 @@ import type { RpcStub } from "capnweb";
 
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
 import { loadApprovalKey } from "./approval-keys.ts";
-import { connectApproval, EVENT, grant, reject, type RequestedPayload } from "./approve-core.ts";
+import {
+  connectApproval,
+  EVENT,
+  grant,
+  reject,
+  safeHost,
+  type RequestedPayload,
+} from "./approve-core.ts";
 
 const RESOLUTION_TYPES = [EVENT.settled, EVENT.rejected];
 
@@ -228,12 +235,4 @@ function emitRequested(offset: number, payload: RequestedPayload, submitted: boo
     bodyPreview: payload.bodyPreview,
     submitted, // a grant already exists — awaiting the door, not fresh
   });
-}
-
-function safeHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }
