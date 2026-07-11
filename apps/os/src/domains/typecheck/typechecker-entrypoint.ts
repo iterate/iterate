@@ -18,9 +18,13 @@ const CheckInput = z.object({
  * later check until isolate death, so the next check retries. */
 let compilerPromise: Promise<Compiler> | undefined;
 function compiler(): Promise<Compiler> {
-  compilerPromise ??= createCompiler({ wasm: typescriptWasm as WebAssembly.Module });
-  compilerPromise.catch(() => (compilerPromise = undefined));
-  return compilerPromise;
+  const promise = (compilerPromise ??= createCompiler({
+    wasm: typescriptWasm as WebAssembly.Module,
+  }));
+  promise.catch(() => {
+    if (compilerPromise === promise) compilerPromise = undefined;
+  });
+  return promise;
 }
 
 /**
