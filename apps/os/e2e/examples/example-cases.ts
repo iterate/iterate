@@ -144,7 +144,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ projectId });
       // Built-ins ARE the children map; `capabilities` holds dynamic mounts
-      // only (a fresh fixture project has none).
+      // only. The matrix shares one fixture project, so sibling examples may
+      // have left durable mounts — assert the shape, not emptiness.
       const builtins = (result as { builtins: string[] }).builtins;
       expect(builtins).toEqual(
         expect.arrayContaining([
@@ -157,7 +158,9 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
           "integrations",
         ]),
       );
-      expect((result as { mounted: string[] }).mounted).toEqual([]);
+      const mounted = (result as { mounted: string[] }).mounted;
+      expect(mounted.every((path) => typeof path === "string")).toBe(true);
+      expect(mounted).not.toContain("streams"); // builtins never appear here
     },
   },
   "discover-tree": {
