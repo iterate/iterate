@@ -55,6 +55,9 @@ patchedDependencies:
   '@cloudflare/workers-types@4.20260621.1':
     hash: ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2
     path: patches/@cloudflare__workers-types@4.20260621.1.patch
+  '@journeyapps/wa-sqlite@1.7.0':
+    hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
+    path: patches/@journeyapps__wa-sqlite@1.7.0.patch
   capnweb@0.8.0:
     hash: e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24
     path: patches/capnweb@0.8.0.patch
@@ -533,7 +536,7 @@ importers:
         version: link:../../packages/ui
       '@journeyapps/wa-sqlite':
         specifier: ^1.7.0
-        version: 1.7.0
+        version: 1.7.0(patch_hash=628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83)
       '@mmkal/jsonata':
         specifier: ^2.2.1
         version: 2.2.1
@@ -853,7 +856,7 @@ importers:
         version: link:../../packages/shared
       '@journeyapps/wa-sqlite':
         specifier: ^1.7.0
-        version: 1.7.0
+        version: 1.7.0(patch_hash=628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83)
       '@tanstack/react-router':
         specifier: ^1.170.10
         version: 1.170.15(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -13963,7 +13966,7 @@ snapshots:
       '@jimp/types': 1.6.0
       tinycolor2: 1.6.0
 
-  '@journeyapps/wa-sqlite@1.7.0': {}
+  '@journeyapps/wa-sqlite@1.7.0(patch_hash=628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83)': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
