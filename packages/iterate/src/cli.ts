@@ -1163,6 +1163,14 @@ const launcherProcedures = {
     .handler(async ({ input }) => {
       const resolved = resolveConfig(process.cwd(), { throw: true });
 
+      // --json is listen-and-decide only; the setup flags are for the terminal
+      // form. Reject the combination loudly rather than silently ignoring it.
+      if (input.json && (input.enroll || input.keys || input.revoke || input.native)) {
+        throw new Error(
+          "--json cannot be combined with --enroll/--keys/--revoke/--native; run those separately.",
+        );
+      }
+
       // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
       // the stored `iterate login` session. In JSON mode we never open a
       // browser — a missing session is reported so the app can drive login.

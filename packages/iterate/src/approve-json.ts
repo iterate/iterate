@@ -68,40 +68,43 @@ export async function runApprovalJson(input: {
   // live-only race, no gap).
   const cursor = await reconcileBacklog(stream, key, pending);
 
+  // Decisions run one at a time: signing pops Touch ID, and two enclave
+  // signatures must not race. Each line chains after the last; handleDecision
+  // never throws, so the chain never breaks.
+  let decisions: Promise<void> = Promise.resolve();
   createInterface({ input: process.stdin }).on("line", (raw) => {
-    void handleDecision(raw).catch((error: unknown) => {
-      emit({ type: "error", message: error instanceof Error ? error.message : String(error) });
-    });
+    decisions = decisions.then(() => handleDecision(raw));
   });
 
   async function handleDecision(raw: string): Promise<void> {
     const trimmed = raw.trim();
     if (trimmed === "") return;
-    const decision = JSON.parse(trimmed) as { offset?: number; decision?: string };
-    if (typeof decision.offset !== "number") return;
-    if (decision.decision === "rejected") {
-      await reject(appendStream, decision.offset);
-      return;
-    }
-    if (decision.decision !== "granted") return;
-    const payload = pending.get(decision.offset);
-    if (payload === undefined) {
-      emit({ type: "error", offset: decision.offset, message: "no such pending request" });
-      return;
-    }
+    let decision: { offset?: number; decision?: string };
     try {
-      // Signs on the enclave path — Touch ID pops here.
-      await grant({
-        stream: appendStream,
-        projectId: input.projectId,
-        key,
-        offset: decision.offset,
-        payload,
-      });
+      decision = JSON.parse(trimmed) as { offset?: number; decision?: string };
+    } catch {
+      emit({ type: "error", message: "malformed decision line" });
+      return;
+    }
+    const offset = decision.offset;
+    if (typeof offset !== "number") return;
+    try {
+      if (decision.decision === "rejected") {
+        await reject(appendStream, offset);
+      } else if (decision.decision === "granted") {
+        const payload = pending.get(offset);
+        if (payload === undefined) {
+          emit({ type: "error", offset, message: "no such pending request" });
+          return;
+        }
+        // Signs on the enclave path — Touch ID pops here.
+        await grant({ stream: appendStream, projectId: input.projectId, key, offset, payload });
+      }
     } catch (error) {
+      // Every failure carries the offset so the app can clear that row.
       emit({
         type: "error",
-        offset: decision.offset,
+        offset,
         message: error instanceof Error ? error.message : String(error),
       });
     }

@@ -121,6 +121,7 @@ final class ApprovalController: ObservableObject {
     process = nil
     stdinHandle = nil
     requests = []
+    buffer = Data()  // a partial line from the old watcher must not bleed into the next
   }
 
   /// Kick off `iterate login` (browser OAuth), then restart the watcher.
