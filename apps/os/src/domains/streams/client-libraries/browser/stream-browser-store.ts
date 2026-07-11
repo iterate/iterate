@@ -1013,7 +1013,11 @@ function createStreamRuntime(
       reconnectNow();
     } else if (subscriptionHandle !== undefined) {
       void nudge();
-    } else {
+    } else if (snapshot.subscriptionStatus === "follower") {
+      // Settled followers ONLY — an election in flight ("electing", or
+      // "leader" before subscribe resolves) also has no handle yet, but its
+      // own step deadlines already bound a dead transport, and a resume-time
+      // probe racing a cold DO would tear down that healthy attempt.
       void (async () => {
         const check = () =>
           raceWithTimeout(
