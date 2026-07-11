@@ -1,5 +1,8 @@
 import { resolveJsonSchema, type JsonSchema } from "./json-schema-types.ts";
 
+/** Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional
+ * `baseUrl` overriding the spec's server, and extra headers (auth) sent with
+ * every operation call. */
 export type OpenApiConnectInput = {
   baseUrl?: string;
   headers?: Record<string, string>;

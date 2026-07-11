@@ -414,7 +414,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getEvent(args);
   }
 
-  /** Read one bounded page of committed events (optionally filtered by type). */
+  /**
+   * Read one bounded page of committed events (default from the stream's
+   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
+   * page (500 events) means MORE remain — page with
+   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
+   * shows you the beginning, not the head.
+   */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args);
   }
@@ -5327,6 +5333,11 @@ const EXA_PLATFORM_KEY_HEADER = {
   authorization: 'Bearer getSecret({ platform: "integrations.exa.apiKey" })',
 };
 
+/**
+ * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`
+ * returns a client whose dotted calls invoke the server's tools; `exa` is the
+ * pre-connected Exa web-search server every project gets.
+ */
 class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -5435,6 +5446,11 @@ type OpenApiReadyState = {
   spec: Record<string, unknown>;
 };
 
+/**
+ * Ad-hoc OpenAPI clients — `itx.openapi`. `connect({ specUrl })` fetches and
+ * parses a spec and returns a client whose dotted calls are the spec's
+ * operationIds, executed against its server through project egress.
+ */
 class OpenApiCollectionRpcTarget extends IterateRpcTarget<"OpenApiCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({

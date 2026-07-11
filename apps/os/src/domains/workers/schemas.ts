@@ -104,6 +104,9 @@ export type DynamicWorkerSource = {
   options?: WorkerBuildOptions;
 };
 
+/** Fields shared by every dynamic worker ref (stateless and stateful): the
+ * itx scope `path` the worker binds to and the declarative `source` it is
+ * built from. */
 export type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker

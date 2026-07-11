@@ -437,8 +437,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpClientCollection",
     kind: "interface",
     sourceText:
-      "export interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}",
-    summary: "",
+      "/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server's tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}",
+    summary: "Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`.",
     memberSummaries: {
       connect: "Connect to an MCP server by URL; dotted calls on the client are tool invocations.",
       exa: "The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every project: web search and page reading as flat tool calls.",
@@ -449,8 +449,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "OpenApiCollection",
     kind: "interface",
     sourceText:
-      "export interface OpenApiCollection {\n  __describe(): Promise<Description>;\n  /** Fetch and parse a spec; dotted calls on the returned client are operationIds. */\n  connect(input: OpenApiConnectInput): Promise<OpenApiRpc>;\n}",
-    summary: "",
+      "/**\n * Ad-hoc OpenAPI clients — `itx.openapi`. `connect({ specUrl })` fetches and\n * parses a spec and returns a client whose dotted calls are the spec's\n * operationIds, executed against its server through project egress.\n */\nexport interface OpenApiCollection {\n  __describe(): Promise<Description>;\n  /** Fetch and parse a spec; dotted calls on the returned client are operationIds. */\n  connect(input: OpenApiConnectInput): Promise<OpenApiRpc>;\n}",
+    summary: "Ad-hoc OpenAPI clients — `itx.openapi`.",
     memberSummaries: {
       connect: "Fetch and parse a spec; dotted calls on the returned client are operationIds.",
     },
@@ -616,13 +616,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Stream",
     kind: "interface",
     sourceText:
-      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /** Read one bounded page of committed events (optionally filtered by type). */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, unknown>;\n      subscriptions: Record<\n        string,\n        {\n          mode: "wake" | "push" | "webhook";\n          ackedOffset: number;\n          lag: number;\n          attempt: number;\n          nextAttemptAt: number | null;\n          lastError: string | null;\n          parkedAtOffset: number | null;\n          connected: boolean;\n        }\n      >;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Live EPHEMERAL event delivery: `processEventBatch` is called for every\n   * committed batch (optionally replayed from `replayAfterOffset`); returns an\n   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable\n   * delivery is configured as data instead, by appending a\n   * `subscription-configured` event (wake or push mode) to the stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */\n    getRuntimeState?: GetProcessorRuntimeState;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
+      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, unknown>;\n      subscriptions: Record<\n        string,\n        {\n          mode: "wake" | "push" | "webhook";\n          ackedOffset: number;\n          lag: number;\n          attempt: number;\n          nextAttemptAt: number | null;\n          lastError: string | null;\n          parkedAtOffset: number | null;\n          connected: boolean;\n        }\n      >;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Live EPHEMERAL event delivery: `processEventBatch` is called for every\n   * committed batch (optionally replayed from `replayAfterOffset`); returns an\n   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable\n   * delivery is configured as data instead, by appending a\n   * `subscription-configured` event (wake or push mode) to the stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */\n    getRuntimeState?: GetProcessorRuntimeState;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
     summary: "Durable event stream capability.",
     memberSummaries: {
       append: "Commit events; resolves with the same events carrying offsets and timestamps.",
       at: "The stream at a sub-path, resolved relative to this stream's path.",
       getEvent: "One event by offset or idempotencyKey; undefined when it does not exist.",
-      getEvents: "Read one bounded page of committed events (optionally filtered by type).",
+      getEvents:
+        "Read one bounded page of committed events (default from the stream's start; filter with `eventTypes`, page forward with `afterOffset`).",
       readEvents:
         'A stateful pager over a read window: repeated `next()` calls walk forward through pages, `[]` means "caught up for now".',
       waitForEvent:
@@ -658,8 +659,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamProcessorRpc",
     kind: "interface",
     sourceText:
-      "export interface StreamProcessorRpc<State = unknown> {\n  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;\n  snapshot(): Promise<ProcessorSnapshot<State>>;\n  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;\n}",
-    summary: "",
+      "/**\n * The read-side RPC surface every stream processor node exposes: inspect\n * runtime state (snapshot plus a processor-specific runtime bag), take an\n * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to\n * block until the processor has folded a given offset.\n */\nexport interface StreamProcessorRpc<State = unknown> {\n  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;\n  snapshot(): Promise<ProcessorSnapshot<State>>;\n  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;\n}",
+    summary:
+      "The read-side RPC surface every stream processor node exposes: inspect runtime state (snapshot plus a processor-specific runtime bag), take an offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to block until the processor has folded a given offset.",
     memberSummaries: {},
     referencedTypeNames: ["ProcessorRuntimeState", "ProcessorSnapshot"],
   },
@@ -979,8 +981,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CapabilityDescription",
     kind: "typeAlias",
     sourceText:
-      'export type CapabilityDescription = {\n  instructions?: string;\n  path: string[];\n  providedAtOffset?: number;\n  /**\n   * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).\n   * Set when a scope reports capabilities it inherited from an enclosing scope,\n   * so the reader can tell a local mount from an inherited one. Absent on\n   * built-ins (they exist at every scope).\n   */\n  scope?: string;\n  type: "builtin" | "live" | "itx-expression";\n  types?: string;\n};',
-    summary: "",
+      '/**\n * One capability in a project\'s inventory (`__describe().capabilities`): the\n * itx path it is mounted at, how it is implemented (built-in, live-provided,\n * or a persisted itx expression), and optional instructions/types for\n * discovery.\n */\nexport type CapabilityDescription = {\n  instructions?: string;\n  path: string[];\n  providedAtOffset?: number;\n  /**\n   * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).\n   * Set when a scope reports capabilities it inherited from an enclosing scope,\n   * so the reader can tell a local mount from an inherited one. Absent on\n   * built-ins (they exist at every scope).\n   */\n  scope?: string;\n  type: "builtin" | "live" | "itx-expression";\n  types?: string;\n};',
+    summary:
+      "One capability in a project's inventory (`__describe().capabilities`): the itx path it is mounted at, how it is implemented (built-in, live-provided, or a persisted itx expression), and optional instructions/types for discovery.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1045,8 +1048,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfMarkdownConversionArgs",
     kind: "typeAlias",
     sourceText:
-      "export type CfMarkdownConversionArgs =\n  | []\n  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];",
-    summary: "",
+      "/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;\n * otherwise one document (or an array) plus optional conversion options\n * converts to markdown. */\nexport type CfMarkdownConversionArgs =\n  | []\n  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];",
+    summary:
+      "The `ai.toMarkdown` argument tuple: empty lists the supported formats; otherwise one document (or an array) plus optional conversion options converts to markdown.",
     memberSummaries: {},
     referencedTypeNames: ["CfMarkdownDocument", "CfMarkdownConversionOptions"],
   },
@@ -1054,8 +1058,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfMarkdownSupportedFormat",
     kind: "typeAlias",
     sourceText:
-      "export type CfMarkdownSupportedFormat = {\n  extension: string;\n  mimeType: string;\n};",
-    summary: "",
+      "/** One file format the markdown converter accepts (extension plus MIME type);\n * `ai.toMarkdown()` with no arguments returns the full list. */\nexport type CfMarkdownSupportedFormat = {\n  extension: string;\n  mimeType: string;\n};",
+    summary:
+      "One file format the markdown converter accepts (extension plus MIME type); `ai.toMarkdown()` with no arguments returns the full list.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1063,8 +1068,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfMarkdownConversionResult",
     kind: "typeAlias",
     sourceText:
-      'export type CfMarkdownConversionResult = {\n  name: string;\n  format: "markdown" | "error";\n  mimeType?: string;\n  tokens?: number;\n  data?: string;\n  error?: string;\n};',
-    summary: "",
+      '/** One converted document from `ai.toMarkdown`: `format` is "markdown" with\n * the markdown text in `data` (plus a token estimate), or "error" with the\n * failure message in `error`. */\nexport type CfMarkdownConversionResult = {\n  name: string;\n  format: "markdown" | "error";\n  mimeType?: string;\n  tokens?: number;\n  data?: string;\n  error?: string;\n};',
+    summary:
+      'One converted document from `ai.toMarkdown`: `format` is "markdown" with the markdown text in `data` (plus a token estimate), or "error" with the failure message in `error`.',
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1072,8 +1078,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfBrowserQuickAction",
     kind: "typeAlias",
     sourceText:
-      'export type CfBrowserQuickAction =\n  | "content"\n  | "screenshot"\n  | "pdf"\n  | "markdown"\n  | "snapshot"\n  | "scrape"\n  | "json"\n  | "links"\n  | "crawl";',
-    summary: "",
+      '/** A Browser Run quick-action name (`browser.quickAction`\'s first argument):\n * what to extract from the rendered page — page content, screenshot, PDF,\n * markdown, accessibility snapshot, scraped elements, structured JSON, links,\n * or a crawl. */\nexport type CfBrowserQuickAction =\n  | "content"\n  | "screenshot"\n  | "pdf"\n  | "markdown"\n  | "snapshot"\n  | "scrape"\n  | "json"\n  | "links"\n  | "crawl";',
+    summary:
+      "A Browser Run quick-action name (`browser.quickAction`'s first argument): what to extract from the rendered page — page content, screenshot, PDF, markdown, accessibility snapshot, scraped elements, structured JSON, links, or a crawl.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1081,8 +1088,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfBrowserQuickActionOptions",
     kind: "typeAlias",
     sourceText:
-      "export type CfBrowserQuickActionOptions = Record<string, unknown> &\n  ({ url: string } | { html: string });",
-    summary: "",
+      "/** Options for a Browser Run quick action: the target page as a `url` or as\n * inline `html`, plus the action's own pass-through options (e.g.\n * `screenshotOptions`). */\nexport type CfBrowserQuickActionOptions = Record<string, unknown> &\n  ({ url: string } | { html: string });",
+    summary:
+      "Options for a Browser Run quick action: the target page as a `url` or as inline `html`, plus the action's own pass-through options (e.g.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1108,8 +1116,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamEvent",
     kind: "typeAlias",
     sourceText:
-      "export type StreamEvent = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n  offset: number;\n  createdAt: string;\n  path: string;\n};",
-    summary: "",
+      "/** One committed event on a durable stream: type, JSON payload, offset,\n * idempotency key, and provenance (processor stamp / cross-post chain), plus\n * the commit-time `createdAt` and stream `path`. */\nexport type StreamEvent = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n  offset: number;\n  createdAt: string;\n  path: string;\n};",
+    summary:
+      "One committed event on a durable stream: type, JSON payload, offset, idempotency key, and provenance (processor stamp / cross-post chain), plus the commit-time `createdAt` and stream `path`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1126,8 +1135,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AgentFileAttachment",
     kind: "typeAlias",
     sourceText:
-      "export type AgentFileAttachment = {\n  contentType: string;\n  filename: string;\n  path: string;\n  size: number;\n  url: string;\n};",
-    summary: "",
+      "/** A file attached to an agent input: content type, filename, project\n * file-storage path, size, and the signed public URL minted at attach time\n * (stored, not re-minted — it expires with its signature). */\nexport type AgentFileAttachment = {\n  contentType: string;\n  filename: string;\n  path: string;\n  size: number;\n  url: string;\n};",
+    summary:
+      "A file attached to an agent input: content type, filename, project file-storage path, size, and the signed public URL minted at attach time (stored, not re-minted — it expires with its signature).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1152,8 +1162,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
   {
     name: "StreamListItem",
     kind: "typeAlias",
-    sourceText: "export type StreamListItem = { createdAt: string; path: string };",
-    summary: "",
+    sourceText:
+      "/** One known stream in a project's reduced state — the entry shape the\n * collection `list()` methods return: stream path plus creation time. */\nexport type StreamListItem = { createdAt: string; path: string };",
+    summary:
+      "One known stream in a project's reduced state — the entry shape the collection `list()` methods return: stream path plus creation time.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1199,8 +1211,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "IntegrationConnectionStatus",
     kind: "typeAlias",
     sourceText:
-      "export type IntegrationConnectionStatus = {\n  connected: boolean;\n  displayName: string | null;\n  externalId: string | null;\n  metadata: Record<string, unknown>;\n};",
-    summary: "",
+      "/** Connection health for one integration connection (what\n * `getConnectionStatus` returns): whether it is connected, plus the external\n * account's id, display name, and provider-specific metadata. */\nexport type IntegrationConnectionStatus = {\n  connected: boolean;\n  displayName: string | null;\n  externalId: string | null;\n  metadata: Record<string, unknown>;\n};",
+    summary:
+      "Connection health for one integration connection (what `getConnectionStatus` returns): whether it is connected, plus the external account's id, display name, and provider-specific metadata.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1228,8 +1241,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CompleteConnectResult",
     kind: "typeAlias",
     sourceText:
-      "export type CompleteConnectResult =\n  | { callbackUrl: string | null; ok: true }\n  | { callbackUrl: string | null; error: string; ok: false };",
-    summary: "",
+      "/** Outcome of `completeConnect` (the OAuth/installation redirect callback):\n * `ok` plus the `callbackUrl` to send the browser back to; on failure, a\n * human-readable `error`. */\nexport type CompleteConnectResult =\n  | { callbackUrl: string | null; ok: true }\n  | { callbackUrl: string | null; error: string; ok: false };",
+    summary:
+      "Outcome of `completeConnect` (the OAuth/installation redirect callback): `ok` plus the `callbackUrl` to send the browser back to; on failure, a human-readable `error`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1237,8 +1251,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpClientConnectInput",
     kind: "typeAlias",
     sourceText:
-      "export type McpClientConnectInput = {\n  headers?: Record<string, string>;\n  timeoutMs?: number;\n  url: string;\n};",
-    summary: "",
+      "/** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional\n * request headers (auth), and an optional per-tool-call timeout in\n * milliseconds. */\nexport type McpClientConnectInput = {\n  headers?: Record<string, string>;\n  timeoutMs?: number;\n  url: string;\n};",
+    summary:
+      "Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional request headers (auth), and an optional per-tool-call timeout in milliseconds.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1255,8 +1270,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "OpenApiConnectInput",
     kind: "typeAlias",
     sourceText:
-      "export type OpenApiConnectInput = {\n  baseUrl?: string;\n  headers?: Record<string, string>;\n  specUrl: string;\n};",
-    summary: "",
+      "/** Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional\n * `baseUrl` overriding the spec's server, and extra headers (auth) sent with\n * every operation call. */\nexport type OpenApiConnectInput = {\n  baseUrl?: string;\n  headers?: Record<string, string>;\n  specUrl: string;\n};",
+    summary:
+      "Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional `baseUrl` overriding the spec's server, and extra headers (auth) sent with every operation call.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1274,8 +1290,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SandboxInstanceType",
     kind: "typeAlias",
     sourceText:
-      'export type SandboxInstanceType =\n  | "basic"\n  | "lite"\n  | "standard-1"\n  | "standard-2"\n  | "standard-3"\n  | "standard-4";',
-    summary: "",
+      '/** A sandbox\'s size tier ("lite" | "basic" | "standard-1"…"standard-4") —\n * Cloudflare container instance-type names, fixed at `create` and immutable\n * for the sandbox\'s lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the\n * vCPU/memory/disk table. */\nexport type SandboxInstanceType =\n  | "basic"\n  | "lite"\n  | "standard-1"\n  | "standard-2"\n  | "standard-3"\n  | "standard-4";',
+    summary:
+      'A sandbox\'s size tier ("lite" | "basic" | "standard-1"…"standard-4") — Cloudflare container instance-type names, fixed at `create` and immutable for the sandbox\'s lifetime.',
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1432,8 +1449,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamEventInput",
     kind: "typeAlias",
     sourceText:
-      "export type StreamEventInput = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n};",
-    summary: "",
+      "/** Append input for `Stream.append`: event type, JSON payload, optional\n * metadata, provenance source, and idempotency key — everything before the\n * stream assigns offset and timestamp at commit. */\nexport type StreamEventInput = {\n  type: string;\n  payload?: Record<string, unknown> | undefined;\n  metadata?: Record<string, unknown> | undefined;\n  source?:\n    | {\n        processor?:\n          | {\n              slug: string;\n              version: string;\n              stream: { path: string; projectId: string | null };\n              whileProcessing?: { offset: number; type: string } | undefined;\n            }\n          | undefined;\n        crossPostedFrom?:\n          | {\n              subscriptionKey: string;\n              createdAt: string;\n              offset: number;\n              path: string;\n              projectId: string | null;\n              type: string;\n            }[]\n          | undefined;\n      }\n    | undefined;\n  idempotencyKey?: string | undefined;\n};",
+    summary:
+      "Append input for `Stream.append`: event type, JSON payload, optional metadata, provenance source, and idempotency key — everything before the stream assigns offset and timestamp at commit.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1495,8 +1513,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
   {
     name: "ProcessorSnapshot",
     kind: "typeAlias",
-    sourceText: "export type ProcessorSnapshot<State> = {\n  offset: number;\n  state: State;\n};",
-    summary: "",
+    sourceText:
+      "/** One consistent read of a processor (what `snapshot()` returns): the folded\n * state pinned to the offset of the last event folded into it. */\nexport type ProcessorSnapshot<State> = {\n  offset: number;\n  state: State;\n};",
+    summary:
+      "One consistent read of a processor (what `snapshot()` returns): the folded state pinned to the offset of the last event folded into it.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1513,8 +1533,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfMarkdownDocument",
     kind: "typeAlias",
     sourceText:
-      "export type CfMarkdownDocument = {\n  /** Filename including the extension; Cloudflare uses it to choose the converter. */\n  name: string;\n  blob: Blob;\n};",
-    summary: "",
+      "/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):\n * a filename plus the raw bytes as a Blob. */\nexport type CfMarkdownDocument = {\n  /** Filename including the extension; Cloudflare uses it to choose the converter. */\n  name: string;\n  blob: Blob;\n};",
+    summary:
+      "One input document for Workers AI markdown conversion (`ai.toMarkdown`): a filename plus the raw bytes as a Blob.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1522,8 +1543,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfMarkdownConversionOptions",
     kind: "typeAlias",
     sourceText:
-      "export type CfMarkdownConversionOptions = {\n  conversionOptions?: {\n    html?: {\n      cssSelector?: string;\n      hostname?: string;\n    };\n    image?: {\n      descriptionLanguage?: string;\n    };\n    pdf?: {\n      excludeMetadata?: boolean;\n    };\n  };\n};",
-    summary: "",
+      "/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,\n * hostname for relative links), image description language, PDF metadata\n * exclusion. */\nexport type CfMarkdownConversionOptions = {\n  conversionOptions?: {\n    html?: {\n      cssSelector?: string;\n      hostname?: string;\n    };\n    image?: {\n      descriptionLanguage?: string;\n    };\n    pdf?: {\n      excludeMetadata?: boolean;\n    };\n  };\n};",
+    summary:
+      "Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector, hostname for relative links), image description language, PDF metadata exclusion.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1588,8 +1610,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SecretDescription",
     kind: "typeAlias",
     sourceText:
-      'export type SecretDescription = {\n  audit: {\n    lastUsedAt?: string;\n    lastUsedBy?: string;\n    lastUsedUrl?: string;\n    usedCount: number;\n  };\n  egress: { urls: string[] };\n  hasMaterial: boolean;\n  /** The configured refresh strategy\'s kind, or null when none is configured. */\n  refresh: SecretRefresh["kind"] | null;\n};',
-    summary: "",
+      "/**\n * A stored secret's public face — its live state and what `__describe()`\n * merges in: usage audit counters, pinned egress URLs, whether material is\n * present, and the configured refresh strategy's kind. Never the material\n * itself: material is write-only and projected away before crossing the RPC\n * boundary.\n */\nexport type SecretDescription = {\n  audit: {\n    lastUsedAt?: string;\n    lastUsedBy?: string;\n    lastUsedUrl?: string;\n    usedCount: number;\n  };\n  egress: { urls: string[] };\n  hasMaterial: boolean;\n  /** The configured refresh strategy's kind, or null when none is configured. */\n  refresh: SecretRefresh[\"kind\"] | null;\n};",
+    summary:
+      "A stored secret's public face — its live state and what `__describe()` merges in: usage audit counters, pinned egress URLs, whether material is present, and the configured refresh strategy's kind.",
     memberSummaries: {},
     referencedTypeNames: ["SecretRefresh"],
   },
@@ -1708,8 +1731,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfImageTransformInput",
     kind: "typeAlias",
     sourceText:
-      "export type CfImageTransformInput = {\n  image: ReadableStream<Uint8Array>;\n  transforms?: CfImageTransformOptions[];\n  draws?: Array<{\n    image: ReadableStream<Uint8Array>;\n    options?: CfImageDrawOptions;\n    transforms?: CfImageTransformOptions[];\n  }>;\n  output: CfImageOutputOptions;\n};",
-    summary: "",
+      "/** Input to the Images capability's `transform`: the source image stream,\n * ordered transform steps, optional overlay draws (watermarks — each with its\n * own transforms), and the output encoding. */\nexport type CfImageTransformInput = {\n  image: ReadableStream<Uint8Array>;\n  transforms?: CfImageTransformOptions[];\n  draws?: Array<{\n    image: ReadableStream<Uint8Array>;\n    options?: CfImageDrawOptions;\n    transforms?: CfImageTransformOptions[];\n  }>;\n  output: CfImageOutputOptions;\n};",
+    summary:
+      "Input to the Images capability's `transform`: the source image stream, ordered transform steps, optional overlay draws (watermarks — each with its own transforms), and the output encoding.",
     memberSummaries: {},
     referencedTypeNames: ["CfImageTransformOptions", "CfImageDrawOptions", "CfImageOutputOptions"],
   },
@@ -1717,8 +1741,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfVideoTransformInput",
     kind: "typeAlias",
     sourceText:
-      "export type CfVideoTransformInput = {\n  video: ReadableStream<Uint8Array>;\n  transform?: CfVideoTransformOptions;\n  output: CfVideoOutputOptions;\n};",
-    summary: "",
+      "/** Input to the videos capability's `transform`: the source video stream,\n * optional transform options, and the output selection. */\nexport type CfVideoTransformInput = {\n  video: ReadableStream<Uint8Array>;\n  transform?: CfVideoTransformOptions;\n  output: CfVideoOutputOptions;\n};",
+    summary:
+      "Input to the videos capability's `transform`: the source video stream, optional transform options, and the output selection.",
     memberSummaries: {},
     referencedTypeNames: ["CfVideoTransformOptions", "CfVideoOutputOptions"],
   },
@@ -1736,8 +1761,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerRefBase",
     kind: "typeAlias",
     sourceText:
-      "export type DynamicWorkerRefBase = {\n  /**\n   * ITX scope path for the worker's `env.ITX` binding and for stateful worker\n   * Durable Object names. This is intentionally not the mounted capability path:\n   * one worker can be mounted at `db`, `counter`, etc. while all events still\n   * belong to the host stream path.\n   */\n  path: string;\n  source: DynamicWorkerSource;\n};",
-    summary: "",
+      "/** Fields shared by every dynamic worker ref (stateless and stateful): the\n * itx scope `path` the worker binds to and the declarative `source` it is\n * built from. */\nexport type DynamicWorkerRefBase = {\n  /**\n   * ITX scope path for the worker's `env.ITX` binding and for stateful worker\n   * Durable Object names. This is intentionally not the mounted capability path:\n   * one worker can be mounted at `db`, `counter`, etc. while all events still\n   * belong to the host stream path.\n   */\n  path: string;\n  source: DynamicWorkerSource;\n};",
+    summary:
+      "Fields shared by every dynamic worker ref (stateless and stateful): the itx scope `path` the worker binds to and the declarative `source` it is built from.",
     memberSummaries: {},
     referencedTypeNames: ["DynamicWorkerSource"],
   },
@@ -1781,32 +1807,39 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
   {
     name: "CfImageTransformOptions",
     kind: "typeAlias",
-    sourceText: "export type CfImageTransformOptions = { [x: string]: unknown };",
-    summary: "",
+    sourceText:
+      "/** One Cloudflare Images transform step (width, height, fit, rotate, …),\n * passed through to the Images binding verbatim. */\nexport type CfImageTransformOptions = { [x: string]: unknown };",
+    summary:
+      "One Cloudflare Images transform step (width, height, fit, rotate, …), passed through to the Images binding verbatim.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
     name: "CfImageDrawOptions",
     kind: "typeAlias",
-    sourceText: "export type CfImageDrawOptions = { [x: string]: unknown };",
-    summary: "",
+    sourceText:
+      "/** Placement options for one overlay draw in a Cloudflare Images transform\n * (opacity, repeat, top/left, …), passed through to the Images binding\n * verbatim. */\nexport type CfImageDrawOptions = { [x: string]: unknown };",
+    summary:
+      "Placement options for one overlay draw in a Cloudflare Images transform (opacity, repeat, top/left, …), passed through to the Images binding verbatim.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
     name: "CfImageOutputOptions",
     kind: "typeAlias",
-    sourceText: "export type CfImageOutputOptions = { format: string } & Record<string, unknown>;",
-    summary: "",
+    sourceText:
+      '/** Output encoding for a Cloudflare Images transform: the target `format`\n * (e.g. "image/webp") plus pass-through options such as quality. */\nexport type CfImageOutputOptions = { format: string } & Record<string, unknown>;',
+    summary: "Output encoding for a Cloudflare Images transform: the target `format` (e.g.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
     name: "CfVideoTransformOptions",
     kind: "typeAlias",
-    sourceText: "export type CfVideoTransformOptions = { [x: string]: unknown };",
-    summary: "",
+    sourceText:
+      "/** Transform options for a Media Transformations video call (width, height,\n * fit, trim, …), passed through to the binding verbatim. */\nexport type CfVideoTransformOptions = { [x: string]: unknown };",
+    summary:
+      "Transform options for a Media Transformations video call (width, height, fit, trim, …), passed through to the binding verbatim.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1814,8 +1847,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfVideoOutputOptions",
     kind: "typeAlias",
     sourceText:
-      'export type CfVideoOutputOptions = {\n  mode: "video" | "spritesheet" | "frame" | "audio";\n} & Record<string, unknown>;',
-    summary: "",
+      '/** Output selection for a video transform: `mode` picks a video, spritesheet,\n * single frame, or audio track; other options pass through to the binding. */\nexport type CfVideoOutputOptions = {\n  mode: "video" | "spritesheet" | "frame" | "audio";\n} & Record<string, unknown>;',
+    summary:
+      "Output selection for a video transform: `mode` picks a video, spritesheet, single frame, or audio track; other options pass through to the binding.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

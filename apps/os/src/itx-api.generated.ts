@@ -761,6 +761,11 @@ export interface ProjectIntegrations {
   }): Promise<{ success: true }>;
 }
 
+/**
+ * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`
+ * returns a client whose dotted calls invoke the server's tools; `exa` is the
+ * pre-connected Exa web-search server every project gets.
+ */
 export interface McpClientCollection {
   __describe(): Promise<Description>;
   /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */
@@ -774,6 +779,11 @@ export interface McpClientCollection {
   exa: McpClientRpc;
 }
 
+/**
+ * Ad-hoc OpenAPI clients — `itx.openapi`. `connect({ specUrl })` fetches and
+ * parses a spec and returns a client whose dotted calls are the spec's
+ * operationIds, executed against its server through project egress.
+ */
 export interface OpenApiCollection {
   __describe(): Promise<Description>;
   /** Fetch and parse a spec; dotted calls on the returned client are operationIds. */
@@ -1022,7 +1032,13 @@ export interface Stream {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
-  /** Read one bounded page of committed events (optionally filtered by type). */
+  /**
+   * Read one bounded page of committed events (default from the stream's
+   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
+   * page (500 events) means MORE remain — page with
+   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
+   * shows you the beginning, not the head.
+   */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
@@ -1122,6 +1138,12 @@ export interface Stream {
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
 }
 
+/**
+ * The read-side RPC surface every stream processor node exposes: inspect
+ * runtime state (snapshot plus a processor-specific runtime bag), take an
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
+ * block until the processor has folded a given offset.
+ */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
@@ -1591,6 +1613,12 @@ export type ProjectListEntry = {
   deploymentStatus: ProjectDeploymentStatus;
 };
 
+/**
+ * One capability in a project's inventory (`__describe().capabilities`): the
+ * itx path it is mounted at, how it is implemented (built-in, live-provided,
+ * or a persisted itx expression), and optional instructions/types for
+ * discovery.
+ */
 export type CapabilityDescription = {
   instructions?: string;
   path: string[];
@@ -1694,15 +1722,23 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
+/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;
+ * otherwise one document (or an array) plus optional conversion options
+ * converts to markdown. */
 export type CfMarkdownConversionArgs =
   | []
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
 
+/** One file format the markdown converter accepts (extension plus MIME type);
+ * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
   extension: string;
   mimeType: string;
 };
 
+/** One converted document from `ai.toMarkdown`: `format` is "markdown" with
+ * the markdown text in `data` (plus a token estimate), or "error" with the
+ * failure message in `error`. */
 export type CfMarkdownConversionResult = {
   name: string;
   format: "markdown" | "error";
@@ -1712,6 +1748,10 @@ export type CfMarkdownConversionResult = {
   error?: string;
 };
 
+/** A Browser Run quick-action name (`browser.quickAction`'s first argument):
+ * what to extract from the rendered page — page content, screenshot, PDF,
+ * markdown, accessibility snapshot, scraped elements, structured JSON, links,
+ * or a crawl. */
 export type CfBrowserQuickAction =
   | "content"
   | "screenshot"
@@ -1723,6 +1763,9 @@ export type CfBrowserQuickAction =
   | "links"
   | "crawl";
 
+/** Options for a Browser Run quick action: the target page as a `url` or as
+ * inline `html`, plus the action's own pass-through options (e.g.
+ * `screenshotOptions`). */
 export type CfBrowserQuickActionOptions = Record<string, unknown> &
   ({ url: string } | { html: string });
 
@@ -1771,6 +1814,9 @@ export type AgentProcessorState = {
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
+/** One committed event on a durable stream: type, JSON payload, offset,
+ * idempotency key, and provenance (processor stamp / cross-post chain), plus
+ * the commit-time `createdAt` and stream `path`. */
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1811,6 +1857,9 @@ export type AgentDefaultsOverrides = {
   model?: string;
 };
 
+/** A file attached to an agent input: content type, filename, project
+ * file-storage path, size, and the signed public URL minted at attach time
+ * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = {
   contentType: string;
   filename: string;
@@ -1827,6 +1876,8 @@ export type FlattenedCapabilityTarget = {
 /** A persisted capability name: the steps from an itx root to a value. */
 export type ItxExpression = ItxExpressionStep[];
 
+/** One known stream in a project's reduced state — the entry shape the
+ * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
@@ -1882,6 +1933,9 @@ export type IntegrationConnectionListEntry =
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
 export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
 
+/** Connection health for one integration connection (what
+ * `getConnectionStatus` returns): whether it is connected, plus the external
+ * account's id, display name, and provider-specific metadata. */
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -1926,10 +1980,16 @@ export type ConnectTelegramResult =
  * first use. */
 export type OAuthProviderSlug = "github" | "google" | "slack";
 
+/** Outcome of `completeConnect` (the OAuth/installation redirect callback):
+ * `ok` plus the `callbackUrl` to send the browser back to; on failure, a
+ * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
 
+/** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional
+ * request headers (auth), and an optional per-tool-call timeout in
+ * milliseconds. */
 export type McpClientConnectInput = {
   headers?: Record<string, string>;
   timeoutMs?: number;
@@ -1943,6 +2003,9 @@ export type McpClientConnectInput = {
  */
 export type McpClientRpc = object;
 
+/** Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional
+ * `baseUrl` overriding the spec's server, and extra headers (auth) sent with
+ * every operation call. */
 export type OpenApiConnectInput = {
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -1972,6 +2035,10 @@ export type SandboxCreateInput = {
   env?: Record<string, string>;
 };
 
+/** A sandbox's size tier ("lite" | "basic" | "standard-1"…"standard-4") —
+ * Cloudflare container instance-type names, fixed at `create` and immutable
+ * for the sandbox's lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the
+ * vCPU/memory/disk table. */
 export type SandboxInstanceType =
   | "basic"
   | "lite"
@@ -2197,6 +2264,9 @@ export type DynamicWorkerDispatchOptions = {
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
 
+/** Append input for `Stream.append`: event type, JSON payload, optional
+ * metadata, provenance source, and idempotency key — everything before the
+ * stream assigns offset and timestamp at commit. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -2289,6 +2359,8 @@ export type StreamSubscriptionHandle = Disposable & {
  */
 export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
 
+/** One consistent read of a processor (what `snapshot()` returns): the folded
+ * state pinned to the offset of the last event folded into it. */
 export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
@@ -2308,12 +2380,17 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
+/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
+ * a filename plus the raw bytes as a Blob. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
   blob: Blob;
 };
 
+/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+ * hostname for relative links), image description language, PDF metadata
+ * exclusion. */
 export type CfMarkdownConversionOptions = {
   conversionOptions?: {
     html?: {
@@ -2377,6 +2454,13 @@ export type SchedulerAction = {
   script: string;
 };
 
+/**
+ * A stored secret's public face — its live state and what `__describe()`
+ * merges in: usage audit counters, pinned egress URLs, whether material is
+ * present, and the configured refresh strategy's kind. Never the material
+ * itself: material is write-only and projected away before crossing the RPC
+ * boundary.
+ */
 export type SecretDescription = {
   audit: {
     lastUsedAt?: string;
@@ -2560,6 +2644,9 @@ export type AgentPolicyEventInput = {
   payload: Record<string, unknown>;
 };
 
+/** Input to the Images capability's `transform`: the source image stream,
+ * ordered transform steps, optional overlay draws (watermarks — each with its
+ * own transforms), and the output encoding. */
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;
   transforms?: CfImageTransformOptions[];
@@ -2571,6 +2658,8 @@ export type CfImageTransformInput = {
   output: CfImageOutputOptions;
 };
 
+/** Input to the videos capability's `transform`: the source video stream,
+ * optional transform options, and the output selection. */
 export type CfVideoTransformInput = {
   video: ReadableStream<Uint8Array>;
   transform?: CfVideoTransformOptions;
@@ -2621,6 +2710,9 @@ export type SecretRefresh =
       graphqlUrl: string;
     };
 
+/** Fields shared by every dynamic worker ref (stateless and stateful): the
+ * itx scope `path` the worker binds to and the declarative `source` it is
+ * built from. */
 export type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker
@@ -2670,14 +2762,25 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
+/** One Cloudflare Images transform step (width, height, fit, rotate, …),
+ * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = { [x: string]: unknown };
 
+/** Placement options for one overlay draw in a Cloudflare Images transform
+ * (opacity, repeat, top/left, …), passed through to the Images binding
+ * verbatim. */
 export type CfImageDrawOptions = { [x: string]: unknown };
 
+/** Output encoding for a Cloudflare Images transform: the target `format`
+ * (e.g. "image/webp") plus pass-through options such as quality. */
 export type CfImageOutputOptions = { format: string } & Record<string, unknown>;
 
+/** Transform options for a Media Transformations video call (width, height,
+ * fit, trim, …), passed through to the binding verbatim. */
 export type CfVideoTransformOptions = { [x: string]: unknown };
 
+/** Output selection for a video transform: `mode` picks a video, spritesheet,
+ * single frame, or audio track; other options pass through to the binding. */
 export type CfVideoOutputOptions = {
   mode: "video" | "spritesheet" | "frame" | "audio";
 } & Record<string, unknown>;
