@@ -143,12 +143,21 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "describe-project": {
     assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ projectId });
+      // Built-ins ARE the children map; `capabilities` holds dynamic mounts
+      // only (a fresh fixture project has none).
       const builtins = (result as { builtins: string[] }).builtins;
       expect(builtins).toEqual(
-        expect.arrayContaining(["streams", "repo", "workers", "secrets", "ai"]),
+        expect.arrayContaining([
+          "streams",
+          "repo",
+          "workers",
+          "secrets",
+          "ai",
+          "capabilityHost",
+          "integrations",
+        ]),
       );
-      const children = (result as { children: string[] }).children;
-      expect(children).toEqual(expect.arrayContaining(["capabilityHost", "integrations"]));
+      expect((result as { mounted: string[] }).mounted).toEqual([]);
     },
   },
   "discover-tree": {

@@ -24,10 +24,7 @@ test("project REPL accepts a forged session", async ({ helpers, page }) => {
     },
     projectId: fixture.project.id,
   });
-  expect(result.capabilities).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ path: ["capabilityHost"], type: "builtin" }),
-      expect.objectContaining({ path: ["streams"], type: "builtin" }),
-    ]),
-  );
+  // Built-ins live in `children`; `capabilities` holds this scope's dynamic
+  // mounts only (none on a fresh fixture project).
+  expect(result.capabilities).toEqual([]);
 });

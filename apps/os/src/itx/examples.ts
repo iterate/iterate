@@ -103,19 +103,18 @@ return await itx.projects.get(pid).__describe();
     id: "describe-project",
     title: "Describe the project (its __describe)",
     description:
-      "__describe() works on EVERY node and is the project's self-report: its id, name, a one-line blip per child member (`children`), and every capability reachable at this scope — built-ins plus anything mounted via a capability host. Agents read this to learn what they can call.",
+      "__describe() works on EVERY node and is the project's self-report: its id, name, a one-line blip per built-in member (`children`), and the dynamic capabilities mounted at this scope (`capabilities`). Agents read this to learn what they can call.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const description = await itx.__describe();
 
-// Built-ins are always there; dynamic mounts carry type "live" or
-// "itx-expression" plus the offset of the event that mounted them.
+// Built-ins are the children map; dynamic mounts appear in capabilities
+// with type "live" or "itx-expression" plus the offset of the event that
+// mounted them.
 return {
-  builtins: description.capabilities
-    .filter((capability) => capability.type === "builtin")
-    .map((capability) => capability.path.join(".")),
-  children: Object.keys(description.children),
+  builtins: Object.keys(description.children),
+  mounted: description.capabilities.map((capability) => capability.path.join(".")),
   projectId: description.projectId,
 };
 `.trim(),

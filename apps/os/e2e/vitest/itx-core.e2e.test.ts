@@ -246,17 +246,11 @@ describe("itx", () => {
     using project = itx.projects.create({ slug: "ai-builtin" });
     const description = await project.__describe();
 
-    expect(description.capabilities).toContainEqual(
-      expect.objectContaining({ path: ["ai"], type: "builtin" }),
-    );
-    // The inventory row carries the connections one-liner; the collection
-    // node itself self-describes with the full per-connection call shapes.
-    expect(description.capabilities).toContainEqual(
-      expect.objectContaining({
-        instructions: expect.stringContaining("/integrations/<slug>/<connection>"),
-        path: ["integrations"],
-        type: "builtin",
-      }),
+    // Built-ins live in the children map (capabilities holds dynamic mounts
+    // only); the collection node itself self-describes with the full
+    // per-connection call shapes.
+    expect(Object.keys(description.children)).toEqual(
+      expect.arrayContaining(["ai", "integrations"]),
     );
     const integrations = await project.integrations.__describe();
     expect(integrations.instructions).toContain("gmail.request");
