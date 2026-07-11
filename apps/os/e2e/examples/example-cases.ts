@@ -35,6 +35,11 @@
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
+//   ai-generate-text
+//                   depends on remote Workers AI model availability and
+//                   billing; interactive reading material.
+//   egress-fetch    fetches a public website through project egress; external
+//                   service, so keep it interactive.
 //   connect-public-mcp
 //                   explicitly connects to Exa's public MCP server; external
 //                   service and rate limited, so keep it interactive.

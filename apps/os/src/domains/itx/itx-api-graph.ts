@@ -64,9 +64,11 @@ export interface DocsSearchHit {
  */
 const CHARS_PER_TOKEN = 4;
 /** Provisional walk-budget reserve for the frontier trailer (assembly then
- * enforces the budget exactly) and the cap on the trailer's name listing. */
+ * enforces the budget exactly) and the cap on the trailer's name listing —
+ * generous, because the names ARE the navigation: eliding them reads as
+ * "those types don't exist". */
 const TRAILER_RESERVE_CHARS = 600;
-const TRAILER_NAME_LIST_CHARS = 400;
+const TRAILER_NAME_LIST_CHARS = 1_600;
 
 /** Index the graph by declaration name (names are unique — enforced by the
  * generator and the graph freshness test). */
@@ -178,12 +180,15 @@ export function typeSlice(input: {
     const unlisted = names.length - listed.length;
     return (
       `// Not included: ${listed.join(", ")}${unlisted > 0 ? ` … and ${unlisted} more` : ""}` +
-      `\n// Fetch any referenced type with: await itx.docs.get({ name: "${listed[0] ?? names[0]}" })`
+      `\n// Fetch any of these with: await itx.docs.get({ name: "<TypeName>" })`
     );
   };
 
   const assemble = (): { sourceText: string; frontierNames: string[] } => {
-    const frontierNames = [...frontier].sort();
+    // Walk order, not alphabetical: the frontier fills as the breadth-first
+    // walk runs out of budget, so earlier names are references of the root
+    // itself — the ones a reader most likely needs next.
+    const frontierNames = [...frontier];
     const trailer = trailerFor(frontierNames);
     const sourceText = [...parts, ...(trailer === "" ? [] : [trailer])].join("\n\n");
     return { sourceText, frontierNames };
@@ -203,7 +208,7 @@ export function typeSlice(input: {
     const notice =
       `\n// … truncated: "${root.name}" alone exceeds maxTokens ${input.maxTokens} — ` +
       `retry with a larger maxTokens.`;
-    const trailer = trailerFor([...frontier].sort());
+    const trailer = trailerFor([...frontier]);
     const cutLength = Math.max(
       0,
       budgetChars - notice.length - (trailer === "" ? 0 : trailer.length + 2) - 3,

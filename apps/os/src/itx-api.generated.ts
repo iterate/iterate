@@ -89,13 +89,13 @@ export interface Project {
   __describe(): Promise<ProjectDescription>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
-  /** Abort this Project Durable Object incarnation; the next request boots it again. */
+  /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
-  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (DO-backed). */
+  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
   liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
@@ -165,21 +165,9 @@ export interface Project {
   /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
-   * "The project processes this event batch" — the first-party dispatch point
-   * every project-scoped stream's birth-certificate feed names
-   * (`expression: ["processEventBatch"]`). Today it delegates verbatim to the
-   * repo-backed project worker; it exists so the persisted expression names
-   * the INTENT rather than the implementation. That indirection is the
-   * platform's adaptation point: envelope evolution happens here in
-   * deployment code instead of by patching user repos, and future first-party
-   * per-event work (policy, metrics, indexing feeds) can join the same
-   * ordered, checkpointed delivery — with one rule when it does: platform
-   * steps must be idempotent and must never throw; only the worker delegation
-   * may reject into the spine's retry/park machinery. The streams index is the
-   * first such step (see `#indexStreamActivity`).
-   *
-   * Same trust model as `worker.processEventBatch` itself: any project
-   * principal may call it.
+   * Platform dispatch point: streams deliver committed event batches here
+   * for the project worker. Scripts should not call this — subscribe to a
+   * stream (or configure a subscription) instead.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
   /**
@@ -305,30 +293,12 @@ export interface CfBrowserCapability {
 }
 
 /**
- * Agent capability surface for message loops and agent-local dynamic tools.
- *
- * Instances are DELIBERATELY plain — never wrapped in a Proxy. This is the
- * surface most routinely returned FROM A METHOD CALL (`itx.agents.get(path)`),
- * and workerd RPC classifies a call result for promise pipelining with native
- * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
- * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
- * pipelined call on the result dies with the baffling "The RPC receiver does
- * not implement the method ..." — cloudflare/workerd#6873). A plain class
- * instance classifies as a single stub and pipelines fine, which is what lets
- * model code write the natural one-liners over the script lane (`env.ITX`
- * loopback):
- *
- *   await itx.agents.get("researcher").message(task);
- *   await itx.agents.get(path).someTool(args);
- *   await itx.agents.get(path).capabilityHost.someTool(args);
- *
- * The dynamic-tool spellings (lines 2 and 3 are equivalent) come from the
- * PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
- * this file: unknown members walk the prototype chain into a proxied hop and
- * dispatch through this agent scope's capability host, while the instance
- * itself stays a genuine, natively-branded RpcTarget. See
- * installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
- * mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
+ * One agent: message loops and agent-local dynamic tools. Chain calls
+ * directly off `get` — `await itx.agents.get("researcher").message(task)`.
+ * Unknown members dispatch through the agent scope's capability host, so
+ * `agents.get(path).someTool(args)` and
+ * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside
+ * the agent's own scripts the same tools are simply `itx.someTool(args)`.
  */
 export interface Agent {
   /**
@@ -423,7 +393,7 @@ export interface Agent {
   }): Promise<{ event: StreamEvent; files: AgentFileAttachment[] }>;
   /** Includes `whoami` (`"agent <projectId>:<agentPath>"`), `projectId`, `agentPath`. */
   __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;
-  /** Abort this Agent Durable Object incarnation; the next request boots it again. */
+  /** Restart the agent's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
 }
 
@@ -476,7 +446,7 @@ export interface CapabilityHost {
     executionId: string;
     result: unknown;
   }>;
-  /** Abort this Capability Host Durable Object incarnation; the next request boots it again. */
+  /** Restart this scope's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
 }
 
@@ -868,7 +838,7 @@ export interface Scheduler {
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void>;
-  /** Abort this Scheduler Durable Object incarnation; the next request boots it again. */
+  /** Restart the scheduler's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   list(): Promise<ScheduleView[]>;
   /** Run a Schedule now. Advances a recurring Schedule's clock and consumes a one-shot. */
@@ -898,7 +868,7 @@ export interface Repo {
   create(): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
-  /** Abort this Repo Durable Object incarnation; the next request boots it again. */
+  /** Restart the repo's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
@@ -1109,7 +1079,7 @@ export interface Stream {
     selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
-    /** Live runtime-state capability, retained for the subscription lifetime (a sibling of the serializable descriptor, matching the wake handshake). */
+    /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle>;
   /**
@@ -1239,7 +1209,7 @@ export interface Secret {
   __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
-  /** Abort this Secret Durable Object incarnation; the next request boots it again. */
+  /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** Set the secret material and/or its egress allowlist. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
@@ -1267,7 +1237,7 @@ export interface Workspace {
   __describe(): Promise<Description>;
   /** Workspace identity string (debug). */
   whoami(): Promise<string>;
-  /** Abort this Workspace Durable Object incarnation; the next request boots it again. */
+  /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null>;

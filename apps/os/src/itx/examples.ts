@@ -625,11 +625,28 @@ return described;
 `.trim(),
   },
   {
+    id: "egress-fetch",
+    e2eProven: false,
+    title: "Make a plain HTTP request through project egress",
+    description:
+      "itx.egress.fetch(url, init?) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers substitute at egress (see secret-postman-echo). External service — interactive-only.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const url = vars.url ?? "https://example.com/";
+
+const response = await itx.egress.fetch(url, { headers: { accept: "text/html" } });
+const body = await response.text();
+
+return { status: response.status, bodyStart: body.slice(0, 200) };
+`.trim(),
+  },
+  {
     id: "secret-postman-echo",
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -752,7 +769,7 @@ return {
     id: "files-roundtrip",
     title: "Store, read, and share a project file",
     description:
-      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
+      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. Use it to save, keep, or persist data for later and remember state between runs (files hold bytes; streams hold structured events). On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -782,7 +799,7 @@ return { servedStatus: served.status, servedText, size: stored.size, text, url }
     e2eProven: false,
     title: "Web search through the built-in Exa MCP server",
     description:
-      "itx.mcp.exa is a pre-connected MCP client for Exa's public server (https://mcp.exa.ai/mcp): web_search_exa({ query, numResults }) searches, web_fetch_exa({ urls }) reads pages as markdown. Tool names are flat calls on the client — the same shape any itx.mcp.connect({ url }) client has. External service, so run it interactively.",
+      "itx.mcp.exa is a pre-connected MCP client for Exa's public server (https://mcp.exa.ai/mcp): web_search_exa({ query, numResults }) searches, web_fetch_exa({ urls }) reads pages as markdown. Tool names are flat calls on the client — the same shape any itx.mcp.connect({ url }) client has. External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -800,7 +817,7 @@ return { pages, search };
     e2eProven: false,
     title: "Connect a public MCP server, then mount it",
     description:
-      "itx.mcp.connect({ url }) opens any reachable MCP server as an ad-hoc capability target. Tool names become flat method calls on the returned client. Mount the same connection recipe as an itx-expression when you want agents and future sessions to discover it through describe() and call it as itx.publicMcp.<tool>(). External service, so run it interactively.",
+      "itx.mcp.connect({ url }) opens any reachable MCP server as an ad-hoc capability target. Tool names become flat method calls on the returned client. Mount the same connection recipe as an itx-expression when you want agents and future sessions to discover it through describe() and call it as itx.publicMcp.<tool>(). External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -886,7 +903,7 @@ return {
     e2eProven: false,
     title: "Connect OpenAPI Petstore, then mount it",
     description:
-      "itx.openapi.connect({ specUrl }) fetches an OpenAPI document through project egress and returns a client whose methods are the spec's flat operationIds. This calls Swagger Petstore's findPetsByStatus operation, then registers the same OpenAPI connection as a durable capability at itx.petstore. External service, so run it interactively.",
+      "itx.openapi.connect({ specUrl }) fetches an OpenAPI document through project egress and returns a client whose methods are the spec's flat operationIds. This calls Swagger Petstore's findPetsByStatus operation, then registers the same OpenAPI connection as a durable capability at itx.petstore. External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -926,7 +943,7 @@ return {
     e2eProven: false,
     title: "Workers AI is a built-in capability",
     description:
-      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — run it interactively.",
+      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -943,7 +960,7 @@ return {
     e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
+      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -965,7 +982,7 @@ return repos.data.repositories.map((repo) => ({ fullName: repo.full_name, update
     e2eProven: false,
     title: "Read a file from a repo through the built-in GitHub integration",
     description:
-      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo, so run it interactively.",
+      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -989,7 +1006,7 @@ return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo 
     e2eProven: false,
     title: "Back a project repo with a real GitHub repository",
     description:
-      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation, so run it interactively.",
+      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1050,7 +1067,7 @@ return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
     e2eProven: false,
     title: "Search the inbox through the built-in Gmail integration",
     description:
-      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail, so run it interactively.',
+      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1084,7 +1101,7 @@ return {
     e2eProven: false,
     title: "Post a message through the built-in Slack integration",
     description:
-      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace, so run it interactively.',
+      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1107,7 +1124,7 @@ return { channel, ok: posted.ok, ts: posted.ts };
     e2eProven: false,
     title: "GitHub's MCP server as a provided integration",
     description:
-      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.',
+      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat — interactive-only.',
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1212,7 +1229,7 @@ return {
     e2eProven: false,
     title: "Convert a document to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure, so run it interactively.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1223,11 +1240,34 @@ return { supported: supported.slice(0, 10), converted };
 `.trim(),
   },
   {
+    id: "ai-generate-text",
+    e2eProven: false,
+    title: "Generate or summarize text with a hosted LLM",
+    description:
+      "The most common model task: summarize, draft, classify, extract, rewrite, or answer questions by running a 'Text Generation' model through itx.ai.run() with { messages } (chat shape) and reading result.response. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const text =
+  vars.text ?? "Cloudflare Workers run JavaScript close to users in hundreds of cities.";
+
+const result = await itx.ai.run("@cf/meta/llama-3.2-3b-instruct", {
+  messages: [
+    { role: "system", content: "Summarize the user's text in one short sentence." },
+    { role: "user", content: text },
+  ],
+});
+
+// Text models answer in result.response.
+return { summary: result.response };
+`.trim(),
+  },
+  {
     id: "ai-generate-image",
     e2eProven: false,
     title: "Generate an image with a Workers AI model",
     description:
-      "Runs Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Generates an image with Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1256,7 +1296,7 @@ return {
     e2eProven: false,
     title: "Generate speech audio with a Workers AI model",
     description:
-      "Runs xAI Grok TTS through itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Speaks text with xAI Grok TTS via itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1279,7 +1319,7 @@ return {
     e2eProven: false,
     title: "Transcribe audio with a Workers AI model",
     description:
-      "Runs xAI Grok STT through itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch, so run it interactively.",
+      "Transcribes audio with xAI Grok STT via itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1304,7 +1344,7 @@ return {
     e2eProven: false,
     title: "Generate video with a Workers AI model",
     description:
-      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1327,7 +1367,7 @@ return {
     e2eProven: false,
     title: "Render a page to Markdown with Browser Run",
     description:
-      "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service, so run it interactively.",
+      "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1342,7 +1382,7 @@ return await resp.json();
     e2eProven: false,
     title: "Resize and convert an image with Cloudflare Images",
     description:
-      "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding, so run it interactively.",
+      "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1363,7 +1403,7 @@ return {
     e2eProven: false,
     title: "Extract a video frame with Media Transformations",
     description:
-      "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding, so run it interactively.",
+      "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1384,7 +1424,7 @@ return {
     e2eProven: false,
     title: "Send an email from the project's address",
     description:
-      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — run it interactively with an address you own.",
+      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — interactive-only, with an address you own.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1400,7 +1440,7 @@ return receipt; // { from: "<slug>@<hostname base>", messageId }
     id: "scheduler-basics",
     title: "Schedule an itx script (set, list, cancel)",
     description:
-      "itx.scheduler runs itx scripts on a schedule: set() upserts by key with recurrence { cron, timezone? } | { every: seconds } | { at: ISO } | { in: seconds }, list() reads the reduced state, cancel(key) removes. The script is a STRING (no closures — bake values in) invoked later as fn(itx, schedule, trigger) with project-root authority, at least once per Trigger. Every set, trigger, and outcome is an event on the /scheduler/primary stream — the complete audit log.",
+      "itx.scheduler runs itx scripts on a schedule: set() upserts by key with recurrence { cron, timezone? } | { every: seconds } | { at: ISO } | { in: seconds }, list() reads the reduced state, cancel(key) removes. Use it to wait, delay, or defer work — do something later, tomorrow, at a specific time, or on a recurring cadence — and to give agents reminders. The script is a STRING (no closures — bake values in) invoked later as fn(itx, schedule, trigger) with project-root authority, at least once per Trigger. Every set, trigger, and outcome is an event on the /scheduler/primary stream — the complete audit log.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

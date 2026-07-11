@@ -307,6 +307,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         target: input.capability,
       };
     } else if (input.type === "itx-expression") {
+      if (!Array.isArray(input.expression)) {
+        throw new Error(
+          '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
+            'walked over itx, e.g. ["streams", ["get", "/"]] — not JavaScript source. ' +
+            'Copy the recipe from itx.docs.get({ name: "typed-capability-mount" }).',
+        );
+      }
       assertExpressionDoesNotReferenceOwnMount(input);
       record = {
         expression: input.expression,

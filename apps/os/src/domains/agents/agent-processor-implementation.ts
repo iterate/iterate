@@ -1286,7 +1286,15 @@ async function scriptResultAgentInput(
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
   if (payload.error !== undefined) {
-    return `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\``;
+    // Advertise the recovery tools at the moment of failure — a wrong call
+    // is exactly when docs.typecheck's did-you-mean and docs.search's
+    // working examples pay off, and nothing else tells the model they exist.
+    return (
+      `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\`\n` +
+      `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
+      `scope's real types (typos come back as "did you mean …"), and ` +
+      `\`await itx.docs.search({ q: "several related words" })\` finds working examples.`
+    );
   }
   if (payload.result === undefined) return null;
   const text = stringifyScriptResult(payload.result);
