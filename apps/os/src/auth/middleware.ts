@@ -30,6 +30,25 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
       return new Response("Iterate auth is not configured.", { status: 503 });
     }
 
+    // Fingerprinted client-build files are public, yet requests for them can
+    // reach this worker (sourcemaps are not uploaded to the static assets
+    // manifest, so devtools .js.map fetches fall through). They must never run
+    // session auth: the refresh token rotates on every use and the anti-theft
+    // response to presenting a rotated token is revoking the user's whole
+    // session family, so a burst of parallel subresource refreshes racing a
+    // navigation's refresh (single-flight only holds within one isolate) signs
+    // the user out with "session_verification_failed".
+    if (isPublicAssetRequest(request)) {
+      return next({
+        context: {
+          principal: null,
+          iterateAuthSession: null,
+          iterateAuthError: undefined,
+          rawRequest: request,
+        },
+      });
+    }
+
     const resolvedAuth = await resolveRequestAuth({ auth, context, request });
 
     const result = await next({
@@ -49,6 +68,12 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
     return result;
   },
 );
+
+/** GET/HEAD requests under the client build's asset prefix (including sourcemaps). */
+export function isPublicAssetRequest(request: Request): boolean {
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+  return new URL(request.url).pathname.startsWith("/assets/");
+}
 
 async function resolveRequestAuth(input: {
   auth: OsIterateAuth | null;
