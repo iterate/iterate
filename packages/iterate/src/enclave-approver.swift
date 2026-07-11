@@ -19,8 +19,6 @@
 // process can read via ps):
 //   generate                     mint a key
 //                                -> {"publicKey": b64 X9.63, "keyBlob": b64 handle}
-//   public-key                   stdin {"keyBlob"}
-//                                -> {"publicKey": b64 X9.63}
 //   sign                         stdin {"keyBlob", "message": b64}; Touch ID, then sign
 //                                -> {"signatureDer": base64}
 //   approve                      stdin {"keyBlob", "message": b64, "request": {...}};
@@ -72,7 +70,7 @@ func isCancellation(_ error: Error) -> Bool {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-  fail("usage: enclave-approver generate | public-key | sign | approve (inputs as JSON on stdin)")
+  fail("usage: enclave-approver generate | sign | approve (inputs as JSON on stdin)")
 }
 
 /// The stdin envelope for key-holding commands: {"keyBlob", "message"?, "request"?}.
@@ -110,13 +108,6 @@ case "generate":
   } catch {
     fail("key generation failed: \(error)")
   }
-
-case "public-key":
-  let envelope = readStdinEnvelope()
-  jsonOut([
-    "publicKey": loadKey(blobBase64: envelope.keyBlob).publicKey.x963Representation
-      .base64EncodedString()
-  ])
 
 case "sign":
   let envelope = readStdinEnvelope()

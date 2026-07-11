@@ -124,12 +124,7 @@ export async function grant(input: {
   if (signed === undefined && input.key !== null) {
     signed = await signApprovalMessage(
       input.key,
-      buildApprovalMessage({
-        projectId: input.projectId,
-        approvalRequestEventOffset: input.offset,
-        requested: input.payload,
-        decision: "granted",
-      }),
+      messageFor(input.projectId, input.offset, input.payload),
     );
   }
   await input.stream.append({

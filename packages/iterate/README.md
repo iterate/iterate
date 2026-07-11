@@ -44,9 +44,86 @@ npx iterate config list
 - `iterate chat` - open the Iterate agent chat terminal UI
 - `iterate login` - authenticate with browser-based OAuth
 - `iterate logout` - remove the stored session for the current config
+- `iterate approve` - be the human in the loop for a project's egress (see below)
 - `iterate orgs list`
 - `iterate config ...`
 - `iterate os ...`
+
+## Egress approvals (`iterate approve`)
+
+A project's outbound HTTP can require a human. Egress rules on the project
+hold matching requests (the caller's `fetch` stays open) until you approve or
+reject them; once you enroll a key, approvals are Secure-Enclave-signed and
+unforgeable. Full design + schemas: the egress-approvals PR.
+
+Be the human — three surfaces, same thing:
+
+```bash
+iterate approve --project <id-or-slug>            # terminal y/n
+iterate approve --project <id-or-slug> --native   # macOS dialog → Touch ID
+iterate approve --project <id-or-slug> --menubar  # menu-bar app (macOS)
+```
+
+Keys (macOS Secure Enclave; software P-256 elsewhere):
+
+```bash
+iterate approve --project <p> --enroll   # mint + enroll this machine's key
+iterate approve --project <p> --keys     # list enrolled keys
+iterate approve --project <p> --revoke   # revoke this machine's key
+```
+
+### Against prd vs a preview
+
+- **prd** is the built-in default — no config needed:
+  `iterate approve --project <slug>` targets `os.iterate.com`.
+- **A preview**: add a named config once (see [Config file](#config-file)), then
+  pass `--config`:
+
+  ```bash
+  iterate config set --name preview_3 \
+    --os-base-url https://os.iterate-preview-3.com \
+    --auth-base-url https://auth.iterate-preview-3.com
+  iterate --config preview_3 login          # each config has its own session
+  iterate --config preview_3 approve --project <slug> --native
+  ```
+
+### Configure rules on a project
+
+Rules are project state, set wholesale via one event on the project's `/`
+stream (first match wins; no match allows). Append it with an itx script —
+`itx run --context <project-id>` (the context is the `prj_…` id):
+
+```bash
+iterate os itx run --context <project-id> --eval '
+  await itx.streams.get("/").append({
+    type: "events.iterate.com/project/egress-rules-configured",
+    payload: { rules: [
+      { ruleKey: "stripe-mutations",
+        match: { hosts: ["api.stripe.com"], methods: ["POST","PUT","DELETE"] },
+        verdict: "hold", approvalTimeoutMs: 600000 },
+      { ruleKey: "spends-prod-key",
+        match: { secretPaths: ["/secrets/stripe/prod"] },
+        verdict: "hold" },
+    ] },
+  });
+'
+```
+
+Inside an `iterate/iterate` clone the same runs as
+`doppler run --config <env> -- pnpm cli itx run --context <project-id> --eval '…'`.
+
+### Testing a held request
+
+> **Gotcha:** fire the test request through `itx.egress.fetch(...)`, **not** a
+> bare `fetch()`. A bare `fetch()` in an itx script runs on your laptop and
+> bypasses the project's egress gate, so nothing is held.
+
+```bash
+iterate os itx run --context <project-id> --eval '
+  const r = await itx.egress.fetch(new Request("https://httpbin.org/post", { method: "POST", body: "hi" }));
+  return { status: r.status };   // hangs until you approve/reject in `iterate approve`
+'
+```
 
 ## Config file
 

@@ -33,6 +33,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   derSignatureToRaw,
+  type HumanApprovalRequestedPayload,
 } from "../../../apps/os/src/domains/projects/egress-approvals.ts";
 import { run } from "./run-command.ts";
 
@@ -168,7 +169,7 @@ export async function promptNativeApproval(input: {
   key: Extract<StoredApprovalKey, { kind: "secure-enclave" }>;
   message: Uint8Array;
   /** The human-approval-requested payload, rendered by the dialog. */
-  request: Record<string, unknown>;
+  request: HumanApprovalRequestedPayload;
 }): Promise<{ decision: "granted"; signature: string } | { decision: "rejected" | "ignored" }> {
   const approver = await ensureEnclaveApprover();
   const answer = z

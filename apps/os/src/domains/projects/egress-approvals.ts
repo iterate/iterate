@@ -103,7 +103,6 @@ export const HumanApprovalGrantedPayload = HumanApprovalResolutionPayload.extend
 
 export const HumanApprovalRejectedPayload = HumanApprovalResolutionPayload.extend({
   reason: z.enum(["human", "expired"]),
-  note: z.string().optional(),
 });
 
 export const HumanApprovalSettledPayload = HumanApprovalResolutionPayload.extend({

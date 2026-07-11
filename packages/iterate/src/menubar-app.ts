@@ -23,7 +23,12 @@ const CONFIG_DIR = join(
 );
 const BUILD_DIR = join(CONFIG_DIR, "menubar-build");
 const APP_PATH = join(BUILD_DIR, "Iterate.app");
-const SOURCES = ["Iterate.swift", "IterateIcon.swift", "build-menubar-app.sh"];
+const SOURCES = [
+  "Iterate.swift",
+  "IterateIcon.swift",
+  "build-menubar-app.sh",
+  "Iterate.entitlements",
+];
 
 /** Compile-if-needed and launch the menu-bar app for one project/config. */
 export async function launchMenubarApp(input: {

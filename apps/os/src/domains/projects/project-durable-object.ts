@@ -15,6 +15,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
 import {
@@ -50,6 +51,8 @@ import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  // Last time #egressRules paid a catch-up — bounds rules staleness to ~5s.
+  #egressRulesFreshAt = 0;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
   // shared-engine case — and dogfoods the `getLiveState` fold the streams index
@@ -259,8 +262,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#holdForHumanApproval({ request, rule, secretPaths });
   }
 
-  #egressRulesFreshAt = 0;
-
   /**
    * The project's egress rules, from reduced state with BOUNDED staleness:
    * push delivery normally keeps the fold current, but a wedged subscription
@@ -446,7 +447,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * unsigned/bad-sig/catch-up-failed — which is never fatal to the hold).
    */
   async #judgeResolution(
-    event: { type: string; offset: number; payload?: unknown },
+    event: StreamEvent,
     input: { approvalRequestEventOffset: number; requestedPayload: HumanApprovalRequestedPayload },
   ): Promise<"granted" | "rejected" | null> {
     if (event.type === "events.iterate.com/project/human-approval-rejected") {

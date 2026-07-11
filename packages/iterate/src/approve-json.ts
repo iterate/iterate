@@ -27,7 +27,7 @@ import { createInterface } from "node:readline";
 import type { RpcStub } from "capnweb";
 
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
-import { loadApprovalKey, type StoredApprovalKey } from "./approval-keys.ts";
+import { loadApprovalKey } from "./approval-keys.ts";
 import { connectApproval, EVENT, grant, reject, type RequestedPayload } from "./approve-core.ts";
 
 const RESOLUTION_TYPES = [EVENT.settled, EVENT.rejected];
@@ -68,7 +68,7 @@ export async function runApprovalJson(input: {
   // Reconcile the backlog: replay history once, emit still-pending requests,
   // and return the max offset so the live tail starts exactly past it (no
   // live-only race, no gap).
-  const cursor = await reconcileBacklog(stream, key, pending);
+  const cursor = await reconcileBacklog(stream, pending);
 
   // Decisions run one at a time: signing pops Touch ID, and two enclave
   // signatures must not race. Each line chains after the last; handleDecision
@@ -134,7 +134,7 @@ export async function runApprovalJson(input: {
       throw error;
     }
     tail = event.offset;
-    dispatch(event, key, pending);
+    dispatch(event, pending);
   }
 }
 
@@ -145,7 +145,6 @@ export async function runApprovalJson(input: {
  */
 async function reconcileBacklog(
   stream: RpcStub<Stream>,
-  key: StoredApprovalKey | null,
   pending: Map<number, RequestedPayload>,
 ): Promise<number> {
   const requests = new Map<number, RequestedPayload>();
@@ -179,21 +178,17 @@ async function reconcileBacklog(
     if (resolved.has(offset)) continue;
     if (Date.parse(payload.expiresAt) <= Date.now()) continue;
     pending.set(offset, payload);
-    emitRequested(offset, payload, key, submitted.has(offset));
+    emitRequested(offset, payload, submitted.has(offset));
   }
   return cursor;
 }
 
-function dispatch(
-  event: StreamEvent,
-  key: StoredApprovalKey | null,
-  pending: Map<number, RequestedPayload>,
-): void {
+function dispatch(event: StreamEvent, pending: Map<number, RequestedPayload>): void {
   if (event.type === EVENT.requested) {
     const payload = event.payload as RequestedPayload;
     if (Date.parse(payload.expiresAt) <= Date.now()) return;
     pending.set(event.offset, payload);
-    emitRequested(event.offset, payload, key, false);
+    emitRequested(event.offset, payload, false);
     return;
   }
   const outcome = event.payload as {
@@ -220,12 +215,7 @@ function dispatch(
   }
 }
 
-function emitRequested(
-  offset: number,
-  payload: RequestedPayload,
-  key: StoredApprovalKey | null,
-  submitted: boolean,
-): void {
+function emitRequested(offset: number, payload: RequestedPayload, submitted: boolean): void {
   emit({
     type: "requested",
     offset,
@@ -236,7 +226,6 @@ function emitRequested(
     ruleKey: payload.ruleKey,
     expiresAt: payload.expiresAt,
     bodyPreview: payload.bodyPreview,
-    signed: key !== null,
     submitted, // a grant already exists — awaiting the door, not fresh
   });
 }

@@ -135,7 +135,7 @@ export async function runApprovalCli(input: {
       const verdict = await promptNativeApproval({
         key: key as Extract<StoredApprovalKey, { kind: "secure-enclave" }>,
         message: messageFor(input.projectId, event.offset, payload),
-        request: payload as unknown as Record<string, unknown>,
+        request: payload,
       });
       if (verdict.decision === "ignored") {
         prompts.log.info(`Ignored #${event.offset} — it can be answered elsewhere or expire.`);
