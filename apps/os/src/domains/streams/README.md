@@ -117,10 +117,63 @@ webhook is the same cursor machinery pointed at plain HTTP:
 | replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
 | filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
 
+### Ephemeral events
+
+`append({ ..., ephemeral: true })` commits a SECOND-CLASS event: an ordinary
+offset-ordered row (same commit turn, same idempotency dedup, same circuit
+breaker, same pause door), with two deliberate demotions:
+
+- **Excluded from reads by default.** Range reads (`getEvents`, `readEvents`,
+  processor catch-up) skip ephemeral rows unless the caller passes
+  `includeEphemeral: true`. Point reads by offset or idempotencyKey — an
+  explicit request — always return them.
+- **Never delivered to durable subscribers.** The wake/push/webhook lanes
+  drop ephemeral events from delivery exactly the way selectors already skip
+  non-matching events (skip-not-defer: cursors advance over their offsets),
+  so subscription-fed processors never fold or side-effect on one. Ephemeral
+  `subscribe()` connections receive them, live and on replay.
+
+The whole pattern in one shape — the rule is "never derive durable state
+from an ephemeral event"; the durable truth is always its own append:
+
+```ts
+// per streamed token: live subscribers paint it; nothing durable ever sees it
+await stream.append({ type: ".../llm-response-chunk", ephemeral: true, payload: { chunk } });
+// once, when the turn settles: THE fact processors fold
+await stream.append({ type: ".../output-added", payload: { text } });
+
+await stream.getEvents(); //                          durable events only
+await stream.getEvents({ includeEphemeral: true }); // + surviving ephemeral rows
+```
+
+The e2e ("ephemeral events are second-class rows…", `streams.e2e.test.ts`)
+proves every clause of this contract end to end, and the `ephemeral-events`
+entry in the itx example catalogue is its userspace-runnable twin.
+
+The demotions are a license the stream keeps: because nothing durable can
+depend on an ephemeral row, a future sweep may EVICT them (memory pressure,
+DO-startup cleanup), leaving permanent offset gaps that every read path —
+including the browser mirror — already tolerates. Constraints pre-paid for
+that future sweep: the offset allocator survives head-row eviction
+(`highestAssignedOffset()` reads AUTOINCREMENT's `sqlite_sequence`, which row
+deletion does not reset — reissuing a seen offset would wedge every
+offset-keyed consumer); eviction forgets idempotency keys (a swept key
+dedupes nothing on re-append — so never sweep rows younger than the LLM
+obligation horizon, or a crashed turn's retry re-appends chunks whose old
+copies live on in browser mirrors); and a post-sweep state rebuild counts
+only surviving rows (`eventCount` may decrease — never compare it to
+`maxOffset`). Use ephemeral events for transient signals whose durable truth
+lands separately: the canonical case is LLM streaming chunks
+(`agent/llm-response-chunk`), superseded by the durable `output-added`.
+`stream/*` control facts cannot be ephemeral — config, presence, and park
+state may never be forgotten. One consequence worth naming: a durable
+subscription (cross-post, webhook) whose selector matches only ephemeral
+types delivers nothing, silently — there is nothing durable to deliver.
+
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
-rides this). Ephemeral batch results are disposed **unpulled**, so those
-subscriptions generate zero subscriber-originated return frames (a
+rides this). Batch results on the ephemeral lane are disposed **unpulled**, so
+those subscriptions generate zero subscriber-originated return frames (a
 `ReadableStream` could never do this: its per-chunk acks ARE its flow
 control — see the `FlowController` in
 [capnweb](https://github.com/cloudflare/capnweb)); durable batch results are

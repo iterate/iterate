@@ -78,6 +78,13 @@ export type ConnectionRuntimeState = {
   eventsSent: number;
   lastDeliveredAt?: string;
   /**
+   * The connect-time identity descriptor. The runtime table is the ONLY home
+   * for ephemeral identity — ephemeral connections don't fold into the
+   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
+   * read who's connected from here.
+   */
+  subscriber?: StreamSubscriberDescriptor;
+  /**
    * True while the last batch handed to this connection's sink is unsettled —
    * exactly the signal idle teardown consults to classify a sink as wedged.
    */
@@ -107,6 +114,8 @@ export type SubscriptionRuntimeState = {
 type Connection = {
   readonly subscriptionType: StreamSubscriptionType;
   readonly startedAt: string;
+  /** Connect-time identity, surfaced through {@link ConnectionRuntimeState}. */
+  readonly subscriber?: StreamSubscriberDescriptor;
   /** Highest offset delivered to the sink; also the pump's resume cursor. */
   readonly cursor: number;
   batchesSent: number;
@@ -491,7 +500,15 @@ export class StreamSubscribers {
           const lastOffset = events.at(-1)?.offset;
           if (lastOffset === undefined) return; // caught up
 
-          const { matched, conditionErrors } = this.#applySelector(subscriptionKey, config, events);
+          // Ephemeral events never reach durable receivers — platform law,
+          // enforced as the same skip-not-defer shape selectors use: the raw
+          // read advances the cursor over their offsets, delivery drops them.
+          const durable = events.filter((event) => event.ephemeral !== true);
+          const { matched, conditionErrors } = this.#applySelector(
+            subscriptionKey,
+            config,
+            durable,
+          );
           for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 
           if (matched.length === 0) {
@@ -873,10 +890,19 @@ export class StreamSubscribers {
               if (!initialBatchPending) return;
             } else {
               cursor = lastOffset;
+              // Configured (wake) connections are a durable lane: ephemeral
+              // events are dropped from delivery (the cursor above already
+              // advanced over them), so hosted processors structurally never
+              // see one. Ephemeral subscriptions receive them, live and on
+              // replay.
+              const visible =
+                subscriptionType === "configured"
+                  ? readEvents.filter((event) => event.ephemeral !== true)
+                  : readEvents;
               events =
                 args.selector === undefined
-                  ? readEvents
-                  : readEvents.filter((event) => selectorMatchesSafely(args.selector!, event));
+                  ? visible
+                  : visible.filter((event) => selectorMatchesSafely(args.selector!, event));
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
@@ -913,6 +939,7 @@ export class StreamSubscribers {
     const connection: Connection = {
       subscriptionType,
       startedAt: new Date(this.#hooks.now()).toISOString(),
+      ...(args.presence === undefined ? {} : { subscriber: args.presence }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       get cursor() {
         return cursor;
@@ -1008,6 +1035,7 @@ export class StreamSubscribers {
           eventsSent: connection.eventsSent,
           lastDeliveredAt: connection.lastDeliveredAt,
           hasPendingDelivery: connection.hasPendingDelivery(),
+          ...(connection.subscriber === undefined ? {} : { subscriber: connection.subscriber }),
         },
       ]),
     );

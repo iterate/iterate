@@ -1283,4 +1283,68 @@ describe("StreamSubscribers", () => {
     ).toBe(true);
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
   });
+
+  it("z. ephemeral events: dropped from push delivery (cursor still advances), delivered to ephemeral subscriptions", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const }, evt(3, "b"));
+
+    // A replaying ephemeral subscription sees everything, flagged, in order —
+    // the spine's storage read is raw.
+    const batches: StreamEventBatch[] = [];
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: (batch) => {
+        batches.push(batch);
+      },
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+    const seen = batches.flatMap((batch) => batch.events);
+    expect(seen.map((event) => [event.offset, event.ephemeral === true])).toEqual([
+      [1, false],
+      [2, true],
+      [3, false],
+    ]);
+
+    // The push drain delivered only the durable events and acked THROUGH the
+    // ephemeral offset (skip-not-defer, same shape as selector skips).
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1, 3]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+
+    // A trailing ephemeral-only append delivers nothing but advances the
+    // cursor — no phantom lag, no redelivery on later wakes.
+    h.append({ ...evt(4, "chunk"), ephemeral: true as const });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(4);
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+  });
+
+  it("z2. configured wake connections never receive ephemeral events; the pump advances over them", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const }, evt(3, "b"));
+    const { sink, batches } = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+
+    // Ephemeral-only append while connected, delivered through the FRESH TAIL
+    // fast path (what the DO's commit hands over — raw, flags included): the
+    // pump advances its cursor and delivers nothing.
+    const fresh: StreamEvent = { ...evt(4, "chunk"), ephemeral: true };
+    h.append(fresh);
+    h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
+    await h.settle();
+    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+  });
 });

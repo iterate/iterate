@@ -320,6 +320,7 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
     metadata: StreamEventSchema.shape.metadata,
     source: StreamEventSchema.shape.source,
     idempotencyKey: StreamEventSchema.shape.idempotencyKey,
+    ephemeral: StreamEventSchema.shape.ephemeral,
     offset: StreamEventSchema.shape.offset,
     createdAt: StreamEventSchema.shape.createdAt,
     path: StreamEventSchema.shape.path,
@@ -352,6 +353,7 @@ export function getEventInputSchema<
       metadata: StreamEventInputSchema.shape.metadata,
       source: StreamEventInputSchema.shape.source,
       idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
+      ephemeral: StreamEventInputSchema.shape.ephemeral,
     })
     .strict() as unknown as z.ZodType<
     TypedStreamEventInput<Type, z.output<PayloadSchema>>,

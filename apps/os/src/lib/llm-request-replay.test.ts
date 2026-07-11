@@ -198,6 +198,30 @@ describe("replayLlmRequest", () => {
     expect(replay?.response).toEqual({ text: "hello world", thinkingText: "", source: "chunks" });
   });
 
+  it("dedupes chunk rows by sequence (evicted-then-restreamed attempts leave two rows per sequence)", () => {
+    // Chunk rows are ephemeral and evictable: a sweep mid-turn followed by a
+    // retry re-appends the same sequences at new offsets, and the browser
+    // mirror (which never deletes) keeps both copies. First occurrence wins.
+    const chunk = (content: string, sequence: number, offset: number) =>
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content } }] }, llmRequestOffset: 7, sequence },
+        offset,
+      );
+    const replay = replayLlmRequest({
+      rawEventJsons: conversationRows(),
+      chunkEventJsons: [
+        chunk("hello ", 0, 60),
+        chunk("world", 1, 61),
+        // The restreamed copies of the same sequences, at later offsets.
+        chunk("hello ", 0, 90),
+        chunk("world", 1, 91),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(replay?.response).toEqual({ text: "hello world", thinkingText: "", source: "chunks" });
+  });
+
   it("derives token counts, latency, and tokens/second from the lifecycle events", () => {
     // Request 7 (still open in conversationRows). Timeline — createdAt encodes
     // the offset as seconds (see row()): started at :10, first chunk at :11,

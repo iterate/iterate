@@ -216,7 +216,9 @@ export interface ProjectWorker {
    * stream it lives on, so `${event.path}@${event.offset}` identifies a
    * delivery globally and is the idempotency-key idiom for reactions. The
    * stream only advances its checkpoint when this resolves; throwing means
-   * the whole batch is redelivered later.
+   * the whole batch is redelivered later. Ephemeral events
+   * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
+   * delivered to this feed; their durable truth arrives as its own event.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
 }

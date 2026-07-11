@@ -231,6 +231,127 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await subscription.unsubscribe();
 });
 
+test("ephemeral events are second-class rows: excluded from default reads, delivered on ephemeral subscriptions", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/os-port/ephemeral/${marker}`;
+  const ephemeralType = `${STREAM_EVENT_TYPE}/chunk`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `os-stream-ephemeral-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(streamPath);
+
+  // A live watcher attached BEFORE the appends.
+  const live: StreamEvent[] = [];
+  using liveSubscription = await stream.subscribe({
+    processEventBatch: (batch) => {
+      live.push(...batch.events);
+    },
+  });
+
+  const [before] = await stream.append({
+    type: STREAM_EVENT_TYPE,
+    payload: { marker, position: "before" },
+  });
+  const [chunk] = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    idempotencyKey: `chunk-${marker}`,
+    payload: { marker },
+  });
+  const [after] = await stream.append({
+    type: STREAM_EVENT_TYPE,
+    payload: { marker, position: "after" },
+  });
+
+  // An ordinary commit: consecutive offsets, self-describing flag, and
+  // idempotency dedup works (it is a row like any other).
+  expect(chunk!.offset).toBe(before!.offset + 1);
+  expect(after!.offset).toBe(chunk!.offset + 1);
+  expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
+  const [deduped] = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    idempotencyKey: `chunk-${marker}`,
+    payload: { marker },
+  });
+  expect(deduped!.offset).toBe(chunk!.offset);
+
+  // Default reads skip it; includeEphemeral opts in.
+  const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
+  const defaultRead = await stream.getEvents(readWindow);
+  expect(defaultRead.map((event) => event.offset)).toEqual([before!.offset, after!.offset]);
+  const rawRead = await stream.getEvents({ ...readWindow, includeEphemeral: true });
+  expect(rawRead.map((event) => event.offset)).toEqual([
+    before!.offset,
+    chunk!.offset,
+    after!.offset,
+  ]);
+
+  // The live watcher saw all three, in offset order, the chunk flagged.
+  await waitFor(
+    () => live.some((event) => event.offset === after!.offset),
+    () =>
+      `live tail through offset ${after!.offset}; saw ${JSON.stringify(live.map((e) => e.offset))}`,
+  );
+  const window = live.filter(
+    (event) => event.offset >= before!.offset && event.offset <= after!.offset,
+  );
+  expect(window.map((event) => [event.offset, event.ephemeral === true])).toEqual([
+    [before!.offset, false],
+    [chunk!.offset, true],
+    [after!.offset, false],
+  ]);
+
+  // Ephemeral subscriptions get them on REPLAY too (the browser mirror stays
+  // dense as long as no eviction has swept the rows).
+  const replayed: StreamEvent[] = [];
+  using replaySubscription = await stream.subscribe({
+    replayAfterOffset: 0,
+    processEventBatch: (batch) => {
+      replayed.push(...batch.events);
+    },
+  });
+  await waitFor(
+    () => replayed.some((event) => event.offset === after!.offset),
+    () =>
+      `replay through offset ${after!.offset}; saw ${JSON.stringify(replayed.map((e) => e.offset))}`,
+  );
+  expect(replayed.some((event) => event.offset === chunk!.offset && event.ephemeral === true)).toBe(
+    true,
+  );
+
+  // Control facts can never be ephemeral.
+  await expect(
+    stream.append({
+      type: "events.iterate.com/stream/paused",
+      ephemeral: true,
+      payload: { reason: "nope" },
+    }),
+  ).rejects.toThrow(/cannot be ephemeral/);
+
+  await liveSubscription.unsubscribe();
+  await replaySubscription.unsubscribe();
+
+  // Restart: ephemeral rows recover the allocator like any other row — the
+  // next offsets continue past the ephemeral head.
+  const burst = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    payload: { marker, sequence: 2 },
+  });
+  const burstHead = burst.at(-1)!.offset;
+  await stream.kill().catch(() => undefined);
+  const [reborn] = await stream.append({
+    type: STREAM_EVENT_TYPE,
+    payload: { marker, position: "post-kill" },
+  });
+  expect(reborn!.offset).toBeGreaterThan(burstHead);
+});
+
 test("crossPostTo copies matching events with source provenance", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post/source/${marker}`;

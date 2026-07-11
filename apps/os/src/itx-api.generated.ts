@@ -1000,7 +1000,9 @@ export interface ProjectWorker {
    * stream it lives on, so `${event.path}@${event.offset}` identifies a
    * delivery globally and is the idempotency-key idiom for reactions. The
    * stream only advances its checkpoint when this resolves; throwing means
-   * the whole batch is redelivered later.
+   * the whole batch is redelivered later. Ephemeral events
+   * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
+   * delivered to this feed; their durable truth arrives as its own event.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
 }
@@ -1018,7 +1020,9 @@ export interface Stream {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
-  /** One event by offset or idempotencyKey; undefined when it does not exist. */
+  /** One event by offset or idempotencyKey; undefined when it does not exist.
+   * Point reads return ephemeral rows too — but those rows are evictable, so
+   * an offset that once resolved may later read as undefined. */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
@@ -1039,6 +1043,8 @@ export interface Stream {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
+   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
+   * events too — remember their rows may be evicted if you record the offset.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -1073,11 +1079,13 @@ export interface Stream {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
-   * Live EPHEMERAL event delivery: `processEventBatch` is called for every
-   * committed batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
-   * delivery is configured as data instead, by appending a
-   * `subscription-configured` event (wake or push mode) to the stream.
+   * Session-scoped live event delivery (the "ephemeral" subscription lane —
+   * also the only lane that receives `ephemeral: true` events):
+   * `processEventBatch` is called for every committed batch (optionally
+   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * Forgotten on disconnect — durable delivery is configured as data instead,
+   * by appending a `subscription-configured` event (wake or push mode) to the
+   * stream.
    */
   subscribe(args: {
     subscriptionKey?: string;
@@ -1841,7 +1849,8 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
 
 /** One committed event on a durable stream: type, JSON payload, offset,
  * idempotency key, and provenance (processor stamp / cross-post chain), plus
- * the commit-time `createdAt` and stream `path`. */
+ * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
+ * second-class row (see `StreamEventInput`). */
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1869,6 +1878,7 @@ export type StreamEvent = {
       }
     | undefined;
   idempotencyKey?: string | undefined;
+  ephemeral?: true | undefined;
   offset: number;
   createdAt: string;
   path: string;
@@ -2291,7 +2301,11 @@ export type SubscriptionKey = string;
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. */
+ * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * second-class row: excluded from range reads unless `includeEphemeral`,
+ * never delivered to durable subscribers (wake/push/webhook), and evictable —
+ * for transient signals (LLM streaming chunks) whose durable truth lands as
+ * its own event. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -2319,6 +2333,7 @@ export type StreamEventInput = {
       }
     | undefined;
   idempotencyKey?: string | undefined;
+  ephemeral?: true | undefined;
 };
 
 /** The read window accepted by `Stream.getEvents` / `Stream.readEvents`. */
@@ -2331,6 +2346,12 @@ export type StreamEventReadInput = {
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
+  /**
+   * Include ephemeral events (default false). Ephemeral rows are second-class:
+   * excluded from every range read unless explicitly requested, and the stream
+   * may evict them later — never derive durable state from one.
+   */
+  includeEphemeral?: boolean;
 };
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */

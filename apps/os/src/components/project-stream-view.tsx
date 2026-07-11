@@ -28,7 +28,7 @@ import {
   BrowserFeedProcessor,
   type BrowserFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import { AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
+import { AgentTokenUsageStrip, QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
@@ -49,7 +49,7 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -111,11 +111,17 @@ export function ProjectStreamView({
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
-  const itx = useItx();
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  // Dial itx imperatively (never `useItx()`): the stream view's shell —
+  // header, tabs, composer, panel — must paint before the socket connects,
+  // with the feed showing its own "connecting" state. A hook read here would
+  // suspend the whole view into the nearest route boundary.
   const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () => streamSource ?? ((path) => itx.streams.get(path)),
-    [itx, streamSource],
+    () =>
+      streamSource ??
+      (async (path) =>
+        (await connectItxBrowser(projectId == null ? {} : { projectId })).streams.get(path)),
+    [projectId, streamSource],
   );
   const streamClientFactory = useMemo(
     () => async (input: { streamPath: string }) =>
@@ -240,9 +246,6 @@ export function ProjectStreamView({
   // local_index order (raw rows click through to the inspector).
   const modeBody = (
     <StreamFeedView
-      {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
-        ? { onInterruptQueuedMessages: interrupt.run }
-        : {})}
       // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
       key={`${feedStore.streamDatabase.databasePath}:${activeMode}`}
       database={feedStore.streamDatabase}
@@ -256,11 +259,12 @@ export function ProjectStreamView({
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       emptyLabel={connectionLabel}
-      isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
       projectSlug={projectSlug}
       isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
     />
   );
+
+  const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
 
   // The feed column — mode body with overlays on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
@@ -274,19 +278,30 @@ export function ProjectStreamView({
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          <StreamViewComposer
-            autoFocusMessage={autoFocusMessageComposer}
-            {...(defaultComposerMode == null
-              ? caps.agentFeed
-                ? { defaultMode: "message" as const }
-                : { defaultMode: "raw" as const }
-              : { defaultMode: defaultComposerMode })}
-            interrupt={interrupt}
-            {...(messageComposer == null ? {} : { messageComposer })}
-            onNudgeDeliveries={nudgeDeliveries}
-            presence={presence}
-            store={store}
-          />
+          <div>
+            {/* Queued messages are part of the composer: the panel tucks
+                behind the pill (painted first, overlapped via its negative
+                bottom margin) and grows the composer column, which the feed's
+                stick-to-bottom already follows on viewport resize. */}
+            <QueuedMessagesPanel
+              messages={queuedUserMessages}
+              isInterrupting={interrupt?.isInterrupting ?? false}
+              {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
+            />
+            <StreamViewComposer
+              autoFocusMessage={autoFocusMessageComposer}
+              {...(defaultComposerMode == null
+                ? caps.agentFeed
+                  ? { defaultMode: "message" as const }
+                  : { defaultMode: "raw" as const }
+                : { defaultMode: defaultComposerMode })}
+              interrupt={interrupt}
+              {...(messageComposer == null ? {} : { messageComposer })}
+              onNudgeDeliveries={nudgeDeliveries}
+              presence={presence}
+              store={store}
+            />
+          </div>
           {caps.agentFeed && agentUiState?.tokenUsage != null ? (
             <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
           ) : null}

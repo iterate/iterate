@@ -53,6 +53,11 @@ const CrossPostTransformResult = z.strictObject({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+// A copy is a new first-hand fact: `ephemeral` deliberately does not
+// propagate (the source's ephemeral events never reach the push lane anyway,
+// and a hand-built acceptCrossPost batch carrying the flag still commits
+// DURABLE copies). Provenance offsets are descriptive, never dereferenced, so
+// a source row evicted after copying leaves no dangling reads.
 export function buildCrossPostAppendInput(args: {
   event: StreamEvent;
   crossPostedFrom: CrossPostProvenanceChain;

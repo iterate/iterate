@@ -13,11 +13,7 @@ import {
   AGENT_KIND_PREFIX,
   type RawFeedItemData,
 } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
-import {
-  AgentFeedItemRow,
-  AgentLiveActivity,
-  QueuedMessagesPanel,
-} from "~/components/agent-feed.tsx";
+import { AgentFeedItemRow, AgentLiveActivity } from "~/components/agent-feed.tsx";
 import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import {
   buildStreamFeedWhere,
@@ -54,9 +50,9 @@ type FeedRow = {
  * truth (useStickToBottom; followOnAppend off), the row window is a live SQL
  * LIMIT/OFFSET query over the filtered collection's dense positions, rows are
  * retained across window shifts with identity stability, and skeletons
- * measure exactly estimateSize. The live in-flight activity and
- * queued-messages panel are trailing virtual items rendered straight from
- * reduced state.
+ * measure exactly estimateSize. The live in-flight activity is a trailing
+ * virtual item rendered straight from reduced state. (Queued messages render
+ * with the composer — they're pending input, not history.)
  *
  * Callers must remount this component when pointing it at a different
  * database or mode (key it by database identity + mode): the virtualizer's
@@ -71,8 +67,6 @@ export function StreamFeedView({
   onInspectEvent,
   onInspectLlmRequest,
   projectSlug,
-  isInterruptingQueuedMessages = false,
-  onInterruptQueuedMessages,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel?: string;
@@ -86,8 +80,6 @@ export function StreamFeedView({
   /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   projectSlug?: string;
-  isInterruptingQueuedMessages?: boolean;
-  onInterruptQueuedMessages?: () => Promise<void> | void;
 }) {
   // No memo: building the filter is trivial and db.query dedupes by
   // (sql, params) VALUE, so fresh param arrays don't cause resubscribes.
@@ -99,7 +91,6 @@ export function StreamFeedView({
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = filter.agent == null ? null : (liveState?.live ?? null);
-  const queuedUserMessages = filter.agent == null ? [] : (liveState?.queuedUserMessages ?? []);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids whose disclosure the user flipped away from its default state.
   // Activities and live-rail steps default collapsed (has(id) = expanded);
@@ -107,28 +98,22 @@ export function StreamFeedView({
   // detail has content (has(id) = collapsed).
   const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
-  // The live in-flight activity and the queued-messages panel are the list's
-  // trailing items so they're inside the virtualizer's size model: their
-  // growth shows up in getTotalSize()/the sizer's height, which is what the
-  // stick's ResizeObserver follows and what anchorTo's mid-history
-  // compensation measures. Rendering them outside the list would hide their
-  // height from both.
+  // The live in-flight activity is the list's trailing item so it's inside
+  // the virtualizer's size model: its growth shows up in getTotalSize()/the
+  // sizer's height, which is what the stick's ResizeObserver follows and what
+  // anchorTo's mid-history compensation measures. Rendering it outside the
+  // list would hide its height from both.
   const liveCount = live == null ? 0 : 1;
-  const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
-  const totalCount = itemCount + liveCount + queuedCount;
+  const totalCount = itemCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
-  // stable key for them. The live activity and queued panel keep their own
-  // keys: their index shifts up every time a settled row lands, and keying
-  // them by index would hand the (often tall) live block's cached measurement
-  // to the new settled row — a visible jump right when a turn settles.
-  const hasLive = live != null;
+  // stable key for them. The live activity keeps its own key: its index
+  // shifts up every time a settled row lands, and keying it by index would
+  // hand the (often tall) live block's cached measurement to the new settled
+  // row — a visible jump right when a turn settles.
   const getItemKey = useCallback(
-    (index: number) => {
-      if (index < itemCount) return index;
-      return hasLive && index === itemCount ? "live" : "queued";
-    },
-    [itemCount, hasLive],
+    (index: number) => (index < itemCount ? index : "live"),
+    [itemCount],
   );
 
   const virtualizer = useVirtualizer({
@@ -253,7 +238,6 @@ export function StreamFeedView({
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
             const isLiveItem = live != null && index === itemCount;
-            const isQueuedItem = index === itemCount + liveCount && queuedCount > 0;
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div
@@ -269,12 +253,6 @@ export function StreamFeedView({
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
-                  />
-                ) : isQueuedItem ? (
-                  <QueuedMessagesPanel
-                    messages={queuedUserMessages}
-                    isInterrupting={isInterruptingQueuedMessages}
-                    onInterrupt={onInterruptQueuedMessages}
                   />
                 ) : row == null ? (
                   // Not-yet-loaded rows must measure exactly estimateSize

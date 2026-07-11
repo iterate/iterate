@@ -20,6 +20,12 @@ export type StreamEventReadInput = {
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
+  /**
+   * Include ephemeral events (default false). Ephemeral rows are second-class:
+   * excluded from every range read unless explicitly requested, and the stream
+   * may evict them later — never derive durable state from one.
+   */
+  includeEphemeral?: boolean;
 };
 
 /** One consistent read of a processor (what `snapshot()` returns): the folded

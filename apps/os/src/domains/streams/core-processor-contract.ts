@@ -54,7 +54,12 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 //      (resume = pure un-park at the cursor where delivery stopped);
 //      `subscription-cursor-set` is the one and only seek. A redrive is two
 //      facts (cursor-set + resumed), each honest about what it did.
-export const CORE_STATE_VERSION = 13;
+// - 14: ephemeral subscriber connections no longer fold into
+//      `connectionsByKey` — the roster tracks configured subscriptions only.
+//      Live ephemeral consumers are runtime state (the in-memory connection
+//      table); dead ones used to linger here forever when their disconnect
+//      fact was lost to an eviction or deploy rollover.
+export const CORE_STATE_VERSION = 14;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -222,9 +227,10 @@ const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodT
 
 /**
  * A processor contract announcement carried on the connect event when the
- * subscriber is a hosted stream processor. It rides the presence facts
- * (`connectionsByKey[..].subscriber.processor.announcement`), which is where
- * UIs and tooling read it.
+ * subscriber is a hosted stream processor. UIs and tooling read it from the
+ * presence facts (the `subscriber-connected` events) and, for configured
+ * subscriptions, from the reduced roster
+ * (`connectionsByKey[..].subscriber.processor.announcement`).
  */
 export const ProcessorContractAnnouncement = z.object({
   slug: z.string().trim().min(1),
@@ -292,6 +298,13 @@ export const CoreProcessorContract = defineProcessorContract({
     path: z.string().trim().min(1).optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
+    /**
+     * Events folded so far — durable AND ephemeral (both reduce). A rebuild
+     * after ephemeral-row eviction counts only survivors, so this may
+     * DECREASE across a rebuild; never compare it to `maxOffset`. Its one
+     * load-bearing read is the constructor's `=== 0` birth check, which is
+     * eviction-proof (`stream/created` can never be ephemeral).
+     */
     eventCount: z.number().int().min(0).default(0),
     maxOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),
@@ -336,11 +349,13 @@ export const CoreProcessorContract = defineProcessorContract({
       )
       .default({}),
     /**
-     * Live presence roster: who is connected to this stream right now, keyed
-     * by subscriptionKey — the event-sourced mirror of the runtime connection
-     * map. `stream/woken` clears it (every connection died with the previous
-     * stream incarnation; survivors reconnect and re-land), connected adds,
-     * disconnected removes.
+     * Live presence roster for CONFIGURED subscriptions: which durable
+     * subscribers are connected right now, keyed by subscriptionKey — the
+     * event-sourced mirror of the runtime connection map. `stream/woken`
+     * clears it (every connection died with the previous stream incarnation;
+     * survivors reconnect and re-land), connected adds, disconnected removes.
+     * Ephemeral connections never fold in (state version 14): their lifetime
+     * is the live socket, tracked only in the runtime connection table.
      */
     connectionsByKey: z
       .record(

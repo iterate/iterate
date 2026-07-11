@@ -131,7 +131,8 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/capability-host/script-execution-requested": {
-      description: "A script should run in this capability scope.",
+      description:
+        "A script should run in this capability scope. Before any attempt starts, the code is typechecked against the scope's capability types: a script with a PROVABLE error — a syntax error, or a near-miss typo where the compiler names the fix (\"Did you mean 'get'?\") — settles straight to an error completion carrying the compiler errors, without ever running (no started event). Everything less certain runs: capabilities are provided dynamically and declared types can lag the runtime, so bare property/argument mismatches, unknown/untyped capabilities, non-async block shapes, and checker failures all let the script run unchecked.",
       payloadSchema: z.looseObject({
         code: z.string(),
         executionId: z.string(),
