@@ -240,14 +240,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const rules = await this.#egressRules();
     if (rules.length === 0) return this.#egress(request);
 
-    // Secret references also feed rule matching (match.secretPaths); a
-    // malformed reference set is not this gate's error to report — the
-    // egress lanes below produce the canonical error response.
+    // Secret references also feed rule matching (match.secretPaths). If the
+    // reference set is malformed we still match on method/host/path — a broken
+    // getSecret placeholder must not be a way to slip a `deny`/`hold` rule —
+    // just without the secret-path matchers. A request that then matches no
+    // rule falls to the egress lanes, which report the canonical error.
     let secretPaths: string[] = [];
     try {
       secretPaths = secretReferencePathsFromRequest(request);
     } catch {
-      return this.#egress(request);
+      secretPaths = [];
     }
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
@@ -452,7 +454,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
    */
   async #judgeResolution(
     event: StreamEvent,
-    input: { approvalRequestEventOffset: number; requestedPayload: HumanApprovalRequestedPayload },
+    input: {
+      approvalRequestEventOffset: number;
+      deadline: number;
+      requestedPayload: HumanApprovalRequestedPayload;
+    },
   ): Promise<"granted" | "rejected" | null> {
     if (event.type === "events.iterate.com/project/human-approval-rejected") {
       const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
@@ -469,32 +475,57 @@ export class ProjectDurableObject extends DurableObject<Env> {
     ) {
       return null;
     }
-    const verdict = await this.#processorHost
-      .catchUp(ProjectProcessorContract.slug)
-      .then(() =>
-        evaluateGrant({
-          grant: grant.data,
-          keys: this.#projectProcessor.currentState.humanApprovalKeys,
-          message: buildApprovalMessage({
-            projectId: this.#name.projectId,
-            approvalRequestEventOffset: input.approvalRequestEventOffset,
-            requested: input.requestedPayload,
-            decision: "granted",
-          }),
-        }),
-      )
-      .catch((error: unknown) => ({
-        accepted: false as const,
-        reason: `key state catch-up failed: ${error instanceof Error ? error.message : String(error)}`,
-      }));
-    if (verdict.accepted) return "granted";
-    console.warn("egress approval: grant ignored", {
-      approvalRequestEventOffset: input.approvalRequestEventOffset,
-      keyId: grant.data.keyId,
+    const message = buildApprovalMessage({
       projectId: this.#name.projectId,
-      reason: verdict.reason,
+      approvalRequestEventOffset: input.approvalRequestEventOffset,
+      requested: input.requestedPayload,
+      decision: "granted",
     });
-    return null;
+
+    // A grant is judged exactly once at its offset — the resolution cursor
+    // moves past it. So a transient key-state catch-up failure must NOT be
+    // mistaken for a bad signature and silently drop a real human grant: retry
+    // with backoff until the catch-up succeeds (then verify against FRESH keys)
+    // or the hold's deadline passes — at which point it expires anyway, the
+    // safe deny direction. A verdict that verifies but isn't accepted (unsigned,
+    // bad signature, unknown/revoked key) is a real ignore, no retry.
+    let backoffMs = 200;
+    while (true) {
+      try {
+        await this.#processorHost.catchUp(ProjectProcessorContract.slug);
+      } catch (error) {
+        if (Date.now() >= input.deadline) {
+          console.warn("egress approval: grant unverifiable — key-state catch-up kept failing", {
+            approvalRequestEventOffset: input.approvalRequestEventOffset,
+            keyId: grant.data.keyId,
+            projectId: this.#name.projectId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }
+        await this.#sleep(Math.min(backoffMs, input.deadline - Date.now(), 2_000));
+        backoffMs *= 2;
+        continue;
+      }
+      const verdict = await evaluateGrant({
+        grant: grant.data,
+        keys: this.#projectProcessor.currentState.humanApprovalKeys,
+        message,
+      });
+      if (verdict.accepted) return "granted";
+      console.warn("egress approval: grant ignored", {
+        approvalRequestEventOffset: input.approvalRequestEventOffset,
+        keyId: grant.data.keyId,
+        projectId: this.#name.projectId,
+        reason: verdict.reason,
+      });
+      return null;
+    }
+  }
+
+  /** A cancellable-free delay for the catch-up backoff; clamps negatives to 0. */
+  #sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
   }
 
   /** This Durable Object's own stream (the project stream for the "/" egress instance). */
