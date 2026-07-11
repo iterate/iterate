@@ -116,7 +116,12 @@ const SHARED_FILES: Record<string, string> = {
     compilerOptions: {
       module: "esnext",
       moduleResolution: "bundler",
-      target: "es2022",
+      // Match the runtime, not a fixed year: scripts run in workerd on current
+      // V8, so a feature the runtime has (the regex `v` flag, top-level await,
+      // import.meta) must not report a target-availability error (TS1501 and
+      // kin live in the 1xxx "syntax" range the gate blocks on). Pinning an old
+      // target made runtime-legal scripts un-runnable.
+      target: "esnext",
       strict: false,
       skipLibCheck: true,
     },
@@ -287,15 +292,62 @@ const EXECUTION_CHECK_DEADLINE_MS = 10_000;
  * types, handle results declared `{}`). The advisory door (checkItxScript)
  * still reports everything.
  */
-const NEAR_MISS_TYPO_CODES = new Set([
-  2551, // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
-  2552, // Cannot find name 'X'. Did you mean 'Y'?
-]);
+const TS_PROPERTY_NEAR_MISS = 2551; // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
+const TS_NAME_NEAR_MISS = 2552; // Cannot find name 'X'. Did you mean 'Y'?
 
 /** TS grammar diagnostics live in the 1xxx range. Unparseable code is the one
  * verdict that needs no type knowledge at all — the runtime's module loader
  * would reject the same script with a worse message. */
 const isSyntaxError = (code: number) => code >= 1000 && code < 2000;
+
+/** The itx root passed to a script (`itx: Itx`, where `Itx = Project & …mounts`)
+ * is RUNTIME-EXTENSIBLE: a script can `provideCapability` a new top-level path
+ * and call it two lines later, so a missing property ON THE ROOT is never
+ * provably wrong — even when it near-misses an existing member (`itx.agentz`
+ * vs `agent`, `itx.strems` vs `streams` read identically to a static check).
+ * A near-miss on a CONCRETE sub-surface (`itx.streams.gett` on
+ * `ProjectStreamCollection`, a typed mount's `T`) stays provable and blocks —
+ * those types are not extended by a provide. Message-shaped because the type
+ * name is the only signal tsc gives; the alias collapses to `Project` or `Itx`. */
+const isRootExtensibleMiss = (message: string) =>
+  /does not exist on type '(?:Project|Itx)'/.test(message);
+
+/** Whether a script-own diagnostic is provable enough to STOP a run. See the
+ * allowlist rationale on ScriptExecutionCheck. */
+function isProvableBlocker(diagnostic: TypecheckDiagnostic): boolean {
+  if (isSyntaxError(diagnostic.code)) return true;
+  // A missing local (`cuont`) is always provable — locals are not runtime-
+  // extensible the way the itx root is.
+  if (diagnostic.code === TS_NAME_NEAR_MISS) return true;
+  if (diagnostic.code === TS_PROPERTY_NEAR_MISS) return !isRootExtensibleMiss(diagnostic.message);
+  return false;
+}
+
+/** Bracket-nesting depth past which the script is handed to the runtime
+ * UNCHECKED instead of tsc. tsc's recursive-descent parser is synchronous and
+ * uninterruptible: a ~2KB script nesting `[[[…]]]` ~1200 deep blocked the host
+ * DO past its storage watchdog and forced a reset (the check's own deadline
+ * fires too late — the RPC is already in flight). V8 parses the same nesting
+ * in milliseconds, so bailing to the runtime is both safe and cheap. The cap
+ * sits far above any real script (1000-deep checked in ~200ms; real code is
+ * single digits). */
+const MAX_NESTING_DEPTH = 400;
+
+/** Cheap upper bound on bracket nesting — counts `([{` vs `)]}` without a
+ * parse. Brackets inside strings/comments inflate the count, which only makes
+ * the guard bail to UNCHECKED sooner: safe, since unchecked runs the script. */
+function exceedsNestingDepth(code: string, limit: number): boolean {
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === "(" || c === "[" || c === "{") {
+      if (++depth > limit) return true;
+    } else if (c === ")" || c === "]" || c === "}") {
+      if (depth > 0) depth--;
+    }
+  }
+  return false;
+}
 
 /**
  * The pre-execution typecheck for a `script-execution-requested` block:
@@ -303,11 +355,13 @@ const isSyntaxError = (code: number) => code >= 1000 && code < 2000;
  * policy above. Blocking requires an error diagnostic in the script's OWN
  * code (`script.ts`) from the allowlist: a syntax error or a near-miss typo.
  * Everything the checker cannot vouch for runs instead — property/argument
- * mismatches (dynamic mounts and surface gaps make them unprovable), shapes
+ * mismatches (dynamic mounts and surface gaps make them unprovable), a
+ * near-miss on the runtime-extensible itx root (isRootExtensibleMiss), shapes
  * the agent extractor never produces (raw runScript callers send plain
- * function expressions), oversized scripts, broken mount declarations (stale
- * journals must not veto unrelated scripts), compiler crashes, an unreachable
- * typechecker, and the deadline. Never throws.
+ * function expressions), oversized or pathologically-nested scripts (the
+ * latter would wedge the host before the deadline fires), broken mount
+ * declarations (stale journals must not veto unrelated scripts), compiler
+ * crashes, an unreachable typechecker, and the deadline. Never throws.
  */
 export async function checkItxScriptForExecution(input: {
   capabilities: CapabilityDescription[];
@@ -326,6 +380,9 @@ export async function checkItxScriptForExecution(input: {
   }
   if (!RUNTIME_SCRIPT_SHAPE.test(input.code.trim())) {
     return { verdict: "unchecked", reason: "not the async block shape the checker models" };
+  }
+  if (exceedsNestingDepth(input.code, MAX_NESTING_DEPTH)) {
+    return { verdict: "unchecked", reason: `nesting deeper than ${MAX_NESTING_DEPTH}` };
   }
   const project = assembleScriptProject(input.capabilities, input.code);
   let checked: TypecheckResult;
@@ -346,7 +403,7 @@ export async function checkItxScriptForExecution(input: {
     (diagnostic) =>
       diagnostic.category === "error" &&
       diagnostic.fileName === "script.ts" &&
-      (isSyntaxError(diagnostic.code) || NEAR_MISS_TYPO_CODES.has(diagnostic.code)),
+      isProvableBlocker(diagnostic),
   );
   if (blocking.length === 0) return { verdict: "clean" };
   const problems = formatProblems(blocking, {
@@ -393,10 +450,10 @@ function formatProblems(
           diagnostic.line === undefined ? undefined : diagnostic.line + options.lineOffset;
         // Lines the assembly prepended (the prelude, an injected import) map
         // below 1 — report without a position rather than lying about one.
-        const position =
-          line === undefined || line < 1
-            ? ""
-            : `:${line}${diagnostic.column === undefined ? "" : `:${diagnostic.column}`}`;
+        // tswasm columns are 0-based; +1 to match the 1-based line and every
+        // editor's gutter (a `line:col` that disagrees on the col base misleads).
+        const column = diagnostic.column === undefined ? "" : `:${diagnostic.column + 1}`;
+        const position = line === undefined || line < 1 ? "" : `:${line}${column}`;
         return `${options.label}${position} — ${diagnostic.message} (TS${diagnostic.code})`;
       }
       const where = fileName.replace(/^mounts\//, "mount ").replace(/\.ts$/, "");

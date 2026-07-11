@@ -561,3 +561,78 @@ test("execution gate: provable script bugs the run would only surface at runtime
     expect(checked.verdict, code).toBe("problems");
   }
 });
+
+// ─── Regression: prd break-test findings (follow-up to #1882) ────────────────
+// Four false-positive / robustness holes the production break-test surfaced.
+// Each asserts the RUNTIME-legal behavior the gate must now preserve.
+
+test("execution gate regression: ES2024+ runtime features are not blocked as syntax errors (TS1501)", async () => {
+  // The regex `v` flag runs in workerd; pinning target es2022 reported TS1501
+  // ("only available when targeting es2024 or later") — a 1xxx code the gate
+  // blocked as if it were a parse error. matching the runtime target fixes it.
+  const vFlag = await gate("async (itx) => { const re = /[\\p{L}]/v; return re.test('x'); }");
+  expect(vFlag).toEqual({ verdict: "clean" });
+  // A sibling target-availability feature: top-level-style await already inside
+  // the async body is fine; `using` (ES2026 explicit resource management) too.
+  const using = await gate("async (itx) => { using d = { [Symbol.dispose]() {} }; void d; }");
+  expect(using).toEqual({ verdict: "clean" });
+});
+
+test("execution gate regression: near-miss on the runtime-extensible itx root does NOT block", async () => {
+  // provide-then-use in one script: the mount does not exist statically, and
+  // its near-miss to `agent` used to bounce it (TS2551 → blocked). The root is
+  // runtime-extensible, so this must run.
+  const provideThenUse = await gate(`async (itx) => {
+    await itx.capabilityHost.provideCapability({ type: "itx-expression", path: ["agentz"], expression: ["streams", ["get", "/"]] });
+    return typeof itx.agentz;
+  }`);
+  expect(provideThenUse).toEqual({ verdict: "clean" });
+
+  // A bare root-member typo (`itx.strems`) reads identically to a dynamic
+  // provide — indistinguishable statically — so it too must run (the price of
+  // a runtime-extensible root; sub-member typos below stay caught).
+  const rootTypo = await gate("async (itx) => itx.strems.get('/')");
+  expect(rootTypo).toEqual({ verdict: "clean" });
+
+  // The refinement must NOT weaken the flagship catches: near-miss on a
+  // CONCRETE sub-surface is still provable and still blocks.
+  const subMemberTypo = await gate("async (itx) => itx.streams.gett('/')");
+  expect(subMemberTypo.verdict).toBe("problems");
+  const mountTypo = await gate("async (itx) => itx.tools.weather.forecastt({ city: 'x' })", [
+    WEATHER_MOUNT,
+  ]);
+  expect(mountTypo.verdict).toBe("problems");
+  // A misspelled LOCAL (TS2552, not a root property) still blocks.
+  const localTypo = await gate("async (itx) => { const count = 1; return cuont + 1; }");
+  expect(localTypo.verdict).toBe("problems");
+});
+
+test("execution gate regression: pathologically-nested scripts bail to unchecked, never reaching tsc", async () => {
+  // ~1200-deep nesting wedged the host DO past its storage watchdog (tsc's
+  // recursive descent is synchronous; the deadline fires too late). The cheap
+  // depth guard bails to unchecked BEFORE the compiler is dialed — proven here
+  // by a poisoned typechecker that throws if it is ever called.
+  const exploding: Typechecker = {
+    check: () => Promise.reject(new Error("typechecker must not be dialed for deep scripts")),
+  };
+  const deep = `async (itx) => { const x = ${"[".repeat(1200)}1${"]".repeat(1200)}; return x; }`;
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: deep,
+    typechecker: exploding,
+  });
+  expect(checked.verdict).toBe("unchecked");
+  expect((checked as { reason: string }).reason).toContain("nesting");
+
+  // A normal script with ordinary nesting still reaches the real checker.
+  const shallow = await gate("async (itx) => itx.streams.gett('/')");
+  expect(shallow.verdict).toBe("problems");
+});
+
+test("execution gate regression: diagnostic columns are 1-based (match the line and editors)", async () => {
+  // `gett` sits at 1-based column 28 in `itx.streams.gett`; the message must
+  // read :28, not the tswasm-native 0-based :27.
+  const checked = await gate("async (itx) => itx.streams.gett('/')");
+  expect(checked.verdict).toBe("problems");
+  expect((checked as { problems: string[] }).problems[0]).toContain("script:1:28");
+});
