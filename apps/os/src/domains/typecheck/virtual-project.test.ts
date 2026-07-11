@@ -222,9 +222,13 @@ test("npm specifier scan finds bare packages in code and ignores prose", () => {
   expect(npmPackagesMentioned(files).sort()).toEqual(["@slack/web-api", "zod"]);
 });
 
-test("a compiler crash comes back as a clean problem, not an infra throw", async () => {
-  // A type-compute bomb can OOM the wasm isolate; the raw throw used to leak
-  // "Worker exceeded memory limit." / non-JSON output to the provide caller.
+test("a compiler crash at provide time ALLOWS the mount — a crash is not proof the types are wrong", async () => {
+  // A type-compute bomb can OOM the wasm isolate. The raw throw used to leak
+  // to the provide caller; then it was surfaced as a problem — which
+  // hard-rejected a mount the compiler merely failed to check. A crash is
+  // "the check didn't happen", not a verdict: allow the mount (same stance as
+  // the execution gate's `unchecked`). Real type errors still reject (see the
+  // typo test above), so this loses nothing but the false reject.
   const crashing: Typechecker = {
     check: (input) =>
       runTypecheck({
@@ -241,9 +245,47 @@ test("a compiler crash comes back as a clean problem, not an infra throw", async
     types: "export type T = 1;",
     typechecker: crashing,
   });
+  expect(problems).toEqual([]);
+});
+
+test("an unreachable / hung sidecar at provide time allows the mount (deadline, no hard reject)", async () => {
+  const unreachable: Typechecker = {
+    check: () => Promise.reject(new Error("sidecar dial failed")),
+  };
+  expect(
+    await checkCapabilityTypes({
+      types: "export type T = { x(): void };",
+      typechecker: unreachable,
+    }),
+  ).toEqual([]);
+
+  const hanging: Typechecker = { check: () => new Promise(() => {}) };
+  expect(
+    await checkCapabilityTypes({
+      types: "export type T = { x(): void };",
+      typechecker: hanging,
+      deadlineMs: 25,
+    }),
+  ).toEqual([]);
+});
+
+test("a pathologically nested type is REJECTED at provide time (durable — must not wedge future checks)", async () => {
+  // Unlike an ephemeral script (which the gate runs unchecked), a `types`
+  // string is journaled and re-compiled by every later script check, so a
+  // parser-wedging nesting must be kept out of the journal. A poisoned checker
+  // proves the guard bails before tsc is ever dialed.
+  const exploding: Typechecker = {
+    check: () => Promise.reject(new Error("typechecker must not be dialed for deep types")),
+  };
+  const deep = `export type T = ${"[".repeat(1200)}number${"]".repeat(1200)};`;
+  const problems = await checkCapabilityTypes({ types: deep, typechecker: exploding });
   expect(problems).toHaveLength(1);
-  expect(problems[0]).toContain("type checking crashed");
-  expect(problems[0]).toContain("too complex");
+  expect(problems[0]).toContain("nesting");
+
+  // A normal declaration still reaches the real checker and compiles clean.
+  expect(
+    await checkCapabilityTypes({ types: "export type T = { x(): Promise<void> };", typechecker }),
+  ).toEqual([]);
 });
 
 test("compiling-but-export-less types are rejected as an authoring mistake", async () => {
