@@ -1542,9 +1542,11 @@ export type ProjectLiveState = {
  * (`export type Slack = import("@slack/web-api").WebClient;`) both resolve.
  * Validated at provide time — a declaration that does not compile rejects the
  * mount — and read by `itx.docs` (search/get) and `itx.docs.typecheck`. An
- * itx-expression mount provided WITHOUT types asks the capability's
- * `__describe()` once and keeps what it reports (the MCP/OpenAPI connect
- * doors generate theirs from tool schemas and spec operations).
+ * itx-expression mount provided WITHOUT types EVALUATES the expression once
+ * at provide time to ask the capability's `__describe()` and keeps what it
+ * reports (the MCP/OpenAPI connect doors generate theirs from tool schemas
+ * and spec operations) — pass `types` explicitly when the expression has
+ * side effects.
  */
 export type ProvideCapabilityInput =
   | {

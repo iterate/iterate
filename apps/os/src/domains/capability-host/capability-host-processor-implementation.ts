@@ -349,7 +349,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * `types` its `__describe()` reports — the MCP and OpenAPI connect doors
    * generate theirs from tool schemas and spec operations, so third-party
    * services become as documented as builtins with zero author effort.
-   * Best-effort by design: an unreachable server, a target without
+   * Best-effort by design: an unreachable or slow server, a target without
    * `__describe`, or self-reported types that fail to compile all leave the
    * mount untyped rather than blocking the provide. The compile gate keeps
    * the invariant that journaled types always compile.
@@ -358,17 +358,29 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
   ): Promise<string | undefined> {
     try {
-      const evaluated = await evaluateItxExpression(this.#itx, expression);
-      const value = (await evaluated.value) as {
-        __describe?: () => Promise<{ types?: string }>;
-      };
-      const types = (await value.__describe?.())?.types;
-      if (typeof types !== "string" || types.length === 0) return undefined;
-      const problems = (await this.#validateCapabilityTypes?.(types)) ?? [];
-      return problems.length === 0 ? types : undefined;
+      // Describing may dial a third-party server (MCP listTools, an OpenAPI
+      // spec fetch); a deadline keeps a hanging server from hanging the
+      // provide — past it, the mount just stays untyped.
+      return await Promise.race([
+        this.#describeExpressionTypes(expression),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 10_000)),
+      ]);
     } catch {
       return undefined;
     }
+  }
+
+  async #describeExpressionTypes(
+    expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
+  ): Promise<string | undefined> {
+    const evaluated = await evaluateItxExpression(this.#itx, expression);
+    const value = (await evaluated.value) as {
+      __describe?: () => Promise<{ types?: string }>;
+    };
+    const types = (await value.__describe?.())?.types;
+    if (typeof types !== "string" || types.length === 0) return undefined;
+    const problems = (await this.#validateCapabilityTypes?.(types)) ?? [];
+    return problems.length === 0 ? types : undefined;
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {

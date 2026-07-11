@@ -230,12 +230,23 @@ export function referencedPlatformTypeNames(
   text: string,
   declarations: ReadonlyMap<string, ItxApiDeclaration>,
 ): string[] {
-  const codeOnly = text.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
+  const codeOnly = stripComments(text);
   const referenced = new Set<string>();
   for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
     if (declarations.has(match[0])) referenced.add(match[0]);
   }
   return [...referenced];
+}
+
+/**
+ * Remove block and line comments so scans see only code. Every regex scan
+ * over TypeScript text in this codebase goes through this first — a JSDoc
+ * example mentioning `import("some-pkg")` or a type name must never count
+ * as a reference (the generator, the docs closure, and the typechecker's
+ * npm scan all share this).
+ */
+export function stripComments(text: string): string {
+  return text.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
 }
 
 /**

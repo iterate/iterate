@@ -5,20 +5,14 @@
 // diagnostics. It knows TypeScript and npm; it knows nothing about itx —
 // callers assemble the project (see virtual-project.ts).
 import { acquireTypes } from "@iterate-com/typm";
+import { stripComments } from "../itx/itx-api-graph.ts";
 
-/** One compiler diagnostic, tswasm's shape passed through. */
-export interface TypecheckDiagnostic {
-  message: string;
-  code: number;
-  category: "error" | "warning" | "suggestion" | "message";
-  fileName?: string;
-  line?: number;
-  column?: number;
-}
+/** One compiler diagnostic — tswasm's own shape (aliased so nothing drifts). */
+export type TypecheckDiagnostic = import("tswasm").Diagnostic;
 
 /** The slice of a tswasm `Compiler` this module needs. */
 export interface CompileFn {
-  compile(request: { files: Record<string, string>; entrypoint?: string }): {
+  compile(request: { files: Record<string, string> }): {
     diagnostics: TypecheckDiagnostic[];
   };
 }
@@ -34,7 +28,7 @@ const packageTypesCache = new Map<string, Promise<Record<string, string>>>();
 
 /**
  * Compile a virtual project and return its diagnostics. Bare import
- * specifiers anywhere in `files` (`import("@slack/web-api")`,
+ * specifiers in the CODE of `files` (`import("@slack/web-api")`,
  * `from "zod"`) get their `.d.ts` surface acquired from npm and placed under
  * `/node_modules` first, so vendor-typed code resolves like it would in a
  * real project. Acquisition failures degrade to "cannot find module"
@@ -66,14 +60,18 @@ export async function runTypecheck(input: {
   return { diagnostics: input.compiler.compile({ files }).diagnostics };
 }
 
-/** Npm package names imported anywhere in the file map — bare specifiers
- * from static imports and `import("…")` type references, subpaths collapsed
- * to the package (`@slack/web-api/dist/x` → `@slack/web-api`). */
+/**
+ * Npm package names imported in the file map's CODE — comments are stripped
+ * first, because the platform surface's own docstrings mention npm imports
+ * as examples and must never trigger acquisition. Bare specifiers only,
+ * subpaths collapsed to the package (`@slack/web-api/dist/x` →
+ * `@slack/web-api`).
+ */
 export function npmPackagesMentioned(files: Record<string, string>): string[] {
   const packages = new Set<string>();
   for (const [path, text] of Object.entries(files)) {
     if (path.startsWith("/node_modules/")) continue;
-    for (const match of text.matchAll(
+    for (const match of stripComments(text).matchAll(
       /(?:\bfrom\s+|\bimport\s+|\bimport\s*\(\s*)["']([^"']+)["']/g,
     )) {
       const specifier = match[1]!;

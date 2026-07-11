@@ -8,28 +8,25 @@ import {
 import { listOpenApiOperations } from "./openapi-types.ts";
 
 test("jsonSchemaToTypeText renders the common shapes", () => {
-  expect(jsonSchemaToTypeText({ type: "string" }, true)).toBe("string");
-  expect(jsonSchemaToTypeText({ type: "integer" }, true)).toBe("number");
-  expect(jsonSchemaToTypeText({ type: "array", items: { type: "boolean" } }, true)).toBe(
+  expect(jsonSchemaToTypeText({ type: "string" })).toBe("string");
+  expect(jsonSchemaToTypeText({ type: "integer" })).toBe("number");
+  expect(jsonSchemaToTypeText({ type: "array", items: { type: "boolean" } })).toBe(
     "Array<boolean>",
   );
-  expect(jsonSchemaToTypeText({ enum: ["a", "b", 3] }, true)).toBe('"a" | "b" | 3');
-  expect(jsonSchemaToTypeText({ anyOf: [{ type: "string" }, { type: "null" }] }, true)).toBe(
+  expect(jsonSchemaToTypeText({ enum: ["a", "b", 3] })).toBe('"a" | "b" | 3');
+  expect(jsonSchemaToTypeText({ anyOf: [{ type: "string" }, { type: "null" }] })).toBe(
     "string | null",
   );
   expect(
-    jsonSchemaToTypeText(
-      {
-        type: "object",
-        properties: {
-          city: { type: "string", description: "Where to forecast" },
-          days: { type: "number" },
-          "kebab-name": { type: "string" },
-        },
-        required: ["city"],
+    jsonSchemaToTypeText({
+      type: "object",
+      properties: {
+        city: { type: "string", description: "Where to forecast" },
+        days: { type: "number" },
+        "kebab-name": { type: "string" },
       },
-      true,
-    ),
+      required: ["city"],
+    }),
   ).toBe('{ /** Where to forecast */ city: string; days?: number; "kebab-name"?: string }');
 });
 
@@ -41,9 +38,9 @@ test("jsonSchemaToTypeText resolves $ref against the root schema", () => {
 });
 
 test("jsonSchemaToTypeText degrades to unknown instead of throwing", () => {
-  expect(jsonSchemaToTypeText(undefined, true)).toBe("unknown");
+  expect(jsonSchemaToTypeText(undefined)).toBe("unknown");
   expect(jsonSchemaToTypeText({ $ref: "#/missing" }, {})).toBe("unknown");
-  expect(jsonSchemaToTypeText({ type: "weird" }, true)).toBe("unknown");
+  expect(jsonSchemaToTypeText({ type: "weird" })).toBe("unknown");
   // Self-referential schema bottoms out at the depth cap.
   const cyclic: Record<string, unknown> = { type: "object" };
   cyclic.properties = { next: cyclic };
@@ -81,6 +78,12 @@ test("openApiCapabilityTypeDeclaration merges parameters and body into one input
           parameters: [{ name: "petId", in: "path", required: true, schema: { type: "string" } }],
         },
       },
+      "/free-form": {
+        post: {
+          operationId: "freeForm",
+          requestBody: { content: { "application/json": { schema: { type: "object" } } } },
+        },
+      },
       "/pets": {
         post: {
           operationId: "createPet",
@@ -103,10 +106,15 @@ test("openApiCapabilityTypeDeclaration merges parameters and body into one input
   expect(declaration).toContain("/** Fetch one pet. */");
   expect(declaration).toContain("getPet(input: { petId: string }): Promise<unknown>;");
   expect(declaration).toContain("createPet(input: { name: string }): Promise<unknown>;");
+  // A property-less body renders as Record<...>, which cannot splice into
+  // the input literal — it must loosen the input, never emit invalid syntax.
+  expect(declaration).toContain("freeForm(input?: Record<string, unknown>): Promise<unknown>;");
 });
 
-test("firstExportedTypeName picks the first export and tolerates none", () => {
+test("firstExportedTypeName picks the first export in CODE and tolerates none", () => {
   expect(firstExportedTypeName("export interface Forecast { city: string }")).toBe("Forecast");
   expect(firstExportedTypeName("// prose\nexport type A = 1;\nexport type B = 2;")).toBe("A");
   expect(firstExportedTypeName("type NotExported = 1;")).toBeUndefined();
+  // A comment mentioning an export must not bind the mount to a ghost name.
+  expect(firstExportedTypeName("/** export type Ghost */\nexport type Real = 1;")).toBe("Real");
 });

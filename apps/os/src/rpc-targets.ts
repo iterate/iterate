@@ -5076,16 +5076,11 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     const maxTokens = Number.isFinite(input.maxTokens)
       ? Math.min(Math.max(input.maxTokens!, 300), 10_000)
       : 1500;
-    if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
-      return typeSlice({
-        declarations: ITX_API_DECLARATIONS_BY_NAME,
-        rootName: input.name,
-        maxTokens,
-      }).sourceText;
-    }
     // A mounted capability's dotted path: slice from a synthetic declaration
     // built from the mount's durable metadata, so the walk crosses from the
-    // scope layer into the platform declarations its types reference.
+    // scope layer into the platform declarations its types reference. Mounts
+    // resolve BEFORE platform declarations — scope shadows platform, the
+    // same rule capability dispatch follows.
     const { capabilities } = await this.#capabilityHost.__describe();
     const mount = capabilities.find(
       (capability) => capability.type !== "builtin" && capability.path.join(".") === input.name,
@@ -5100,6 +5095,13 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       const declarations = new Map(ITX_API_DECLARATIONS_BY_NAME);
       declarations.set(synthetic.name, synthetic);
       return typeSlice({ declarations, rootName: synthetic.name, maxTokens }).sourceText;
+    }
+    if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
+      return typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: input.name,
+        maxTokens,
+      }).sourceText;
     }
     const nearest = (await this.search({ q: input.name })).slice(0, 3);
     throw new Error(

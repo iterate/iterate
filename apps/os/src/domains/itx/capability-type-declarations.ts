@@ -9,6 +9,7 @@ import type { Tool } from "@modelcontextprotocol/client";
 import { resolveJsonSchema, type JsonSchema } from "./json-schema-types.ts";
 import type { OpenApiOperation } from "./openapi-types.ts";
 import { operationBodySchema, isObjectSchema } from "./openapi-types.ts";
+import { stripComments } from "./itx-api-graph.ts";
 
 /** How deep nested schemas render before collapsing to `unknown` — beyond
  * this, a docs reader is better served by brevity than fidelity. */
@@ -16,10 +17,10 @@ const MAX_SCHEMA_DEPTH = 4;
 
 /**
  * Render a JSON Schema as TypeScript type text. `root` anchors `$ref`
- * resolution (pass the schema itself when it has no external refs).
+ * resolution; without one, `$ref`s render as `unknown`.
  */
-export function jsonSchemaToTypeText(schema: unknown, root: JsonSchema, depth = 0): string {
-  const resolved = resolveJsonSchema(schema, root);
+export function jsonSchemaToTypeText(schema: unknown, root?: JsonSchema, depth = 0): string {
+  const resolved = resolveJsonSchema(schema, root ?? {});
   if (resolved === undefined || resolved === true) return "unknown";
   if (resolved === false) return "never";
   if (depth >= MAX_SCHEMA_DEPTH) return "unknown";
@@ -61,7 +62,7 @@ export function jsonSchemaToTypeText(schema: unknown, root: JsonSchema, depth = 
       if (!properties) return node.type === "object" ? "Record<string, unknown>" : "unknown";
       const required = new Set(Array.isArray(node.required) ? node.required : []);
       const members = Object.entries(properties).map(([name, property]) => {
-        const resolvedProperty = resolveJsonSchema(property, root);
+        const resolvedProperty = resolveJsonSchema(property, root ?? {});
         const description =
           resolvedProperty !== undefined &&
           typeof resolvedProperty === "object" &&
@@ -86,11 +87,9 @@ export function jsonSchemaToTypeText(schema: unknown, root: JsonSchema, depth = 
 export function mcpCapabilityTypeDeclaration(tools: Tool[]): string {
   const members = tools.map((tool) => {
     const doc = tool.description ? `  /** ${escapeCommentText(tool.description)} */\n` : "";
-    const input = jsonSchemaToTypeText(
-      tool.inputSchema,
-      (tool.inputSchema ?? true) as JsonSchema,
-      1,
-    );
+    // Depth starts at 1: the input object renders inline inside the method
+    // member, pre-spending one nesting level of the depth budget.
+    const input = jsonSchemaToTypeText(tool.inputSchema, tool.inputSchema as JsonSchema, 1);
     return `${doc}  ${quoteMemberName(tool.name)}(input: ${input}): Promise<unknown>;`;
   });
   return `export type Capability = {\n${members.join("\n")}\n};`;
@@ -117,9 +116,13 @@ export function openApiCapabilityTypeDeclaration(
     const body = operationBodySchema(operation, spec);
     if (isObjectSchema(body)) {
       const bodyType = jsonSchemaToTypeText(body, spec as JsonSchema, 1);
-      // Body properties merge into the same input object; render the body
-      // object's members inline by unwrapping its braces.
-      parts.push(bodyType.replace(/^\{ /, "").replace(/ \}$/, ""));
+      // Body properties merge into the same input object by unwrapping the
+      // rendered literal's braces. A body that renders as anything else
+      // (say a property-less object -> Record<string, unknown>) cannot be
+      // spliced into members, so it stays out and the input just loosens.
+      if (bodyType.startsWith("{ ") && bodyType.endsWith(" }")) {
+        parts.push(bodyType.slice(2, -2));
+      }
     }
     const input =
       parts.length > 0 ? `input: { ${parts.join("; ")} }` : "input?: Record<string, unknown>";
@@ -135,7 +138,9 @@ export function openApiCapabilityTypeDeclaration(
  * mount as untyped.
  */
 export function firstExportedTypeName(typesText: string): string | undefined {
-  return typesText.match(/export\s+(?:type|interface)\s+([A-Za-z_$][A-Za-z0-9_$]*)/)?.[1];
+  return stripComments(typesText).match(
+    /export\s+(?:type|interface)\s+([A-Za-z_$][A-Za-z0-9_$]*)/,
+  )?.[1];
 }
 
 function quoteMemberName(name: string): string {

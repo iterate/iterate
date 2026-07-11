@@ -1,6 +1,6 @@
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import type { WorkerShape } from "@valtown/codemirror-ts/worker";
-import { ITX_API_DECLARATIONS } from "~/itx-api-graph.generated.ts";
+import { itxTypesFileText } from "~/domains/itx/itx-types-text.ts";
 
 export type ItxReplTypeScriptWorker = WorkerShape & {
   getAutocompletionWithDocs(input: {
@@ -18,15 +18,11 @@ export const ITX_TYPES_PATH = "/itx-types.ts";
 
 /**
  * The public itx surface as one standalone module for the editor's virtual
- * filesystem: every declaration of `~/itx-api.generated.ts`, joined from the
- * Itx Type Graph (same generator run, byte-identical declaration text —
- * freshness enforced by itx-api.generated.test.ts). Import-free by
- * construction, so completions and hover docs in the browser REPL come from
- * THE type surface.
+ * filesystem (see domains/itx/itx-types-text.ts — the typechecker's virtual
+ * project loads the same text), so completions and hover docs in the browser
+ * REPL come from THE type surface.
  */
-export const itxTypesDeclaration: string = ITX_API_DECLARATIONS.map(
-  (declaration) => declaration.sourceText,
-).join("\n\n");
+export const itxTypesDeclaration: string = itxTypesFileText;
 
 /**
  * REPL prelude for the editor's virtual filesystem. Only what

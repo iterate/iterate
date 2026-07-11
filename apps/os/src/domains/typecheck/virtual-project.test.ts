@@ -1,8 +1,10 @@
 // These tests run the REAL tswasm compiler (the same wasm the typechecker
 // sidecar ships) against the assembled virtual project, so "the platform
 // surface compiles clean under the sidecar's lib + shims" is a tested
-// invariant, not a hope. No network: scripts here import no npm packages, so
-// typm never fires.
+// invariant, not a hope. Network is stubbed: acquisitions serve from an
+// in-memory fake registry, and checks that mention no npm package must not
+// fetch at all (the platform surface's own docstrings mention npm imports —
+// only CODE may trigger acquisition).
 import { createCompiler } from "tswasm";
 import { beforeAll, expect, test } from "vitest";
 import type { CapabilityDescription } from "../itx/describe.ts";
@@ -16,6 +18,7 @@ import {
 } from "./virtual-project.ts";
 
 let typechecker: Typechecker;
+let fetchedUrls: string[] = [];
 
 beforeAll(async () => {
   const compiler = await createCompiler();
@@ -23,11 +26,36 @@ beforeAll(async () => {
     check: (input) =>
       runTypecheck({
         compiler: compiler as CompileFn,
-        fetchImpl: () => Promise.reject(new Error("network is off in unit tests")),
+        fetchImpl: fakeRegistryFetch,
         files: input.files,
       }),
   };
 });
+
+/** A tiny in-memory jsdelivr: exactly one package, `fake-pets`, with one
+ * exported type — enough to prove acquisition end to end without network. */
+async function fakeRegistryFetch(url: string): Promise<Response> {
+  fetchedUrls.push(url);
+  if (url.includes("/package/resolve/npm/fake-pets")) {
+    return Response.json({ version: "1.0.0" });
+  }
+  if (url.includes("/package/npm/fake-pets@1.0.0/flat")) {
+    return Response.json({
+      default: "/index.d.ts",
+      files: [
+        { name: "/package.json", size: 1 },
+        { name: "/index.d.ts", size: 1 },
+      ],
+    });
+  }
+  if (url.endsWith("fake-pets@1.0.0/package.json")) {
+    return new Response(JSON.stringify({ name: "fake-pets", types: "index.d.ts" }));
+  }
+  if (url.endsWith("fake-pets@1.0.0/index.d.ts")) {
+    return new Response("export type PetsClient = { listPets(): Promise<string[]> };");
+  }
+  return new Response("not found", { status: 404 });
+}
 
 const WEATHER_MOUNT: CapabilityDescription = {
   path: ["tools", "weather"],
@@ -36,13 +64,17 @@ const WEATHER_MOUNT: CapabilityDescription = {
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
 
-test("the platform surface compiles clean under the sidecar's lib and shims", async () => {
+test("the platform surface compiles clean under the sidecar's lib and shims, fetching nothing", async () => {
+  fetchedUrls = [];
   const problems = await checkItxScript({
     capabilities: [],
     code: "async (itx) => {}",
     typechecker,
   });
   expect(problems).toEqual([]);
+  // The surface's own docstrings mention import("@slack/web-api") as an
+  // example; a fetch here would mean the npm scan reads comments.
+  expect(fetchedUrls).toEqual([]);
 });
 
 test("a wrong call into the typed surface is a compiler error with a did-you-mean", async () => {
@@ -78,6 +110,19 @@ test("typed mounts join the itx type; untyped mounts stay permissive", async () 
   expect(typo[0]).toContain("number");
 });
 
+test("a mount whose path prefixes another mount keeps both types (intersection, not a tree)", async () => {
+  const capabilities: CapabilityDescription[] = [
+    { path: ["tools"], type: "live", types: "export type Tools = { ping(): Promise<void> };" },
+    WEATHER_MOUNT, // tools.weather — nested under the mount above
+  ];
+  const problems = await checkItxScript({
+    capabilities,
+    code: `async (itx) => {\n  await itx.tools.ping();\n  return await itx.tools.weather.forecast({ city: "Berlin" });\n}`,
+    typechecker,
+  });
+  expect(problems).toEqual([]);
+});
+
 test("mount types referencing platform declarations resolve bare", async () => {
   const problems = await checkCapabilityTypes({
     types: "export type Root = { tail(): Promise<StreamEvent[]> };",
@@ -86,6 +131,11 @@ test("mount types referencing platform declarations resolve bare", async () => {
   expect(problems).toEqual([]);
   expect(mountModuleText("export type Root = Stream;")).toContain(
     'import type { Stream } from "../itx-types";',
+  );
+  // Comments never count: a comment naming a platform type must not inject
+  // an import, and one naming the declared type must not suppress it.
+  expect(mountModuleText("// not really Stream\nexport type X = { n: number };")).not.toContain(
+    "import",
   );
 });
 
@@ -96,12 +146,38 @@ test("a typo'd capability types string is rejected with a compiler error", async
   });
   expect(problems).toHaveLength(1);
   expect(problems[0]).toContain("Streem");
+  expect(problems[0]).toContain("types:1"); // injected-import offset undone
 });
 
-test("npm specifier scan finds bare packages and ignores relative/node ones", () => {
+test("npm-backed mount types acquire real .d.ts and typecheck against them", async () => {
+  const capabilities: CapabilityDescription[] = [
+    {
+      path: ["pets"],
+      type: "itx-expression",
+      types: 'export type Pets = import("fake-pets").PetsClient;',
+    },
+  ];
+  const ok = await checkItxScript({
+    capabilities,
+    code: "async (itx) => itx.pets.listPets()",
+    typechecker,
+  });
+  expect(ok).toEqual([]);
+
+  const typo = await checkItxScript({
+    capabilities,
+    code: "async (itx) => itx.pets.listPetz()",
+    typechecker,
+  });
+  expect(typo).toHaveLength(1);
+  expect(typo[0]).toContain("Did you mean 'listPets'");
+});
+
+test("npm specifier scan finds bare packages in code and ignores relative/node/comment ones", () => {
   const files = {
-    "/mounts/slack.ts": 'export type Slack = import("@slack/web-api").WebClient;',
-    "/script.ts": 'import { z } from "zod/v4";\nimport "./local";\nimport fs from "node:fs";',
+    "mounts/slack.ts": 'export type Slack = import("@slack/web-api").WebClient;',
+    "script.ts": 'import { z } from "zod/v4";\nimport "./local";\nimport fs from "node:fs";',
+    "commented.ts": '/** example: import("left-pad") */\n// import "right-pad"',
     "/node_modules/zod/index.d.ts": 'import "left-pad";', // acquired files never re-scan
   };
   expect(npmPackagesMentioned(files).sort()).toEqual(["@slack/web-api", "zod"]);

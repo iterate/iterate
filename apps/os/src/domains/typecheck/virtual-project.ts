@@ -2,13 +2,18 @@
 // type surface, one module per typed mount, ambient shims for the runtime
 // globals tswasm's ES-only lib lacks, and the script under check typed as
 // `(itx: Itx) => unknown` where Itx is the Project surface intersected with
-// this scope's mount tree. The typechecker sidecar (run-typecheck.ts)
+// this scope's mount types. The typechecker sidecar (run-typecheck.ts)
 // compiles whatever this module assembles; the split keeps "what a scope
 // looks like" and "how to run tsc" independently testable.
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { firstExportedTypeName } from "../itx/capability-type-declarations.ts";
-import { declarationsByName, referencedPlatformTypeNames } from "../itx/itx-api-graph.ts";
+import {
+  declarationsByName,
+  referencedPlatformTypeNames,
+  stripComments,
+} from "../itx/itx-api-graph.ts";
+import { itxTypesFileText } from "../itx/itx-types-text.ts";
 import type { TypecheckDiagnostic } from "./run-typecheck.ts";
 
 /** The minimal typechecker interface — `env.TYPECHECKER` satisfies it, and
@@ -19,20 +24,15 @@ export interface Typechecker {
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
-/** The platform surface as one virtual module (same join the browser REPL
- * uses — see components/itx-repl-types.ts). */
-const ITX_TYPES_FILE_TEXT = ITX_API_DECLARATIONS.map((declaration) => declaration.sourceText).join(
-  "\n\n",
-);
-
 /**
  * Ambient declarations for what scripts and the itx surface reference beyond
- * tswasm's bundled ES lib (no DOM, no workers-runtime globals). Everything is
- * `any` on purpose: the checker's job is catching wrong calls INTO the typed
- * surface, not modeling the whole runtime. The "platform surface compiles
- * clean" test (virtual-project.test.ts) is what keeps this list sufficient.
+ * tswasm's bundled ES lib (no DOM, no workers-runtime globals). The runtime
+ * names are `any` on purpose: the checker's job is catching wrong calls INTO
+ * the typed surface, not modeling the whole runtime. The "platform surface
+ * compiles clean" test (virtual-project.test.ts) is what keeps this list
+ * sufficient.
  */
-const RUNTIME_SHIMS = `// Ambient runtime globals (all any — see virtual-project.ts).
+const RUNTIME_SHIMS = `// Ambient runtime shims — see virtual-project.ts.
 interface SymbolConstructor {
   readonly dispose: unique symbol;
   readonly asyncDispose: unique symbol;
@@ -83,7 +83,7 @@ ${[
 `;
 
 const SHARED_FILES: Record<string, string> = {
-  "itx-types.ts": ITX_TYPES_FILE_TEXT,
+  "itx-types.ts": itxTypesFileText,
   "runtime.d.ts": RUNTIME_SHIMS,
   "tsconfig.json": JSON.stringify({
     compilerOptions: {
@@ -104,9 +104,10 @@ const SHARED_FILES: Record<string, string> = {
  * same property.
  */
 export function mountModuleText(types: string): string {
+  const codeOnly = stripComments(types);
   const referenced = referencedPlatformTypeNames(types, ITX_API_DECLARATIONS_BY_NAME).filter(
     // A name the text declares itself shadows the platform one.
-    (name) => !new RegExp(`\\b(?:type|interface)\\s+${name}\\b`).test(types),
+    (name) => !new RegExp(`\\b(?:type|interface)\\s+${name}\\b`).test(codeOnly),
   );
   const importLine =
     referenced.length > 0 ? `import type { ${referenced.join(", ")} } from "../itx-types";\n` : "";
@@ -127,18 +128,20 @@ export async function checkCapabilityTypes(input: {
   typechecker: Typechecker;
 }): Promise<string[]> {
   const fileName = mountFileName("provided");
+  const moduleText = mountModuleText(input.types);
   const { diagnostics } = await input.typechecker.check({
-    files: { ...SHARED_FILES, [fileName]: mountModuleText(input.types) },
+    files: { ...SHARED_FILES, [fileName]: moduleText },
   });
-  // The injected import is one line, so mount-text line N reports as N+1
-  // when an import was added — close enough for a one-string declaration;
-  // the message is what matters.
-  return formatProblems(diagnostics, { label: "types", onlyFile: fileName });
+  return formatProblems(diagnostics, {
+    label: "types",
+    onlyFile: fileName,
+    lineOffset: moduleText === input.types ? 0 : -1, // the injected import line
+  });
 }
 
 /**
  * Typecheck an `async (itx) => { … }` script against a scope's surface:
- * `itx` is `Project` intersected with the scope's mount tree (typed mounts
+ * `itx` is `Project` intersected with the scope's mount types (typed mounts
  * by their first exported type, untyped mounts as `any`).
  */
 export async function checkItxScript(input: {
@@ -147,28 +150,34 @@ export async function checkItxScript(input: {
   typechecker: Typechecker;
 }): Promise<string[]> {
   const files: Record<string, string> = { ...SHARED_FILES };
-  const mounts: Array<{ path: string[]; typeReference: string }> = [];
+  // Each mount is its own single-path intersection term: `{ tools: { weather:
+  // T } } & { tools: U }` merges correctly even when one mount's path prefixes
+  // another's (both are journal-legal — dispatch is longest-prefix).
+  const mountTerms: string[] = [];
   for (const capability of input.capabilities) {
     if (capability.type === "builtin") continue;
     const dottedPath = capability.path.join(".");
     const exportedName = capability.types ? firstExportedTypeName(capability.types) : undefined;
+    let typeReference = "any";
     if (capability.types && exportedName) {
       files[mountFileName(dottedPath)] = mountModuleText(capability.types);
-      mounts.push({
-        path: capability.path,
-        typeReference: `import("./mounts/${dottedPath}").${exportedName}`,
-      });
-    } else {
-      mounts.push({ path: capability.path, typeReference: "any" });
+      typeReference = `import("./mounts/${dottedPath}").${exportedName}`;
     }
+    // Path segments passed assertCapabilityPath (plain identifiers), so they
+    // embed in a type literal unquoted.
+    mountTerms.push(
+      [...capability.path]
+        .reverse()
+        .reduce((type, segment) => `{ ${segment}: ${type} }`, typeReference),
+    );
   }
 
   const prelude = [
     `import type { Project } from "./itx-types";`,
-    `type Itx = Project & ${mountsTreeText(mounts)};`,
+    `type Itx = ${["Project", ...mountTerms].join(" & ")};`,
     `const script: (itx: Itx) => unknown = (`,
   ];
-  files["script.ts"] = [...prelude, input.code, ");", "void script;", "export {};"].join("\n");
+  files["script.ts"] = [...prelude, input.code, ");"].join("\n");
 
   const { diagnostics } = await input.typechecker.check({ files });
   return formatProblems(diagnostics, {
@@ -180,32 +189,9 @@ export async function checkItxScript(input: {
   });
 }
 
-/** The mount tree as a type literal: `{ tools: { weather: T }; pets: U }`. */
-function mountsTreeText(mounts: Array<{ path: string[]; typeReference: string }>): string {
-  if (mounts.length === 0) return "{}";
-  type Tree = { [segment: string]: Tree | string };
-  const root: Tree = {};
-  for (const mount of mounts) {
-    let node = root;
-    for (const segment of mount.path.slice(0, -1)) {
-      const next = node[segment];
-      node = typeof next === "object" ? next : (node[segment] = {});
-    }
-    node[mount.path.at(-1)!] ??= mount.typeReference;
-  }
-  const render = (tree: Tree): string =>
-    `{ ${Object.entries(tree)
-      .map(([segment, value]) => {
-        const name = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ? segment : JSON.stringify(segment);
-        return `${name}: ${typeof value === "string" ? value : render(value)}`;
-      })
-      .join("; ")} }`;
-  return render(root);
-}
-
 function formatProblems(
   diagnostics: TypecheckDiagnostic[],
-  options: { label: string; onlyFile: string; lineOffset?: number },
+  options: { label: string; onlyFile: string; lineOffset: number },
 ): string[] {
   return diagnostics
     .filter(
@@ -214,10 +200,13 @@ function formatProblems(
         (diagnostic.fileName === undefined || diagnostic.fileName === options.onlyFile),
     )
     .map((diagnostic) => {
-      const line =
-        diagnostic.line === undefined
-          ? undefined
-          : Math.max(1, diagnostic.line + (options.lineOffset ?? 0));
+      const line = diagnostic.line === undefined ? undefined : diagnostic.line + options.lineOffset;
+      if (line !== undefined && line < 1) {
+        // Before the caller's own text: the scope assembly itself failed
+        // (say, a journaled mount whose types no longer resolve) — name the
+        // real culprit instead of pinning it on the script's first line.
+        return `scope — ${diagnostic.message} (TS${diagnostic.code})`;
+      }
       const position =
         line === undefined
           ? ""
