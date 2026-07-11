@@ -231,14 +231,16 @@ function dispatch(
   };
   const offset = outcome.approvalRequestEventOffset;
   if (typeof offset !== "number") return;
-  // A grant (this app's or another approver's) is not terminal: mark the row
-  // submitted and hand the outcome to the door's verdict — a settlement watch
-  // that treats `settled` as final over a stray reject.
+  // A grant (this app's or another approver's) is not terminal: hand the outcome
+  // to the door's verdict — a settlement watch that treats `settled` as final
+  // over a stray reject. ALWAYS start the watch, even when we have no row for
+  // this offset (e.g. the `requested` was dropped as client-side-expired while
+  // the DO still holds it); otherwise a later stray reject could shadow a
+  // release for an offset nothing is watching. Only the "submitted" UI hint is
+  // gated on having a live row.
   if (event.type === EVENT.granted) {
-    if (state.pending.has(offset)) {
-      emit({ type: "submitted", offset });
-      state.watchSettlement(offset);
-    }
+    if (state.pending.has(offset)) emit({ type: "submitted", offset });
+    state.watchSettlement(offset);
     return;
   }
   // settled / rejected. If a grant was seen, the settlement watch owns the
