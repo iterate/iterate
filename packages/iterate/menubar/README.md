@@ -1,16 +1,33 @@
-# Iterate Approvals — menu-bar app
+# Iterate — the menu-bar app
 
-A tiny macOS menu-bar app for human-in-the-loop egress approvals. It's a thin
-shell over `iterate approve --json`: the CLI owns all transport, auth, streams,
-key storage, and Secure Enclave signing; the app owns only the 𝑖 menu-bar icon
-and the dropdown (who you're signed in as, a Sign-in button, and each held
-request with Approve / Reject). A native notification fires when a request
-arrives so you're pinged with the dropdown closed.
+**Iterate.app** is a tiny macOS menu-bar app. Today it's the human-in-the-loop
+approver for a project's egress. It's a thin shell over `iterate approve
+--json`: the CLI owns all transport, auth, streams, key storage, and Secure
+Enclave signing; the app owns only the 𝑖 menu-bar icon and the dropdown (who
+you're signed in as, a Sign-in button, and each held request with Approve /
+Reject). A notification fires when a request arrives so you're pinged with the
+dropdown closed.
 
 ```
-menu bar app  ──spawns, NDJSON──▶  iterate approve --json  ──shells──▶  enclave-approver.swift
-  (this dir)    events ↓ / clicks ↑    (transport, auth, sign)            (Touch ID)
+Iterate.app  ──spawns, NDJSON──▶  iterate approve --json  ──shells──▶  enclave-approver.swift
+  (this dir)   events ↓ / clicks ↑    (transport, auth, sign)            (Touch ID)
 ```
+
+## Notifications
+
+Out of the box (ad-hoc build): a plain notification via `osascript` — zero
+setup, works everywhere. Build with a real Developer ID and you get **rich,
+actionable** banners — the 𝑖 logo plus **Approve** / **Reject** buttons right
+in the notification (tapping Approve signs, so Touch ID pops just like the
+dropdown):
+
+```bash
+SIGN_IDENTITY="Developer ID Application: You (TEAMID)" ./build-menubar-app.sh
+```
+
+The app requests notification authorization at launch and upgrades to the rich
+path only if it's granted (which needs the signed identity); otherwise it stays
+on the osascript fallback. Nothing to configure at runtime.
 
 ## Easiest: from the CLI
 
@@ -27,8 +44,8 @@ command-line tools (`xcode-select --install`) for `swiftc`.
 ## Build by hand
 
 ```bash
-./build-menubar-app.sh            # → build/Iterate Approvals.app
-open "build/Iterate Approvals.app"
+./build-menubar-app.sh            # → build/Iterate.app
+open "build/Iterate.app"
 ```
 
 The 𝑖 icon is drawn from the brand logo's own vector paths (see

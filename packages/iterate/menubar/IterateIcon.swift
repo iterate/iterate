@@ -16,9 +16,15 @@ enum IterateIcon {
   /// The template 𝑖, sized for the menu bar (~16pt tall, aspect-preserved).
   static let mark: NSImage = render(height: 16)
 
+  /// The two `i` paths combined, in SVG coordinate space (y-down, 0..500).
+  private static func glyph() -> NSBezierPath {
+    let combined = NSBezierPath()
+    for path in paths { combined.append(parse(path)) }
+    return combined
+  }
+
   private static func render(height: CGFloat) -> NSImage {
-    let glyph = NSBezierPath()
-    for path in paths { glyph.append(parse(path)) }
+    let glyph = glyph()
     let bounds = glyph.bounds
 
     let scale = height / bounds.height
@@ -36,6 +42,44 @@ enum IterateIcon {
     image.unlockFocus()
     image.isTemplate = true
     return image
+  }
+
+  /// A square brand tile (black rounded rect, white 𝑖) written to a temp PNG,
+  /// for use as a notification attachment. Cached; nil if writing fails.
+  static let logoPNGURL: URL? = renderLogoPNG(side: 128)
+
+  private static func renderLogoPNG(side: CGFloat) -> URL? {
+    let glyph = glyph()
+    let bounds = glyph.bounds
+    // Fit the 𝑖 to ~62% of the tile height, centered, y-flipped into image space.
+    let target = side * 0.62
+    let scale = target / bounds.height
+    let width = bounds.width * scale
+    let originX = (side - width) / 2
+    let originY = (side - target) / 2
+    var transform = AffineTransform()
+    transform.translate(x: originX - bounds.minX * scale, y: side - originY + bounds.minY * scale)
+    transform.scale(x: scale, y: -scale)
+    glyph.transform(using: transform)
+
+    let image = NSImage(size: NSSize(width: side, height: side))
+    image.lockFocus()
+    NSColor.black.setFill()
+    NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: side, height: side), xRadius: side * 0.22, yRadius: side * 0.22).fill()
+    NSColor.white.setFill()
+    glyph.fill()
+    image.unlockFocus()
+
+    guard let tiff = image.tiffRepresentation,
+      let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+    else { return nil }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("iterate-approval-logo.png")
+    do {
+      try png.write(to: url)
+      return url
+    } catch {
+      return nil
+    }
   }
 
   /// Minimal SVG path reader: absolute M/L/H/V/Z with implicit-repeat args.

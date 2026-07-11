@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Iterate Approvals — a menu-bar app for human-in-the-loop egress approvals.
+// Iterate — a small macOS menu-bar app. Today it's the human-in-the-loop
+// approver for a project's egress.
 //
 // Deliberately a THIN shell over the iterate CLI: it owns nothing but the
 // menu-bar icon and the dropdown. All transport, auth, streams, key storage,
@@ -15,6 +16,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import UserNotifications
 
 // MARK: - Config
 
@@ -71,6 +73,10 @@ final class ApprovalController: ObservableObject {
   @Published var keyLabel: String?  // "secure-enclave 9f2c…" or nil (unsigned)
   @Published var requests: [HeldRequest] = []
   @Published var lastError: String?
+
+  /// True once UserNotifications authorization succeeded — gates the rich,
+  /// actionable banners; otherwise notify() falls back to osascript.
+  var notificationsAuthorized = false
 
   private let config = MenuBarConfig.load()
   private var process: Process?
@@ -200,15 +206,18 @@ final class ApprovalController: ObservableObject {
     }
   }
 
-  func decide(_ request: HeldRequest, _ decision: String) {
-    // Reassign the element (not just an in-place field write) so the @Published
-    // array reliably republishes and the row shows its spinner.
-    if let index = requests.firstIndex(of: request) {
+  /// Relay a verdict for one held request — from the dropdown OR a notification
+  /// action. The CLI does the signing (Touch ID pops there); the row shows a
+  /// spinner until the settle/error comes back.
+  func decide(offset: Int, _ decision: String) {
+    if let index = requests.firstIndex(where: { $0.offset == offset }) {
+      // Reassign the element (not an in-place field write) so the @Published
+      // array reliably republishes.
       var updated = requests[index]
       updated.submitting = true
       requests[index] = updated
     }
-    let line = #"{"offset":\#(request.offset),"decision":"\#(decision)"}"# + "\n"
+    let line = #"{"offset":\#(offset),"decision":"\#(decision)"}"# + "\n"
     stdinHandle?.write(Data(line.utf8))
   }
 
@@ -273,13 +282,34 @@ final class ApprovalController: ObservableObject {
     }
   }
 
-  /// A passive macOS notification via osascript — zero entitlements, the same
-  /// path use-my-computer uses. Fires when a request arrives so the human is
-  /// pinged even with the dropdown closed.
+  /// Ping the human when a request lands, even with the dropdown closed. When
+  /// UserNotifications authorization succeeded (needs a signed bundle — see
+  /// build-menubar-app.sh SIGN_IDENTITY), post a rich banner with the 𝑖 logo
+  /// and Approve/Reject actions that come back through `decide`. Otherwise fall
+  /// back to a plain osascript notification — zero setup, works everywhere.
   private func notify(_ request: HeldRequest) {
     let title = "Approval needed"
-    let secrets = request.secretPaths.isEmpty ? "" : " · \(request.secretPaths.joined(separator: ", "))"
+    let secrets =
+      request.secretPaths.isEmpty ? "" : " · spends \(request.secretPaths.joined(separator: ", "))"
     let body = "\(request.method) \(request.host)\(secrets)"
+
+    if notificationsAuthorized {
+      let content = UNMutableNotificationContent()
+      content.title = title
+      content.body = body
+      content.categoryIdentifier = ApprovalNotifications.categoryId
+      content.userInfo = ["offset": request.offset]
+      if let url = IterateIcon.logoPNGURL,
+        let attachment = try? UNNotificationAttachment(identifier: "logo", url: url)
+      {
+        content.attachments = [attachment]
+      }
+      let notification = UNNotificationRequest(
+        identifier: "approval-\(request.offset)", content: content, trigger: nil)
+      UNUserNotificationCenter.current().add(notification)
+      return
+    }
+
     let script = "display notification \(quote(body)) with title \(quote(title))"
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -375,8 +405,10 @@ struct RequestRow: View {
         if request.submitting {
           ProgressView().controlSize(.small)
         } else {
-          Button("Reject") { controller.decide(request, "rejected") }.buttonStyle(.bordered)
-          Button("Approve") { controller.decide(request, "granted") }.buttonStyle(.borderedProminent)
+          Button("Reject") { controller.decide(offset: request.offset, "rejected") }
+            .buttonStyle(.bordered)
+          Button("Approve") { controller.decide(offset: request.offset, "granted") }
+            .buttonStyle(.borderedProminent)
         }
       }
     }
@@ -385,17 +417,73 @@ struct RequestRow: View {
   }
 }
 
+// MARK: - Notifications
+
+/// The one actionable-notification category: Approve / Reject, mapped back to
+/// `decide` by the delegate. Delivery needs a signed bundle, so it's an
+/// opt-in upgrade over the osascript fallback (see notify()).
+enum ApprovalNotifications {
+  static let categoryId = "APPROVAL"
+
+  static func register(_ center: UNUserNotificationCenter) {
+    let approve = UNNotificationAction(identifier: "APPROVE", title: "Approve", options: [.foreground])
+    let reject = UNNotificationAction(
+      identifier: "REJECT", title: "Reject", options: [.destructive])
+    center.setNotificationCategories([
+      UNNotificationCategory(
+        identifier: categoryId, actions: [approve, reject], intentIdentifiers: [], options: [])
+    ])
+  }
+}
+
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)  // menu-bar only, no dock icon
+
+    // Actionable notifications are best-effort: only an app with a stable
+    // signing identity gets authorization. If it's granted we upgrade from the
+    // osascript ping to rich Approve/Reject banners; if not, nothing breaks.
+    if Bundle.main.bundleIdentifier != nil {
+      let center = UNUserNotificationCenter.current()
+      center.delegate = self
+      ApprovalNotifications.register(center)
+      center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        DispatchQueue.main.async { ApprovalController.shared.notificationsAuthorized = granted }
+      }
+    }
+
     ApprovalController.shared.start()  // connect at launch, not on first open
+  }
+
+  /// Show the banner even when the app is frontmost.
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    completionHandler([.banner, .sound])
+  }
+
+  /// An Approve/Reject tap on a banner routes straight to `decide` (signing —
+  /// and Touch ID — happen in the CLI, exactly as from the dropdown).
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    if let offset = response.notification.request.content.userInfo["offset"] as? Int {
+      switch response.actionIdentifier {
+      case "APPROVE": ApprovalController.shared.decide(offset: offset, "granted")
+      case "REJECT": ApprovalController.shared.decide(offset: offset, "rejected")
+      default: break
+      }
+    }
+    completionHandler()
   }
 }
 
 @main
-struct IterateApprovalsApp: App {
+struct IterateApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var controller = ApprovalController.shared
 

@@ -22,8 +22,8 @@ const CONFIG_DIR = join(
   "iterate",
 );
 const BUILD_DIR = join(CONFIG_DIR, "menubar-build");
-const APP_PATH = join(BUILD_DIR, "Iterate Approvals.app");
-const SOURCES = ["IterateApprovals.swift", "IterateIcon.swift", "build-menubar-app.sh"];
+const APP_PATH = join(BUILD_DIR, "Iterate.app");
+const SOURCES = ["Iterate.swift", "IterateIcon.swift", "build-menubar-app.sh"];
 
 /** Compile-if-needed and launch the menu-bar app for one project/config. */
 export async function launchMenubarApp(input: {
@@ -76,6 +76,6 @@ export async function launchMenubarApp(input: {
 
   const open = await run("open", [APP_PATH]);
   if (open.exitCode !== 0) throw new Error(`Could not launch the app: ${open.stderr.trim()}`);
-  log(`Launched Iterate Approvals for project "${input.project}" (config ${input.configName}).`);
+  log(`Launched Iterate for project "${input.project}" (config ${input.configName}).`);
   log("It lives in your menu bar — click the 𝑖 to sign in and approve requests.");
 }
