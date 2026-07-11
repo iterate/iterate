@@ -146,6 +146,9 @@ export const AgentFileAttachment = z.object({
   size: z.number().int().nonnegative(),
   url: z.string(),
 });
+/** A file attached to an agent input: content type, filename, project
+ * file-storage path, size, and the signed public URL minted at attach time
+ * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
 
 /**

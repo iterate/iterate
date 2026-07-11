@@ -20,8 +20,7 @@ describe("the generated graph", () => {
     // Search results and children maps show summaries; a docless declaration
     // is invisible to the dumb search.
     const docless = ITX_API_DECLARATIONS.filter((d) => d.summary.trim() === "").map((d) => d.name);
-    // Not yet zero — hold the line where it is and ratchet down.
-    expect(docless.length).toBeLessThanOrEqual(30);
+    expect(docless).toEqual([]);
   });
 
   test("the anchor declarations exist", () => {

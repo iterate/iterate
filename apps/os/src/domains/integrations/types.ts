@@ -29,6 +29,9 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
+/** Connection health for one integration connection (what
+ * `getConnectionStatus` returns): whether it is connected, plus the external
+ * account's id, display name, and provider-specific metadata. */
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -58,6 +61,9 @@ export type IntegrationConnectionListEntry =
       source: "provided";
     };
 
+/** Outcome of `completeConnect` (the OAuth/installation redirect callback):
+ * `ok` plus the `callbackUrl` to send the browser back to; on failure, a
+ * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
