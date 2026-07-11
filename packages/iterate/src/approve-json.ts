@@ -99,6 +99,10 @@ export async function runApprovalJson(input: {
         }
         // Signs on the enclave path — Touch ID pops here.
         await grant({ stream: appendStream, projectId: input.projectId, key, offset, payload });
+      } else {
+        // Any decision we can't act on still gets an offset-bearing error so
+        // the app clears that row's spinner instead of spinning forever.
+        emit({ type: "error", offset, message: `unknown decision "${decision.decision}"` });
       }
     } catch (error) {
       // Every failure carries the offset so the app can clear that row.

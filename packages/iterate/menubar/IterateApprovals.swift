@@ -64,7 +64,8 @@ struct HeldRequest: Identifiable, Equatable {
 final class ApprovalController: ObservableObject {
   static let shared = ApprovalController()
 
-  @Published var loggedIn = false
+  @Published var loggedIn = false  // is there a valid session (from the status line)?
+  @Published var connected = false  // is a watcher live and serving right now?
   @Published var principal: String?
   @Published var project: String?
   @Published var keyLabel: String?  // "secure-enclave 9f2c…" or nil (unsigned)
@@ -127,6 +128,7 @@ final class ApprovalController: ObservableObject {
   /// so a watcher that never connects or keeps dying fast won't hot-loop.
   private func watcherExited() {
     requests = []
+    connected = false  // no live watcher until one reconnects and emits status
     if Date().timeIntervalSince(sessionStart) > 10 { reconnectAttempts = 0 }  // it was stable
     guard loggedIn, sawStatus else { return }  // never connected → no reconnect
     if reconnectAttempts < 5 {
@@ -145,6 +147,7 @@ final class ApprovalController: ObservableObject {
 
   func stop() {
     generation += 1  // any in-flight reconnect scheduled before now is void
+    connected = false
     process?.terminationHandler = nil
     process?.terminate()
     process = nil
@@ -179,7 +182,13 @@ final class ApprovalController: ObservableObject {
   }
 
   func decide(_ request: HeldRequest, _ decision: String) {
-    if let index = requests.firstIndex(of: request) { requests[index].submitting = true }
+    // Reassign the element (not just an in-place field write) so the @Published
+    // array reliably republishes and the row shows its spinner.
+    if let index = requests.firstIndex(of: request) {
+      var updated = requests[index]
+      updated.submitting = true
+      requests[index] = updated
+    }
     let line = #"{"offset":\#(request.offset),"decision":"\#(decision)"}"# + "\n"
     stdinHandle?.write(Data(line.utf8))
   }
@@ -203,6 +212,8 @@ final class ApprovalController: ObservableObject {
     case "status":
       sawStatus = true  // this watcher connected and spoke
       loggedIn = event["loggedIn"] as? Bool ?? false
+      connected = loggedIn  // a live, authed watcher is serving
+      lastError = nil
       principal = event["principal"] as? String
       project = event["projectId"] as? String
       if let key = event["key"] as? [String: Any] {
@@ -295,7 +306,24 @@ struct DropdownView: View {
   }
 
   @ViewBuilder private var header: some View {
-    if controller.loggedIn {
+    if !controller.loggedIn {
+      HStack {
+        Text("Not signed in").font(.headline)
+        Spacer()
+        Button("Sign in") { controller.login() }.buttonStyle(.borderedProminent)
+      }
+    } else if !controller.connected {
+      // Valid session, but no watcher is live (it died and is retrying or gave
+      // up) — say so honestly and offer a manual reconnect.
+      HStack {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(controller.principal ?? "signed in").font(.headline)
+          Text("Disconnected").font(.caption).foregroundStyle(.orange)
+        }
+        Spacer()
+        Button("Reconnect") { controller.start() }.buttonStyle(.bordered)
+      }
+    } else {
       VStack(alignment: .leading, spacing: 2) {
         Text(controller.principal ?? "signed in").font(.headline)
         if let project = controller.project {
@@ -303,12 +331,6 @@ struct DropdownView: View {
         }
         Text(controller.keyLabel.map { "signing with \($0)" } ?? "grants are unsigned — enroll a key")
           .font(.caption2).foregroundStyle(.secondary)
-      }
-    } else {
-      HStack {
-        Text("Not signed in").font(.headline)
-        Spacer()
-        Button("Sign in") { controller.login() }.buttonStyle(.borderedProminent)
       }
     }
   }
