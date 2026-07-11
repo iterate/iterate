@@ -186,6 +186,14 @@ export type StreamBrowserStore = Disposable & {
   debugRuntimeState(): Promise<StreamServerRuntimeState>;
   /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). Poll-friendly. */
   metrics(): BrowserStreamMetrics;
+  /**
+   * An append THIS browser initiated through a lane the store doesn't carry
+   * (e.g. `itx.agents.get(path).message(...)`) committed at
+   * `maxCommittedOffset`. Feeds the same consume-own-append loop as
+   * `appendBatch`: the loop closes when this tab's own subscription ingests
+   * past the offset. `t0` is when the caller initiated the append.
+   */
+  noteExternalAppend(args: { maxCommittedOffset: number; t0: number }): void;
   getProcessorRuntimeState(args: {
     subscriptionKey: SubscriptionKey;
   }): StreamRpcResult<ProcessorRuntimeState | null>;
@@ -1337,6 +1345,11 @@ function createStreamRuntime(
     disposed,
     hasConnection: stream !== undefined,
     hasSubscription: subscriptionHandle !== undefined,
+    hasHostedProcessor: currentProcessor !== undefined,
+    metrics: {
+      transportRttMs: transportRtt.stats(),
+      subscriber: currentProcessor?.subscriberMetrics?.report() ?? null,
+    },
     listeners: listeners.size,
   }));
 
@@ -1476,6 +1489,14 @@ function createStreamRuntime(
       transportRttMs: transportRtt.stats(),
       subscriber: currentProcessor?.subscriberMetrics?.report(),
     }),
+    noteExternalAppend({ maxCommittedOffset, t0 }) {
+      if (!Number.isFinite(maxCommittedOffset) || maxCommittedOffset <= 0) return;
+      currentProcessor?.subscriberMetrics?.noteAppendCommitted({
+        maxCommittedOffset,
+        t0,
+        atMs: Date.now(),
+      });
+    },
     getProcessorRuntimeState(args) {
       return callWhenReady(
         (rpc) => rpc.getProcessorRuntimeState(args) as Promise<ProcessorRuntimeState | null>,

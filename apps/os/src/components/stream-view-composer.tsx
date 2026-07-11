@@ -4,7 +4,7 @@ import { XIcon } from "lucide-react";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Button } from "@iterate-com/ui/components/button";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import { StreamEventInput } from "~/domains/streams/schemas.ts";
+import { StreamEventInput, type StreamEvent } from "~/domains/streams/schemas.ts";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 
@@ -12,12 +12,19 @@ const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
 const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
-/** How a domain page lets its stream view send chat messages (agents only). */
+/**
+ * How a domain page lets its stream view send chat messages (agents only).
+ * Submit handlers may return the committed event — the composer then feeds
+ * the store's consume-own-append metric (real append→observed latency).
+ */
 export type StreamMessageComposer = {
   placeholder?: string;
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
-  onSubmit: (message: string) => Promise<void>;
-  onSubmitFiles?: (input: { files: File[]; message: string }) => Promise<void>;
+  onSubmit: (message: string) => Promise<StreamEvent | undefined | void>;
+  onSubmitFiles?: (input: {
+    files: File[];
+    message: string;
+  }) => Promise<StreamEvent | undefined | void>;
 };
 
 /**
@@ -88,7 +95,11 @@ export function StreamViewComposer({
     const { onSubmit, onSubmitFiles } = messageComposer;
     if (selectedFiles.length > 0 && onSubmitFiles != null) {
       await runSubmit(async () => {
-        await onSubmitFiles({ files: selectedFiles, message: trimmed });
+        const t0 = Date.now();
+        const committed = await onSubmitFiles({ files: selectedFiles, message: trimmed });
+        if (typeof committed?.offset === "number") {
+          store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
+        }
         setMessageText("");
         setSelectedFiles([]);
         setFileError(undefined);
@@ -98,7 +109,14 @@ export function StreamViewComposer({
     }
     if (!trimmed) return;
     await runSubmit(async () => {
-      await onSubmit(trimmed);
+      // Time the whole submit: this is the real consume-own-append t0. The
+      // handler returning the committed event is what closes the loop when
+      // this tab's own subscription ingests past its offset.
+      const t0 = Date.now();
+      const committed = await onSubmit(trimmed);
+      if (typeof committed?.offset === "number") {
+        store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
+      }
       setMessageText("");
       onNudgeDeliveries();
     });

@@ -584,10 +584,15 @@ function ProcessorEntryButton({
       entry.runtimeSubscription?.deliveryDurationMs?.last ??
       null)
     : null;
+  // Live connection cursor first: the wake lane's spine row is an
+  // OBSERVATIONAL watermark that deliberately goes stale while a connection
+  // streams (see stream-subscribers.ts #poke), so a healthy connected
+  // processor would otherwise show a scary fake backlog. The subscription
+  // row's lag is the real number for the lanes without a live connection.
   const lag =
     entry.kind === "core"
       ? "0"
-      : (entry.runtimeSubscription?.lag ?? entry.runtimeConnection?.lag ?? null);
+      : (entry.runtimeConnection?.lag ?? entry.runtimeSubscription?.lag ?? null);
   return (
     <button
       type="button"
@@ -1121,20 +1126,22 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
         <RuntimeStateStat
           label="acked"
           value={
-            runtime != null
-              ? `#${runtime.ackedOffset}`
-              : connection != null
-                ? `#${connection.cursor}`
+            connection != null
+              ? `#${connection.cursor}`
+              : runtime != null
+                ? `#${runtime.ackedOffset}`
                 : "—"
           }
         />
         <RuntimeStateStat
           label="lag"
+          // Connection cursor first: the wake spine row's watermark goes
+          // stale by design while a connection streams (see the row list).
           value={
-            runtime != null
-              ? String(runtime.lag)
-              : connection != null
-                ? String(connection.lag)
+            connection != null
+              ? String(connection.lag)
+              : runtime != null
+                ? String(runtime.lag)
                 : "—"
           }
         />
