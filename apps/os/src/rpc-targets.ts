@@ -5079,8 +5079,9 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     // A mounted capability's dotted path: slice from a synthetic declaration
     // built from the mount's durable metadata, so the walk crosses from the
     // scope layer into the platform declarations its types reference. Mounts
-    // resolve BEFORE platform declarations — scope shadows platform, the
-    // same rule capability dispatch follows.
+    // resolve BEFORE platform declarations: a mount can never collide with a
+    // BUILTIN member (rejectBuiltinCollision), but nothing stops one sharing
+    // a platform TYPE name, and the caller's own mount is the likelier ask.
     const { capabilities } = await this.#capabilityHost.__describe();
     const mount = capabilities.find(
       (capability) => capability.type !== "builtin" && capability.path.join(".") === input.name,

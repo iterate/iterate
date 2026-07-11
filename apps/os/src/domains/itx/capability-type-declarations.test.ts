@@ -63,7 +63,9 @@ test("mcpCapabilityTypeDeclaration types each tool from its inputSchema", () => 
   expect(declaration).toContain("export type Capability = {");
   expect(declaration).toContain("/** Search the web. */");
   expect(declaration).toContain("web_search(input: { query: string }): Promise<unknown>;");
-  expect(declaration).toContain('"with-dash"(input: Record<string, unknown>): Promise<unknown>;');
+  // No required properties -> optional input (dispatch treats a missing
+  // argument as {}), so no-arg calls typecheck.
+  expect(declaration).toContain('"with-dash"(input?: Record<string, unknown>): Promise<unknown>;');
   expect(firstExportedTypeName(declaration)).toBe("Capability");
 });
 
@@ -82,6 +84,13 @@ test("openApiCapabilityTypeDeclaration merges parameters and body into one input
         post: {
           operationId: "freeForm",
           requestBody: { content: { "application/json": { schema: { type: "object" } } } },
+        },
+      },
+      "/notes": {
+        post: {
+          operationId: "addNote",
+          parameters: [{ name: "petId", in: "query", required: true, schema: { type: "string" } }],
+          requestBody: { content: { "application/json": { schema: { type: "string" } } } },
         },
       },
       "/pets": {
@@ -106,9 +115,14 @@ test("openApiCapabilityTypeDeclaration merges parameters and body into one input
   expect(declaration).toContain("/** Fetch one pet. */");
   expect(declaration).toContain("getPet(input: { petId: string }): Promise<unknown>;");
   expect(declaration).toContain("createPet(input: { name: string }): Promise<unknown>;");
-  // A property-less body renders as Record<...>, which cannot splice into
-  // the input literal — it must loosen the input, never emit invalid syntax.
-  expect(declaration).toContain("freeForm(input?: Record<string, unknown>): Promise<unknown>;");
+  // A property-less object body means leftover input keys ARE the body
+  // (dispatch's rule), typed as an index signature — never invalid syntax.
+  expect(declaration).toContain("freeForm(input?: { [key: string]: unknown }): Promise<unknown>;");
+  // A NON-object body rides under dispatch's { body } convention, and a
+  // required parameter keeps the input required.
+  expect(declaration).toContain(
+    "addNote(input: { petId: string; body?: string }): Promise<unknown>;",
+  );
 });
 
 test("firstExportedTypeName picks the first export in CODE and tolerates none", () => {

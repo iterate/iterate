@@ -54,27 +54,35 @@ export async function runTypecheck(input: {
     try {
       Object.assign(files, await acquisition);
     } catch {
-      packageTypesCache.delete(packageName);
+      // Evict only if a concurrent caller has not already replaced the entry.
+      if (packageTypesCache.get(packageName) === acquisition) {
+        packageTypesCache.delete(packageName);
+      }
     }
   }
   return { diagnostics: input.compiler.compile({ files }).diagnostics };
 }
 
 /**
- * Npm package names imported in the file map's CODE — comments are stripped
- * first, because the platform surface's own docstrings mention npm imports
- * as examples and must never trigger acquisition. Bare specifiers only,
- * subpaths collapsed to the package (`@slack/web-api/dist/x` →
+ * Npm package names imported in the file map's CODE. Comments are stripped
+ * first, and only string literals that sit directly after an `import`/`from`
+ * keyword count as specifiers — the platform surface's docstrings mention
+ * npm imports as examples, and script prose like `"messages from 'bob'"`
+ * contains the keywords, so neither may trigger acquisition. Bare specifiers
+ * only, subpaths collapsed to the package (`@slack/web-api/dist/x` →
  * `@slack/web-api`).
  */
 export function npmPackagesMentioned(files: Record<string, string>): string[] {
   const packages = new Set<string>();
   for (const [path, text] of Object.entries(files)) {
     if (path.startsWith("/node_modules/")) continue;
-    for (const match of stripComments(text).matchAll(
-      /(?:\bfrom\s+|\bimport\s+|\bimport\s*\(\s*)["']([^"']+)["']/g,
-    )) {
-      const specifier = match[1]!;
+    const codeOnly = stripComments(text);
+    // Walk string literals in order; nesting resolves itself because an
+    // enclosing literal is consumed whole before its contents are seen.
+    for (const literal of codeOnly.matchAll(/(["'`])((?:\\.|(?!\1).)*)\1/g)) {
+      const before = codeOnly.slice(0, literal.index);
+      if (!/(?:\bfrom|\bimport)\s*\(?\s*$/.test(before)) continue;
+      const specifier = literal[2]!;
       if (specifier.startsWith(".") || specifier.startsWith("/")) continue;
       if (specifier.startsWith("node:")) continue;
       const segments = specifier.split("/");

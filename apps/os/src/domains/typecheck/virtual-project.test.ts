@@ -146,7 +146,29 @@ test("a typo'd capability types string is rejected with a compiler error", async
   });
   expect(problems).toHaveLength(1);
   expect(problems[0]).toContain("Streem");
-  expect(problems[0]).toContain("types:1"); // injected-import offset undone
+  expect(problems[0]).toContain("types:1"); // no injected import, no offset
+
+  // With an injected platform import the offset is undone: the error on the
+  // author's line 2 reports as line 2, not module line 3.
+  const withImport = await checkCapabilityTypes({
+    types: "export type Root = Stream;\nexport type Broken = Streem;",
+    typechecker,
+  });
+  expect(withImport).toHaveLength(1);
+  expect(withImport[0]).toContain("types:2");
+});
+
+test("a broken mount module surfaces in script checks instead of hiding", async () => {
+  // Pre-validation-era journals can hold types that no longer compile; the
+  // check must say so, labeled by the mount, not report ok.
+  const problems = await checkItxScript({
+    capabilities: [{ path: ["stale"], type: "live", types: "export type Stale = Goone;" }],
+    code: "async (itx) => {}",
+    typechecker,
+  });
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain("mount stale");
+  expect(problems[0]).toContain("Goone");
 });
 
 test("npm-backed mount types acquire real .d.ts and typecheck against them", async () => {
@@ -173,11 +195,13 @@ test("npm-backed mount types acquire real .d.ts and typecheck against them", asy
   expect(typo[0]).toContain("Did you mean 'listPets'");
 });
 
-test("npm specifier scan finds bare packages in code and ignores relative/node/comment ones", () => {
+test("npm specifier scan finds bare packages in code and ignores prose", () => {
   const files = {
     "mounts/slack.ts": 'export type Slack = import("@slack/web-api").WebClient;',
     "script.ts": 'import { z } from "zod/v4";\nimport "./local";\nimport fs from "node:fs";',
     "commented.ts": '/** example: import("left-pad") */\n// import "right-pad"',
+    // The keywords inside ordinary string literals are prose, not imports.
+    "prose.ts": `const q = "messages from 'bob' unread"; const t = \`import\`;`,
     "/node_modules/zod/index.d.ts": 'import "left-pad";', // acquired files never re-scan
   };
   expect(npmPackagesMentioned(files).sort()).toEqual(["@slack/web-api", "zod"]);

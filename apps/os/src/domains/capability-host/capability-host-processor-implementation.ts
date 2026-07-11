@@ -352,7 +352,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * Best-effort by design: an unreachable or slow server, a target without
    * `__describe`, or self-reported types that fail to compile all leave the
    * mount untyped rather than blocking the provide. The compile gate keeps
-   * the invariant that journaled types always compile.
+   * the invariant that types journaled THROUGH provideCapability always
+   * compile (direct `capability-provided` appends — agent birth mounts,
+   * userspace processors — bypass this method entirely).
    */
   async #selfDescribedTypes(
     expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],

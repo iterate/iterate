@@ -82,7 +82,7 @@ describe("searchScore", () => {
 });
 
 describe("mounted capabilities in the graph", () => {
-  test("referencedPlatformTypeNames scans code, not comments", () => {
+  test("referencedPlatformTypeNames scans code, not comments or local bindings", () => {
     expect(
       referencedPlatformTypeNames(
         "// Stream in a comment does not count\nexport type Root = { tail(): Promise<StreamEvent[]>; agent: Agent };",
@@ -90,6 +90,17 @@ describe("mounted capabilities in the graph", () => {
       ).sort(),
     ).toEqual(["Agent", "StreamEvent"]);
     expect(referencedPlatformTypeNames("export type X = { n: number };", byName)).toEqual([]);
+    // Names the text binds itself — declarations of any kind, or import
+    // bindings — shadow the platform ones.
+    expect(referencedPlatformTypeNames("export declare class Agent { x: Stream }", byName)).toEqual(
+      ["Stream"],
+    );
+    expect(
+      referencedPlatformTypeNames(
+        'import type { Stream } from "vendor";\nexport type X = Stream;',
+        byName,
+      ),
+    ).toEqual([]);
   });
 
   test("a typed mount slices across the layer boundary into platform declarations", () => {
@@ -105,7 +116,8 @@ describe("mounted capabilities in the graph", () => {
     expect(slice.includedNames[0]).toBe("tools.tail");
     expect(slice.includedNames).toContain("StreamEvent");
     expect(slice.sourceText).toContain('Mounted capability "tools.tail"');
-    expect(slice.sourceText).toContain("The project stream's newest events.");
+    // FULL instructions ride the entry, not just the first sentence.
+    expect(slice.sourceText).toContain("Call tools.tail.tail().");
   });
 
   test("an untyped mount still yields a readable entry", () => {

@@ -8,11 +8,7 @@
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { firstExportedTypeName } from "../itx/capability-type-declarations.ts";
-import {
-  declarationsByName,
-  referencedPlatformTypeNames,
-  stripComments,
-} from "../itx/itx-api-graph.ts";
+import { declarationsByName, referencedPlatformTypeNames } from "../itx/itx-api-graph.ts";
 import { itxTypesFileText } from "../itx/itx-types-text.ts";
 import type { TypecheckDiagnostic } from "./run-typecheck.ts";
 
@@ -47,6 +43,7 @@ ${[
   "Response",
   "Request",
   "RequestInit",
+  "RequestInfo",
   "Headers",
   "FormData",
   "Blob",
@@ -62,7 +59,9 @@ ${[
   "AbortController",
   "AbortSignal",
 ]
-  .map((name) => `type ${name} = any;\ndeclare var ${name}: any;`)
+  // Optional type params so generic uses (ReadableStream<Uint8Array>,
+  // workers-flavored Request<CfProperties>) resolve like the bare name.
+  .map((name) => `type ${name}<A = any, B = any> = any;\ndeclare var ${name}: any;`)
   .join("\n")}
 ${[
   "console",
@@ -99,16 +98,12 @@ const SHARED_FILES: Record<string, string> = {
 /**
  * One virtual module per typed mount. Bare platform-type references in the
  * mount's Capability Type Declaration (`export type Root = Stream;`) resolve
- * through an injected type-import — the same reference scan the docs closure
- * walks, so "readable in docs.get" and "resolvable in the checker" are the
- * same property.
+ * through an injected type-import. `referencedPlatformTypeNames` is the same
+ * scan the docs closure walks (locally-bound names excluded in both), so
+ * "readable in docs.get" and "resolvable in the checker" are one property.
  */
 export function mountModuleText(types: string): string {
-  const codeOnly = stripComments(types);
-  const referenced = referencedPlatformTypeNames(types, ITX_API_DECLARATIONS_BY_NAME).filter(
-    // A name the text declares itself shadows the platform one.
-    (name) => !new RegExp(`\\b(?:type|interface)\\s+${name}\\b`).test(codeOnly),
-  );
+  const referenced = referencedPlatformTypeNames(types, ITX_API_DECLARATIONS_BY_NAME);
   const importLine =
     referenced.length > 0 ? `import type { ${referenced.join(", ")} } from "../itx-types";\n` : "";
   return importLine + types;
@@ -134,7 +129,7 @@ export async function checkCapabilityTypes(input: {
   });
   return formatProblems(diagnostics, {
     label: "types",
-    onlyFile: fileName,
+    primaryFile: fileName,
     lineOffset: moduleText === input.types ? 0 : -1, // the injected import line
   });
 }
@@ -182,35 +177,40 @@ export async function checkItxScript(input: {
   const { diagnostics } = await input.typechecker.check({ files });
   return formatProblems(diagnostics, {
     label: "script",
-    onlyFile: "script.ts",
+    primaryFile: "script.ts",
     // The script's first line is preceded by the prelude lines, so subtract
     // them: reported positions match the code the caller sent.
     lineOffset: -prelude.length,
   });
 }
 
+/**
+ * Every error diagnostic becomes a problem string — nothing is filtered out,
+ * because a broken mount module or platform-surface error silently dropped
+ * would read as "the script is fine". Positions in the primary file (the
+ * caller's own text) are offset back to the caller's line numbers; anything
+ * else is labeled by where it lives (`mount tools.weather:2 — …`).
+ */
 function formatProblems(
   diagnostics: TypecheckDiagnostic[],
-  options: { label: string; onlyFile: string; lineOffset: number },
+  options: { label: string; primaryFile: string; lineOffset: number },
 ): string[] {
   return diagnostics
-    .filter(
-      (diagnostic) =>
-        diagnostic.category === "error" &&
-        (diagnostic.fileName === undefined || diagnostic.fileName === options.onlyFile),
-    )
+    .filter((diagnostic) => diagnostic.category === "error")
     .map((diagnostic) => {
-      const line = diagnostic.line === undefined ? undefined : diagnostic.line + options.lineOffset;
-      if (line !== undefined && line < 1) {
-        // Before the caller's own text: the scope assembly itself failed
-        // (say, a journaled mount whose types no longer resolve) — name the
-        // real culprit instead of pinning it on the script's first line.
-        return `scope — ${diagnostic.message} (TS${diagnostic.code})`;
+      const { fileName } = diagnostic;
+      if (fileName === undefined || fileName === options.primaryFile) {
+        const line =
+          diagnostic.line === undefined ? undefined : diagnostic.line + options.lineOffset;
+        // Lines the assembly prepended (the prelude, an injected import) map
+        // below 1 — report without a position rather than lying about one.
+        const position =
+          line === undefined || line < 1
+            ? ""
+            : `:${line}${diagnostic.column === undefined ? "" : `:${diagnostic.column}`}`;
+        return `${options.label}${position} — ${diagnostic.message} (TS${diagnostic.code})`;
       }
-      const position =
-        line === undefined
-          ? ""
-          : `:${line}${diagnostic.column === undefined ? "" : `:${diagnostic.column}`}`;
-      return `${options.label}${position} — ${diagnostic.message} (TS${diagnostic.code})`;
+      const where = fileName.replace(/^mounts\//, "mount ").replace(/\.ts$/, "");
+      return `${where}${diagnostic.line === undefined ? "" : `:${diagnostic.line}`} — ${diagnostic.message} (TS${diagnostic.code})`;
     });
 }

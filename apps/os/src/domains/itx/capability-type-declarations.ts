@@ -90,7 +90,11 @@ export function mcpCapabilityTypeDeclaration(tools: Tool[]): string {
     // Depth starts at 1: the input object renders inline inside the method
     // member, pre-spending one nesting level of the depth budget.
     const input = jsonSchemaToTypeText(tool.inputSchema, tool.inputSchema as JsonSchema, 1);
-    return `${doc}  ${quoteMemberName(tool.name)}(input: ${input}): Promise<unknown>;`;
+    // Dispatch treats a missing argument as {} — the input parameter is only
+    // required when the schema actually requires a property.
+    const requiredProperties = (tool.inputSchema as { required?: unknown } | undefined)?.required;
+    const required = Array.isArray(requiredProperties) && requiredProperties.length > 0;
+    return `${doc}  ${quoteMemberName(tool.name)}(input${required ? "" : "?"}: ${input}): Promise<unknown>;`;
   });
   return `export type Capability = {\n${members.join("\n")}\n};`;
 }
@@ -108,24 +112,32 @@ export function openApiCapabilityTypeDeclaration(
   const members = operations.map((operation) => {
     const doc = operation.summary ? `  /** ${escapeCommentText(operation.summary)} */\n` : "";
     const parts: string[] = [];
+    let requiredInput = false;
     for (const parameter of operation.parameters) {
       const type = jsonSchemaToTypeText(parameter.schema, spec as JsonSchema, 1);
-      const optional = parameter.required ? "" : "?";
-      parts.push(`${quoteMemberName(parameter.name)}${optional}: ${type}`);
+      if (parameter.required) requiredInput = true;
+      parts.push(`${quoteMemberName(parameter.name)}${parameter.required ? "" : "?"}: ${type}`);
     }
+    // The body follows dispatch's conventions (executeOperation): an object
+    // body's properties merge into the input object; a NON-object body
+    // (string, array, union) rides under a `body` key; an object body
+    // without listed properties means leftover input keys ARE the body.
     const body = operationBodySchema(operation, spec);
     if (isObjectSchema(body)) {
       const bodyType = jsonSchemaToTypeText(body, spec as JsonSchema, 1);
-      // Body properties merge into the same input object by unwrapping the
-      // rendered literal's braces. A body that renders as anything else
-      // (say a property-less object -> Record<string, unknown>) cannot be
-      // spliced into members, so it stays out and the input just loosens.
       if (bodyType.startsWith("{ ") && bodyType.endsWith(" }")) {
         parts.push(bodyType.slice(2, -2));
+        if (Array.isArray(body.required) && body.required.length > 0) requiredInput = true;
+      } else {
+        parts.push("[key: string]: unknown");
       }
+    } else if (body !== undefined) {
+      parts.push(`body?: ${jsonSchemaToTypeText(body, spec as JsonSchema, 1)}`);
     }
     const input =
-      parts.length > 0 ? `input: { ${parts.join("; ")} }` : "input?: Record<string, unknown>";
+      parts.length > 0
+        ? `input${requiredInput ? "" : "?"}: { ${parts.join("; ")} }`
+        : "input?: Record<string, unknown>";
     return `${doc}  ${quoteMemberName(operation.operationId)}(${input}): Promise<unknown>;`;
   });
   return `export type Capability = {\n${members.join("\n")}\n};`;

@@ -231,9 +231,22 @@ export function referencedPlatformTypeNames(
   declarations: ReadonlyMap<string, ItxApiDeclaration>,
 ): string[] {
   const codeOnly = stripComments(text);
+  // Names the text binds itself — its own declarations and import bindings —
+  // shadow the platform ones and are not references.
+  const locallyBound = new Set<string>();
+  for (const declared of codeOnly.matchAll(
+    /\b(?:type|interface|class|enum|namespace)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g,
+  )) {
+    locallyBound.add(declared[1]!);
+  }
+  for (const importClause of codeOnly.matchAll(/\bimport\s+(?:type\s+)?([^"']*?)\s*from\s*["']/g)) {
+    for (const bound of importClause[1]!.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g)) {
+      locallyBound.add(bound[0]);
+    }
+  }
   const referenced = new Set<string>();
   for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
-    if (declarations.has(match[0])) referenced.add(match[0]);
+    if (declarations.has(match[0]) && !locallyBound.has(match[0])) referenced.add(match[0]);
   }
   return [...referenced];
 }
@@ -261,9 +274,11 @@ export function mountDeclaration(input: {
   instructions?: string;
   types?: string;
 }): ItxApiDeclaration {
+  // The FULL instructions ride the entry (docs.get promises "instructions and
+  // types"); firstSentence is only for the one-line summary below.
   const header = [
     `// Mounted capability "${input.dottedPath}" — call it as itx.${input.dottedPath}.<member>(...).`,
-    ...(input.instructions ? [`// ${firstSentence(input.instructions)}`] : []),
+    ...(input.instructions ?? "").split("\n").flatMap((line) => (line ? [`// ${line}`] : [])),
   ];
   const body =
     input.types ??
