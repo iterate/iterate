@@ -68,6 +68,10 @@ export type LlmRequestReplayStats = {
   chunkCount: number;
   /** Output tokens over the generation window. */
   outputTokensPerSecond: number | null;
+  /** AI Gateway response-cache verdict (`cf-aig-cache-status`: HIT/MISS…)
+   * where the transport recorded one — a HIT means the whole response was
+   * served from the gateway's cache without touching the model. */
+  gatewayCacheStatus: string | null;
   /** The completed event's verbatim result.rawResponse — whatever the
    * transport recorded (usage dialects, gateway cache status, …). */
   rawResponse: unknown;
@@ -128,6 +132,11 @@ const ChunkPayloadSlice = z.looseObject({
   chunk: z.unknown(),
   llmRequestOffset: z.number(),
   sequence: z.number(),
+});
+/** The transport stamps the gateway's `cf-aig-cache-status` header onto the
+ * rawResponse it journals (BYOK lane); absent everywhere else. */
+const GatewayCacheSlice = z.looseObject({
+  cloudflareAiGatewayResponseCacheStatus: z.string().nullable().optional(),
 });
 
 /**
@@ -302,13 +311,18 @@ function replayStats(input: {
       ? Math.round((tokens.outputTokens / (generationMs / 1000)) * 10) / 10
       : null;
 
+  const rawResponse = completed?.success ? (completed.data.result.rawResponse ?? null) : null;
+  const gatewayCacheStatus = GatewayCacheSlice.safeParse(rawResponse);
   return {
     tokens,
     timeToFirstChunkMs,
     generationMs,
     chunkCount: chunks.length,
     outputTokensPerSecond,
-    rawResponse: completed?.success ? (completed.data.result.rawResponse ?? null) : null,
+    gatewayCacheStatus: gatewayCacheStatus.success
+      ? (gatewayCacheStatus.data.cloudflareAiGatewayResponseCacheStatus ?? null)
+      : null,
+    rawResponse,
   };
 }
 

@@ -255,6 +255,7 @@ describe("replayLlmRequest", () => {
       generationMs: 4000,
       chunkCount: 2,
       outputTokensPerSecond: 25,
+      gatewayCacheStatus: "HIT",
       rawResponse: { streamed: true, cloudflareAiGatewayResponseCacheStatus: "HIT" },
     });
   });
@@ -267,6 +268,7 @@ describe("replayLlmRequest", () => {
       generationMs: null,
       chunkCount: 0,
       outputTokensPerSecond: null,
+      gatewayCacheStatus: null,
       rawResponse: null,
     });
   });

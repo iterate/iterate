@@ -382,7 +382,9 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
               {tokens.inputTokens.toLocaleString()} tok
               {tokens.cachedInputTokens == null || tokens.cachedInputTokens === 0
                 ? ""
-                : ` (${tokens.cachedInputTokens.toLocaleString()} cached)`}
+                : ` (${tokens.cachedInputTokens.toLocaleString()} cached · ${Math.round(
+                    (tokens.cachedInputTokens / tokens.inputTokens) * 100,
+                  )}% hit rate)`}
             </dd>
             <dt className="text-muted-foreground/70">output</dt>
             <dd>
@@ -401,6 +403,24 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
           <>
             <dt className="text-muted-foreground/70">streaming</dt>
             <dd>{streamingParts.join(" · ")}</dd>
+          </>
+        )}
+        {stats.gatewayCacheStatus == null ? null : (
+          <>
+            <dt className="text-muted-foreground/70">gateway</dt>
+            <dd>
+              response cache{" "}
+              <span
+                className={cn(
+                  stats.gatewayCacheStatus === "HIT" && "text-emerald-600 dark:text-emerald-500",
+                )}
+              >
+                {stats.gatewayCacheStatus}
+              </span>
+              {stats.gatewayCacheStatus === "HIT"
+                ? " — served from the AI Gateway cache without touching the model"
+                : ""}
+            </dd>
           </>
         )}
       </dl>
