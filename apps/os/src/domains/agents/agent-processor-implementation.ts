@@ -851,7 +851,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       // so the label spells out the reply door.
       const content =
         from.kind === "agent"
-          ? `Message from agent ${from.path} (that agent cannot see your web chat — to reply to it: await itx.agents.get(${JSON.stringify(from.path)}).message(text)):\n${event.payload.content}`
+          ? `Message from agent ${from.path} (that agent cannot see this conversation — to reply to it: await itx.agents.get(${JSON.stringify(from.path)}).message(text)):\n${event.payload.content}`
           : event.payload.content;
       return {
         ...state,
@@ -1288,19 +1288,24 @@ async function scriptResultAgentInput(
   }
   if (payload.result === undefined) return null;
   const text = stringifyScriptResult(payload.result);
+  // String results are raw text, not JSON — the fence label, the spill
+  // file's extension, and the read-it-back recipe all say so honestly.
+  const isRawText = typeof payload.result === "string";
+  const fence = isRawText ? "```" : "```json";
   if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
     try {
       const spilledPath = await spillScriptResult({
         executionId: payload.executionId,
+        extension: isRawText ? "txt" : "json",
         text,
         writeWorkspaceFile,
       });
       return [
         "Your script returned:",
-        "```json",
+        fence,
         text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT),
         "```",
-        spillNotice({ path: spilledPath, totalChars: text.length }),
+        spillNotice({ isRawText, path: spilledPath, totalChars: text.length }),
       ].join("\n");
     } catch (error) {
       // Spilling is best effort: a workspace that cannot clone or write must
@@ -1311,10 +1316,16 @@ async function scriptResultAgentInput(
       });
     }
   }
-  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(text)}\n\`\`\``;
+  return `Your script returned:\n${fence}\n${truncateScriptResult(text)}\n\`\`\``;
 }
 
 function stringifyScriptResult(result: unknown): string {
+  // A returned string renders as itself: JSON.stringify would escape every
+  // newline and quote, turning a fetched page or file into one unreadable
+  // escaped line the model pays to mentally unescape (seen live: an 8.8KB
+  // worker.ts as a single escape-riddled JSON string). Non-strings keep the
+  // pretty-printed JSON shape.
+  if (typeof result === "string") return result;
   try {
     return JSON.stringify(result, null, 2) ?? String(result);
   } catch {
@@ -1341,6 +1352,7 @@ const SCRIPT_RESULT_SPILL_DIR = "/script-results";
 /** Writes the full result text into the agent's workspace; returns its path. */
 async function spillScriptResult(input: {
   executionId: string;
+  extension: "json" | "txt";
   text: string;
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
 }): Promise<string> {
@@ -1348,7 +1360,7 @@ async function spillScriptResult(input: {
   // nested ignore every spill would ride along into workspace snapshot
   // commits (the overlay publish honors .gitignore).
   await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
-  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
+  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${input.extension}`;
   await input.writeWorkspaceFile({ content: input.text, path });
   return path;
 }
@@ -1358,13 +1370,21 @@ async function spillScriptResult(input: {
  * lives and a concrete next-script recipe for paging it, so the model reads
  * the file with plain JavaScript instead of re-running the expensive fetch.
  */
-function spillNotice(input: { path: string; totalChars: number }): string {
+function spillNotice(input: { isRawText: boolean; path: string; totalChars: number }): string {
+  const readRecipe = input.isRawText
+    ? [
+        `  const text = await itx.workspace.readFile(${JSON.stringify(input.path)});`,
+        "  return text.slice(30_000, 60_000); // page/regex to return only what you need",
+      ]
+    : [
+        `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
+        "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+      ];
   return [
     `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
     "```js",
     "async (itx) => {",
-    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
-    "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+    ...readRecipe,
     "}",
     "```",
   ].join("\n");

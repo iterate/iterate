@@ -332,14 +332,98 @@ function slackWebhookSenderUserId(body: unknown): string | undefined {
   );
 }
 
+/**
+ * Envelope keys stripped from the model-facing transcript. `token` is
+ * Slack's webhook VERIFICATION SECRET — dumping it re-sends the secret to
+ * the LLM provider on every turn of every Slack agent. The rest is routing
+ * plumbing (event ids, authorization lists, dedup context) that drowns the
+ * message without telling the model anything actionable.
+ */
+const SLACK_ENVELOPE_NOISE = new Set([
+  "token",
+  "api_app_id",
+  "authorizations",
+  "authed_users",
+  "authed_teams",
+  "event_context",
+  "context_team_id",
+  "context_enterprise_id",
+  "event_id",
+  "event_time",
+  "is_ext_shared_channel",
+]);
+
+/** Event keys stripped for the same reason: `blocks` is the rich-text AST of
+ * the `text` field it sits next to (pure duplication at 10-50x the tokens);
+ * the rest is client/team bookkeeping. */
+const SLACK_EVENT_NOISE = new Set([
+  "blocks",
+  "client_msg_id",
+  "source_team",
+  "user_team",
+  "team",
+  "display_as_bot",
+  "is_locked",
+  "subscribed",
+]);
+
+/** Slack file objects carry dozens of thumbnail/preview fields; the model
+ * needs identity and type — the bytes ride separately as itx.files
+ * attachments on the same message. */
+const SLACK_FILE_KEYS = ["id", "name", "title", "mimetype", "filetype", "size", "mode"] as const;
+
+/**
+ * The model-facing transcript of one Slack webhook: the event's facts,
+ * curated rather than the raw wire payload (same posture as the email
+ * door's transcriber). Curation is by removal, not a whitelist, so rare
+ * event shapes (reactions, joins, interactivity payloads) keep their fields
+ * instead of arriving empty.
+ */
 function slackWebhookAgentInput(payload: unknown) {
   return [
     "`events.iterate.com/slack/webhook-received` event received",
     "",
     "```yaml",
-    stringifyYaml(payload).trimEnd(),
+    stringifyYaml(curateSlackWebhookPayload(payload)).trimEnd(),
     "```",
   ].join("\n");
+}
+
+function curateSlackWebhookPayload(payload: unknown): unknown {
+  const record = readRecord(payload);
+  if (record == null) return payload;
+  // headers are transport dedup facts (event id, request timestamp) — the
+  // curated body already carries everything the model can act on.
+  const { headers: _headers, ...envelope } = record;
+  const body = readRecord(record.body);
+  if (body == null) return envelope;
+  const curatedBody: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (SLACK_ENVELOPE_NOISE.has(key)) continue;
+    curatedBody[key] = key === "event" ? curateSlackEvent(value) : value;
+  }
+  return { ...envelope, body: curatedBody };
+}
+
+function curateSlackEvent(event: unknown): unknown {
+  const record = readRecord(event);
+  if (record == null) return event;
+  const curated: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (SLACK_EVENT_NOISE.has(key)) continue;
+    curated[key] = key === "files" && Array.isArray(value) ? value.map(curateSlackFile) : value;
+  }
+  return curated;
+}
+
+function curateSlackFile(file: unknown): unknown {
+  const record = readRecord(file);
+  if (record == null) return file;
+  const curated: Record<string, unknown> = {};
+  for (const key of SLACK_FILE_KEYS) {
+    if (record[key] !== undefined) curated[key] = record[key];
+  }
+  return curated;
 }
 
 function isBotMessage(slackEvent: Record<string, unknown>): boolean {
