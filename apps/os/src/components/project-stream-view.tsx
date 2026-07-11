@@ -30,6 +30,7 @@ import {
 import { AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
+import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
   StreamProcessorsPanel,
@@ -264,6 +265,7 @@ export function ProjectStreamView({
       }}
       liveState={caps.agentFeed ? agentUiState : null}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
+      {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       emptyLabel={connectionLabel}
       isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
       projectSlug={projectSlug}
@@ -284,6 +286,14 @@ export function ProjectStreamView({
             offset={panels.inspectedOffset}
             onNavigate={panels.inspectEvent}
             onClose={panels.closeInspector}
+          />
+        ) : panels.inspectedLlmRequestOffset != null ? (
+          // Replays the request from the RAW events mirror (not feed_items):
+          // the fold reads the journal, the same source the processor read.
+          <LlmRequestInspectorPanel
+            database={store.streamDatabase}
+            llmRequestOffset={panels.inspectedLlmRequestOffset}
+            onClose={panels.closeLlmRequestInspector}
           />
         ) : null}
       </div>

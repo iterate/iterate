@@ -66,6 +66,7 @@ export function StreamFeedView({
   isPending = false,
   liveState,
   onInspectEvent,
+  onInspectLlmRequest,
   projectSlug,
   isInterruptingQueuedMessages = false,
   onInterruptQueuedMessages,
@@ -79,6 +80,8 @@ export function StreamFeedView({
   liveState: AgentUiState | null;
   /** Opens the raw-event inspector panel at this offset (raw rows only). */
   onInspectEvent?: (offset: number) => void;
+  /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
   projectSlug?: string;
   isInterruptingQueuedMessages?: boolean;
   onInterruptQueuedMessages?: () => Promise<void> | void;
@@ -335,6 +338,7 @@ export function StreamFeedView({
                     live={live}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
+                    onInspectLlmRequest={onInspectLlmRequest}
                   />
                 ) : isQueuedItem ? (
                   <QueuedMessagesPanel
@@ -357,6 +361,7 @@ export function StreamFeedView({
                     item={row.agentItem}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
+                    onInspectLlmRequest={onInspectLlmRequest}
                     projectSlug={projectSlug}
                   />
                 ) : (

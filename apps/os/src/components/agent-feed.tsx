@@ -9,6 +9,7 @@ import {
   PaperclipIcon,
   PauseIcon,
   PlayIcon,
+  ScrollTextIcon,
 } from "lucide-react";
 import type {
   AgentUiActivity,
@@ -92,11 +93,14 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
   toggledIds,
   onToggle,
+  onInspectLlmRequest,
   projectSlug,
 }: {
   item: AgentUiItem;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
   projectSlug?: string;
 }) {
   if (item.kind === "stream-woken") {
@@ -166,6 +170,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
         expanded={toggledIds.has(item.id)}
         toggledIds={toggledIds}
         onToggle={onToggle}
+        onInspectLlmRequest={onInspectLlmRequest}
       />
     );
   }
@@ -296,11 +301,13 @@ function AgentActivityRow({
   expanded,
   toggledIds,
   onToggle,
+  onInspectLlmRequest,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
 }) {
   const interrupted = activityWasInterrupted(activity);
 
@@ -351,6 +358,7 @@ function AgentActivityRow({
                 step={step}
                 expanded={toggledIds.has(step.id) !== defaultExpanded}
                 onToggle={onToggle}
+                onInspectLlmRequest={onInspectLlmRequest}
               />
             );
           })}
@@ -525,40 +533,73 @@ function AgentActivityStep({
   step,
   expanded,
   onToggle,
+  onInspectLlmRequest,
 }: {
   step: AgentUiStep;
   expanded: boolean;
   onToggle: (id: string) => void;
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
 }) {
   return (
     <div className="flex flex-col">
-      <Button
-        variant="ghost"
-        size="xs"
-        aria-expanded={expanded}
-        onClick={() => onToggle(step.id)}
-        className="-ml-2 self-start font-normal"
-      >
-        {step.kind === "llm" ? (
-          <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
-        ) : (
-          <CodeIcon className="size-3 text-muted-foreground" />
-        )}
-        <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
-        <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
-        <ChevronRightIcon
-          className={cn(
-            "size-2 text-muted-foreground/50 transition-transform",
-            expanded && "rotate-90",
+      <div className="-ml-2 flex items-center gap-0.5 self-start">
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-expanded={expanded}
+          onClick={() => onToggle(step.id)}
+          className="font-normal"
+        >
+          {step.kind === "llm" ? (
+            <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
+          ) : (
+            <CodeIcon className="size-3 text-muted-foreground" />
           )}
-        />
-      </Button>
+          <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
+          <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
+          <ChevronRightIcon
+            className={cn(
+              "size-2 text-muted-foreground/50 transition-transform",
+              expanded && "rotate-90",
+            )}
+          />
+        </Button>
+        {step.kind === "llm" && onInspectLlmRequest != null ? (
+          <InspectLlmRequestButton
+            llmRequestOffset={step.llmRequestOffset}
+            onInspectLlmRequest={onInspectLlmRequest}
+          />
+        ) : null}
+      </div>
       {expanded ? (
         <div className="flex flex-col gap-2 pb-2.5 pl-5 pt-0.5">
           {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Opens the LLM request inspector: the exact context this request sent to
+ * the model, replayed from the local event mirror (llm-request-inspector-panel). */
+function InspectLlmRequestButton({
+  llmRequestOffset,
+  onInspectLlmRequest,
+}: {
+  llmRequestOffset: number;
+  onInspectLlmRequest: (llmRequestOffset: number) => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      title="Show the exact context sent to the model"
+      data-testid="agent-feed-inspect-llm-request"
+      onClick={() => onInspectLlmRequest(llmRequestOffset)}
+      className="text-muted-foreground/60 hover:text-foreground"
+    >
+      <ScrollTextIcon className="size-3" />
+    </Button>
   );
 }
 
@@ -709,10 +750,12 @@ export function AgentLiveActivity({
   live,
   toggledIds,
   onToggle,
+  onInspectLlmRequest,
 }: {
   live: AgentUiActivity;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
 }) {
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
@@ -723,6 +766,13 @@ export function AgentLiveActivity({
     doneSteps.length > 0 ||
     runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
 
+  // The in-flight request's context is already committed history (the fold
+  // reads offsets ≤ llmRequestOffset), so "what is it chewing on right now"
+  // is inspectable mid-turn from the live label row.
+  const runningLlmStep = runningSteps
+    .filter((step): step is AgentUiLlmStep => step.kind === "llm")
+    .at(-1);
+
   if (!working && activityWasInterrupted(live)) {
     return (
       <AgentActivityRow
@@ -730,6 +780,7 @@ export function AgentLiveActivity({
         expanded={toggledIds.has(live.id)}
         toggledIds={toggledIds}
         onToggle={onToggle}
+        onInspectLlmRequest={onInspectLlmRequest}
       />
     );
   }
@@ -742,6 +793,12 @@ export function AgentLiveActivity({
           <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
             {liveActivityLabel(runningSteps)}
           </span>
+          {runningLlmStep != null && onInspectLlmRequest != null ? (
+            <InspectLlmRequestButton
+              llmRequestOffset={runningLlmStep.llmRequestOffset}
+              onInspectLlmRequest={onInspectLlmRequest}
+            />
+          ) : null}
         </div>
       ) : null}
       {showStepRail ? (
@@ -758,6 +815,7 @@ export function AgentLiveActivity({
               step={step}
               expanded={toggledIds.has(`live:${step.id}`)}
               onToggle={toggleLive}
+              onInspectLlmRequest={onInspectLlmRequest}
             />
           ))}
           {runningSteps.map((step) =>
