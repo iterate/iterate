@@ -5562,10 +5562,14 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
         "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
       // Connect-time auto-typing, reference-style: one line naming the spec
       // (the typechecker materializes the full declaration at check time —
-      // schemas never enter the journal or an agent's context). See the MCP
-      // client's __describe for the direct-declaration variant.
+      // schemas never enter the journal or an agent's context). Specs behind
+      // auth headers journal inline instead: headers ride project egress,
+      // which the sidecar's bare fetch does not hold.
       types:
-        this.props.description?.types ?? openApiCapabilityTypeReference(this.props.config.specUrl),
+        this.props.description?.types ??
+        (this.props.config.headers
+          ? openApiCapabilityTypeInline(operations, spec, this.props.config.specUrl)
+          : openApiCapabilityTypeReference(this.props.config.specUrl)),
       children: Object.fromEntries(
         operations.map((operation) => [
           operation.operationId,
