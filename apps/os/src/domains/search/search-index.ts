@@ -217,6 +217,69 @@ export async function indexStreamEventBatch(input: {
   }
 }
 
+/**
+ * Re-index a whole stream from offset 0 — the explicit repair verb for the
+ * one gap the fire-and-forget per-batch indexing can leave: a segment that
+ * went permanently quiet right after a failed write. Paginates the stream in
+ * offset order and rewrites every segment document (grouping by segment
+ * boundary, so gaps from ephemeral/disallow-listed offsets don't matter).
+ * Idempotent: same events → same segment documents.
+ */
+export async function indexEntireStream(input: {
+  projectId: string;
+  path: string;
+  readEvents: (args: {
+    afterOffset: number;
+    beforeOffset: number;
+    limit: number;
+  }) => Promise<StreamEvent[]>;
+}): Promise<{ segments: number }> {
+  let afterOffset = 0;
+  let currentSegment = 0;
+  let buffer: StreamEvent[] = [];
+  let segments = 0;
+
+  const flush = async () => {
+    const document = renderStreamSegmentDocument({
+      events: buffer,
+      segment: currentSegment,
+      streamPath: input.path,
+    });
+    buffer = [];
+    if (document === null) return;
+    await itxEnv.SEARCH_BUCKET.put(
+      streamSegmentKey({
+        projectId: input.projectId,
+        streamPath: input.path,
+        segment: currentSegment,
+      }),
+      document,
+      { httpMetadata: { contentType: "text/markdown" } },
+    );
+    segments += 1;
+  };
+
+  while (true) {
+    const page = await input.readEvents({
+      afterOffset,
+      beforeOffset: Number.MAX_SAFE_INTEGER,
+      limit: SEARCH_SEGMENT_SIZE,
+    });
+    if (page.length === 0) break;
+    for (const event of page) {
+      const segment = segmentForOffset(event.offset);
+      if (segment !== currentSegment) {
+        await flush();
+        currentSegment = segment;
+      }
+      buffer.push(event);
+    }
+    afterOffset = page[page.length - 1]!.offset;
+  }
+  await flush();
+  return { segments };
+}
+
 /** Outcome of one file mirror, so backfill callers can report honest counts. */
 type MirrorFileOutcome = "mirrored" | "skipped" | "failed";
 

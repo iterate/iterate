@@ -861,6 +861,12 @@ export interface Search {
     systemPrompt?: string;
   }): Promise<SearchAnswerResult>;
   /**
+   * Re-index one stream from the beginning — the repair verb for streams that
+   * predate search indexing, or the rare tail gap a failed per-batch write can
+   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   */
+  indexStream(input: { path: string }): Promise<{ segments: number }>;
+  /**
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
    * incrementally from here on).

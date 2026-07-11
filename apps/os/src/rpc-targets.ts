@@ -196,6 +196,7 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
+  indexEntireStream,
   indexRepoSnapshotToSearchIndex,
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
@@ -1870,12 +1871,13 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         "(Cloudflare AI Search over the deployment's search-index bucket, indexed on a " +
         "schedule — expect minutes of lag behind writes). query({ query }) returns scored " +
         "chunks; answer({ query }) additionally generates an answer from them. Scope with " +
-        'source: "streams" | "files" | "repos". indexRepo({ path }) and backfillFiles() ' +
-        "force-reindex content written before this deployment started mirroring.",
+        'source: "streams" | "files" | "repos". indexStream({ path }), indexRepo({ path }), ' +
+        "and backfillFiles() force-reindex content written before this deployment started mirroring.",
       children: {
         answer: "RAG answer: retrieve matching chunks and generate a response from them.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
         indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
+        indexStream: "Re-index one stream from the beginning (backfill/repair).",
         query: "Retrieve scored chunks matching a query.",
       },
       parent: "a project itx (itx.search)",
@@ -1966,6 +1968,25 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
           content: item.content.map((chunk) => chunk.text).join("\n"),
         })),
       };
+    });
+  }
+
+  /**
+   * Re-index one stream from the beginning — the repair verb for streams that
+   * predate search indexing, or the rare tail gap a failed per-batch write can
+   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   */
+  async indexStream(input: { path: string }): Promise<{ segments: number }> {
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path: normalizePath(input.path) },
+        { allowNullProjectId: true },
+      ),
+    );
+    return await indexEntireStream({
+      projectId: this.props.projectId,
+      path: normalizePath(input.path),
+      readEvents: (args) => streamStub.getEvents(args),
     });
   }
 
