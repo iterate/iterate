@@ -839,6 +839,49 @@ return {
 `.trim(),
   },
   {
+    id: "typed-capability-mount",
+    title: "Mount a capability with types, then discover and typecheck against it",
+    description:
+      "provideCapability's `types` field is a TypeScript declaration for the mounted value (first export = the mount's type; bare platform names like Stream resolve). It is validated at provide time, indexed by docs.search, returned by docs.get with the platform declarations it references, and joined into the scope's surface for docs.typecheck — so a script's typo against the mount is a compiler error before it costs a run.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+await itx.provideCapability({
+  expression: ["streams", ["get", "/"]],
+  instructions: "The project root stream, mounted at rootStream.",
+  path: ["rootStream"],
+  type: "itx-expression",
+  types: "export type RootStream = Stream;",
+});
+
+// The types metadata is part of the search haystack, so method names and
+// type text match too — pass MANY related words as always.
+const hits = await itx.docs.search({ q: "rootStream root stream mounted events" });
+const hit = hits.find((h) => h.kind === "capability" && h.name === "rootStream");
+
+// docs.get on a mount's dotted path returns its instructions and types plus
+// the platform declarations those types reference (Stream here — big enough
+// to need a raised maxTokens; the default 1500 would list it as frontier).
+const entry = await itx.docs.get({ name: "rootStream", maxTokens: 4000 });
+
+// docs.typecheck compiles a script against this scope's surface — platform
+// types AND typed mounts — without running it.
+const good = await itx.docs.typecheck({
+  code: "async (itx) => { return await itx.rootStream.getEvents(); }",
+});
+const typo = await itx.docs.typecheck({
+  code: "async (itx) => { return await itx.rootStream.appendd(); }",
+});
+
+return {
+  searchFoundMount: Boolean(hit),
+  entryIncludesStreamDeclaration: entry.includes("export interface Stream"),
+  goodScriptOk: good.ok,
+  typoCaught: typo.ok === false && typo.problems[0]?.includes("appendd"),
+};
+`.trim(),
+  },
+  {
     id: "connect-openapi-petstore",
     e2eProven: false,
     title: "Connect OpenAPI Petstore, then mount it",

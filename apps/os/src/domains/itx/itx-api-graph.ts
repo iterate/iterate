@@ -219,6 +219,82 @@ export function typeSlice(input: {
   return { ...assembled, includedNames };
 }
 
+/**
+ * The platform declarations a free-form TypeScript text mentions: PascalCase
+ * identifiers in its CODE (comments stripped) that name a declaration in the
+ * graph. The same scan the generator uses for `referencedTypeNames`, applied
+ * to text from OUTSIDE the graph — a mount's Capability Type Declaration —
+ * so mount types get reference edges into the platform layer.
+ */
+export function referencedPlatformTypeNames(
+  text: string,
+  declarations: ReadonlyMap<string, ItxApiDeclaration>,
+): string[] {
+  const codeOnly = stripComments(text);
+  // Names the text binds itself — its own declarations and import bindings —
+  // shadow the platform ones and are not references.
+  const locallyBound = new Set<string>();
+  for (const declared of codeOnly.matchAll(
+    /\b(?:type|interface|class|enum|namespace)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g,
+  )) {
+    locallyBound.add(declared[1]!);
+  }
+  for (const importClause of codeOnly.matchAll(/\bimport\s+(?:type\s+)?([^"']*?)\s*from\s*["']/g)) {
+    for (const bound of importClause[1]!.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g)) {
+      locallyBound.add(bound[0]);
+    }
+  }
+  const referenced = new Set<string>();
+  for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
+    if (declarations.has(match[0]) && !locallyBound.has(match[0])) referenced.add(match[0]);
+  }
+  return [...referenced];
+}
+
+/**
+ * Remove block and line comments so scans see only code. Every regex scan
+ * over TypeScript text in this codebase goes through this first — a JSDoc
+ * example mentioning `import("some-pkg")` or a type name must never count
+ * as a reference (the generator, the docs closure, and the typechecker's
+ * npm scan all share this).
+ */
+export function stripComments(text: string): string {
+  return text.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
+}
+
+/**
+ * A mounted capability as a synthetic graph declaration, so `typeSlice` can
+ * walk from a mount into the platform layer: the slice starts at the mount's
+ * own types and pulls in the platform declarations they reference, budget
+ * and frontier rules identical to a platform root.
+ */
+export function mountDeclaration(input: {
+  declarations: ReadonlyMap<string, ItxApiDeclaration>;
+  dottedPath: string;
+  instructions?: string;
+  types?: string;
+}): ItxApiDeclaration {
+  // The FULL instructions ride the entry (docs.get promises "instructions and
+  // types"); firstSentence is only for the one-line summary below.
+  const header = [
+    `// Mounted capability "${input.dottedPath}" — call it as itx.${input.dottedPath}.<member>(...).`,
+    ...(input.instructions ?? "").split("\n").flatMap((line) => (line ? [`// ${line}`] : [])),
+  ];
+  const body =
+    input.types ??
+    `// No types recorded for this mount. itx.${input.dottedPath}.__describe() reports its durable instructions.`;
+  return {
+    name: input.dottedPath,
+    kind: "typeAlias",
+    sourceText: [...header, body].join("\n"),
+    summary: input.instructions ? firstSentence(input.instructions) : "",
+    memberSummaries: {},
+    referencedTypeNames: input.types
+      ? referencedPlatformTypeNames(input.types, input.declarations)
+      : [],
+  };
+}
+
 /** First sentence of a prose string — what one-line summaries show. */
 export function firstSentence(text: string): string {
   const collapsed = text.replaceAll(/\s+/g, " ").trim();

@@ -110,6 +110,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   /** Injected clock (expiry decisions); production defaults to Date.now. */
   #now: (() => number) | undefined;
   #parent: ParentCapabilityHost | undefined;
+  #validateCapabilityTypes: ((types: string) => Promise<string[]>) | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
@@ -124,6 +125,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
       parent?: ParentCapabilityHost;
+      /**
+       * Compiles a mount's `types` string, returning problems (empty = it
+       * compiles). Wired to the typechecker sidecar in production; the node
+       * test harness runs without one, which skips validation.
+       */
+      validateCapabilityTypes?: (types: string) => Promise<string[]>;
     },
   ) {
     super(args);
@@ -132,6 +139,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
     this.#parent = args.parent;
+    this.#validateCapabilityTypes = args.validateCapabilityTypes;
   }
 
   protected override reduce({
@@ -258,6 +266,17 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async provideCapability(input: ProvideCapabilityInput) {
     const { path } = input;
     assertCapabilityPath(path);
+    // Authored types must compile before they enter the journal — a typo'd
+    // declaration rejected here is a fixable error; one journaled durably is
+    // silent rot every docs read and typecheck inherits.
+    if (input.types !== undefined) {
+      const problems = (await this.#validateCapabilityTypes?.(input.types)) ?? [];
+      if (problems.length > 0) {
+        throw new Error(
+          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
+        );
+      }
+    }
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     let record: CapabilityProvidedPayload;
@@ -286,7 +305,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         instructions: input.instructions,
         path,
         type: "itx-expression",
-        types: input.types,
+        types: input.types ?? (await this.#selfDescribedTypes(input.expression)),
       };
     } else {
       input satisfies never;
@@ -322,6 +341,55 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
     await this.waitUntilEvent({ offset: committedOffset });
     return { path, providedAtOffset: committedOffset };
+  }
+
+  /**
+   * Connect-time auto-typing: a durable expression mount provided WITHOUT
+   * types asks the capability to describe itself ONCE, here, and keeps the
+   * `types` its `__describe()` reports — the MCP and OpenAPI connect doors
+   * generate theirs from tool schemas and spec operations, so third-party
+   * services become as documented as builtins with zero author effort.
+   * Best-effort by design: an unreachable or slow server, a target without
+   * `__describe`, or self-reported types that fail to compile all leave the
+   * mount untyped rather than blocking the provide. The compile gate keeps
+   * the invariant that types journaled THROUGH provideCapability always
+   * compile (direct `capability-provided` appends — agent birth mounts,
+   * userspace processors — bypass this method entirely).
+   */
+  async #selfDescribedTypes(
+    expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
+  ): Promise<string | undefined> {
+    // The catch rides the promise itself, BEFORE the race: describing may
+    // lose to the deadline and fail later, and an abandoned rejection must
+    // not surface as unhandled after the provide already returned.
+    const described = this.#describeExpressionTypes(expression).catch(() => undefined);
+    // The deadline keeps a hanging third-party server (MCP listTools, an
+    // OpenAPI spec fetch) from hanging the provide — past it, the mount just
+    // stays untyped.
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        described,
+        new Promise<undefined>((resolve) => {
+          deadline = setTimeout(() => resolve(undefined), 10_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
+
+  async #describeExpressionTypes(
+    expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
+  ): Promise<string | undefined> {
+    const evaluated = await evaluateItxExpression(this.#itx, expression);
+    const value = (await evaluated.value) as {
+      __describe?: () => Promise<{ types?: string }>;
+    };
+    const types = (await value.__describe?.())?.types;
+    if (typeof types !== "string" || types.length === 0) return undefined;
+    const problems = (await this.#validateCapabilityTypes?.(types)) ?? [];
+    return problems.length === 0 ? types : undefined;
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {

@@ -51,6 +51,16 @@ export interface Env {
    * artifact cache (see its BuilderEnv).
    */
   BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
+  /**
+   * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
+   * projects and returns diagnostics, behind provide-time capability-types
+   * validation and `itx.docs.typecheck`. The only script carrying the
+   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
+   * BUILDER.
+   */
+  TYPECHECKER: Service<
+    import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
+  >;
 
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject
