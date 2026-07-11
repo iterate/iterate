@@ -1113,8 +1113,23 @@ export function buildAgentLlmRequestBody(input: {
   const state = reduceAgentEvents(
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
+  // Without a clock the model's "now" is its training cutoff — every web
+  // search for something recent, every scheduler cron, every "how old is
+  // this?" judgment silently wrong, with no error signal. The request's own
+  // llm-request-requested append time is the stamp: journaled, so refolds
+  // and the UI trace replay reproduce the exact request byte for byte.
+  const requestedAt = input.events.find(
+    (event) =>
+      event.offset === input.llmRequestOffset &&
+      event.type === "events.iterate.com/agent/llm-request-requested",
+  )?.createdAt;
+  const clockLine =
+    requestedAt === undefined ? "" : `\n\nCurrent date and time (UTC): ${requestedAt}`;
   return {
-    messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
+    messages: [
+      { role: "system" as const, content: state.systemPrompt + clockLine },
+      ...state.history,
+    ],
   };
 }
 

@@ -231,9 +231,17 @@ export type AgentPolicyEventInput = {
 export function agentDefaultsForPath(input: {
   agentPath: string;
   projectId: string;
+  /**
+   * Human-facing project facts from the directory, when the caller has them:
+   * the very first question a real user asked their agent was "which project
+   * is this?", and an opaque prj_ hex id was the only answer the boot
+   * context could give. Optional because some hosts (tests, bare births)
+   * have no directory at hand — the id-only line still works.
+   */
+  project?: { name: string; slug: string; hostname?: string };
   overrides?: AgentDefaultsOverrides;
 }): AgentDefaultPolicy {
-  const { agentPath, projectId } = input;
+  const { agentPath, projectId, project } = input;
   const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
   // An override replaces the path prompt wholesale. There is no baked-in
   // child-agent prompt either: child-agent-ness rides on the parent's MESSAGE
@@ -281,10 +289,15 @@ export function agentDefaultsForPath(input: {
       payload: {
         content: [
           "Platform context for this agent:",
-          `- Project id: ${projectId}`,
+          project === undefined
+            ? `- Project id: ${projectId}`
+            : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.hostname === undefined ? "" : ` — the project worker/website serves https://${project.hostname}`}`,
           `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
-          '- The project config repo is at "/repos/config" (itx.repo): worker.ts (the project worker + website), package.json, AGENTS.md. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-          "- Your private workspace (itx.workspace) overlays the config repo's latest main: readFile/writeFile/edit/glob, then itx.workspace.git.commit({ message }) ships straight to main and the project worker/website redeploys. No branches, no push.",
+          // One seed list, marked non-exhaustive, and ONE rule for choosing
+          // between the two write doors — the model was repeating this line
+          // verbatim to users as the repo's full contents.
+          '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
+          "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
           "- Delegate by messaging a child agent into existence: await itx.agents.get('researcher').message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
           // Deliberate reinforcement of the prompt's FIND WORKING CODE
           // section — repetition is the one thing small prompts buy back.
@@ -302,7 +315,7 @@ export function agentDefaultsForPath(input: {
             idempotencyKey: `project-onboarding-start:${projectId}`,
             payload: {
               content:
-                "Start onboarding now. The project owner just created this project and is looking at the chat.",
+                "Begin onboarding. The project owner just created this project and is looking at the chat. If the user already sent a message above, answer it first, then continue the onboarding script.",
               llmRequestPolicy: { behaviour: "after-current-request" },
             },
           },

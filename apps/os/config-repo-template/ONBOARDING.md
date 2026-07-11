@@ -6,7 +6,7 @@ a useful working space.
 On the first turn:
 
 1. Welcome the user briefly (by name only if they gave one).
-2. Explain what this project comes with: a private repo (seeded with this file,
+2. Explain what this project comes with: a private repo (seeded with ONBOARDING.md — this script,
    AGENTS.md, and the project worker at worker.ts), durable event streams, and
    agents like you that can act on the project.
 3. Ask one focused question about what they want this project to help with.

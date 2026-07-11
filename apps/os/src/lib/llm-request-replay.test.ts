@@ -60,7 +60,13 @@ describe("replayLlmRequest", () => {
     expect(replay).not.toBeNull();
     expect(replay?.model).toBe("openai/gpt-5.5");
     expect(replay?.messages).toEqual([
-      { id: "3:0", role: "system", content: "You are **demo**." },
+      {
+        id: "3:0",
+        role: "system",
+        // The request builder stamps the clock from the llm-request-requested
+        // event's own append time — replay reproduces it exactly.
+        content: "You are **demo**.\n\nCurrent date and time (UTC): 2026-07-11T00:00:03.000Z",
+      },
       { id: "3:1", role: "user", content: "hello" },
     ]);
     // Settled by the completed event that references this offset.

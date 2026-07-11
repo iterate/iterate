@@ -1163,13 +1163,34 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * (projectId, path), so appending them twice — or racing a redelivery — is
    * a no-op.
    */
-  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+  async forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy> {
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
+      ...(await agentBootProjectFacts(this.props.projectId)),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
+}
+
+/**
+ * Human-facing project facts for an agent's boot context, best-effort from
+ * the project directory: name, slug, and the served hostname. Absent (id-only
+ * boot line) when the directory has no record yet — never a birth blocker.
+ */
+async function agentBootProjectFacts(
+  projectId: string,
+): Promise<{ project?: { name: string; slug: string; hostname?: string } }> {
+  const record = await readProjectById(env.PROJECT_DIRECTORY, projectId).catch(() => null);
+  if (record === null) return {};
+  const hostnameBase = parseConfig(env).projectHostnameBases[0];
+  return {
+    project: {
+      name: record.name,
+      slug: record.slug,
+      ...(hostnameBase === undefined ? {} : { hostname: `${record.slug}.${hostnameBase}` }),
+    },
+  };
 }
 
 /**
@@ -3128,6 +3149,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const defaults = agentDefaultsForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
+      ...(await agentBootProjectFacts(this.#props.projectId)),
       overrides: input,
     });
     // The defaults batch (fixed keys) establishes policy on a fresh agent and
