@@ -297,11 +297,20 @@ export interface CfBrowserCapability {
   __describe(): Promise<Description>;
   /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-  /** Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. */
+  /**
+   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,
+   * scrape, json, links, crawl. Returns the action's RESULT directly —
+   * `quickAction("markdown", { url })` is the markdown string, structured
+   * actions (links, json, scrape, …) are their parsed value, and binary
+   * actions (screenshot, pdf) are bytes — instead of the binding's raw
+   * Response, whose `{ success, result }` JSON envelope every caller was
+   * unwrapping by hand (and the agent prompt's one-call recipe promised not
+   * to need). A failed action throws with the envelope's error.
+   */
   quickAction(
     action: CfBrowserQuickAction,
     options: CfBrowserQuickActionOptions,
-  ): Promise<Response>;
+  ): Promise<string | Uint8Array | unknown>;
 }
 
 /**
