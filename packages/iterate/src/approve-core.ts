@@ -217,6 +217,16 @@ function settledOutcome(
 }
 
 /**
+ * How long to wait for the door to settle a grant. The door appends `settled`
+ * only AFTER the approved upstream `fetch` finishes, so the window must outlast
+ * a slow-but-succeeding egress — a shorter wait would misreport a valid grant
+ * as `unsettled` (or, after a stray reject, a false rejection). Chunked into
+ * bounded one-shot waits so no single RPC spans it.
+ */
+const SETTLEMENT_WINDOW_MS = 120_000;
+const SETTLEMENT_CHUNK_MS = 25_000;
+
+/**
  * Read back what the egress door did with a request: released (with the
  * upstream status), delivery-failed, rejected, or — if nothing lands in the
  * window — unsettled (an unverifiable signature is ignored server-side, so
@@ -225,40 +235,60 @@ function settledOutcome(
  * `settled` is authoritative. The door acts on the FIRST resolution and appends
  * `settled` ONLY after it releases egress, so a `settled` for this offset always
  * means a grant won — even if a second approver raced in a `rejected`. On seeing
- * a rejection we therefore give the door a brief grace to confirm with a settled
- * before trusting the veto; released beats a stray reject every time.
+ * a rejection we therefore re-scan for a settled before trusting the veto;
+ * released beats a stray reject every time.
  */
 export async function awaitSettlement(
   stream: RpcStub<Stream>,
   offset: number,
-  timeoutMs = 30_000,
+  windowMs = SETTLEMENT_WINDOW_MS,
 ): Promise<Settlement> {
   const forThisRequest = (candidate: StreamEvent) =>
     (candidate.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
     offset;
+
+  // Wait for the first matching event within the budget, re-arming a one-shot
+  // waitForEvent on chunk timeouts (and transient stream restarts) from the same
+  // offset. Returns null once the budget elapses.
+  const waitWithin = async (
+    eventTypes: readonly string[],
+    budgetMs: number,
+  ): Promise<StreamEvent | null> => {
+    const until = Date.now() + budgetMs;
+    while (Date.now() < until) {
+      try {
+        return await stream.waitForEvent({
+          afterOffset: offset,
+          eventTypes: [...eventTypes],
+          predicate: forThisRequest,
+          timeoutMs: Math.min(until - Date.now(), SETTLEMENT_CHUNK_MS),
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.includes("Timed out waiting for stream event")
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    return null;
+  };
+
   try {
-    const event = await stream.waitForEvent({
-      afterOffset: offset,
-      eventTypes: [EVENT.settled, EVENT.rejected],
-      predicate: forThisRequest,
-      timeoutMs,
-    });
+    const event = await waitWithin([EVENT.settled, EVENT.rejected], windowMs);
+    if (event === null) return { kind: "unsettled" };
     if (event.type === EVENT.settled) return settledOutcome(event);
 
-    // A rejection: authoritative only if no grant won. Re-scan from the request
-    // offset for a `settled` (already committed, or landing within the grace) —
-    // its presence means egress released and this reject is a stray veto.
-    try {
-      const settled = await stream.waitForEvent({
-        afterOffset: offset,
-        eventTypes: [EVENT.settled],
-        predicate: forThisRequest,
-        timeoutMs: 5_000,
-      });
-      return settledOutcome(settled);
-    } catch {
-      return { kind: "rejected", reason: (event.payload as { reason?: string }).reason ?? "human" };
-    }
+    // A rejection: authoritative only if no grant won. Re-scan for a `settled`
+    // (already committed, or landing before the window closes — the winning
+    // grant's upstream fetch can be slow); its presence means egress released
+    // and this reject is a stray veto.
+    const settled = await waitWithin([EVENT.settled], windowMs);
+    return settled === null
+      ? { kind: "rejected", reason: (event.payload as { reason?: string }).reason ?? "human" }
+      : settledOutcome(settled);
   } catch {
     return { kind: "unsettled" };
   }
