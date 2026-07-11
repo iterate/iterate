@@ -55,6 +55,19 @@ export const StreamEventInput = z.object({
     })
     .optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
+  /**
+   * Ephemeral events are second-class rows: committed and offset-ordered like
+   * any event, but EXCLUDED from range reads unless explicitly requested
+   * (`includeEphemeral: true`; point reads by offset or idempotency key
+   * always return them) and never delivered to the durable subscription
+   * lanes (wake/push/webhook) — so subscription-fed processors cannot fold
+   * them or side-effect on them. Ephemeral subscriptions (`subscribe()`)
+   * receive them, live and on replay. The stream may EVICT their rows in the
+   * future (memory pressure, DO startup sweeps), so nothing durable may ever
+   * depend on one: use them for transient signals whose durable truth lands
+   * separately — LLM streaming chunks superseded by `output-added`.
+   */
+  ephemeral: z.literal(true).optional(),
 });
 
 // A committed event is an append input plus the fields the stream assigns at
@@ -81,11 +94,16 @@ export const StreamListItem = z.object({
 // inferred, not hand-maintained (types.ts re-exports them for older importers).
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. */
+ * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * second-class row: excluded from range reads unless `includeEphemeral`,
+ * never delivered to durable subscribers (wake/push/webhook), and evictable —
+ * for transient signals (LLM streaming chunks) whose durable truth lands as
+ * its own event. */
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 /** One committed event on a durable stream: type, JSON payload, offset,
  * idempotency key, and provenance (processor stamp / cross-post chain), plus
- * the commit-time `createdAt` and stream `path`. */
+ * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
+ * second-class row (see `StreamEventInput`). */
 export type StreamEvent = z.infer<typeof StreamEvent>;
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */

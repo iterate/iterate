@@ -715,8 +715,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         })),
         model,
         onChunk: async (chunk, index) => {
+          // Ephemeral: the durable truth is the output-added /
+          // llm-request-completed pair below.
           await this.append({
             type: "events.iterate.com/agent/llm-response-chunk",
+            ephemeral: true,
             idempotencyKey: this.idempotencyKey(`llm-response-chunk@${llmRequestOffset}:${index}`),
             payload: { chunk: jsonCompatible(chunk), llmRequestOffset, sequence: index },
           });

@@ -491,7 +491,15 @@ export class StreamSubscribers {
           const lastOffset = events.at(-1)?.offset;
           if (lastOffset === undefined) return; // caught up
 
-          const { matched, conditionErrors } = this.#applySelector(subscriptionKey, config, events);
+          // Ephemeral events never reach durable receivers — platform law,
+          // enforced as the same skip-not-defer shape selectors use: the raw
+          // read advances the cursor over their offsets, delivery drops them.
+          const durable = events.filter((event) => event.ephemeral !== true);
+          const { matched, conditionErrors } = this.#applySelector(
+            subscriptionKey,
+            config,
+            durable,
+          );
           for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 
           if (matched.length === 0) {
@@ -873,10 +881,19 @@ export class StreamSubscribers {
               if (!initialBatchPending) return;
             } else {
               cursor = lastOffset;
+              // Configured (wake) connections are a durable lane: ephemeral
+              // events are dropped from delivery (the cursor above already
+              // advanced over them), so hosted processors structurally never
+              // see one. Ephemeral subscriptions receive them, live and on
+              // replay.
+              const visible =
+                subscriptionType === "configured"
+                  ? readEvents.filter((event) => event.ephemeral !== true)
+                  : readEvents;
               events =
                 args.selector === undefined
-                  ? readEvents
-                  : readEvents.filter((event) => selectorMatchesSafely(args.selector!, event));
+                  ? visible
+                  : visible.filter((event) => selectorMatchesSafely(args.selector!, event));
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {

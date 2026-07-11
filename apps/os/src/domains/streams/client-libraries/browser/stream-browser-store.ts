@@ -790,8 +790,8 @@ function createStreamRuntime(
 
   // Browsers are an inbound (fire-and-forget) subscriber: the server advances its delivery
   // cursor regardless of whether our ingest succeeded and never closes the connection on an
-  // ingest error. So if applying a batch throws (a transient OPFS/SQLite error, or the
-  // continuity RAISE(ABORT) in browser-raw-events), we must self-heal — otherwise the mirror
+  // ingest error. So if applying a batch throws (a transient OPFS/SQLite error, or a
+  // RAISE(ABORT) from the mirror trigger: replay conflict / out-of-order insert), we must self-heal — otherwise the mirror
   // silently desyncs forever. We resubscribe from the last successfully-applied checkpoint
   // (the next election re-reads the processor's persisted offset into `replayAfterOffset`,
   // so the server replays from there), with bounded exponential backoff so repeated failures

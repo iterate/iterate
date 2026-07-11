@@ -117,10 +117,40 @@ webhook is the same cursor machinery pointed at plain HTTP:
 | replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
 | filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
 
+### Ephemeral events
+
+`append({ ..., ephemeral: true })` commits a SECOND-CLASS event: an ordinary
+offset-ordered row (same commit turn, same idempotency dedup, same circuit
+breaker, same pause door), with two deliberate demotions:
+
+- **Excluded from reads by default.** Range reads (`getEvents`, `readEvents`,
+  processor catch-up) skip ephemeral rows unless the caller passes
+  `includeEphemeral: true`. Point reads by offset or idempotencyKey — an
+  explicit request — always return them.
+- **Never delivered to durable subscribers.** The wake/push/webhook lanes
+  drop ephemeral events from delivery exactly the way selectors already skip
+  non-matching events (skip-not-defer: cursors advance over their offsets),
+  so subscription-fed processors never fold or side-effect on one. Ephemeral
+  `subscribe()` connections receive them, live and on replay.
+
+The demotions are a license the stream keeps: because nothing durable can
+depend on an ephemeral row, a future sweep may EVICT them (memory pressure,
+DO-startup cleanup), leaving permanent offset gaps that every read path —
+including the browser mirror — already tolerates. Two constraints on that
+future sweep are pre-paid here: the offset allocator survives head-row
+eviction (`highestAssignedOffset()` reads AUTOINCREMENT's `sqlite_sequence`,
+which row deletion does not reset — reissuing a seen offset would wedge every
+offset-keyed consumer), and eviction forgets idempotency keys (a swept key
+dedupes nothing on re-append). Use ephemeral events for transient signals
+whose durable truth lands separately: the canonical case is LLM streaming
+chunks (`agent/llm-response-chunk`), superseded by the durable
+`output-added`. `stream/*` control facts cannot be ephemeral — config,
+presence, and park state may never be forgotten.
+
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
-rides this). Ephemeral batch results are disposed **unpulled**, so those
-subscriptions generate zero subscriber-originated return frames (a
+rides this). Batch results on the ephemeral lane are disposed **unpulled**, so
+those subscriptions generate zero subscriber-originated return frames (a
 `ReadableStream` could never do this: its per-chunk acks ARE its flow
 control — see the `FlowController` in
 [capnweb](https://github.com/cloudflare/capnweb)); durable batch results are

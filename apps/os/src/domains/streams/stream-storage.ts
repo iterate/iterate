@@ -42,13 +42,25 @@ export class StreamEventLog {
     this.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
+      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
+      -- the stream may evict them in the future. Eviction keeps offsets consumed
+      -- (highestAssignedOffset reads AUTOINCREMENT's sqlite_sequence, which survives
+      -- row deletion) but forgets their idempotency keys.
       create table if not exists events (
         offset integer primary key autoincrement,
         type text not null,
         created_at text not null,
-        idempotency_key text unique
+        idempotency_key text unique,
+        ephemeral integer not null default 0
       )
     `);
+    // Live streams predate the ephemeral column; adopt their table in place.
+    // Synchronous and cheap (one pragma per constructor), same posture as the
+    // create-if-not-exists DDL above.
+    const eventColumns = this.sql.exec<{ name: string }>("pragma table_info(events)").toArray();
+    if (!eventColumns.some((column) => column.name === "ephemeral")) {
+      this.sql.exec("alter table events add column ephemeral integer not null default 0");
+    }
     this.sql.exec(`
       -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
       -- primary key is the lookup index used by point reads and range replay.
@@ -71,6 +83,22 @@ export class StreamEventLog {
   }
 
   /**
+   * The highest offset ever INSERTED, even if its row was since deleted —
+   * AUTOINCREMENT's sqlite_sequence row is updated by every insert (explicit
+   * offsets included) and survives row deletion. This is the offset
+   * allocator's recovery floor: a future ephemeral-row eviction sweep may
+   * delete the highest row, and reseeding the allocator from max(offset)
+   * would then reissue offsets that live subscribers already saw.
+   */
+  highestAssignedOffset(): number {
+    const sequence =
+      this.sql
+        .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
+        .toArray()[0]?.seq ?? 0;
+    return Math.max(this.highestOffset(), sequence);
+  }
+
+  /**
    * Returns each event's serialized byte length (the exact bytes written to
    * `event_chunks`), so the commit path can hand delivery fan-out a sized
    * fresh tail without anyone re-stringifying what was just serialized here.
@@ -79,11 +107,12 @@ export class StreamEventLog {
     const byteLengths: number[] = [];
     for (const event of events) {
       this.sql.exec(
-        "insert into events (offset, type, created_at, idempotency_key) values (?, ?, ?, ?)",
+        "insert into events (offset, type, created_at, idempotency_key, ephemeral) values (?, ?, ?, ?, ?)",
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
+        event.ephemeral === true ? 1 : 0,
       );
       const rawJsonBytes = textEncoder.encode(JSON.stringify(event));
       byteLengths.push(rawJsonBytes.byteLength);
@@ -121,6 +150,8 @@ export class StreamEventLog {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
+    /** Include ephemeral rows. Default false — ephemeral is opt-in on every range read. */
+    includeEphemeral?: boolean;
   }): StreamEvent[] {
     return this.getRangeSized(args).map((sized) => sized.event);
   }
@@ -135,12 +166,14 @@ export class StreamEventLog {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
+    includeEphemeral?: boolean;
   }): SizedStreamEvent[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
     const eventTypeClause =
       eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
+    const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.sql
@@ -152,6 +185,7 @@ export class StreamEventLog {
             from events
             where offset > ?
               and offset < ?
+              ${ephemeralClause}
               ${eventTypeClause}
             order by offset asc
             limit ?

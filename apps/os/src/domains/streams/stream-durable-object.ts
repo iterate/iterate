@@ -89,6 +89,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           afterOffset: args.afterOffset,
           beforeOffset: Number.MAX_SAFE_INTEGER,
           limit: args.limit,
+          // RAW, ephemeral included: the spine's cursors advance over every
+          // offset (skip-not-defer, like selector-filtered events), and the
+          // ephemeral lane delivers them; the durable lanes filter them from
+          // DELIVERY in stream-subscribers.ts.
+          includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
@@ -320,13 +325,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#log.getByOffset(args.offset);
   }
 
-  /** Synchronous committed-event range read. Keep await-free (see getEvent). */
+  /**
+   * Synchronous committed-event range read. Keep await-free (see getEvent).
+   * Ephemeral rows are excluded unless `includeEphemeral` — the second-class
+   * contract: nothing reads them by accident, so the stream stays free to
+   * evict them later.
+   */
   getEvents(
     args: {
       afterOffset?: number;
       beforeOffset?: number | null;
       eventTypes?: readonly string[];
       limit?: number;
+      includeEphemeral?: boolean;
     } = {},
   ): StreamEvent[] {
     const limit = args.limit;
@@ -341,6 +352,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
+      includeEphemeral: args.includeEphemeral,
     });
   }
 
@@ -362,6 +374,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    * stream itself can reject an append based on core state.
    */
   #validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
+    if (args.event.ephemeral && args.event.type.startsWith("events.iterate.com/stream/")) {
+      // Control facts fold into config/presence/park state and may never be
+      // evicted; an ephemeral one would be a fact the stream is licensed to
+      // forget.
+      throw new Error("stream control events cannot be ephemeral");
+    }
+
     // Control facts must be first-hand: a copied (cross-posted) stream/*
     // control event is stored and visible but must never fold or validate as
     // config — otherwise a cross-post subscription matching stream/* would
@@ -959,6 +978,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         afterOffset: next.maxOffset,
         beforeOffset: highestOffset + 1,
         limit: 500,
+        // Ephemeral rows folded on append (counters + circuit breaker), so a
+        // rebuild must re-fold them for the same state.
+        includeEphemeral: true,
       });
       if (page.length === 0) break;
       for (const event of page) {
@@ -966,6 +988,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         next = this.#reduce({ event, state: next }, "replay");
       }
     }
+    // The fold recovers maxOffset from surviving rows; the assigned floor
+    // covers rows a future ephemeral eviction sweep deleted. Without it a
+    // rebuild after head-row eviction would reissue offsets that live
+    // subscribers already saw (the browser mirror hard-ABORTs on a reused
+    // offset carrying different JSON).
+    const assignedFloor = this.#log.highestAssignedOffset();
+    if (assignedFloor > next.maxOffset) next = { ...next, maxOffset: assignedFloor };
     return next;
   }
 
@@ -1067,6 +1096,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   /**
    * One-shot convenience over `subscribe()`: replay from the requested cursor,
    * then live-tail until a caller predicate accepts an event.
+   *
+   * Rides an ephemeral subscription, so it CAN match ephemeral events —
+   * remember their rows may be evicted later if you record the offset.
    *
    * Intentionally not a durable waiter. If the RPC caller or this DO
    * incarnation dies, the wait dies too; callers that need retry semantics
