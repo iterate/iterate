@@ -595,12 +595,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   /**
-   * The pre-execution typecheck gate: a script whose OWN code provably
-   * mis-calls a typed surface settles as an error completion without running
-   * — the model reads compiler errors instead of paying a failed run.
-   * Permissive everywhere the checker lacks knowledge (unknown types,
-   * unchecked verdicts, checker failures): the gate may only ever block on
-   * proof. Returns the completion error, or null to proceed.
+   * The pre-execution typecheck gate: a script whose OWN code carries a
+   * provable error (a syntax error, a near-miss typo the compiler can name
+   * the fix for) settles as an error completion without running — the model
+   * reads compiler errors instead of paying a failed run. Permissive
+   * everywhere the checker lacks knowledge (unknown types, unchecked
+   * verdicts, checker failures): the gate may only ever block on proof.
+   * Returns the completion error, or null to proceed.
    */
   async #typecheckRejection(code: string, records: CapabilityRecord[]): Promise<string | null> {
     const typecheckScript = this.#typecheckScript;

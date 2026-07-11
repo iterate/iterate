@@ -367,11 +367,12 @@ test("execution gate: a wrong call into the typed surface blocks with the caller
   expect(problems[0]).toContain("Did you mean 'get'");
 });
 
-test("execution gate: a typo'd typed-mount call blocks; anything on an untyped mount runs", async () => {
-  const typo = await gate("async (itx) => itx.tools.weather.forecast({ city: 42 })", [
+test("execution gate: a near-miss typo on a typed mount blocks; anything else on mounts runs", async () => {
+  const typo = await gate("async (itx) => itx.tools.weather.forecastt({ city: 'Berlin' })", [
     WEATHER_MOUNT,
   ]);
   expect(typo.verdict).toBe("problems");
+  expect((typo as { problems: string[] }).problems[0]).toContain("Did you mean 'forecast'");
 
   const untyped = await gate("async (itx) => itx.legacy.whatever(1, { deep: true })", [
     { path: ["legacy"], type: "live" },
@@ -379,10 +380,38 @@ test("execution gate: a typo'd typed-mount call blocks; anything on an untyped m
   expect(untyped).toEqual({ verdict: "clean" });
 });
 
-test("execution gate: calling a capability that does not exist at all blocks", async () => {
-  const checked = await gate("async (itx) => itx.nonexistent.doThing()");
-  expect(checked.verdict).toBe("problems");
-  expect((checked as { problems: string[] }).problems[0]).toContain("nonexistent");
+test("execution gate: only NEAR-MISS proof blocks — bare mismatches are unprovable and run", async () => {
+  // The declared surface lags the runtime in places (preview e2e:
+  // CloudflareSandbox.exec exists at runtime but not in types, handle results
+  // declared {}), so property/argument mismatches without a did-you-mean must
+  // never block. These all failed loudly in preview until this policy.
+  for (const code of [
+    // A capability nobody declared — journal-legal via dynamic provides.
+    "async (itx) => itx.nonexistent.doThing()",
+    // Wrong argument type into the platform surface — types may lag runtime.
+    "async (itx) => itx.docs.search(42)",
+    // Wrong argument shape into a typed mount.
+    "async (itx) => itx.tools.weather.forecast({ city: 42 })",
+  ]) {
+    const checked = await gate(code, [WEATHER_MOUNT]);
+    expect(checked, code).toEqual({ verdict: "clean" });
+  }
+});
+
+test("execution gate: provide-then-use in one script stays green (dynamic mounts are invisible to a static check)", async () => {
+  // The canonical catalogue example shape that preview e2e runs: mount a
+  // capability, then call it through the itx proxy two lines later.
+  const checked = await gate(
+    `async (itx) => {
+      await itx.capabilityHost.provideCapability({
+        type: "itx-expression",
+        path: ["demoStream"],
+        expression: ["streams", ["get", "/"]],
+      });
+      return await itx.demoStream.getEvents({ afterOffset: 0, limit: 10 });
+    }`,
+  );
+  expect(checked).toEqual({ verdict: "clean" });
 });
 
 test("execution gate: a stale BROKEN mount never vetoes a script that doesn't deserve it", async () => {
@@ -517,14 +546,15 @@ test("execution gate: runtime idioms that execute fine stay green", async () => 
   }
 });
 
-test("execution gate: genuine script bugs the run would only surface at runtime DO block", async () => {
+test("execution gate: provable script bugs the run would only surface at runtime DO block", async () => {
   const buggy = [
-    // Misspelled local — TS2552/2304 in the script's own code.
+    // Misspelled local with a near-miss — TS2552 names the fix.
     "async (itx) => { const count = 1; return cuont + 1; }",
-    // Wrong argument type into the platform surface.
-    "async (itx) => itx.docs.search(42)",
-    // Syntax error.
+    // Misspelled platform member with a near-miss — TS2551 names the fix.
+    "async (itx) => itx.streams.gett('/')",
+    // Syntax errors — the runtime's loader would reject these anyway.
     "async (itx) => { const = 1; }",
+    "async (itx) => { return JSON.parse('{'; }",
   ];
   for (const code of buggy) {
     const checked = await gate(code);

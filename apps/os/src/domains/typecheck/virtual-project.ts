@@ -70,8 +70,8 @@ ${[
   "AbortController",
   "AbortSignal",
   // nodejs_compat globals — dynamic workers run with the flag, so scripts
-  // legitimately reach these; unshimmed they would fail the EXECUTION gate
-  // (checkItxScriptForExecution) for code that runs fine.
+  // legitimately reach these; unshimmed, code that runs fine reports errors
+  // to every reader (the docs door, the execution gate's near-miss check).
   "Buffer",
   "Event",
   "EventTarget",
@@ -275,25 +275,39 @@ export type ScriptExecutionCheck =
  * acquisition; past it the script runs unchecked rather than stall. */
 const EXECUTION_CHECK_DEADLINE_MS = 10_000;
 
-/** Unresolved-module diagnostics never block execution: "Cannot find module"
- * conflates a typo'd specifier with a failed/absent type acquisition, and the
- * runtime's own loader error is the truthful verdict for the former. */
-const UNRESOLVED_MODULE_CODES = new Set([
-  2307, // Cannot find module 'X'
-  2792, // Cannot find module 'X'. Did you mean to set moduleResolution…
-  7016, // Could not find a declaration file for module 'X'
+/**
+ * What the gate may block on — an ALLOWLIST, because blocking is only sound
+ * for errors that hold regardless of how complete the declared type surface
+ * is. Near-miss typos qualify: the compiler PROVED a correct alternative
+ * exists ("Did you mean 'get'?"). Bare "does not exist" / wrong-argument
+ * errors do not: capabilities are provided dynamically (a script may mount
+ * `itx.demoStream` and call it two lines later — journal-legal, invisible to
+ * a static check), and the declared surface demonstrably lags the runtime in
+ * places (preview e2e: `CloudflareSandbox.exec` exists at runtime but not in
+ * types, handle results declared `{}`). The advisory door (checkItxScript)
+ * still reports everything.
+ */
+const NEAR_MISS_TYPO_CODES = new Set([
+  2551, // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
+  2552, // Cannot find name 'X'. Did you mean 'Y'?
 ]);
+
+/** TS grammar diagnostics live in the 1xxx range. Unparseable code is the one
+ * verdict that needs no type knowledge at all — the runtime's module loader
+ * would reject the same script with a worse message. */
+const isSyntaxError = (code: number) => code >= 1000 && code < 2000;
 
 /**
  * The pre-execution typecheck for a `script-execution-requested` block:
  * everything checkItxScript checks, read through the permissive-by-default
  * policy above. Blocking requires an error diagnostic in the script's OWN
- * code (`script.ts`) that is not an unresolved module. Everything the checker
- * cannot vouch for runs unchecked instead: shapes the agent extractor never
- * produces (raw runScript callers send plain function expressions), oversized
- * scripts, broken mount declarations (stale journals must not veto unrelated
- * scripts), compiler crashes, an unreachable typechecker, and the deadline.
- * Never throws.
+ * code (`script.ts`) from the allowlist: a syntax error or a near-miss typo.
+ * Everything the checker cannot vouch for runs instead — property/argument
+ * mismatches (dynamic mounts and surface gaps make them unprovable), shapes
+ * the agent extractor never produces (raw runScript callers send plain
+ * function expressions), oversized scripts, broken mount declarations (stale
+ * journals must not veto unrelated scripts), compiler crashes, an unreachable
+ * typechecker, and the deadline. Never throws.
  */
 export async function checkItxScriptForExecution(input: {
   capabilities: CapabilityDescription[];
@@ -332,7 +346,7 @@ export async function checkItxScriptForExecution(input: {
     (diagnostic) =>
       diagnostic.category === "error" &&
       diagnostic.fileName === "script.ts" &&
-      !UNRESOLVED_MODULE_CODES.has(diagnostic.code),
+      (isSyntaxError(diagnostic.code) || NEAR_MISS_TYPO_CODES.has(diagnostic.code)),
   );
   if (blocking.length === 0) return { verdict: "clean" };
   const problems = formatProblems(blocking, {
