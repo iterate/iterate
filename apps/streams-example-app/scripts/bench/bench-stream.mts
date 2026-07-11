@@ -51,13 +51,11 @@ function makePayload(bytes: number, index: number) {
   return { index, sentAt: Date.now(), pad: "x".repeat(Math.max(0, bytes)) };
 }
 
-type CoreState = { coreProcessorState: { maxOffset: number } };
-
 const connection = withStreamConnectionFromNode({ url });
 const stream = connection.stream;
 
 async function maxOffset(): Promise<number> {
-  const state = (await stream.runtimeState()) as CoreState;
+  const state = (await stream.runtimeState()) as { coreProcessorState: { maxOffset: number } };
   return state.coreProcessorState.maxOffset;
 }
 

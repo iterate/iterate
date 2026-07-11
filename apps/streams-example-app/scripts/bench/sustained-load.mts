@@ -21,8 +21,6 @@ const url = `${wsBase}?path=${encodeURIComponent(path)}&projectId=default${
   token ? `&access_token=${token}` : ""
 }`;
 
-type CoreState = { coreProcessorState: { maxOffset: number } };
-
 const connection = withStreamConnectionFromNode({ url });
 const stream = connection.stream;
 await stream.runtimeState();
@@ -36,7 +34,9 @@ const t0 = Date.now();
 const sampler = setInterval(() => {
   void (async () => {
     try {
-      const state = (await stream.runtimeState()) as CoreState;
+      const state = (await stream.runtimeState()) as {
+        coreProcessorState: { maxOffset: number };
+      };
       timeline.push({ t: Date.now(), maxOffset: state.coreProcessorState.maxOffset });
     } catch {
       // A dropped sample is fine; the load half keeps its own failure count.
