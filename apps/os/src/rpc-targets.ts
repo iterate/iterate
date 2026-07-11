@@ -47,6 +47,7 @@ import {
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
+import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
@@ -1165,13 +1166,41 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * (projectId, path), so appending them twice — or racing a redelivery — is
    * a no-op.
    */
-  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+  async forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy> {
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
       projectId: this.props.projectId,
+      ...(await agentBootProjectFacts(this.props.projectId)),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
+}
+
+/**
+ * Human-facing project facts for an agent's boot context, best-effort from
+ * the project directory: name, slug, and the served worker URL (via the
+ * canonical builder, so loopback bases keep their scheme/port and wildcard
+ * bases normalize). Absent (id-only boot line) when the directory has no
+ * record yet — never a birth blocker.
+ */
+async function agentBootProjectFacts(
+  projectId: string,
+): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
+  const record = await readProjectById(env.PROJECT_DIRECTORY, projectId).catch(() => null);
+  if (record === null) return {};
+  const config = parseConfig(env);
+  const workerUrl = buildProjectWorkerUrl({
+    projectSlug: record.slug,
+    projectHostnameBases: config.projectHostnameBases,
+    ...(config.baseUrl === undefined ? {} : { appBaseUrl: config.baseUrl }),
+  });
+  return {
+    project: {
+      name: record.name,
+      slug: record.slug,
+      ...(workerUrl === null ? {} : { workerUrl }),
+    },
+  };
 }
 
 /**
@@ -3127,6 +3156,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const defaults = agentDefaultsForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
+      ...(await agentBootProjectFacts(this.#props.projectId)),
       overrides: input,
     });
     // The defaults batch (fixed keys) establishes policy on a fresh agent and

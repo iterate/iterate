@@ -215,6 +215,11 @@ export async function cloudflareAiGatewayResponseCacheKey(body: unknown): Promis
 export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string): string {
   return serialized
     .replace(/prj_[0-9a-f]{32}/g, "prj_MASKED")
+    .replace(/Current date and time \(UTC\): [^"\\]*/g, "Current date and time (UTC): MASKED")
+    .replace(
+      /- Project: \\"(?:[^"\\]|\\.)*?\\" \(slug [^)]*\)(?: — the project worker\/website serves [^"\\]*)?/g,
+      "- Project: MASKED",
+    )
     .replace(/\/agents\/[A-Za-z0-9._/-]*/g, "/agents/MASKED")
     .replace(/([?&](?:signature|sig|expires|exp|token|key)=)[^"&\\\s]+/gi, "$1MASKED")
     .replace(/"prompt_cache_key":"[^"]*"/g, '"prompt_cache_key":"MASKED"');

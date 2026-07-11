@@ -1156,7 +1156,7 @@ export interface AgentDefaults {
    * (projectId, path), so appending them twice — or racing a redelivery — is
    * a no-op.
    */
-  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy;
+  forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy>;
 }
 
 /** Disposable handle for one live project egress interception. */
