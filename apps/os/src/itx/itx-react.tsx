@@ -226,6 +226,15 @@ export function reconnectItx(address?: ItxAddress): void {
   const context = address?.projectId;
   const promise = sockets.get(context);
   if (!promise) return;
+  // Capture and unmap the transport BEFORE wake(): useSyncExternalStore's
+  // change handler synchronously re-reads getSnapshot → socketFor, which
+  // dials a fresh socket and OVERWRITES this context's socketTransports slot.
+  // Reading the slot after wake() closed that fresh successor at
+  // readyState=0 while the corpse — carrying every pending call — was never
+  // closed (prd-observed: composer sends stranded forever behind a spinner,
+  // one leaked socket per eviction, one wasted dial per eviction).
+  const ws = socketTransports.get(context);
+  if (ws !== undefined) socketTransports.delete(context);
   sockets.delete(context);
   wake();
   // CLOSE the transport, don't just unmap it: capnweb tears the session down
@@ -233,12 +242,8 @@ export function reconnectItx(address?: ItxAddress): void {
   // Unmapping alone leaves a ghost session that in-flight calls — a composer
   // send, a suspended query — hang on forever, and on a half-open socket the
   // OS may never deliver a close for us. The close listener's identity guards
-  // make this safe against the map already pointing at a successor.
-  const ws = socketTransports.get(context);
-  if (ws !== undefined) {
-    socketTransports.delete(context);
-    ws.close();
-  }
+  // make this safe regardless of what the map points at by now.
+  ws?.close();
   void promise.then((itx) => (itx as Partial<Disposable>)[Symbol.dispose]?.()).catch(() => {});
 }
 
