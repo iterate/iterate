@@ -45,6 +45,7 @@ npx iterate config list
 - `iterate login` - authenticate with browser-based OAuth
 - `iterate logout` - remove the stored session for the current config
 - `iterate approve` - be the human in the loop for a project's egress (see below)
+- `iterate use-my-computer` - lend this Mac to a project's agents (see below)
 - `iterate orgs list`
 - `iterate config ...`
 - `iterate os ...`
@@ -111,6 +112,24 @@ iterate os itx run --context <project-id> --eval '
 
 Inside an `iterate/iterate` clone the same runs as
 `doppler run --config <env> -- pnpm cli itx run --context <project-id> --eval '…'`.
+
+## Use my computer (`iterate use-my-computer`)
+
+Lend this Mac to a project's agents. It mounts a live capability at
+`itx.<name>` — agents call `ask` (native dialog), `notify` (desktop
+notification) and `runSwift` (arbitrary Swift), and the calls run **right here**
+on your machine, over the socket, as you. Runs until Ctrl-C.
+
+```bash
+iterate use-my-computer --project <id-or-slug>              # prompts for a name, prints a paste-for-your-agent hint
+iterate use-my-computer --project <id-or-slug> --name jonasComputer
+```
+
+It's also built into the **menu-bar app** (`iterate approve --menubar`): flip
+**Use my computer** on to share, and the dropdown shows each call as it happens —
+a green dot appears in the menu bar while an agent is actively using your Mac.
+Sharing is opt-in, stops when you flip it off or quit, and the toggle drives the
+same `iterate use-my-computer --json` under the hood.
 
 ### Testing a held request
 

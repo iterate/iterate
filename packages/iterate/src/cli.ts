@@ -22,7 +22,11 @@ import type {
   Session,
   Stream,
 } from "./itx-api.generated.ts";
-import { shareMyComputer } from "./use-my-computer.ts";
+import {
+  emitComputerNeedsLogin,
+  runUseMyComputerJson,
+  shareMyComputer,
+} from "./use-my-computer.ts";
 import { runApprovalCli } from "./approve.ts";
 import { emitNeedsLogin, runApprovalJson } from "./approve-json.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
@@ -1060,6 +1064,13 @@ const launcherProcedures = {
           .describe(
             "Name agents use to reach this computer (camelCase; the itx.<name> path). Prompted if omitted.",
           ),
+        json: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Machine mode for the menu-bar app: NDJSON activity on stdout. Never opens a browser — emits a needs-login line instead.",
+          ),
       }),
     )
     .meta({
@@ -1070,7 +1081,8 @@ const launcherProcedures = {
       const resolved = resolveConfig(process.cwd(), { throw: true });
 
       // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
-      // the stored `iterate login` session, kicking off a browser login if none.
+      // the stored `iterate login` session. In JSON mode we never open a
+      // browser — a missing session is reported so the app can drive login.
       const envAuth = osAuthFromEnvironment();
       let authHeaders: OsAuthHeaders | undefined;
       if (!envAuth) {
@@ -1078,6 +1090,10 @@ const launcherProcedures = {
           authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
         } catch (error) {
           if (!shouldAutoLoginForChat(error)) throw error;
+          if (input.json) {
+            emitComputerNeedsLogin();
+            return;
+          }
           console.error(
             `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
           );
@@ -1096,14 +1112,20 @@ const launcherProcedures = {
         explicitProject: input.project,
       });
 
-      // Prompts for a name, provides itx.<name>, then blocks until Ctrl-C.
-      await shareMyComputer({
+      const shared = {
         auth: auth.credentials,
         baseUrl: resolved.config.osBaseUrl,
         projectId,
         headers: headersRecord(auth.requestHeaders),
         name: input.name,
-      });
+      };
+      // JSON mode announces activity for the menu-bar app; the terminal form
+      // prompts for a name and prints a paste-for-your-agent hint. Both block.
+      if (input.json) {
+        await runUseMyComputerJson(shared);
+        return;
+      }
+      await shareMyComputer(shared);
     }),
 
   approve: os

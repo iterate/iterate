@@ -82,5 +82,8 @@ export async function launchMenubarApp(input: {
   const open = await run("open", [APP_PATH]);
   if (open.exitCode !== 0) throw new Error(`Could not launch the app: ${open.stderr.trim()}`);
   log(`Launched Iterate for project "${input.project}" (config ${input.configName}).`);
-  log("It lives in your menu bar — click the 𝑖 to sign in and approve requests.");
+  log(
+    "It lives in your menu bar — click the 𝑖 to sign in, approve requests, and " +
+      "share your computer with the project's agents.",
+  );
 }
