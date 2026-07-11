@@ -163,7 +163,7 @@ describe("worker builds", () => {
         await expect(
           // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
           project.worker.ocado.mum.noSuchMethod(),
-        ).rejects.toThrow(/"ocado.mum.noSuchMethod" is not a method on this project worker/);
+        ).rejects.toThrow(/"ocado.mum.noSuchMethod" is not a method on this worker/);
       } finally {
         await mock.close();
       }
