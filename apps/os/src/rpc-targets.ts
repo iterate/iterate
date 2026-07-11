@@ -194,6 +194,7 @@ import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
+import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
   CfBrowserQuickAction,
   CfBrowserQuickActionOptions,
@@ -1855,11 +1856,11 @@ class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Cloudflare Browser Run binding. Use quickAction(action, options) for simple browser tasks: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. Example: const resp = await itx.browser.quickAction("markdown", { url }); return await resp.json(). Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Quick Actions https://developers.cloudflare.com/browser-run/quick-actions/ ; Workers binding quickAction https://developers.cloudflare.com/changelog/post/2026-05-28-use-browser-run-quick-actions-directly-from-workers/ .',
+        'Cloudflare Browser Run binding. Use quickAction(action, options) for simple browser tasks: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. It returns the RESULT directly — const markdown = await itx.browser.quickAction("markdown", { url }) is a string; screenshot/pdf return bytes (Uint8Array) ready to attach to a chat message. Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Quick Actions https://developers.cloudflare.com/browser-run/quick-actions/ ; Workers binding quickAction https://developers.cloudflare.com/changelog/post/2026-05-28-use-browser-run-quick-actions-directly-from-workers/ .',
       children: {
         fetch: "Raw Browser Run binding fetch for CDP/library use.",
         quickAction:
-          'Run a Browser Run quick action: quickAction("markdown", { url }) or quickAction("screenshot", { url, screenshotOptions }).',
+          'Run a Browser Run quick action and get its result directly: quickAction("markdown", { url }) returns the markdown string; quickAction("screenshot", { url, screenshotOptions }) returns image bytes.',
       },
       parent: "a project itx (itx.browser / itx.integrations.cf.browser)",
     });
@@ -1870,16 +1871,26 @@ class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability
     return env.BROWSER.fetch(input, init);
   }
 
-  /** Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. */
-  quickAction(
+  /**
+   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,
+   * scrape, json, links, crawl. Returns the action's RESULT directly —
+   * `quickAction("markdown", { url })` is the markdown string, structured
+   * actions (links, json, scrape, …) are their parsed value, and binary
+   * actions (screenshot, pdf) are bytes — instead of the binding's raw
+   * Response, whose `{ success, result }` JSON envelope every caller was
+   * unwrapping by hand (and the agent prompt's one-call recipe promised not
+   * to need). A failed action throws with the envelope's error.
+   */
+  async quickAction(
     action: CfBrowserQuickAction,
     options: CfBrowserQuickActionOptions,
-  ): Promise<Response> {
-    return (
+  ): Promise<string | Uint8Array | unknown> {
+    const response = await (
       env.BROWSER as BrowserRun & {
         quickAction(action: string, options: Record<string, unknown>): Promise<Response>;
       }
     ).quickAction(action, options);
+    return unwrapBrowserRunQuickAction(action, response);
   }
 }
 

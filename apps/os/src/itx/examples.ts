@@ -1331,10 +1331,10 @@ return {
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
-const resp = await itx.browser.quickAction("markdown", {
+const markdown = await itx.browser.quickAction("markdown", {
   url: "https://developers.cloudflare.com/browser-run/quick-actions/",
 });
-return await resp.json();
+return markdown.slice(0, 4_000);
 `.trim(),
   },
   {
