@@ -73,11 +73,14 @@ const INSTRUCTIONS = `A real person's Mac, shared live from their terminal for a
 - notify({ message, title? }) shows a desktop notification.
 - runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.`;
 
-const TYPES = `{
+// A capability `types` string must be a valid TS declaration named `Capability`
+// (the egress/capability host typechecks it before mounting) — not a bare object
+// literal, which fails to compile and aborts the mount.
+const TYPES = `export type Capability = {
   ask(input: { question: string; buttons?: string[] }): Promise<{ answer: string }>;
   notify(input: { message: string; title?: string }): Promise<{ ok: true }>;
   runSwift(input: { code: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-}`;
+};`;
 
 /**
  * Ask what agents should call this computer, and mount the capability there —
