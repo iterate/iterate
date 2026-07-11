@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import UserNotifications
@@ -375,6 +376,19 @@ final class ComputerController: ObservableObject {
   private var stdoutHandle: FileHandle?
   private var buffer = Data()
   private var generation = 0  // bumped on every stop(); voids stale stdout chunks
+  private var cancellables = Set<AnyCancellable>()
+
+  private init() {
+    // If the app loses its session, stop sharing immediately — the mount is
+    // dead anyway, and otherwise the computer could stay lent while the toggle
+    // greys out with no way to revoke but quitting.
+    ApprovalController.shared.$loggedIn
+      .dropFirst()
+      .sink { [weak self] loggedIn in
+        if !loggedIn { self?.stop() }
+      }
+      .store(in: &cancellables)
+  }
 
   /// Turn sharing on or off — safe to drive straight from a Toggle binding.
   func setEnabled(_ on: Bool) {
@@ -554,7 +568,9 @@ struct DropdownView: View {
         Toggle("", isOn: Binding(get: { computer.enabled }, set: { computer.setEnabled($0) }))
           .labelsHidden()
           .toggleStyle(.switch)
-          .disabled(!controller.loggedIn)
+          // Need a session to START sharing, but never trap an ACTIVE share
+          // behind a greyed-out switch — always allow turning it off.
+          .disabled(!controller.loggedIn && !computer.enabled)
       }
       if computer.sharing {
         if computer.recentCalls.isEmpty {
