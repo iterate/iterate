@@ -1,14 +1,16 @@
 import { createPrivateKey, createSign, generateKeyPairSync } from "node:crypto";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import {
   buildApprovalMessage,
   bytesToBase64,
   canonicalJson,
   derSignatureToRaw,
+  EgressRule,
   evaluateGrant,
   matchEgressRule,
   verifyApprovalSignature,
-  type EgressRule,
   type HumanApprovalKey,
 } from "./egress-approvals.ts";
 
@@ -76,6 +78,30 @@ describe("matchEgressRule", () => {
     expect(matchEgressRule([both, fallback], request({ method: "GET" }))?.ruleKey).toBe("fallback");
     // A rule with an empty match object matches everything.
     expect(matchEgressRule([rule({ ruleKey: "all" })], request())?.ruleKey).toBe("all");
+  });
+
+  test("a rule that omits approvalTimeoutMs folds to a finite default, never NaN", () => {
+    // The egress door computes `deadline = Date.now() + rule.approvalTimeoutMs`.
+    // A rule reaches project state only through the reduce (which parses the
+    // event payload with `z.array(EgressRule)`) or checkpoint hydration (which
+    // re-parses the whole fold through the contract's stateSchema — the same
+    // `z.array(EgressRule)`). Both apply `.default(600_000)`, so a missing
+    // timeout is always filled. Were it ever left undefined the deadline would
+    // be NaN: the held fetch would hang forever and the post-deadline sweep
+    // would page resolution events without end.
+    const timeoutless = {
+      ruleKey: "stripe-writes",
+      verdict: "hold" as const,
+      match: { hosts: ["api.stripe.com"] },
+    };
+
+    // Reduce gate: the per-rule parse the event payloadSchema runs.
+    expect(z.array(EgressRule).parse([timeoutless])[0].approvalTimeoutMs).toBe(600_000);
+
+    // Checkpoint-hydration gate: the state schema re-parses the fold on load.
+    const state = ProjectProcessorContract.stateSchema.parse({ egressRules: [timeoutless] });
+    expect(state.egressRules[0].approvalTimeoutMs).toBe(600_000);
+    expect(Number.isFinite(Date.now() + state.egressRules[0].approvalTimeoutMs)).toBe(true);
   });
 
   test("an unparseable URL never throws, and only disables host/path matchers", () => {
