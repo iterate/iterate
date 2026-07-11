@@ -29,6 +29,7 @@ import {
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 import {
+  extractChunkText,
   jsonCompatible,
   normalizeLlmUsage,
   runWorkersAiAttempt,
@@ -82,6 +83,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   readonly #scheduledRequestTimers = new Map<string, { cancel: () => void }>();
   /** llmRequestOffsets with an execution alive in THIS incarnation. */
   readonly #liveLlmExecutions = new Set<number>();
+  /** Streamed assistant text so far by llmRequestOffset — what an interrupt
+   * hands back to the model as its "response so far". Incarnation-local best
+   * effort: an eviction loses it, and the crash-cancel path never had it. */
+  readonly #partialLlmResponseTexts = new Map<number, string>();
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
@@ -152,7 +157,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interruptedRequest = previousState.currentRequest;
         if (interruptedRequest === null) return;
-        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interruptedRequest)));
+        blockProcessorWhile(() =>
+          append(...this.#cancelEventsForCurrentRequest(interruptedRequest)),
+        );
         return;
       }
       case "events.iterate.com/agents/web-message-sent": {
@@ -179,7 +186,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interrupted = previousState.currentRequest;
         if (interrupted === null) return;
-        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interrupted)));
+        blockProcessorWhile(() => append(...this.#cancelEventsForCurrentRequest(interrupted)));
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
@@ -644,22 +651,32 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     };
   }
 
-  #cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
+  /**
+   * The cancel for a user interrupt — plus, when this incarnation streamed
+   * any of the doomed attempt's text, a model-visible input carrying the
+   * response so far. Without it the next turn silently loses everything the
+   * user just watched stream; the model would repeat or contradict itself
+   * with no idea why. dont-trigger-request: the interrupting input is the
+   * trigger. Refold-safe: replays find an empty map and the cancel dedupes.
+   */
+  #cancelEventsForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
     if (request.phase === "scheduled") {
-      return {
-        type: "events.iterate.com/agent/llm-request-cancelled" as const,
-        idempotencyKey: this.idempotencyKey(
-          `llm-request-cancelled@scheduled:${request.scheduledOffset}`,
-        ),
-        payload: {
-          phase: "scheduled" as const,
-          reason: "interrupted-by-user-input" as const,
-          requestId: request.requestId,
+      return [
+        {
+          type: "events.iterate.com/agent/llm-request-cancelled" as const,
+          idempotencyKey: this.idempotencyKey(
+            `llm-request-cancelled@scheduled:${request.scheduledOffset}`,
+          ),
+          payload: {
+            phase: "scheduled" as const,
+            reason: "interrupted-by-user-input" as const,
+            requestId: request.requestId,
+          },
         },
-      };
+      ];
     }
 
-    return {
+    const cancelEvent = {
       type: "events.iterate.com/agent/llm-request-cancelled" as const,
       idempotencyKey: this.idempotencyKey(
         `llm-request-cancelled@requested:${request.llmRequestOffset}`,
@@ -670,6 +687,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         llmRequestOffset: request.llmRequestOffset,
       },
     };
+    const partialResponse = this.#partialLlmResponseTexts.get(request.llmRequestOffset);
+    if (partialResponse === undefined || partialResponse.trim() === "") return [cancelEvent];
+    return [
+      cancelEvent,
+      {
+        type: "events.iterate.com/agent/input-added" as const,
+        idempotencyKey: this.idempotencyKey(
+          `render-interrupted-partial@${request.llmRequestOffset}`,
+        ),
+        payload: {
+          content: `Your in-progress response was interrupted by the user input above and cancelled. It never completed, and no code block in it was executed. Your response so far:\n\n${partialResponse}`,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+        },
+      },
+    ];
   }
 
   /**
@@ -715,6 +747,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         })),
         model,
         onChunk: async (chunk, index) => {
+          // Accumulated text is what an interrupt hands back to the model as
+          // its "response so far" (#cancelEventsForCurrentRequest).
+          this.#partialLlmResponseTexts.set(
+            llmRequestOffset,
+            (this.#partialLlmResponseTexts.get(llmRequestOffset) ?? "") + extractChunkText(chunk),
+          );
           // Ephemeral: the durable truth is the output-added /
           // llm-request-completed pair below.
           await this.append({
@@ -788,6 +826,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           },
         },
       });
+    } finally {
+      // The attempt is settled; a cancel for it can no longer be appended
+      // (the completion or the cancel already cleared currentRequest), so the
+      // accumulated text has no remaining reader.
+      this.#partialLlmResponseTexts.delete(llmRequestOffset);
     }
   }
 
