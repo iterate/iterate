@@ -534,7 +534,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-response-chunk": {
       description:
-        "One streamed chunk received from the AI binding. Appended EPHEMERAL: it rides live subscriptions (browser feed, TUI) but is never persisted or replayed — the durable truth is the output-added / llm-request-completed pair. A retried attempt re-streams; llmRequestOffset + sequence identify chunks consumer-side.",
+        "One streamed chunk received from the AI binding. Appended EPHEMERAL: it reaches ephemeral subscriptions (browser feed, TUI) but is excluded from default reads, never delivered to durable subscribers, and evictable — the durable truth is the output-added / llm-request-completed pair.",
       payloadSchema: z.object({
         chunk: z.unknown(),
         llmRequestOffset: z.number().int().positive(),

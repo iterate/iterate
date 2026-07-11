@@ -73,10 +73,10 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             -- local_index is deliberately separate from offset. Today it is offset - 1,
             -- because server offsets are one-based and TanStack Virtual indexes are
             -- zero-based. Keeping a separate local list position gives us room to age
-            -- server events out later. It is NOT dense: ephemeral events consume
-            -- offsets without ever being persisted server-side, so a mirror that
-            -- replays from server storage has permanent gaps (consumers ORDER BY
-            -- local_index and paginate with LIMIT/OFFSET, which is gap-proof).
+            -- server events out later. It is NOT guaranteed dense: the server may
+            -- evict ephemeral rows (their offsets stay consumed), so replays can
+            -- carry permanent gaps (consumers ORDER BY local_index and paginate
+            -- with LIMIT/OFFSET, which is gap-proof).
             CREATE TABLE IF NOT EXISTS events (
               local_index INTEGER PRIMARY KEY,
               raw_jsonb BLOB NOT NULL,
@@ -101,9 +101,9 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             --    "first stored locally".
             -- 2. Same offset with different JSON is a conflicting duplicate.
             -- 3. New rows must append in increasing offset order. Gaps are legal:
-            --    ephemeral events consume offsets but are never replayed from server
-            --    storage, so a strict-continuity check would wedge every reload of a
-            --    stream that streamed chunks.
+            --    the server may evict ephemeral rows (offsets stay consumed), so a
+            --    strict-continuity check would wedge every replay of a stream whose
+            --    chunks were swept.
             CREATE TRIGGER IF NOT EXISTS events_before_insert
             BEFORE INSERT ON events
             BEGIN

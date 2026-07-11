@@ -15,7 +15,6 @@ import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
-  sizeEvent,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
 } from "./stream-storage.ts";
@@ -90,6 +89,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           afterOffset: args.afterOffset,
           beforeOffset: Number.MAX_SAFE_INTEGER,
           limit: args.limit,
+          // RAW, ephemeral included: the spine's cursors advance over every
+          // offset (skip-not-defer, like selector-filtered events), and the
+          // ephemeral lane delivers them; the durable lanes filter them from
+          // DELIVERY in stream-subscribers.ts.
+          includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
@@ -215,14 +219,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
     let workingState = this.#coreProcessorState;
-    // The durable head before this batch: the gap-aware contiguity floor the
-    // delivery spine needs to keep its fresh-tail fast path exact (offsets in
-    // (durableAfterOffset, first durable offset] hold only ephemeral events
-    // storage never had).
-    const durableAfterOffset = workingState.maxDurableOffset;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
-    const ephemeralEvents: StreamEvent[] = [];
     const reducedEvents: ReducedCoreEvent[] = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
 
@@ -235,21 +233,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       // it attached made every asserted append of a core policy event fail with
       // a spurious "Unrecognized key: offset" instead of performing the assertion.
       const { offset: expectedOffset, ...body } = StreamAppendInput.parse(eventInput);
-
-      if (body.ephemeral) {
-        if (body.idempotencyKey !== undefined) {
-          // Dedup is implemented as the durable log's unique constraint; an
-          // idempotency key on an event that leaves no row is a promise the
-          // stream cannot keep (a restart forgets it). Reject loudly instead
-          // of granting fake at-most-once semantics.
-          throw new Error("ephemeral events cannot carry an idempotencyKey");
-        }
-        if (body.type.startsWith("events.iterate.com/stream/")) {
-          // Control facts fold into config/presence/park state that must
-          // survive restarts and replay.
-          throw new Error("stream control events cannot be ephemeral");
-        }
-      }
 
       if (body.idempotencyKey !== undefined) {
         // Same-batch idempotency should behave like already-persisted idempotency.
@@ -278,37 +261,21 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       const previousState = workingState;
-      // Ephemeral events skip the core fold: they advance the allocator and
-      // charge the circuit breaker (a runaway chunk producer must still trip
-      // it), but never touch eventCount / maxDurableOffset / config state.
-      // They cannot be stream/* types (rejected above), so the fold they skip
-      // would have hit the default arm anyway.
-      workingState = committed.ephemeral
-        ? this.#reduceCircuitBreaker({
-            event: committed,
-            state: { ...previousState, maxOffset: committed.offset },
-          })
-        : this.#reduce({ event: committed, state: previousState }, "append");
+      workingState = this.#reduce({ event: committed, state: previousState }, "append");
 
       // Core side effects are deferred until after the commit below: they can
       // call back into stream runtime state, so running them mid-batch would
-      // observe stale `this.#coreProcessorState`. Ephemeral events join the
-      // list for exactly one effect — the breaker-trip pause; the switch in
-      // #processEvent only acts on stream/* types, which they can never be.
+      // observe stale `this.#coreProcessorState`.
       reducedEvents.push({ event: committed, previousState, state: workingState });
 
       events.push(committed);
-      if (committed.ephemeral) {
-        ephemeralEvents.push(committed);
-      } else {
-        newEvents.push(committed);
-      }
+      newEvents.push(committed);
       if (committed.idempotencyKey !== undefined) {
         idempotencyHitsInBatch.set(committed.idempotencyKey, committed);
       }
     }
 
-    if (newEvents.length === 0 && ephemeralEvents.length === 0) return events;
+    if (newEvents.length === 0) return events;
 
     // 2. Persist event rows and reduced core state. Durable Object SQL storage
     // runs synchronously in the object's thread; each sql.exec() is atomic and
@@ -321,15 +288,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // boot catch-up folds past a lagging checkpoint by design.
     const byteLengths = this.#log.insert(newEvents);
     this.#coreProcessorState = workingState;
-    this.#checkpointCoreProcessorState(newEvents.length + ephemeralEvents.length);
-    if (ephemeralEvents.length > 0) {
-      // Ephemeral offsets leave no rows, so without this the allocator's
-      // position would be unrecoverable after a crash inside the checkpoint
-      // debounce window (or a version rebuild) — and a reissued offset breaks
-      // every offset-keyed consumer. One integer under the same output gate
-      // as the event rows; `reset()`'s deleteAll wipes it with everything.
-      this.ctx.storage.kv.put("maxOffsetFloor", workingState.maxOffset);
-    }
+    this.#checkpointCoreProcessorState(newEvents.length);
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -341,20 +300,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     // just-committed events (sized by the log write) so caught-up consumers
     // skip the per-lane SQLite re-read.
     for (const reduced of reducedEvents) this.#processEvent(reduced);
-    const durableTail = newEvents.map((event, index) => ({
-      event,
-      byteLength: byteLengths[index]!,
-    }));
-    // The live tail carries the whole batch (durable + ephemeral, offset
-    // order) for ephemeral subscriptions; the durable tail is exactly what a
-    // storage read-back would return, for the spine's lanes.
-    const liveTail =
-      ephemeralEvents.length === 0
-        ? durableTail
-        : [...durableTail, ...ephemeralEvents.map(sizeEvent)].sort(
-            (a, b) => a.event.offset - b.event.offset,
-          );
-    this.#subscribers.wake({ durable: durableTail, durableAfterOffset, live: liveTail });
+    this.#subscribers.wake(
+      newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
+    );
 
     // Re-arm (or clear) the idle timer against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
@@ -377,13 +325,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#log.getByOffset(args.offset);
   }
 
-  /** Synchronous committed-event range read. Keep await-free (see getEvent). */
+  /**
+   * Synchronous committed-event range read. Keep await-free (see getEvent).
+   * Ephemeral rows are excluded unless `includeEphemeral` — the second-class
+   * contract: nothing reads them by accident, so the stream stays free to
+   * evict them later.
+   */
   getEvents(
     args: {
       afterOffset?: number;
       beforeOffset?: number | null;
       eventTypes?: readonly string[];
       limit?: number;
+      includeEphemeral?: boolean;
     } = {},
   ): StreamEvent[] {
     const limit = args.limit;
@@ -398,6 +352,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
+      includeEphemeral: args.includeEphemeral,
     });
   }
 
@@ -419,6 +374,13 @@ export class StreamDurableObject extends DurableObject<Env> {
    * stream itself can reject an append based on core state.
    */
   #validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
+    if (args.event.ephemeral && args.event.type.startsWith("events.iterate.com/stream/")) {
+      // Control facts fold into config/presence/park state and may never be
+      // evicted; an ephemeral one would be a fact the stream is licensed to
+      // forget.
+      throw new Error("stream control events cannot be ephemeral");
+    }
+
     // Control facts must be first-hand: a copied (cross-posted) stream/*
     // control event is stored and visible but must never fold or validate as
     // config — otherwise a cross-post subscription matching stream/* would
@@ -511,7 +473,6 @@ export class StreamDurableObject extends DurableObject<Env> {
           ...args.state,
           eventCount: args.state.eventCount + 1,
           maxOffset: args.event.offset,
-          maxDurableOffset: args.event.offset,
         },
       });
     }
@@ -523,7 +484,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       ...args.state,
       eventCount: args.state.eventCount + 1,
       maxOffset: args.event.offset,
-      maxDurableOffset: args.event.offset,
     };
 
     // Control facts must be first-hand: a cross-posted copy of a stream/*
@@ -930,16 +890,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       : this.#recoverCoreProcessorStateFromEventLog();
     if (storedState === undefined) return CoreProcessorContract.stateSchema.parse({});
 
-    let state = this.#catchUpCoreProcessorState(storedState);
-
-    // Lift the allocator past any ephemeral offsets the checkpoint/log missed
-    // (ephemeral events leave no rows to replay). Applied AFTER catch-up:
-    // lifting maxOffset first would satisfy the catch-up loop's condition
-    // early and skip durable rows. See the floor write in append().
-    const maxOffsetFloor = this.ctx.storage.kv.get<number>("maxOffsetFloor") ?? 0;
-    if (maxOffsetFloor > state.maxOffset) {
-      state = { ...state, maxOffset: maxOffsetFloor };
-    }
+    const state = this.#catchUpCoreProcessorState(storedState);
 
     if (!storedStateIsCurrent) {
       // A version-mismatch rebuild replayed the config from the log, but the
@@ -1027,6 +978,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         afterOffset: next.maxOffset,
         beforeOffset: highestOffset + 1,
         limit: 500,
+        // Ephemeral rows folded on append (counters + circuit breaker), so a
+        // rebuild must re-fold them for the same state. Evicted rows simply
+        // stop counting — fine, the fold is monotonic bookkeeping.
+        includeEphemeral: true,
       });
       if (page.length === 0) break;
       for (const event of page) {

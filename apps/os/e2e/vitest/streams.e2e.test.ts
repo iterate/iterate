@@ -231,7 +231,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await subscription.unsubscribe();
 });
 
-test("ephemeral events consume offsets, ride live subscriptions, and never persist", async () => {
+test("ephemeral events are second-class rows: excluded from default reads, invisible to durable lanes, delivered on ephemeral subscriptions", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/ephemeral/${marker}`;
   const ephemeralType = `${STREAM_EVENT_TYPE}/chunk`;
@@ -244,8 +244,7 @@ test("ephemeral events consume offsets, ride live subscriptions, and never persi
   using project = itx.projects.create({ slug: `os-stream-ephemeral-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  // A live watcher attached BEFORE the appends: the only lane ephemeral
-  // events are ever delivered on.
+  // A live watcher attached BEFORE the appends.
   const live: StreamEvent[] = [];
   using liveSubscription = await stream.subscribe({
     processEventBatch: (batch) => {
@@ -260,6 +259,7 @@ test("ephemeral events consume offsets, ride live subscriptions, and never persi
   const [chunk] = await stream.append({
     type: ephemeralType,
     ephemeral: true,
+    idempotencyKey: `chunk-${marker}`,
     payload: { marker },
   });
   const [after] = await stream.append({
@@ -267,15 +267,29 @@ test("ephemeral events consume offsets, ride live subscriptions, and never persi
     payload: { marker, position: "after" },
   });
 
-  // The ephemeral event consumed a real offset between its durable neighbors
-  // and the committed event self-describes.
+  // An ordinary commit: consecutive offsets, self-describing flag, and
+  // idempotency dedup works (it is a row like any other).
   expect(chunk!.offset).toBe(before!.offset + 1);
   expect(after!.offset).toBe(chunk!.offset + 1);
   expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
+  const [deduped] = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    idempotencyKey: `chunk-${marker}`,
+    payload: { marker },
+  });
+  expect(deduped!.offset).toBe(chunk!.offset);
 
-  // The durable log has a permanent gap where the chunk was.
-  const read = await stream.getEvents({ afterOffset: before!.offset - 1 });
-  expect(read.map((event) => event.offset)).toEqual([before!.offset, after!.offset]);
+  // Default reads skip it; includeEphemeral opts in.
+  const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
+  const defaultRead = await stream.getEvents(readWindow);
+  expect(defaultRead.map((event) => event.offset)).toEqual([before!.offset, after!.offset]);
+  const rawRead = await stream.getEvents({ ...readWindow, includeEphemeral: true });
+  expect(rawRead.map((event) => event.offset)).toEqual([
+    before!.offset,
+    chunk!.offset,
+    after!.offset,
+  ]);
 
   // The live watcher saw all three, in offset order, the chunk flagged.
   await waitFor(
@@ -283,15 +297,17 @@ test("ephemeral events consume offsets, ride live subscriptions, and never persi
     () =>
       `live tail through offset ${after!.offset}; saw ${JSON.stringify(live.map((e) => e.offset))}`,
   );
-  const window = live.filter((event) => event.offset >= before!.offset);
+  const window = live.filter(
+    (event) => event.offset >= before!.offset && event.offset <= after!.offset,
+  );
   expect(window.map((event) => [event.offset, event.ephemeral === true])).toEqual([
     [before!.offset, false],
     [chunk!.offset, true],
     [after!.offset, false],
   ]);
 
-  // A catch-up subscriber replaying from 0 never sees it: replay reads
-  // storage, and storage never had it.
+  // Ephemeral subscriptions get them on REPLAY too (the browser mirror stays
+  // dense as long as no eviction has swept the rows).
   const replayed: StreamEvent[] = [];
   using replaySubscription = await stream.subscribe({
     replayAfterOffset: 0,
@@ -304,29 +320,11 @@ test("ephemeral events consume offsets, ride live subscriptions, and never persi
     () =>
       `replay through offset ${after!.offset}; saw ${JSON.stringify(replayed.map((e) => e.offset))}`,
   );
-  expect(replayed.some((event) => event.offset === chunk!.offset)).toBe(false);
-
-  // The accounting splits: eventCount excludes the chunk (its offset is a
-  // permanent gap), while the allocator head counted it. Presence facts from
-  // the subscriptions above keep appending, so assert relatively: exactly one
-  // gap, and a durable event at the head right now.
-  const runtimeState = await stream.runtimeState();
-  const state = coreState(runtimeState.coreProcessorState);
-  expect(state.maxOffset).toBeGreaterThanOrEqual(after!.offset);
-  expect(state.eventCount).toBe(state.maxOffset - 1);
-  expect((runtimeState.coreProcessorState as { maxDurableOffset?: number }).maxDurableOffset).toBe(
-    state.maxOffset,
+  expect(replayed.some((event) => event.offset === chunk!.offset && event.ephemeral === true)).toBe(
+    true,
   );
 
-  // Ephemeral appends reject the durable-only knobs loudly.
-  await expect(
-    stream.append({
-      type: ephemeralType,
-      ephemeral: true,
-      idempotencyKey: "chunk-dedup",
-      payload: { marker },
-    }),
-  ).rejects.toThrow(/idempotencyKey/);
+  // Control facts can never be ephemeral.
   await expect(
     stream.append({
       type: "events.iterate.com/stream/paused",
@@ -338,14 +336,13 @@ test("ephemeral events consume offsets, ride live subscriptions, and never persi
   await liveSubscription.unsubscribe();
   await replaySubscription.unsubscribe();
 
-  // Restart safety: ephemeral offsets are never reused. Kill the Durable
-  // Object right after an ephemeral burst (inside the checkpoint debounce
-  // window) — the durable log alone cannot recover the allocator past the
-  // burst, the maxOffsetFloor KV key must.
-  const burst = await stream.append(
-    { type: ephemeralType, ephemeral: true, payload: { marker, sequence: 1 } },
-    { type: ephemeralType, ephemeral: true, payload: { marker, sequence: 2 } },
-  );
+  // Restart: ephemeral rows recover the allocator like any other row — the
+  // next offsets continue past the ephemeral head.
+  const burst = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    payload: { marker, sequence: 2 },
+  });
   const burstHead = burst.at(-1)!.offset;
   await stream.kill().catch(() => undefined);
   const [reborn] = await stream.append({

@@ -118,16 +118,25 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
   });
 
-  it("accepts explicit gapped offsets and reads across the gap (ephemeral events never persist)", () => {
+  it("excludes ephemeral rows from range reads unless asked; point reads always return them", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
-    // Offset 2 was an ephemeral event: assigned, delivered live, never a row.
+    const chunk: StreamEvent = {
+      ...event(2, "events.iterate.com/test/chunk"),
+      ephemeral: true,
+      idempotencyKey: "chunk-2",
+    };
     log.insert([event(1, "events.iterate.com/test/durable")]);
+    log.insert([chunk]);
     log.insert([event(3, "events.iterate.com/test/durable")]);
+
     expect(log.highestOffset()).toBe(3);
-    expect(log.getByOffset(2)).toBeUndefined();
-    expect(
-      log.getRange({ afterOffset: 0, beforeOffset: 100, limit: 10 }).map((entry) => entry.offset),
-    ).toEqual([1, 3]);
+    expect(offsets(read(log, { afterOffset: 0, limit: 10 }))).toEqual([1, 3]);
+    expect(offsets(read(log, { afterOffset: 0, limit: 10, includeEphemeral: true }))).toEqual([
+      1, 2, 3,
+    ]);
+    // Point reads are an explicit request — no flag needed.
+    expect(log.getByOffset(2)).toEqual(chunk);
+    expect(log.getByIdempotencyKey("chunk-2")).toEqual(chunk);
   });
 
   it("adds the stream path when reading legacy stored events", () => {

@@ -54,11 +54,7 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 //      (resume = pure un-park at the cursor where delivery stopped);
 //      `subscription-cursor-set` is the one and only seek. A redrive is two
 //      facts (cursor-set + resumed), each honest about what it did.
-// - 14: ephemeral events — `maxOffset` becomes the allocator head (durable +
-//      ephemeral), the new `maxDurableOffset` is the persisted head the
-//      delivery spine reconciles against, and `eventCount` counts durable
-//      events only (ephemeral appends skip the core fold entirely).
-export const CORE_STATE_VERSION = 14;
+export const CORE_STATE_VERSION = 13;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -296,21 +292,8 @@ export const CoreProcessorContract = defineProcessorContract({
     path: z.string().trim().min(1).optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
-    /** Durable events only; ephemeral appends never advance it. */
     eventCount: z.number().int().min(0).default(0),
-    /**
-     * The offset allocator's head: the highest offset ever ASSIGNED, durable
-     * or ephemeral. Recovered across restarts via the `maxOffsetFloor` KV key
-     * (ephemeral offsets leave no rows to replay), so it never regresses
-     * except on a genuine stream reset.
-     */
     maxOffset: z.number().int().min(0).default(0),
-    /**
-     * The highest PERSISTED offset — what storage reads can catch a subscriber
-     * up to. The delivery spine's caught-up/lag reference; `maxOffset` minus
-     * the ephemeral gap at the head.
-     */
-    maxDurableOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),
     paused: z.boolean().default(false),
     pauseReason: z.string().nullable().default(null),

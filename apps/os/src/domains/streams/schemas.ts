@@ -56,15 +56,16 @@ export const StreamEventInput = z.object({
     .optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
   /**
-   * Ephemeral events ride the streaming infrastructure without ever becoming
-   * durable facts. They consume an offset (the durable log keeps a permanent
-   * gap) and are delivered to LIVE ephemeral subscriptions only, at-most-once:
-   * never persisted in the stream's SQLite, never replayed on catch-up, never
-   * delivered to the durable spine (wake/push/webhook) — so subscription-fed
-   * processors structurally cannot fold them or side-effect on them. For
-   * transient signals whose durable truth lands separately (LLM streaming
-   * chunks superseded by `output-added`). `ephemeral` + `idempotencyKey` is
-   * rejected at append: dedup is a property of the durable log.
+   * Ephemeral events are second-class rows: committed and offset-ordered like
+   * any event, but EXCLUDED from every read unless explicitly requested
+   * (`includeEphemeral: true` on range reads) and never delivered to the
+   * durable subscription lanes (wake/push/webhook) — so subscription-fed
+   * processors cannot fold them or side-effect on them. Ephemeral
+   * subscriptions (`subscribe()`) receive them, live and on replay. The
+   * stream may EVICT their rows in the future (memory pressure, DO startup
+   * sweeps), so nothing durable may ever depend on one: use them for
+   * transient signals whose durable truth lands separately — LLM streaming
+   * chunks superseded by `output-added`.
    */
   ephemeral: z.literal(true).optional(),
 });
