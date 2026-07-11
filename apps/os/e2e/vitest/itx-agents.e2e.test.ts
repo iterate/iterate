@@ -241,12 +241,13 @@ describe("itx", () => {
       payload: {
         content: fencedAgentScript(`
           async (itx) => {
-            // Agent-scope capabilities are members of the agent's OWN itx —
-            // \`itx.agent\` is the narrow control surface (message/ask/stream/…)
-            // and deliberately does NOT proxy dynamic names (see
-            // AgentRpcTarget); its dynamic door is itx.agent.capabilityHost.
+            // Agent-scope capabilities: itx.<cap> is the canonical spelling in
+            // your own scope; itx.agent.capabilityHost.<cap> is the explicit
+            // handle door; itx.agent.<cap> also works via the handle's
+            // prototype-chain fallback. All three dispatch identically —
+            // exercise one of each.
             const probe = await itx.agentProbe.inspect("agent-only");
-            const first = await itx.agentCounter.increment();
+            const first = await itx.agent.agentCounter.increment();
             const current = await itx.agent.capabilityHost.agentCounter.current();
             await itx.chat.sendMessage(JSON.stringify({
               durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
@@ -326,8 +327,9 @@ describe("itx", () => {
 
     // @ts-expect-error - dynamic project capability mounted by this test.
     expect(await project.scopeProbe.projectScope()).toEqual({ kind: "project", projectId });
-    // The agent HANDLE has no dynamic fallback (see AgentRpcTarget) — its
-    // scope's dynamic capabilities live behind the capabilityHost property.
+    // The handle's dynamic capabilities: dispatched by the prototype-chain
+    // fallback (agent.scopeProbe...) or the explicit capabilityHost door —
+    // this exercises the explicit spelling.
     // @ts-expect-error - dynamic agent capability mounted by this test.
     expect(await agent.capabilityHost.scopeProbe.agentScope()).toEqual({
       kind: "agent",
@@ -351,7 +353,8 @@ describe("itx", () => {
     // agent's own capability host and mounts on the project root by addressing
     // it through `capabilityHosts.get("/")`.
     const execution = await agent.capabilityHost.runScript(`async (itx) => {
-      // Workers RPC: await the capability before calling through it.
+      // capabilityHosts.get() pipelines; a handle is kept here only because
+      // the script calls the root host twice (provide + invoke below).
       const host = await itx.capabilityHosts.get("/");
       const provision = await host.provideCapability({
         type: "live",

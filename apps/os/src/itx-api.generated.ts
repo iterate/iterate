@@ -68,13 +68,23 @@ export interface Session {
   projects: ProjectCollection;
 }
 
+/**
+ * An itx: the project capability surface, scoped to one path (the project
+ * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
+ * integrations, sandboxes, scheduler, docs, ...) are project-global and
+ * identical at every scope; what differs by scope is the capability host
+ * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * Unknown dotted members dispatch dynamically against the scope's capability
+ * host, chaining up to the project root.
+ */
 export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
-   * capability (built-ins + dynamic mounts), the children map, and the full
-   * public type surface in `types`.
+   * capability (built-ins + dynamic mounts), the children map, and the
+   * `Project` declaration in `types` (the full surface is one
+   * `itx.docs.get({ name })` per declaration away).
    */
   __describe(): Promise<ProjectDescription>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
@@ -119,8 +129,11 @@ export interface Project {
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
   email: EmailCapability;
-  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
-  examples: ItxExampleCatalog;
+  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+   * declarations, and this scope's mounted capabilities; `get({ name })`
+   * fetches one. Pass search MANY related words — matching is dumb word
+   * overlap. */
+  docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
   /** The integrations collection: built-in integrations as dispatch branches
@@ -294,43 +307,38 @@ export interface CfBrowserCapability {
 /**
  * Agent capability surface for message loops and agent-local dynamic tools.
  *
- * DELIBERATELY NOT wrapped in `withInvokeCapabilityFallback`, unlike the other
- * itx surfaces — and this is load-bearing, not an omission. This is the one
- * surface routinely returned FROM A METHOD CALL (`itx.agents.get(path)`), and
- * workerd's RPC classifies a call result for promise pipelining with native
+ * Instances are DELIBERATELY plain — never wrapped in a Proxy. This is the
+ * surface most routinely returned FROM A METHOD CALL (`itx.agents.get(path)`),
+ * and workerd RPC classifies a call result for promise pipelining with native
  * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
  * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
  * pipelined call on the result dies with the baffling "The RPC receiver does
- * not implement the method ..."). A plain class instance classifies as a
- * single stub and pipelines fine — which is what lets model code write the
- * natural one-liners over the script lane (`env.ITX` loopback):
+ * not implement the method ..." — cloudflare/workerd#6873). A plain class
+ * instance classifies as a single stub and pipelines fine, which is what lets
+ * model code write the natural one-liners over the script lane (`env.ITX`
+ * loopback):
  *
- *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get("researcher").message(task);
+ *   await itx.agents.get(path).someTool(args);
  *   await itx.agents.get(path).capabilityHost.someTool(args);
  *
- * The second line is how DYNAMIC capabilities are reached through a fetched
- * handle: `capabilityHost` is a property (workerd resolves property PATHS
- * through proxies — `tryGetProperty` has an explicit `isProxyOfRpcTarget`
- * walk — the gap is only in classifying METHOD RESULTS), so the proxied
- * CapabilityHost behind it still does dotted dynamic dispatch.
- * Inside the agent's own scope nothing changes: scope capabilities live on
- * the root itx (`itx.someTool(...)`), whose proxy is never a call result.
- *
- * Keep it this way: never return a proxied target from a method callers will
- * pipeline on. (Upstream fix proposed for the workerd classifier; until it
- * ships everywhere this rule stands regardless.)
+ * The dynamic-tool spellings (lines 2 and 3 are equivalent) come from the
+ * PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
+ * this file: unknown members walk the prototype chain into a proxied hop and
+ * dispatch through this agent scope's capability host, while the instance
+ * itself stays a genuine, natively-branded RpcTarget. See
+ * installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
+ * mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
  */
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
-   * through a fetched handle: `agents.get(path).capabilityHost.someTool(args)`.
-   * That chain pipelines over workerd RPC because `capabilityHost` is a
-   * PROPERTY: workerd resolves property paths through the host's fallback
-   * Proxy (its traversal code special-cases proxies), whereas the handle
-   * itself must stay unproxied to be pipelinable at all (see the class
-   * comment). Inside the agent's own scripts the same capabilities are simply
-   * `itx.someTool(args)`.
+   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
+   * shorthand `agents.get(path).someTool(args)` resolves through the same
+   * host via the handle's prototype-chain fallback; both pipeline over
+   * workerd RPC. Inside the agent's own scripts the same capabilities are
+   * simply `itx.someTool(args)`.
    */
   capabilityHost: CapabilityHost;
   /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent's scope). */
@@ -518,9 +526,11 @@ export interface AgentCollection {
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
    * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
-   * `itx.agents.get(path).message(text)` in one expression — over workerd RPC
-   * (the script lane); see Agent's class comment for the mechanism
-   * and `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
+   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
+   * expression — over workerd RPC (the script lane); dynamic members resolve
+   * through the prototype-chain fallback. See Agent's class comment
+   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
+   * guard.
    */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
@@ -598,12 +608,39 @@ export interface EmailCapability {
   }): Promise<{ from: string; to: string; messageId: string | null }>;
 }
 
-export interface ItxExampleCatalog {
+/**
+ * The docs door: search + fetch over everything callable from this scope —
+ * the platform's example scripts (most are proven: the test suite runs them
+ * unattended against a live project on every change; the rest are marked
+ * interactive), the public type surface (the Itx Type Graph), and the
+ * capabilities mounted in the caller's scope chain. One door for "how do I
+ * X?": search first, fetch what the hits name, adapt working code.
+ *
+ * The search mechanism is deliberately dumb (word matching, no embeddings),
+ * which is why every docstring here tells callers to pass MANY related words
+ * — recall comes from the query, not the engine.
+ */
+export interface Docs {
   __describe(): Promise<Description>;
-  /** Every example summary, without code bodies (cheap to skim). */
-  list(): Promise<ItxExampleSummary[]>;
-  /** One example with its full script body. */
-  get(input: { id: string }): Promise<ItxExampleWithCode>;
+  /**
+   * Find examples, types, and mounted capabilities. Pass MANY related words —
+   * matching is dumb word overlap, so more synonyms means better recall:
+   * `search({ q: "file upload attachment bytes store image" })`, not
+   * `search({ q: "files" })`. Example hits are working scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetchCall`
+   * field is the literal next call to make.
+   */
+  search(input: { q: string }): Promise<DocsSearchHit[]>;
+  /**
+   * Fetch one entry by the name a search hit gave you. An example name
+   * returns its full script, annotated with its provenance (most examples
+   * run unattended against a live project in the platform's test suite; the
+   * rest are marked interactive); a type declaration name returns its
+   * TypeScript source plus as much of its reference closure as fits
+   * `maxTokens` (default 1500), ending with a comment naming anything left
+   * out and how to fetch it.
+   */
+  get(input: { name: string; maxTokens?: number }): Promise<string>;
 }
 
 /**
@@ -724,6 +761,11 @@ export interface ProjectIntegrations {
   }): Promise<{ success: true }>;
 }
 
+/**
+ * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`
+ * returns a client whose dotted calls invoke the server's tools; `exa` is the
+ * pre-connected Exa web-search server every project gets.
+ */
 export interface McpClientCollection {
   __describe(): Promise<Description>;
   /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */
@@ -737,6 +779,11 @@ export interface McpClientCollection {
   exa: McpClientRpc;
 }
 
+/**
+ * Ad-hoc OpenAPI clients — `itx.openapi`. `connect({ specUrl })` fetches and
+ * parses a spec and returns a client whose dotted calls are the spec's
+ * operationIds, executed against its server through project egress.
+ */
 export interface OpenApiCollection {
   __describe(): Promise<Description>;
   /** Fetch and parse a spec; dotted calls on the returned client are operationIds. */
@@ -985,7 +1032,13 @@ export interface Stream {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
-  /** Read one bounded page of committed events (optionally filtered by type). */
+  /**
+   * Read one bounded page of committed events (default from the stream's
+   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
+   * page (500 events) means MORE remain — page with
+   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
+   * shows you the beginning, not the head.
+   */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
@@ -1085,6 +1138,12 @@ export interface Stream {
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
 }
 
+/**
+ * The read-side RPC surface every stream processor node exposes: inspect
+ * runtime state (snapshot plus a processor-specific runtime bag), take an
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
+ * block until the processor has folded a given offset.
+ */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
@@ -1113,6 +1172,20 @@ export interface AgentDefaults {
 /** Disposable handle for one live project egress interception. */
 export interface ProjectEgressIntercept extends Disposable {
   release(): Promise<void>;
+}
+
+/** A search hit from `itx.docs.search`, in relevance order. */
+export interface DocsSearchHit {
+  /** What kind of corpus entry matched: an example script from the platform
+   * catalogue, a type declaration, or a capability mounted in the caller's
+   * scope. */
+  kind: "example" | "type" | "capability";
+  /** The name to fetch it by (example id, declaration name, or mount path). */
+  name: string;
+  /** One-line summary of the entry. */
+  summary: string;
+  /** The literal itx call that fetches the full entry — copy it verbatim. */
+  fetchCall: string;
 }
 
 /** One project file, addressed by path. */
@@ -1309,7 +1382,15 @@ export interface WorkspaceGit {
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
-  get(): Promise<Project>;
+  /**
+   * The value delivered over the loopback is an RPC STUB of the project root,
+   * and stubs are disposable — typed honestly so worker code can (and
+   * should) write `using itx = await this.env.ITX.get()`: releasing the stub
+   * when the handler ends keeps workerd's "An RPC stub was not disposed
+   * properly" warning out of production logs. Values obtained THROUGH it
+   * hold their own references and survive its disposal.
+   */
+  get(): Promise<Project & Disposable>;
 };
 
 /**
@@ -1532,6 +1613,12 @@ export type ProjectListEntry = {
   deploymentStatus: ProjectDeploymentStatus;
 };
 
+/**
+ * One capability in a project's inventory (`__describe().capabilities`): the
+ * itx path it is mounted at, how it is implemented (built-in, live-provided,
+ * or a persisted itx expression), and optional instructions/types for
+ * discovery.
+ */
 export type CapabilityDescription = {
   instructions?: string;
   path: string[];
@@ -1635,15 +1722,23 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
+/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;
+ * otherwise one document (or an array) plus optional conversion options
+ * converts to markdown. */
 export type CfMarkdownConversionArgs =
   | []
   | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
 
+/** One file format the markdown converter accepts (extension plus MIME type);
+ * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
   extension: string;
   mimeType: string;
 };
 
+/** One converted document from `ai.toMarkdown`: `format` is "markdown" with
+ * the markdown text in `data` (plus a token estimate), or "error" with the
+ * failure message in `error`. */
 export type CfMarkdownConversionResult = {
   name: string;
   format: "markdown" | "error";
@@ -1653,6 +1748,10 @@ export type CfMarkdownConversionResult = {
   error?: string;
 };
 
+/** A Browser Run quick-action name (`browser.quickAction`'s first argument):
+ * what to extract from the rendered page — page content, screenshot, PDF,
+ * markdown, accessibility snapshot, scraped elements, structured JSON, links,
+ * or a crawl. */
 export type CfBrowserQuickAction =
   | "content"
   | "screenshot"
@@ -1664,6 +1763,9 @@ export type CfBrowserQuickAction =
   | "links"
   | "crawl";
 
+/** Options for a Browser Run quick action: the target page as a `url` or as
+ * inline `html`, plus the action's own pass-through options (e.g.
+ * `screenshotOptions`). */
 export type CfBrowserQuickActionOptions = Record<string, unknown> &
   ({ url: string } | { html: string });
 
@@ -1712,6 +1814,9 @@ export type AgentProcessorState = {
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
+/** One committed event on a durable stream: type, JSON payload, offset,
+ * idempotency key, and provenance (processor stamp / cross-post chain), plus
+ * the commit-time `createdAt` and stream `path`. */
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -1752,6 +1857,9 @@ export type AgentDefaultsOverrides = {
   model?: string;
 };
 
+/** A file attached to an agent input: content type, filename, project
+ * file-storage path, size, and the signed public URL minted at attach time
+ * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = {
   contentType: string;
   filename: string;
@@ -1768,6 +1876,8 @@ export type FlattenedCapabilityTarget = {
 /** A persisted capability name: the steps from an itx root to a value. */
 export type ItxExpression = ItxExpressionStep[];
 
+/** One known stream in a project's reduced state — the entry shape the
+ * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
@@ -1797,16 +1907,6 @@ export type EmailAttachmentInput =
       contentType?: string;
     };
 
-/** One example without its code — what `itx.examples.list()` returns. */
-export type ItxExampleSummary = {
-  description: string;
-  id: string;
-  title: string;
-};
-
-/** One example with its full script body — what `itx.examples.get({ id })` returns. */
-export type ItxExampleWithCode = ItxExampleSummary & { code: string };
-
 /**
  * One entry of `integrations.list()`. Discriminated on `source`: built-in
  * entries always name a concrete connection (they come from
@@ -1833,6 +1933,9 @@ export type IntegrationConnectionListEntry =
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
 export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
 
+/** Connection health for one integration connection (what
+ * `getConnectionStatus` returns): whether it is connected, plus the external
+ * account's id, display name, and provider-specific metadata. */
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -1877,10 +1980,16 @@ export type ConnectTelegramResult =
  * first use. */
 export type OAuthProviderSlug = "github" | "google" | "slack";
 
+/** Outcome of `completeConnect` (the OAuth/installation redirect callback):
+ * `ok` plus the `callbackUrl` to send the browser back to; on failure, a
+ * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
 
+/** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional
+ * request headers (auth), and an optional per-tool-call timeout in
+ * milliseconds. */
 export type McpClientConnectInput = {
   headers?: Record<string, string>;
   timeoutMs?: number;
@@ -1894,6 +2003,9 @@ export type McpClientConnectInput = {
  */
 export type McpClientRpc = object;
 
+/** Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional
+ * `baseUrl` overriding the spec's server, and extra headers (auth) sent with
+ * every operation call. */
 export type OpenApiConnectInput = {
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -1923,6 +2035,10 @@ export type SandboxCreateInput = {
   env?: Record<string, string>;
 };
 
+/** A sandbox's size tier ("lite" | "basic" | "standard-1"…"standard-4") —
+ * Cloudflare container instance-type names, fixed at `create` and immutable
+ * for the sandbox's lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the
+ * vCPU/memory/disk table. */
 export type SandboxInstanceType =
   | "basic"
   | "lite"
@@ -2148,6 +2264,9 @@ export type DynamicWorkerDispatchOptions = {
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
 
+/** Append input for `Stream.append`: event type, JSON payload, optional
+ * metadata, provenance source, and idempotency key — everything before the
+ * stream assigns offset and timestamp at commit. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -2240,6 +2359,8 @@ export type StreamSubscriptionHandle = Disposable & {
  */
 export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
 
+/** One consistent read of a processor (what `snapshot()` returns): the folded
+ * state pinned to the offset of the last event folded into it. */
 export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
@@ -2259,12 +2380,17 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
+/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
+ * a filename plus the raw bytes as a Blob. */
 export type CfMarkdownDocument = {
   /** Filename including the extension; Cloudflare uses it to choose the converter. */
   name: string;
   blob: Blob;
 };
 
+/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+ * hostname for relative links), image description language, PDF metadata
+ * exclusion. */
 export type CfMarkdownConversionOptions = {
   conversionOptions?: {
     html?: {
@@ -2328,6 +2454,13 @@ export type SchedulerAction = {
   script: string;
 };
 
+/**
+ * A stored secret's public face — its live state and what `__describe()`
+ * merges in: usage audit counters, pinned egress URLs, whether material is
+ * present, and the configured refresh strategy's kind. Never the material
+ * itself: material is write-only and projected away before crossing the RPC
+ * boundary.
+ */
 export type SecretDescription = {
   audit: {
     lastUsedAt?: string;
@@ -2511,6 +2644,9 @@ export type AgentPolicyEventInput = {
   payload: Record<string, unknown>;
 };
 
+/** Input to the Images capability's `transform`: the source image stream,
+ * ordered transform steps, optional overlay draws (watermarks — each with its
+ * own transforms), and the output encoding. */
 export type CfImageTransformInput = {
   image: ReadableStream<Uint8Array>;
   transforms?: CfImageTransformOptions[];
@@ -2522,6 +2658,8 @@ export type CfImageTransformInput = {
   output: CfImageOutputOptions;
 };
 
+/** Input to the videos capability's `transform`: the source video stream,
+ * optional transform options, and the output selection. */
 export type CfVideoTransformInput = {
   video: ReadableStream<Uint8Array>;
   transform?: CfVideoTransformOptions;
@@ -2572,6 +2710,9 @@ export type SecretRefresh =
       graphqlUrl: string;
     };
 
+/** Fields shared by every dynamic worker ref (stateless and stateful): the
+ * itx scope `path` the worker binds to and the declarative `source` it is
+ * built from. */
 export type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker
@@ -2621,14 +2762,25 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
+/** One Cloudflare Images transform step (width, height, fit, rotate, …),
+ * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = { [x: string]: unknown };
 
+/** Placement options for one overlay draw in a Cloudflare Images transform
+ * (opacity, repeat, top/left, …), passed through to the Images binding
+ * verbatim. */
 export type CfImageDrawOptions = { [x: string]: unknown };
 
+/** Output encoding for a Cloudflare Images transform: the target `format`
+ * (e.g. "image/webp") plus pass-through options such as quality. */
 export type CfImageOutputOptions = { format: string } & Record<string, unknown>;
 
+/** Transform options for a Media Transformations video call (width, height,
+ * fit, trim, …), passed through to the binding verbatim. */
 export type CfVideoTransformOptions = { [x: string]: unknown };
 
+/** Output selection for a video transform: `mode` picks a video, spritesheet,
+ * single frame, or audio track; other options pass through to the binding. */
 export type CfVideoOutputOptions = {
   mode: "video" | "spritesheet" | "frame" | "audio";
 } & Record<string, unknown>;

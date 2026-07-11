@@ -10,11 +10,6 @@ describe("streamViewMode", () => {
   it("clamps unsupported agent modes on non-agent streams to raw", () => {
     expect(streamViewMode({ mode: "pretty" }, "/secrets/x")).toBe("raw");
     expect(streamViewMode({ mode: "pretty-raw" }, "/repos/x")).toBe("raw");
-    expect(streamViewMode({ mode: "pretty-debug" }, "/sandboxes")).toBe("raw");
-  });
-
-  it("normalizes legacy pretty-debug to pretty-raw on agents", () => {
-    expect(streamViewMode({ mode: "pretty-debug" }, "/agents/x")).toBe("pretty-raw");
   });
 
   it("honors valid modes on agents", () => {
@@ -24,8 +19,8 @@ describe("streamViewMode", () => {
 });
 
 describe("modeCapabilities", () => {
-  it("keeps raw group filters available when pretty-raw has legacy raw=false", () => {
-    const caps = modeCapabilities({ mode: "pretty-raw", raw: false }, "/agents/x");
+  it("keeps raw group filters available in pretty-raw", () => {
+    const caps = modeCapabilities({ mode: "pretty-raw" }, "/agents/x");
     expect(caps.agentFeed).toBe(true);
     expect(caps.rawFeed).toBe(true);
     expect(caps.eventInspector).toBe(true);

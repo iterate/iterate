@@ -9,12 +9,6 @@ import type {
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { Stream } from "../itx-api.generated.ts";
-import {
-  AGENT_UI_FEED_TABLE,
-  AGENT_UI_SCHEMA_VERSION,
-  AgentUiProcessor,
-  AgentUiProcessorContract,
-} from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
 import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamProcessorStore } from "~/domains/streams/client-libraries/browser/hooks/use-stream-processor-store.ts";
@@ -27,14 +21,14 @@ import {
   type BrowserRawEventsState,
 } from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
 import {
-  BROWSER_EVENT_FEED_SCHEMA_VERSION,
-  BROWSER_EVENT_FEED_TABLE,
-  BrowserEventFeedContract,
-  BrowserEventFeedProcessor,
-  type BrowserEventFeedState,
-} from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import { AgentFeedView, AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
-import { FeedItemsView } from "~/components/feed-items-view.tsx";
+  BROWSER_FEED_SCHEMA_VERSION,
+  BROWSER_FEED_TABLE,
+  BrowserFeedContract,
+  BrowserFeedProcessor,
+  type BrowserFeedState,
+} from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import { AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
+import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
@@ -70,10 +64,10 @@ type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
  * with the composer below and right-edge overlays (raw-event inspector,
  * processors sheet) on top.
  *
- * This component is the orchestrator: it owns the three browser-hosted
- * processors that mirror the stream into local SQLite (raw events, agent UI,
- * grouped feed items) and hands their stores/databases to focused child
- * components. All view state (mode, filters, open panels) lives in the URL —
+ * This component is the orchestrator: it owns the two browser-hosted
+ * processors that mirror the stream into local SQLite (the raw `events` log
+ * and the single `feed_items` projection) and hands their stores/databases to
+ * focused child components. All view state (mode, filters, open panels) lives in the URL —
  * see ~/lib/stream-view-search.ts — so children read it themselves; the
  * component stays mounted across ⌘K stream switches (the switcher navigates
  * with an empty search, resetting the view to the new stream's defaults).
@@ -127,11 +121,12 @@ export function ProjectStreamView({
     [resolvedStreamSource],
   );
 
-  // Three browser-hosted processors share the stream's per-path SQLite mirror:
-  // the verbatim raw-event log (also the composer's append target), the agent
-  // UI reduction (chat items + live activity + presence — mounted here, not in
-  // the agent tab, because the header derives presence/busy from it), and the
-  // grouped feed_items collection the Feed tab's presets filter over.
+  // Two browser-hosted processors share the stream's per-path SQLite mirror:
+  // the verbatim raw-event `events` log (also the composer's append target)
+  // and the browser-feed projector, whose single `feed_items` table backs
+  // every mode (pretty chat rows and raw rows in one total order) and whose
+  // reduced state carries the live activity + presence the header derives
+  // presence/busy from — which is why it mounts here, not in the feed body.
   const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
     createStreamClient: streamClientFactory,
     projectId: streamRuntimeProjectKey,
@@ -141,29 +136,20 @@ export function ProjectStreamView({
     tables: ["events"],
     Processor: BrowserRawEventsProcessor,
   });
-  const { store: agentStore, snapshot: agentSnapshot } = useStreamProcessorStore<AgentUiState>({
+  const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
     createStreamClient: streamClientFactory,
     projectId: streamRuntimeProjectKey,
     streamPath,
-    slug: AgentUiProcessorContract.slug,
-    schemaVersion: AGENT_UI_SCHEMA_VERSION,
+    slug: BrowserFeedContract.slug,
+    schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
     resetOnSchemaVersionChange: true,
-    tables: [AGENT_UI_FEED_TABLE],
-    Processor: AgentUiProcessor,
-  });
-  const { store: feedStore } = useStreamProcessorStore<BrowserEventFeedState>({
-    createStreamClient: streamClientFactory,
-    projectId: streamRuntimeProjectKey,
-    streamPath,
-    slug: BrowserEventFeedContract.slug,
-    schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
-    tables: [BROWSER_EVENT_FEED_TABLE],
-    Processor: BrowserEventFeedProcessor,
+    tables: [BROWSER_FEED_TABLE],
+    Processor: BrowserFeedProcessor,
   });
 
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const agentUiState = useAgentUiReducedState(store.streamDatabase);
+  const agentUiState = useAgentUiReducedState(feedStore.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
   const { search } = useStreamViewSearch();
@@ -176,7 +162,9 @@ export function ProjectStreamView({
   const activePreset = caps.rawPresets
     ? (presets.find((preset) => preset.id === search.preset) ?? defaultPreset)
     : defaultPreset;
-  const feedSearch = search.q ?? "";
+  // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
+  // pattern of spaces that hides every row.
+  const feedSearch = (search.q ?? "").trim();
   const rawFilter = feedItemsFilterFromSearch(search, streamPath);
 
   // The server is about to append: verify deliveries actually arrive and
@@ -184,9 +172,8 @@ export function ProjectStreamView({
   // the user's message not appearing until the next paced probe (or a reload).
   const nudgeDeliveries = useCallback(() => {
     void store.nudge();
-    void agentStore.nudge();
     void feedStore.nudge();
-  }, [store, agentStore, feedStore]);
+  }, [store, feedStore]);
 
   const runningLlmRequestId =
     agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
@@ -197,11 +184,10 @@ export function ProjectStreamView({
   });
 
   async function clearClientDatabases() {
-    // Sequential on purpose: the three runtimes share one per-path SQLite
+    // Sequential on purpose: the two runtimes share one per-path SQLite
     // mirror, and each clear deletes its tables and VACUUMs — interleaving
     // them would race writes and compactions on the same file.
     await feedStore.clearLocalDatabase();
-    await agentStore.clearLocalDatabase();
     await store.clearLocalDatabase();
     window.location.reload();
   }
@@ -259,61 +245,31 @@ export function ProjectStreamView({
       />
     );
 
-  const agentFeed = caps.agentFeed ? (
-    <AgentFeedView
+  // Mode body: ONE virtualized list over feed_items for every mode — Pretty
+  // shows agent rows, Raw shows raw rows, Pretty+raw both interleaved in
+  // local_index order (raw rows click through to the inspector).
+  const modeBody = (
+    <StreamFeedView
       {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
         ? { onInterruptQueuedMessages: interrupt.run }
         : {})}
-      // Fresh virtualizer state per stream mirror + mode (see AgentFeedView docs).
-      key={`${store.streamDatabase.databasePath}:${activeMode}:agent`}
-      database={store.streamDatabase}
-      liveState={agentUiState}
-      search={feedSearch}
-      showDebug={caps.agentShowDebug}
+      // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
+      key={`${feedStore.streamDatabase.databasePath}:${activeMode}`}
+      database={feedStore.streamDatabase}
+      filter={{
+        agent: caps.agentFeed
+          ? { showDebug: caps.agentShowDebug, searchQuery: feedSearch === "" ? null : feedSearch }
+          : null,
+        raw: caps.rawFeed ? rawFilter : null,
+      }}
+      liveState={caps.agentFeed ? agentUiState : null}
+      {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       emptyLabel={connectionLabel}
       isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
       projectSlug={projectSlug}
-      isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
+      isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
     />
-  ) : null;
-
-  const rawFeed = caps.rawFeed ? (
-    <FeedItemsView
-      key={`${feedStore.streamDatabase.databasePath}:${activeMode}:raw`}
-      database={feedStore.streamDatabase}
-      emptyLabel={connectionLabel}
-      filter={rawFilter}
-      onInspectEvent={panels.inspectEvent}
-    />
-  ) : null;
-
-  // Mode body: Pretty = agent only; Raw = feed_items only; Pretty+raw = both
-  // stacked (chat + full raw rail with click-to-inspect).
-  const modeBody =
-    caps.agentFeed && caps.rawFeed ? (
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {/* Both pane wrappers must be flex columns: the feeds size themselves
-            with flex-1 and only scroll internally when a flex parent
-            constrains them — in a block wrapper they grow to content height
-            and the pane just clips them at the top. */}
-        <div className="relative flex min-h-0 flex-[3] flex-col overflow-hidden border-b">
-          {agentFeed}
-        </div>
-        <div className="relative flex min-h-0 flex-[2] flex-col overflow-hidden">
-          <div className="flex h-7 shrink-0 items-center border-b bg-muted/30 px-4">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Raw events
-            </span>
-            <span className="ml-2 font-mono text-[10px] text-muted-foreground/70">
-              click a row to inspect · arrow keys page
-            </span>
-          </div>
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">{rawFeed}</div>
-        </div>
-      </div>
-    ) : (
-      (agentFeed ?? rawFeed)
-    );
+  );
 
   // The feed column — mode body with overlays on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
@@ -439,7 +395,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
     >
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
+        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
         showCloseButton={false}
       >
         <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
@@ -603,10 +559,11 @@ function useAgentInterrupt(args: {
 }
 
 /**
- * The agent-ui processor persists its reduced state (live activity with
- * streaming text, presence roster) to `processor_state` on every checkpoint;
- * reading it reactively is how the live tail re-renders per delta batch.
- * Null until the processor's first checkpoint lands.
+ * The browser-feed projector persists its reduced state — whose `agent` slice
+ * holds the live activity with streaming text and the presence roster — to
+ * `processor_state` on every checkpoint; reading it reactively is how the
+ * live tail re-renders per delta batch. Null until the projector's first
+ * checkpoint lands.
  */
 function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState | null {
   const result = useStreamQuery(
@@ -615,13 +572,13 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
     // for the slug (e.g. after a key-format change); read the most advanced one.
     `SELECT reduced_state FROM processor_state WHERE processor_slug = ?
      ORDER BY max_offset DESC LIMIT 1`,
-    [AgentUiProcessorContract.slug],
+    [BrowserFeedContract.slug],
   );
   return useMemo(() => {
     const raw = result.data[0]?.reduced_state;
     if (typeof raw !== "string") return null;
     try {
-      return JSON.parse(raw) as AgentUiState;
+      return (JSON.parse(raw) as { agent?: AgentUiState }).agent ?? null;
     } catch {
       return null;
     }

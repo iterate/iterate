@@ -33,6 +33,10 @@ export const SANDBOX_INSTANCE_TYPES = [
 ] as const;
 
 export const SandboxInstanceType = z.enum(SANDBOX_INSTANCE_TYPES);
+/** A sandbox's size tier ("lite" | "basic" | "standard-1"…"standard-4") —
+ * Cloudflare container instance-type names, fixed at `create` and immutable
+ * for the sandbox's lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the
+ * vCPU/memory/disk table. */
 export type SandboxInstanceType = z.infer<typeof SandboxInstanceType>;
 
 /** The instance type a new sandbox gets when `create` doesn't pick one.

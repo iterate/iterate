@@ -468,7 +468,17 @@ function createStreamRuntime(
       ? await streamDatabase.readMirrorSchemaVersion(slug)
       : schemaVersion;
 
-    if (localSchemaVersion !== schemaVersion) {
+    // A truly fresh mirror — no schema version ever recorded AND nothing
+    // checkpointed — must never take the rebuild lane: "undefined ≠ current"
+    // is not a schema CHANGE, and discarding would VACUUM an empty database
+    // on every first open (OPFS VACUUM under a sibling connection's open
+    // handles is exactly the contention that wedges the shared per-path
+    // file). A fresh checkpoint with a DIFFERENT recorded version still
+    // rebuilds: the slug's tables are shared across subscription keys, so an
+    // older subscription may have populated them under the old schema.
+    const trulyFreshMirror = localMaxOffset <= 0 && localSchemaVersion === undefined;
+
+    if (!trulyFreshMirror && localSchemaVersion !== schemaVersion) {
       console.warn(
         `[stream ${args.streamPath} ${slug}] Local ${slug} schema version changed; rebuilding mirror.`,
         { localSchemaVersion, schemaVersion },
@@ -480,7 +490,8 @@ function createStreamRuntime(
     }
 
     if (localMaxOffset <= 0) {
-      // Fresh mirror: nothing to discard, just record which incarnation we are tracking.
+      // Fresh mirror: nothing to discard, just record which schema version and
+      // incarnation we are tracking.
       if (args.resetOnSchemaVersionChange) {
         await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
       }

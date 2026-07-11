@@ -71,6 +71,13 @@ export type SecretRefresh =
       graphqlUrl: string;
     };
 
+/**
+ * A stored secret's public face — its live state and what `__describe()`
+ * merges in: usage audit counters, pinned egress URLs, whether material is
+ * present, and the configured refresh strategy's kind. Never the material
+ * itself: material is write-only and projected away before crossing the RPC
+ * boundary.
+ */
 export type SecretDescription = {
   audit: {
     lastUsedAt?: string;

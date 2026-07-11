@@ -22,6 +22,8 @@ export type StreamEventReadInput = {
   limit?: number;
 };
 
+/** One consistent read of a processor (what `snapshot()` returns): the folded
+ * state pinned to the offset of the last event folded into it. */
 export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
@@ -46,6 +48,12 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
 };
 
+/**
+ * The read-side RPC surface every stream processor node exposes: inspect
+ * runtime state (snapshot plus a processor-specific runtime bag), take an
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
+ * block until the processor has folded a given offset.
+ */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;

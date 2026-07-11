@@ -79,6 +79,14 @@ export const StreamListItem = z.object({
 
 // The schemas above are the single definition of these shapes; the types are
 // inferred, not hand-maintained (types.ts re-exports them for older importers).
+/** Append input for `Stream.append`: event type, JSON payload, optional
+ * metadata, provenance source, and idempotency key — everything before the
+ * stream assigns offset and timestamp at commit. */
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
+/** One committed event on a durable stream: type, JSON payload, offset,
+ * idempotency key, and provenance (processor stamp / cross-post chain), plus
+ * the commit-time `createdAt` and stream `path`. */
 export type StreamEvent = z.infer<typeof StreamEvent>;
+/** One known stream in a project's reduced state — the entry shape the
+ * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = z.infer<typeof StreamListItem>;

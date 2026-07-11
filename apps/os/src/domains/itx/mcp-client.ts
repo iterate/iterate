@@ -8,6 +8,9 @@ import {
   type Tool,
 } from "@modelcontextprotocol/client";
 
+/** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional
+ * request headers (auth), and an optional per-tool-call timeout in
+ * milliseconds. */
 export type McpClientConnectInput = {
   headers?: Record<string, string>;
   timeoutMs?: number;

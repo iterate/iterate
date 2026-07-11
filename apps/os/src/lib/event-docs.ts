@@ -9,7 +9,7 @@ import { ProjectProcessorContract } from "~/domains/projects/project-processor-c
 import { RepoProcessorContract } from "~/domains/repos/repo-processor-contract.ts";
 import { SandboxProcessorContract } from "~/domains/sandboxes/sandbox-processor-contract.ts";
 import { SecretProcessorContract } from "~/domains/secrets/secret-processor-contract.ts";
-import { BrowserEventFeedContract } from "~/domains/streams/client-libraries/processors/browser-event-feed/contract.ts";
+import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/contract.ts";
 import { BrowserRawEventsContract } from "~/domains/streams/client-libraries/processors/browser-raw-events/contract.ts";
 import { CoreProcessorContract } from "~/domains/streams/core-processor-contract.ts";
 
@@ -46,7 +46,7 @@ const processorContracts = [
   TelegramProcessorContract,
   TelegramAgentProcessorContract,
   BrowserRawEventsContract,
-  BrowserEventFeedContract,
+  BrowserFeedContract,
 ] as const satisfies readonly ProcessorContractForDocs[];
 
 /**

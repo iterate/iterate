@@ -101,8 +101,6 @@ const STREAM_VIEW_SEARCH_RESET = {
   preset: undefined,
   processor: undefined,
   q: undefined,
-  raw: undefined,
-  tab: undefined,
   to: undefined,
   types: undefined,
 } satisfies Partial<z.infer<typeof StreamViewSearch>>;
@@ -725,7 +723,7 @@ function IntegrationFeedSheet({
   return (
     <Sheet open={feedPanel != null} onOpenChange={onOpenChange}>
       {feedPanel == null ? null : (
-        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(92vw,56rem)] data-[side=right]:sm:max-w-[min(92vw,56rem)]">
+        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]">
           <SheetHeader className="sr-only">
             <SheetTitle>{feedPanel.streamPath} feed</SheetTitle>
           </SheetHeader>

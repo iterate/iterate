@@ -34,8 +34,9 @@ describe("itx", () => {
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
       const specUrl = `${api.url}/openapi.json`;
 
-      // Cap'n Web promise pipelining lets dynamic operation members be called
-      // before connect() resolves.
+      // Three call shapes exercised DELIBERATELY: pipelined on the un-awaited
+      // connect() promise, on an awaited handle, and as a one-expression
+      // chain — all three lanes must keep working.
       const directPromise = project.openapi.connect({ headers, specUrl });
       await expect(
         // @ts-expect-error - OpenAPI operations are derived at runtime.
@@ -48,7 +49,7 @@ describe("itx", () => {
       ).resolves.toEqual([{ id: 1, name: "available-pet", status: "available" }]);
       await expect(
         // @ts-expect-error - OpenAPI operations are derived at runtime.
-        (await project.openapi.connect({ headers, specUrl })).findPetsByStatus({
+        project.openapi.connect({ headers, specUrl }).findPetsByStatus({
           status: "sold",
         }),
       ).resolves.toEqual([{ id: 1, name: "sold-pet", status: "sold" }]);
@@ -118,8 +119,8 @@ describe("itx", () => {
 
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
 
-      // Cap'n Web promise pipelining lets dynamic tool members be called before
-      // connect() resolves.
+      // Same three-lane coverage as the OpenAPI test above: un-awaited
+      // promise, awaited handle, one-expression chain.
       const directPromise = project.mcp.connect({ headers, url: mcp.url });
       await expect(
         // @ts-expect-error - MCP tools are derived at runtime.
@@ -132,7 +133,7 @@ describe("itx", () => {
       ).resolves.toEqual({ answer: "docs:Workers" });
       await expect(
         // @ts-expect-error - MCP tools are derived at runtime.
-        (await project.mcp.connect({ headers, url: mcp.url })).search_docs({
+        project.mcp.connect({ headers, url: mcp.url }).search_docs({
           query: "Pipelines",
         }),
       ).resolves.toEqual({ answer: "docs:Pipelines" });
@@ -140,10 +141,12 @@ describe("itx", () => {
       const instructions = "Call search_docs on the mounted MCP docs capability.";
       const types =
         "export type Capability = { search_docs(input: { query: string }): Promise<unknown> };";
+      // "docs" itself is a builtin (the docs door), so the mount must live
+      // under a free name — provide-time collision rejection covers the rest.
       using _provision = await project.provideCapability({
         expression: ["mcp", ["connect", { headers, url: mcp.url }]],
         instructions,
-        path: ["docs"],
+        path: ["cloudflareDocs"],
         type: "itx-expression",
         types,
       });
@@ -152,7 +155,7 @@ describe("itx", () => {
         expect.arrayContaining([
           expect.objectContaining({
             instructions,
-            path: ["docs"],
+            path: ["cloudflareDocs"],
             type: "itx-expression",
             types,
           }),
@@ -160,7 +163,7 @@ describe("itx", () => {
       );
       await expect(
         // @ts-expect-error - mounted MCP capability root.
-        project.docs.search_docs({ query: "Durable Objects" }),
+        project.cloudflareDocs.search_docs({ query: "Durable Objects" }),
       ).resolves.toEqual({ answer: "docs:Durable Objects" });
 
       if (mcp.methods.length > 0) {

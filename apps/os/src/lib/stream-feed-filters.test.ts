@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFeedItemsFilter,
+  buildStreamFeedWhere,
   defaultPresetForMode,
   feedFiltersActive,
   feedItemsFilterFromSearch,
@@ -49,24 +50,24 @@ describe("buildFeedItemsFilter", () => {
     ).toBeNull();
   });
 
-  it("composes prefix, event types, components, search, and offset bounds", () => {
+  it("composes prefix, event types, raw kinds, search, and offset bounds", () => {
     const filter = buildFeedItemsFilter({
       eventTypes: ["events.iterate.com/agent/input-added", "events.iterate.com/agent/turn-ended"],
-      components: ["group", "stream.woken"],
+      components: ["raw.group", "raw.stream.woken"],
       eventTypePrefix: "events.iterate.com/agent/",
       searchQuery: "hello",
       offsetFrom: 10,
       offsetTo: 99,
     });
     expect(filter?.whereSql).toMatchInlineSnapshot(
-      `"COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ? AND COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) IN (?, ?) AND component IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
+      `"COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ? AND COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) IN (?, ?) AND kind IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
     );
     expect(filter?.params).toEqual([
       "events.iterate.com/agent/%",
       "events.iterate.com/agent/input-added",
       "events.iterate.com/agent/turn-ended",
-      "group",
-      "stream.woken",
+      "raw.group",
+      "raw.stream.woken",
       "%hello%",
       10,
       99,
@@ -100,7 +101,7 @@ describe("feedItemsFilterFromSearch", () => {
       feedItemsFilterFromSearch(
         {
           mode: "pretty-raw",
-          components: ["stream.woken"],
+          components: ["raw.stream.woken"],
           types: ["events.iterate.com/stream/woken"],
           q: "only-pretty",
           from: 10,
@@ -109,7 +110,7 @@ describe("feedItemsFilterFromSearch", () => {
       ),
     ).toEqual({
       eventTypes: ["events.iterate.com/stream/woken"],
-      components: ["stream.woken"],
+      components: ["raw.stream.woken"],
       eventTypePrefix: null,
       searchQuery: null,
       offsetFrom: null,
@@ -120,14 +121,58 @@ describe("feedItemsFilterFromSearch", () => {
   it("honors components + types from the URL in raw mode", () => {
     expect(
       feedItemsFilterFromSearch(
-        { mode: "raw", components: ["stream.woken"], types: ["events.iterate.com/stream/woken"] },
+        {
+          mode: "raw",
+          components: ["raw.stream.woken"],
+          types: ["events.iterate.com/stream/woken"],
+        },
         "/agents/x",
       ),
     ).toMatchObject({
-      components: ["stream.woken"],
+      components: ["raw.stream.woken"],
       eventTypes: ["events.iterate.com/stream/woken"],
       eventTypePrefix: "events.iterate.com/agent/",
     });
+  });
+});
+
+describe("buildStreamFeedWhere", () => {
+  const unscopedRaw = {
+    eventTypes: null,
+    components: null,
+    eventTypePrefix: null,
+    searchQuery: null,
+    offsetFrom: null,
+    offsetTo: null,
+  };
+
+  it("shows only agent rows in Pretty (minus debug kinds)", () => {
+    const { whereSql, params } = buildStreamFeedWhere({
+      agent: { showDebug: false, searchQuery: null },
+      raw: null,
+    });
+    expect(whereSql).toBe(`kind LIKE 'agent.%' AND kind NOT IN (?)`);
+    expect(params).toEqual(["agent.stream-woken"]);
+  });
+
+  it("shows only raw rows in Raw", () => {
+    const { whereSql } = buildStreamFeedWhere({ agent: null, raw: unscopedRaw });
+    expect(whereSql).toBe(`kind LIKE 'raw.%'`);
+  });
+
+  it("ORs the two kind families in Pretty+raw so raw filters never hide agent rows", () => {
+    const { whereSql, params } = buildStreamFeedWhere({
+      agent: { showDebug: true, searchQuery: "hello" },
+      raw: { ...unscopedRaw, components: ["raw.group"] },
+    });
+    expect(whereSql).toBe(
+      `(kind LIKE 'agent.%' AND json(data) LIKE ?) OR (kind LIKE 'raw.%' AND kind IN (?))`,
+    );
+    expect(params).toEqual(["%hello%", "raw.group"]);
+  });
+
+  it("matches nothing when both sides are hidden", () => {
+    expect(buildStreamFeedWhere({ agent: null, raw: null }).whereSql).toBe("0");
   });
 });
 
@@ -154,19 +199,11 @@ describe("feedFiltersActive", () => {
   it("signals raw filter deviations including components", () => {
     expect(feedFiltersActive({ mode: "raw", preset: "everything" }, agentPath)).toBe(true);
     expect(feedFiltersActive({ mode: "raw", q: "boom" }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ mode: "pretty-raw", components: ["group"] }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
-    expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
-  });
-
-  it("accepts legacy pretty-debug as pretty-raw for filter activity", () => {
-    expect(feedFiltersActive({ mode: "pretty-debug", components: ["group"] }, agentPath)).toBe(
+    expect(feedFiltersActive({ mode: "pretty-raw", components: ["raw.group"] }, agentPath)).toBe(
       true,
     );
-  });
-
-  it("ignores the legacy raw=false toggle in pretty-raw", () => {
-    expect(feedFiltersActive({ mode: "pretty-raw", raw: false }, agentPath)).toBe(false);
+    expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
+    expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
   });
 
   it("does not treat pretty mode on non-agent paths as pretty (clamped to raw)", () => {

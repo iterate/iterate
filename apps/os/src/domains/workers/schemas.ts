@@ -104,6 +104,9 @@ export type DynamicWorkerSource = {
   options?: WorkerBuildOptions;
 };
 
+/** Fields shared by every dynamic worker ref (stateless and stateful): the
+ * itx scope `path` the worker binds to and the declarative `source` it is
+ * built from. */
 export type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker
@@ -339,5 +342,13 @@ export const DynamicWorkerRef = z.discriminatedUnion("type", [
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
-  get(): Promise<ProjectRpcTarget>;
+  /**
+   * The value delivered over the loopback is an RPC STUB of the project root,
+   * and stubs are disposable — typed honestly so worker code can (and
+   * should) write `using itx = await this.env.ITX.get()`: releasing the stub
+   * when the handler ends keeps workerd's "An RPC stub was not disposed
+   * properly" warning out of production logs. Values obtained THROUGH it
+   * hold their own references and survive its disposal.
+   */
+  get(): Promise<ProjectRpcTarget & Disposable>;
 };

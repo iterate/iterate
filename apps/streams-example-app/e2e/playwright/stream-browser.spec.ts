@@ -251,7 +251,7 @@ test("event feed view starts at the bottom on first visit while replay fills the
 
   const freshContext = await browser.newContext();
   const page = await freshContext.newPage();
-  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
   await expect(page.getByTestId("feed-item-count")).not.toHaveText(/^0 feed items$/, {
     timeout: 30_000,
   });
@@ -583,9 +583,9 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
 });
 
 // Known failing regression: tail row expansion currently grows underneath the sticky composer.
-// Leave this as a failing test for now. The rest of the stream uses TanStack Virtual's native
-// chat behavior (`anchorTo: "end"` + `followOnAppend`) and we do not want custom scroll
-// bookkeeping just to paper over this edge case.
+// Leave this as a failing test for now. Clicking the row is leaving-the-tail intent (the
+// bottom stick releases on pointerdown, so an expansion is readable without being yanked),
+// which means nothing re-pins the expanded JSON above the sticky composer.
 test("expanding the tail event row at stream end stays above the composer", async ({ page }) => {
   test.fail(true, "Known regression: expanded tail rows can grow under the sticky composer.");
 
@@ -823,21 +823,21 @@ test("reset discards stale local rows and shows a fresh stream", async ({ page }
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 });
 
-// The event-feed view hosts the browser-event-feed processor: specific-renderer events
-// (created/woken) render as their own rows; consecutive events of the same type collapse
-// into one group row. A new type always starts a fresh row.
+// The event-feed view hosts the unified browser-feed processor: specific-renderer events
+// (created/woken) render as their own raw.* rows; consecutive events of the same type
+// collapse into one raw.group row. A new type always starts a fresh row.
 test("event-feed view renders specific renderers as singletons and groups by type", async ({
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
 
   await expect(
-    page.locator("[data-testid='feed-item'][data-component='stream.created']"),
+    page.locator("[data-testid='feed-item'][data-kind='raw.stream.created']"),
   ).toHaveCount(1);
-  await expect(
-    page.locator("[data-testid='feed-item'][data-component='stream.woken']"),
-  ).toHaveCount(1);
+  await expect(page.locator("[data-testid='feed-item'][data-kind='raw.stream.woken']")).toHaveCount(
+    1,
+  );
   await expect(
     page.locator("[data-testid='feed-lifecycle-marker'][data-kind='created']"),
   ).toContainText("Durable object created");
@@ -894,8 +894,8 @@ test("view switcher navigates between the three views", async ({ page }) => {
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
-  await page.getByTestId("view-link-browser-event-feed").click();
-  await expect(page).toHaveURL(/view=browser-event-feed/);
+  await page.getByTestId("view-link-browser-feed").click();
+  await expect(page).toHaveURL(/view=browser-feed/);
   await expect(page.getByTestId("feed-item-count")).toBeVisible();
 
   await page.getByTestId("view-link-browser-state").click();
@@ -1009,10 +1009,10 @@ async function expectComposerAtScrollerBottom(page: Page) {
 }
 
 // The scroll helpers below move the viewport with direct `scrollTop` writes (deterministic,
-// frame-addressable), but the page's initial tail pin deliberately releases only on user
-// *input* events — programmatic scroll deltas are indistinguishable from the virtualizer's
-// own convergence writes (see use-initial-tail-scroll.ts). Each helper therefore dispatches
-// a wheel event first: the same signal a real user reading older rows would produce.
+// frame-addressable), but the page's bottom stick deliberately releases only on user
+// *input* events — programmatic scroll deltas are indistinguishable from the stick's own
+// re-pin writes (see use-stick-to-bottom.ts). Each helper therefore dispatches an upward
+// wheel event first: the same signal a real user reading older rows would produce.
 async function scrollStreamBy(page: Page, delta: number) {
   await page.getByTestId("stream-events").evaluate((element, scrollDelta) => {
     if (!(element instanceof HTMLElement))

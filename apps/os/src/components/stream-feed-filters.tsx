@@ -22,10 +22,9 @@ import {
 /**
  * Mode-owned filter row + expandable type filter panel.
  *
- * Pretty and Pretty+raw = search only (Pretty+raw still shows the full grouped
- * raw rail). Raw = presets, search, offsets, and a large "Types" expander with
- * two sections:
- *   1) Feed item types (`components` — feed_items.component)
+ * Pretty = search only. Pretty+raw and Raw add the "Types" expander narrowing
+ * the raw rows of the one interleaved feed, with two sections:
+ *   1) Raw feed item kinds (`components` — feed_items.kind, raw.* family)
  *   2) Raw event types (`types`)
  */
 export function StreamFeedFilterRow({
@@ -341,15 +340,16 @@ function TypeCheckboxGrid({
 }
 
 function useComponentOptions(database: StreamBrowserDatabase) {
+  // Only the raw.* kind family is filterable here — agent rows are governed
+  // by the mode, not the type panel.
   const result = useStreamQuery(
     database,
-    `SELECT component, COUNT(*) AS total FROM feed_items GROUP BY component ORDER BY component`,
+    `SELECT kind, COUNT(*) AS total FROM feed_items WHERE kind LIKE 'raw.%'
+     GROUP BY kind ORDER BY kind`,
     [],
   );
   return result.data.flatMap((row) =>
-    typeof row.component === "string"
-      ? [{ count: Number(row.total ?? 0), type: row.component }]
-      : [],
+    typeof row.kind === "string" ? [{ count: Number(row.total ?? 0), type: row.kind }] : [],
   );
 }
 
@@ -365,7 +365,7 @@ function useEventTypeOptions(database: StreamBrowserDatabase, eventTypePrefix: s
   const result = useStreamQuery(
     database,
     `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
-     FROM feed_items ${filter == null ? "" : `WHERE ${filter.whereSql}`}
+     FROM feed_items WHERE kind LIKE 'raw.%'${filter == null ? "" : ` AND ${filter.whereSql}`}
      GROUP BY event_type ORDER BY event_type`,
     filter?.params ?? [],
   );

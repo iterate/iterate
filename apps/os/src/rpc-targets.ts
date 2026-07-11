@@ -53,9 +53,8 @@ import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts"
 import {
   describeNode,
   rejectBuiltinCollision,
-  withInvokeCapabilityFallback,
+  installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
-import { ITX_TYPES_SOURCE } from "./types-source.generated.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
@@ -145,7 +144,15 @@ import {
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath, listMcpTools } from "./domains/itx/mcp-client.ts";
-import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import { ITX_EXAMPLES } from "./itx/examples.ts";
+import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
+import {
+  declarationsByName,
+  firstSentence,
+  searchScore,
+  typeSlice,
+  type DocsSearchHit,
+} from "./domains/itx/itx-api-graph.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
   StreamProcessor,
@@ -192,7 +199,6 @@ import type {
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
-import type { ItxExampleSummary, ItxExampleWithCode } from "./itx/examples.ts";
 import type { McpClientConnectInput, McpClientRpc } from "./domains/itx/mcp-client.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
@@ -305,6 +311,8 @@ class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 
 type FetchOnly = Pick<Fetcher, "fetch">;
 
+const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
+
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 
@@ -406,7 +414,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getEvent(args);
   }
 
-  /** Read one bounded page of committed events (optionally filtered by type). */
+  /**
+   * Read one bounded page of committed events (default from the stream's
+   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
+   * page (500 events) means MORE remain — page with
+   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
+   * shows you the beginning, not the head.
+   */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args);
   }
@@ -1078,9 +1092,11 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
    * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
-   * `itx.agents.get(path).message(text)` in one expression — over workerd RPC
-   * (the script lane); see AgentRpcTarget's class comment for the mechanism
-   * and `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
+   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
+   * expression — over workerd RPC (the script lane); dynamic members resolve
+   * through the prototype-chain fallback. See AgentRpcTarget's class comment
+   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
+   * guard.
    */
   get(path: string): AgentRpcTarget {
     const resolved = resolveAgentPath(path, this.props.sourceScopePath);
@@ -2017,7 +2033,6 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    return withInvokeCapabilityFallback(this);
   }
 
   // The project-root capability table: unknown slugs resolve there, and
@@ -2290,7 +2305,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
         'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
-        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
+        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.docs.get({ name: "github-mcp-connect" }).',
       ].join("\n"),
       types: [
         "type GmailRequestInput = {",
@@ -2930,31 +2945,28 @@ type AgentRpcTargetProps = {
 /**
  * Agent capability surface for message loops and agent-local dynamic tools.
  *
- * DELIBERATELY NOT wrapped in `withInvokeCapabilityFallback`, unlike the other
- * itx surfaces — and this is load-bearing, not an omission. This is the one
- * surface routinely returned FROM A METHOD CALL (`itx.agents.get(path)`), and
- * workerd's RPC classifies a call result for promise pipelining with native
+ * Instances are DELIBERATELY plain — never wrapped in a Proxy. This is the
+ * surface most routinely returned FROM A METHOD CALL (`itx.agents.get(path)`),
+ * and workerd RPC classifies a call result for promise pipelining with native
  * brand checks that a JS Proxy can never pass (`serializeJsValueWithPipeline`
  * in workerd's worker-rpc.c++ falls through to `NonPipelinable`, so EVERY
  * pipelined call on the result dies with the baffling "The RPC receiver does
- * not implement the method ..."). A plain class instance classifies as a
- * single stub and pipelines fine — which is what lets model code write the
- * natural one-liners over the script lane (`env.ITX` loopback):
+ * not implement the method ..." — cloudflare/workerd#6873). A plain class
+ * instance classifies as a single stub and pipelines fine, which is what lets
+ * model code write the natural one-liners over the script lane (`env.ITX`
+ * loopback):
  *
- *   await itx.agents.get("subagents/researcher").message(task);
+ *   await itx.agents.get("researcher").message(task);
+ *   await itx.agents.get(path).someTool(args);
  *   await itx.agents.get(path).capabilityHost.someTool(args);
  *
- * The second line is how DYNAMIC capabilities are reached through a fetched
- * handle: `capabilityHost` is a property (workerd resolves property PATHS
- * through proxies — `tryGetProperty` has an explicit `isProxyOfRpcTarget`
- * walk — the gap is only in classifying METHOD RESULTS), so the proxied
- * CapabilityHostRpcTarget behind it still does dotted dynamic dispatch.
- * Inside the agent's own scope nothing changes: scope capabilities live on
- * the root itx (`itx.someTool(...)`), whose proxy is never a call result.
- *
- * Keep it this way: never return a proxied target from a method callers will
- * pipeline on. (Upstream fix proposed for the workerd classifier; until it
- * ships everywhere this rule stands regardless.)
+ * The dynamic-tool spellings (lines 2 and 3 are equivalent) come from the
+ * PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
+ * this file: unknown members walk the prototype chain into a proxied hop and
+ * dispatch through this agent scope's capability host, while the instance
+ * itself stays a genuine, natively-branded RpcTarget. See
+ * installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
+ * mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
  */
 class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
@@ -2974,14 +2986,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the dotted door to the scope's DYNAMIC capabilities
-   * through a fetched handle: `agents.get(path).capabilityHost.someTool(args)`.
-   * That chain pipelines over workerd RPC because `capabilityHost` is a
-   * PROPERTY: workerd resolves property paths through the host's fallback
-   * Proxy (its traversal code special-cases proxies), whereas the handle
-   * itself must stay unproxied to be pipelinable at all (see the class
-   * comment). Inside the agent's own scripts the same capabilities are simply
-   * `itx.someTool(args)`.
+   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
+   * shorthand `agents.get(path).someTool(args)` resolves through the same
+   * host via the handle's prototype-chain fallback; both pipeline over
+   * workerd RPC. Inside the agent's own scripts the same capabilities are
+   * simply `itx.someTool(args)`.
    */
   get capabilityHost(): CapabilityHostRpcTarget {
     return this.#props.capabilityHost;
@@ -3206,7 +3216,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   > {
     return describeNode({
       instructions:
-        "One agent: the narrow control surface for the agent stream at this path. This surface has ONLY the members listed below — the agent scope's dynamic capabilities are reached through `capabilityHost` (e.g. agents.get(path).capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
+        "One agent: the control surface for the agent stream at this path. Besides the members below, the agent scope's dynamic capabilities dispatch directly on this handle — agents.get(path).someTool(args) (equivalently capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
@@ -3307,7 +3317,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    return withInvokeCapabilityFallback(this);
   }
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
@@ -3767,9 +3776,6 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.#props = { ...props, path: normalizePath(props.path) };
-    // The host itself gets the dotted-path fallback too: host.foo.bar(x) is
-    // host.invokeCapability({ path: ["foo", "bar"], args: [x] }).
-    return withInvokeCapabilityFallback(this);
   }
 
   /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */
@@ -3903,7 +3909,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
-  examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
+  docs: 'Find working code + types: search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
@@ -3962,9 +3968,10 @@ type ProjectRpcTargetProps = {
  *
  * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
- * in the isolate; only unknown roots fall through `withInvokeCapabilityFallback`
- * to the capability host's dynamic table (which itself chains up to enclosing
- * scopes). So the common `itx.streams.get(...)` path never makes a round trip
+ * in the isolate; only unknown roots fall through the prototype-chain
+ * fallback (the registry block at the bottom of this file) to the capability
+ * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
  * (`rejectBuiltinCollision` enforces this at provide time). If we end up needing
@@ -3981,6 +3988,15 @@ type ProjectDurableObjectRpc = {
   touchStreamActivity(input: TouchInput): Promise<void>;
 };
 
+/**
+ * An itx: the project capability surface, scoped to one path (the project
+ * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
+ * integrations, sandboxes, scheduler, docs, ...) are project-global and
+ * identical at every scope; what differs by scope is the capability host
+ * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * Unknown dotted members dispatch dynamically against the scope's capability
+ * host, chaining up to the project root.
+ */
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -3990,7 +4006,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
-    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   /** The project this itx is scoped into. */
@@ -4007,8 +4022,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
-   * capability (built-ins + dynamic mounts), the children map, and the full
-   * public type surface in `types`.
+   * capability (built-ins + dynamic mounts), the children map, and the
+   * `Project` declaration in `types` (the full surface is one
+   * `itx.docs.get({ name })` per declaration away).
    */
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#props.capabilityHost.path;
@@ -4022,8 +4038,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
         "Built-ins are project-global and identical at every scope; `capabilities` is the full inventory (built-ins + dynamic mounts). " +
         "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
-        "Deep discovery: call __describe() on any child.",
-      types: ITX_TYPES_SOURCE,
+        'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
+      // The Project declaration alone is ~1.4k tokens; 2000 fits it plus a
+      // little of its closure, and the trailer names the rest.
+      types: typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: "Project",
+        maxTokens: 2000,
+      }).sourceText,
       children: {
         ...PROJECT_BUILTIN_BLIPS,
         ...(scopePath.startsWith("/agents/")
@@ -4193,9 +4215,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
-  get examples(): ItxExampleCatalogRpcTarget {
-    return new ItxExampleCatalogRpcTarget();
+  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+   * declarations, and this scope's mounted capabilities; `get({ name })`
+   * fetches one. Pass search MANY related words — matching is dumb word
+   * overlap. */
+  get docs(): ItxDocsRpcTarget {
+    return new ItxDocsRpcTarget({ capabilityHost: this.#props.capabilityHost });
   }
 
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
@@ -4882,42 +4907,180 @@ export class StreamProcessorRpcTarget<
 // The examples catalogue is plain data (src/itx/examples.ts) shared with the
 // REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
 // agents and scripts browse known-good snippets instead of guessing at the
-// surface; list() omits the code bodies so it stays cheap to skim.
-// Session-context entries are excluded: they run against the OS Session
-// (what authenticate() returns), which an itx holder does not have.
+// surface. Session-context entries are excluded: they run against the OS
+// Session (what authenticate() returns), which an itx holder does not have.
 const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
 
-class ItxExampleCatalogRpcTarget extends IterateRpcTarget<"ItxExampleCatalog"> {
+/**
+ * The docs door: search + fetch over everything callable from this scope —
+ * the platform's example scripts (most are proven: the test suite runs them
+ * unattended against a live project on every change; the rest are marked
+ * interactive), the public type surface (the Itx Type Graph), and the
+ * capabilities mounted in the caller's scope chain. One door for "how do I
+ * X?": search first, fetch what the hits name, adapt working code.
+ *
+ * The search mechanism is deliberately dumb (word matching, no embeddings),
+ * which is why every docstring here tells callers to pass MANY related words
+ * — recall comes from the query, not the engine.
+ */
+class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
+  readonly #capabilityHost: CapabilityHostRpcTarget;
+
+  constructor(props: { capabilityHost: CapabilityHostRpcTarget }) {
+    super();
+    this.#capabilityHost = props.capabilityHost;
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Read-only catalogue of known-good itx script snippets: list() summaries, get({ id }) one example with full code. Copy working patterns instead of inventing them.",
-      children: { get: "One example with code.", list: "All example summaries." },
-      parent: "a project itx (itx.examples)",
+        "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
+        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
+        "get({ name }) fetches what a hit names: an example's full annotated code, or a type declaration with its referenced types.",
+      children: {
+        get: "Fetch one entry by name: an example's full code, or a type declaration closure.",
+        search:
+          "Find examples, types, and mounted capabilities by keywords (pass many related words).",
+      },
+      parent: "a project itx (itx.docs)",
     });
   }
 
-  /** Every example summary, without code bodies (cheap to skim). */
-  async list(): Promise<ItxExampleSummary[]> {
-    return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
-  }
+  /**
+   * Find examples, types, and mounted capabilities. Pass MANY related words —
+   * matching is dumb word overlap, so more synonyms means better recall:
+   * `search({ q: "file upload attachment bytes store image" })`, not
+   * `search({ q: "files" })`. Example hits are working scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetchCall`
+   * field is the literal next call to make.
+   */
+  async search(input: { q: string }): Promise<DocsSearchHit[]> {
+    const scored: Array<{ hit: DocsSearchHit; score: number }> = [];
 
-  /** One example with its full script body. */
-  async get(input: { id: string }): Promise<ItxExampleWithCode> {
-    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.id);
-    if (!example) {
-      throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
+    for (const example of PROJECT_CONTEXT_EXAMPLES) {
+      const score = searchScore(
+        input.q,
+        `${example.id} ${example.title} ${example.description} ${example.code}`,
+      );
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "example",
+          name: example.id,
+          summary: `${example.title} — ${example.description}`,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(example.id)} })`,
+        },
+      });
     }
-    return { ...exampleSummary(example), code: example.code };
-  }
-}
 
-function exampleSummary(example: ItxExample): ItxExampleSummary {
-  return {
-    description: example.description,
-    id: example.id,
-    title: example.title,
-  };
+    for (const declaration of ITX_API_DECLARATIONS) {
+      const memberText = Object.entries(declaration.memberSummaries)
+        .map(([member, summary]) => `${member} ${summary}`)
+        .join(" ");
+      const score = searchScore(
+        input.q,
+        `${declaration.name} ${declaration.summary} ${memberText}`,
+      );
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "type",
+          name: declaration.name,
+          summary: declaration.summary,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(declaration.name)} })`,
+        },
+      });
+    }
+
+    // Capabilities mounted in this scope's chain (agent scope sees its own
+    // mounts plus the project root's) — the part of the surface no static
+    // corpus can know.
+    const { capabilities } = await this.#capabilityHost.__describe();
+    for (const capability of capabilities) {
+      if (capability.type === "builtin") continue; // builtins are covered by their type declarations
+      const dottedPath = capability.path.join(".");
+      const instructions = capability.instructions ?? "";
+      const score = searchScore(input.q, `${dottedPath} ${instructions}`);
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "capability",
+          name: dottedPath,
+          summary: firstSentence(instructions) || "(no instructions recorded)",
+          fetchCall: `await itx.${dottedPath}.__describe()`,
+        },
+      });
+    }
+
+    // Equal-score tie-break mirrors the guidance: working examples first,
+    // scope-specific mounts next, type reference last; 12 hits is about one
+    // screenful for a model.
+    const kindRank: Record<DocsSearchHit["kind"], number> = { example: 0, capability: 1, type: 2 };
+    return scored
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          kindRank[a.hit.kind] - kindRank[b.hit.kind] ||
+          a.hit.name.localeCompare(b.hit.name),
+      )
+      .slice(0, 12)
+      .map((entry) => entry.hit);
+  }
+
+  /**
+   * Fetch one entry by the name a search hit gave you. An example name
+   * returns its full script, annotated with its provenance (most examples
+   * run unattended against a live project in the platform's test suite; the
+   * rest are marked interactive); a type declaration name returns its
+   * TypeScript source plus as much of its reference closure as fits
+   * `maxTokens` (default 1500), ending with a comment naming anything left
+   * out and how to fetch it.
+   */
+  async get(input: { name: string; maxTokens?: number }): Promise<string> {
+    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.name);
+    if (example) {
+      // Paste-ready for the codemode contract: the annotation lives INSIDE
+      // the function (a response block must START with `async` — leading
+      // comments die silently), and `vars` is bound so the body's example
+      // inputs (`vars.foo ?? fallback`) resolve to their fallbacks until the
+      // caller substitutes real values.
+      return [
+        "async (itx) => {",
+        `  // EXAMPLE ${JSON.stringify(example.id)}: ${example.title}`,
+        example.e2eProven === false
+          ? `  // From the example catalogue (interactive: depends on a connected account or external service).`
+          : `  // Proven: this exact script runs unattended against a live project in the platform's test suite.`,
+        `  // ${example.description}`,
+        `  const vars = {}; // example inputs — replace \`vars.x ?? fallback\` with real values`,
+        example.code,
+        "}",
+      ].join("\n");
+    }
+    if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
+      // Clamp instead of reject: an out-of-range value from a model should
+      // cost a degraded answer, not a wasted turn. The floor covers the
+      // trailer reserve plus one small declaration.
+      const maxTokens = Number.isFinite(input.maxTokens)
+        ? Math.min(Math.max(input.maxTokens!, 300), 10_000)
+        : 1500;
+      return typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: input.name,
+        maxTokens,
+      }).sourceText;
+    }
+    const nearest = (await this.search({ q: input.name })).slice(0, 3);
+    throw new Error(
+      `unknown docs entry ${JSON.stringify(input.name)}` +
+        (nearest.length > 0
+          ? ` — closest matches: ${nearest.map((hit) => hit.name).join(", ")}`
+          : "") +
+        `. itx.docs.search({ q: "several related words" }) finds examples, types, and capabilities.`,
+    );
+  }
 }
 
 /**
@@ -5170,6 +5333,11 @@ const EXA_PLATFORM_KEY_HEADER = {
   authorization: 'Bearer getSecret({ platform: "integrations.exa.apiKey" })',
 };
 
+/**
+ * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`
+ * returns a client whose dotted calls invoke the server's tools; `exa` is the
+ * pre-connected Exa web-search server every project gets.
+ */
 class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -5231,7 +5399,6 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
     },
   ) {
     super();
-    return withInvokeCapabilityFallback(this);
   }
 
   async __describe(): Promise<Description> {
@@ -5279,6 +5446,11 @@ type OpenApiReadyState = {
   spec: Record<string, unknown>;
 };
 
+/**
+ * Ad-hoc OpenAPI clients — `itx.openapi`. `connect({ specUrl })` fetches and
+ * parses a spec and returns a client whose dotted calls are the spec's
+ * operationIds, executed against its server through project egress.
+ */
 class OpenApiCollectionRpcTarget extends IterateRpcTarget<"OpenApiCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -5322,7 +5494,6 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
       const spec = await fetchSpec(props.config, props.egress);
       return { operations: listOpenApiOperations(spec), spec };
     });
-    return withInvokeCapabilityFallback(this);
   }
 
   async __describe(): Promise<Description> {
@@ -5487,3 +5658,52 @@ function requestBase(props: OpenApiConnectInput, spec: Record<string, unknown>):
 function ensureTrailingSlash(url: string): string {
   return url.endsWith("/") ? url : `${url}/`;
 }
+
+// =============================================================================
+// Dynamic-capability fallbacks — the registry.
+//
+// Every surface listed here answers UNKNOWN dotted members by dispatching an
+// `invokeCapability({ path, args })` against its scope's capability table
+// (`itx.someTool(...)`, `host.foo.bar(x)`, `mcpClient.someToolName(args)`).
+// The fallback lives on each class's PROTOTYPE CHAIN — one proxied hop
+// between `Class.prototype` and its parent — NOT as a Proxy around instances:
+// workerd RPC brand-checks a method call's RESULT when classifying it for
+// promise pipelining, a Proxy never passes, and every pipelined call on it
+// then fails with "The RPC receiver does not implement the method ..."
+// (cloudflare/workerd#6873). With the hop, instances are genuine RpcTargets —
+// `itx.capabilityHosts.get(p).runScript(s)`, `itx.workers.get(ref).ping()`,
+// `itx.mcp.connect(url).someToolName(args)` all pipeline in one expression —
+// while unknown-name lookups still walk the prototype chain into the hop.
+// Mechanism details: installPrototypeInvokeCapabilityFallback (domains/itx/
+// utils.ts).
+// =============================================================================
+
+// The root itx / `projects.get(id)`: unknown roots dispatch via the scope's
+// capability host (mounted capabilities, `itx.someTool(...)`).
+installPrototypeInvokeCapabilityFallback(ProjectRpcTarget, {
+  invokerFor: (project) => project.capabilityHost,
+});
+// `capabilityHosts.get(path)` and every `capabilityHost` getter: the host IS
+// the invoker — `host.foo.bar(x)` is `host.invokeCapability({ path: ["foo",
+// "bar"], args: [x] })`.
+installPrototypeInvokeCapabilityFallback(CapabilityHostRpcTarget);
+// `itx.integrations`: userspace connections mount under provider slugs
+// (`itx.integrations.waitrose.mum.search(...)`).
+installPrototypeInvokeCapabilityFallback(ProjectIntegrationsRpcTarget);
+// `workers.get(ref)`: dotted paths flatten into one invokeCapability against
+// the dynamic worker (the userspace `invokeCapability` walk).
+installPrototypeInvokeCapabilityFallback(DynamicWorkerRpcTarget);
+// `mcp.connect(url)`: tool names are only known at runtime (tools/list), so
+// every tool call is a dynamic member by construction.
+installPrototypeInvokeCapabilityFallback(McpClientRpcTarget);
+// `openapi.connect(specUrl)`: operationIds are runtime-discovered, same shape
+// as MCP tools.
+installPrototypeInvokeCapabilityFallback(OpenApiRpcTarget);
+// `agents.get(path)`: an agent scope's mounted tools directly on the handle —
+// `itx.agents.get(path).someTool(args)` — dispatched via the agent's own
+// capability host (the explicit `agent.capabilityHost.someTool(...)` spelling
+// resolves identically). #1839 removed the instance Proxy to make handles
+// pipelinable; the hop restores the sugar without giving that back.
+installPrototypeInvokeCapabilityFallback(AgentRpcTarget, {
+  invokerFor: (agent) => agent.capabilityHost,
+});

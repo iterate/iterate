@@ -151,6 +151,13 @@ async function runByokAttempt(input: {
   if (ttlSeconds !== undefined) {
     headers["cf-aig-cache-ttl"] = String(ttlSeconds);
     headers["cf-aig-cache-key"] = await cloudflareAiGatewayResponseCacheKey(body);
+  } else {
+    // No TTL configured means this deployment must NEVER serve a cached
+    // reply (prd). Said explicitly per request: the gateway otherwise falls
+    // back to its dashboard-level cache setting, which is account state this
+    // code can't see — live prd evidence showed cache lookups (MISS) even
+    // with no cache headers sent.
+    headers["cf-aig-skip-cache"] = "true";
   }
   const response = await input.deadline.race(
     gateway.run({ provider: "openai", endpoint: "chat/completions", headers, query: body }),

@@ -48,6 +48,8 @@
 //                   needs an onboarded sender domain and a real recipient
 //                   mailbox, so keep it interactive.
 
+import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
+
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
@@ -73,36 +75,25 @@ export type ExampleCase = {
    * tens of seconds; that is expected latency, not a hang.
    */
   completionTimeoutMs?: number;
+  /**
+   * Post-assertion teardown, run by every runner with a project-scoped itx.
+   * For examples that create real slot-level resources (sandbox containers):
+   * back-to-back e2e runs otherwise accumulate instances until Cloudflare's
+   * container provisioning throttles the whole slot into multi-minute boot
+   * stalls (every 2026-07-10 marathon died on this around run 4-6, while
+   * spaced-out PR runs never saw it). Best-effort — a cleanup failure logs,
+   * never fails the test.
+   */
+  cleanup?: (itx: unknown, ctx: ExampleRunContext) => Promise<void>;
 };
 
-/** Example ids that intentionally have no matrix case (see header). */
-export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
-  "whoami",
-  "list-projects",
-  "ai-models",
-  "cf-ai-to-markdown",
-  "ai-generate-image",
-  "ai-generate-audio",
-  "ai-transcribe-audio",
-  "ai-generate-video",
-  "cf-browser-markdown",
-  "cf-images-transform",
-  "cf-videos-frame",
-  "exa-web-search",
-  "connect-public-mcp",
-  "connect-openapi-petstore",
-  "secret-postman-echo",
-  "github-mcp-connect",
-  "github-webhooks-project-worker",
-  // Built-in integration usage snippets: each needs a REAL connected
-  // GitHub/Google/Slack account, which e2e fixture projects never hold.
-  "github-list-repos",
-  "github-read-file",
-  "github-backed-repo",
-  "gmail-search-inbox",
-  "slack-post-message",
-  "email-send",
-]);
+/** Example ids that intentionally have no matrix case: exactly the entries
+ * the catalogue marks `e2eProven: false` (see the field's docstring — the
+ * data is the single source; the per-id rationales live in the header
+ * above). */
+export const EXAMPLE_IDS_WITHOUT_CASES = new Set(
+  ITX_EXAMPLES.filter((example) => example.e2eProven === false).map((example) => example.id),
+);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "stream-cross-post": {
@@ -265,6 +256,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
     },
+    cleanup: async (itx, ctx) => {
+      const project = itx as {
+        sandboxes: { get(path: string): Promise<{ destroy(): Promise<unknown> }> };
+      };
+      const sandbox = await project.sandboxes.get(`/sandboxes/example-${ctx.attemptSalt}`);
+      await sandbox.destroy();
+    },
   },
   "workspace-edit-and-push": {
     // Unique workspace per example × runtime: the path is durable identity
@@ -367,10 +365,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
-  "browse-examples": {
+  "docs-search-and-get": {
     assert: (result, _ctx, expect) => {
-      expect(result).toMatchObject({ hasCode: true, id: "describe-project" });
-      expect((result as { count: number }).count).toBeGreaterThan(10);
+      expect(result).toMatchObject({
+        examplePasteReady: true,
+        streamTypesIncludeAppend: true,
+      });
+      expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);
+      expect(result).toHaveProperty("firstHit.fetchCall");
     },
   },
   "agent-send-message": {

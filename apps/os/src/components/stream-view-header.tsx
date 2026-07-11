@@ -183,7 +183,7 @@ export function StreamViewHeader({
             ) : null}
           </>
         )}
-        <StreamActionMenu kill={streamKill} pause={agentPause} />
+        {agentPause == null ? null : <StreamActionMenu kill={streamKill} pause={agentPause} />}
       </div>
     </header>
   );
@@ -210,7 +210,6 @@ export function StreamModeTabs({ streamPath }: { streamPath: string }) {
           mode: mode === defaultMode ? undefined : mode,
           types: undefined,
           components: undefined,
-          raw: undefined,
           from: undefined,
           to: undefined,
           preset: undefined,
@@ -236,13 +235,13 @@ function StreamActionMenu({
     kill: () => Promise<void>;
     pending: boolean;
   };
-  pause?: {
+  pause: {
     paused: boolean;
     pending: boolean;
     setPaused: (paused: boolean) => Promise<void>;
   };
 }) {
-  const PauseActionIcon = pause?.paused ? PlayIcon : PauseIcon;
+  const PauseActionIcon = pause.paused ? PlayIcon : PauseIcon;
 
   return (
     <DropdownMenu>
@@ -251,7 +250,7 @@ function StreamActionMenu({
           <Button
             variant="ghost"
             size="icon"
-            title={pause == null ? "Stream actions" : "Agent actions"}
+            title="Agent actions"
             className="rounded-full text-muted-foreground"
           />
         }
@@ -260,19 +259,15 @@ function StreamActionMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>
-            {pause == null ? "Stream actions" : "Agent actions"}
-          </DropdownMenuLabel>
-          {pause == null ? null : (
-            <DropdownMenuItem
-              closeOnClick
-              disabled={pause.pending}
-              onClick={() => void pause.setPaused(!pause.paused)}
-            >
-              {pause.pending ? <Spinner /> : <PauseActionIcon />}
-              {pause.paused ? "Resume agent" : "Pause agent"}
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
+          <DropdownMenuItem
+            closeOnClick
+            disabled={pause.pending}
+            onClick={() => void pause.setPaused(!pause.paused)}
+          >
+            {pause.pending ? <Spinner /> : <PauseActionIcon />}
+            {pause.paused ? "Resume agent" : "Pause agent"}
+          </DropdownMenuItem>
           <DropdownMenuItem
             closeOnClick
             disabled={kill.pending}
