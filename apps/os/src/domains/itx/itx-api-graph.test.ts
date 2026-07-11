@@ -8,6 +8,7 @@ import {
   mountDeclaration,
   referencedPlatformTypeNames,
   searchScore,
+  weightedDeclarationScore,
   typeSlice,
 } from "./itx-api-graph.ts";
 
@@ -70,6 +71,30 @@ describe("typeSlice", () => {
     const a = typeSlice({ declarations: byName, rootName: "Agent", maxTokens: 2_000 });
     const b = typeSlice({ declarations: byName, rootName: "Agent", maxTokens: 2_000 });
     expect(a.sourceText).toBe(b.sourceText);
+  });
+});
+
+describe("weightedDeclarationScore", () => {
+  test("counts name/summary words fully and member-only words half", () => {
+    expect(
+      weightedDeclarationScore({
+        query: "stream append events",
+        ownText: "Stream One durable event stream",
+        memberText: "append appends events to the stream",
+      }),
+    ).toBe(2); // "stream" in own text (1), "append" + "events" member-only (0.5 each)
+  });
+
+  test("keeps hub declarations from matching wholesale on member text", () => {
+    // Every query word landing ONLY in member summaries scores half per
+    // word — a hub type no longer beats an example whose title matches.
+    expect(
+      weightedDeclarationScore({
+        query: "send message agent",
+        ownText: "Project the root project surface",
+        memberText: "agents send message to an agent streams repos",
+      }),
+    ).toBe(1.5);
   });
 });
 

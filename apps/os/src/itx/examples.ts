@@ -46,10 +46,13 @@ export type ItxExample = {
    * the docs door words its provenance claim from it.
    */
   e2eProven?: false;
-  /** The handle the snippet expects: a project itx (the normal case) or the
-   * OS Session — what authenticate() returns, not an itx (__describe /
-   * projects.list only). */
-  context: "project" | "session";
+  /** The handle the snippet expects: a project itx (the normal case), an
+   * AGENT itx (the project surface plus the agent's own mounts — chat,
+   * workspace, agent; the docs door serves these too since agents are its
+   * main audience, but the unattended matrix skips them: they need a live
+   * conversation), or the OS Session — what authenticate() returns, not an
+   * itx (__describe / projects.list only). */
+  context: "agent" | "project" | "session";
   description: string;
   id: string;
   /** Runtimes the snippet runs unattended in (the e2e matrix honors this). */
@@ -702,9 +705,9 @@ return { record }; // ["capability-provided", "capability-revoked"]
   },
   {
     id: "agent-send-message",
-    title: "Send a message to an agent",
+    title: "Send a message to an agent (also how you create one)",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured).",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -746,6 +749,30 @@ return {
   examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
   streamTypesIncludeAppend: streamTypes.includes("append("),
 };
+`.trim(),
+  },
+  {
+    id: "chat-message-with-files",
+    e2eProven: false,
+    title: "Send a chat message with an attached image or file",
+    description:
+      "itx.chat.sendMessage accepts attachments: files: [{ filename, contentType, data }] where data is a Blob, Uint8Array, or base64 string (what itx.ai.run image models return). One call stores the bytes in project file storage AND attaches them to the message — attached images render inline in the chat and stay visible to you on later turns. Agent-scope only (itx.chat is the agent's conversation); needs a live agent conversation to observe, so run it interactively.",
+    context: "agent",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// vars.data can be raw bytes or a base64 string — e.g. the b64_json an
+// ai-generate-image run returned. NEVER paste base64 into message text;
+// attach it and let the platform store + render it.
+const sent = await itx.chat.sendMessage(vars.caption ?? "Here you go!", {
+  files: [
+    {
+      filename: vars.filename ?? "picture.png",
+      contentType: vars.contentType ?? "image/png",
+      data: vars.data ?? new Blob(["hello from the examples catalogue"]),
+    },
+  ],
+});
+return { offset: sent.offset, type: sent.type };
 `.trim(),
   },
   {
