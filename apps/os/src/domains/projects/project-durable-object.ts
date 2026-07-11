@@ -292,6 +292,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
     secretPaths: string[];
   }): Promise<Response> {
     const { request, rule } = input;
+    // ONE deadline drives both the `expiresAt` the approver UI reads and the
+    // server's own hold — stamped now so they can't drift (body buffering and
+    // the append below take time).
+    const deadline = Date.now() + rule.approvalTimeoutMs;
     // Buffer the body up front: hashing consumes the stream, and the released
     // request is re-built from these bytes after the human answers.
     const bodyBytes = request.body === null ? null : new Uint8Array(await request.arrayBuffer());
@@ -303,7 +307,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       bodyPreview: bodyBytes === null ? null : utf8Preview(bodyBytes),
       secretPaths: input.secretPaths,
       ruleKey: rule.ruleKey,
-      expiresAt: new Date(Date.now() + rule.approvalTimeoutMs).toISOString(),
+      expiresAt: new Date(deadline).toISOString(),
     };
 
     const stream = this.#ownStream();
@@ -315,7 +319,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
     const resolution = await this.#awaitApprovalResolution({
       approvalRequestEventOffset,
-      deadline: Date.now() + rule.approvalTimeoutMs,
+      deadline,
       requestedPayload,
     });
 
