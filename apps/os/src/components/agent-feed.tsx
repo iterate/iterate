@@ -39,6 +39,7 @@ import {
   formatFileSize,
   formatSeconds,
   formatTokens,
+  looksLikeCode,
 } from "~/lib/feed-format.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -588,8 +589,9 @@ function AgentActivityStep({
   );
 }
 
-/** Opens the LLM request inspector: the exact context this request sent to
- * the model, replayed from the local event mirror (llm-request-inspector-panel). */
+/** Opens the LLM trace panel: the exact context this request sent to the
+ * model and the response it made, replayed from the local event mirror
+ * (llm-request-inspector-panel). */
 function InspectLlmRequestButton({
   llmRequestOffset,
   onInspectLlmRequest,
@@ -601,12 +603,13 @@ function InspectLlmRequestButton({
     <Button
       variant="ghost"
       size="xs"
-      title="Show the exact context sent to the model"
+      title="Show the exact request sent to the model and its response"
       data-testid="agent-feed-inspect-llm-request"
       onClick={() => onInspectLlmRequest(llmRequestOffset)}
-      className="text-muted-foreground/60 hover:text-foreground"
+      className="font-normal text-muted-foreground/70 hover:text-foreground"
     >
       <ScrollTextIcon className="size-3" />
+      <span className="font-mono text-xs">View trace</span>
     </Button>
   );
 }
@@ -864,12 +867,6 @@ function liveActivityLabel(runningSteps: AgentUiStep[]): string {
     parts.push(`Making ${llmCount} LLM request${llmCount === 1 ? "" : "s"}`);
   }
   return parts.join(" · ") || "Working…";
-}
-
-/** Code-mode agents stream itx code as their response; chat agents stream prose. */
-const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;
-function looksLikeCode(text: string): boolean {
-  return text.includes("```") || CODE_START_PATTERN.test(text);
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {

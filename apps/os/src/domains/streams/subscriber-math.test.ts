@@ -21,7 +21,7 @@ describe("tuning constants", () => {
     expect(MAX_DELIVERY_ATTEMPTS).toBe(15);
     expect(SKIP_CONFIRM_ATTEMPTS).toBe(3);
     expect(MAX_CONSECUTIVE_SKIPS).toBe(3);
-    expect(DELIVERY_BATCH_LIMIT).toBe(100);
+    expect(DELIVERY_BATCH_LIMIT).toBe(1000);
     expect(DELIVERY_BATCH_BYTE_LIMIT).toBe(1024 * 1024);
   });
 });
@@ -103,10 +103,10 @@ describe("halveBatchLimit", () => {
   it("walks the full bisect ladder from DELIVERY_BATCH_LIMIT down to 1 and stays there", () => {
     const steps: number[] = [];
     let limit = DELIVERY_BATCH_LIMIT;
-    while (steps.length < 10) {
+    while (steps.length < 13) {
       limit = halveBatchLimit(limit);
       steps.push(limit);
     }
-    expect(steps).toEqual([50, 25, 12, 6, 3, 1, 1, 1, 1, 1]);
+    expect(steps).toEqual([500, 250, 125, 62, 31, 15, 7, 3, 1, 1, 1, 1, 1]);
   });
 });

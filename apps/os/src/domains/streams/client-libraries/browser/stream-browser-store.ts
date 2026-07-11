@@ -28,6 +28,32 @@ import {
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
+
+// --- Catch-up + flow-control tuning ----------------------------------------------------
+// The server's live subscription pump is deliberately one-directional: it never waits for
+// the client (see stream-subscribers.ts #open). That is perfect for the live tail and
+// fatal for a cold mirror thousands of events behind — the whole backlog gets blasted at
+// the socket faster than SQLite can apply it (measured: ~20k events/s delivered vs
+// ~1-4k events/s applied; a 1M-event replay ballooned a browser tab to >1.3GB of queued
+// batches and redelivered 3.26× through reconnect churn). So the leader PULLS history
+// with paged `getEvents` reads — client-paced, so backpressure is structural — and only
+// subscribes for the tail once it is within CATCHUP_THRESHOLD_EVENTS of the head.
+
+/** How far behind the server head a checkpoint may be before we page instead of subscribe. */
+const CATCHUP_THRESHOLD_EVENTS = 1_000;
+/** `getEvents` page size (its server-side maximum). */
+const CATCHUP_PAGE_LIMIT = 500;
+/**
+ * Live-tail safety valve: if the un-applied delivery backlog exceeds this many events, the
+ * subscription has outrun SQLite. Cut the connection (dropping the queued batches — the
+ * superseded-election guard already discards them) and reconnect; the fresh election
+ * pull-pages back to the head at the mirror's own pace. One control action when
+ * overwhelmed, zero protocol chatter in steady state — delivery frames stay one-way.
+ */
+const MAX_PENDING_INGEST_EVENTS = 20_000;
+
+/** Retries for `appendBatch` across reconnects/stream-DO restarts (~30s of backoff). */
+const APPEND_MAX_RETRIES = 8;
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
@@ -254,6 +280,10 @@ function createStreamRuntime(
   let readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   // Self-heal backoff for browser-side ingest failures (C1).
   let ingestFailureCount = 0;
+  // Events delivered by the live subscription but not yet applied to SQLite — the
+  // in-memory backlog the MAX_PENDING_INGEST_EVENTS valve bounds. Reset whenever the
+  // connection is replaced (the superseded-election guard discards the queue with it).
+  let pendingIngestEvents = 0;
   // The server incarnation this connection reconciled against, how far deliveries have
   // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
   // ingest). The liveness probe compares these against fresh runtimeState() so an
@@ -389,6 +419,7 @@ function createStreamRuntime(
   function scheduleReconnect(connectionError: string, delayMs: number) {
     if (disposed) return;
     connectionEpoch += 1;
+    pendingIngestEvents = 0;
     stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
@@ -447,7 +478,9 @@ function createStreamRuntime(
   // core state's per-DO-restart `incarnationId`. If our recorded incarnation differs from
   // the server's, the offset comparison is meaningless — rebuild the mirror. Otherwise fall
   // back to the offset check: discard when the server has fewer committed events than we do.
-  async function reconcileLocalMirrorWithServer(rpc: BrowserStreamClient) {
+  async function reconcileLocalMirrorWithServer(
+    rpc: BrowserStreamClient,
+  ): Promise<{ serverMaxOffset: number }> {
     // Deliberately a throwaway instance: processors memoize their checkpoint on
     // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({
@@ -461,6 +494,7 @@ function createStreamRuntime(
     const localMaxOffset = checkpoint.offset;
     const { coreProcessorState: rawCoreProcessorState } = await rpc.runtimeState();
     const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
+    const reconciled = { serverMaxOffset: coreProcessorState.maxOffset };
     const serverIncarnation = coreProcessorState.createdAt;
     reconciledIncarnation = serverIncarnation;
     const localIncarnation = await streamDatabase.readMirrorIncarnation(slug);
@@ -486,7 +520,7 @@ function createStreamRuntime(
       await discardLocalMirror();
       await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
       await recordServerIncarnation(serverIncarnation);
-      return;
+      return reconciled;
     }
 
     if (localMaxOffset <= 0) {
@@ -496,7 +530,7 @@ function createStreamRuntime(
         await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
       }
       await recordServerIncarnation(serverIncarnation);
-      return;
+      return reconciled;
     }
 
     if (localIncarnation !== serverIncarnation) {
@@ -510,7 +544,7 @@ function createStreamRuntime(
       );
       await discardLocalMirror();
       await recordServerIncarnation(serverIncarnation);
-      return;
+      return reconciled;
     }
 
     if (coreProcessorState.maxOffset < localMaxOffset) {
@@ -525,6 +559,7 @@ function createStreamRuntime(
       await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
     }
     await recordServerIncarnation(serverIncarnation);
+    return reconciled;
   }
 
   function connect() {
@@ -629,7 +664,10 @@ function createStreamRuntime(
         if (!ownsRuntime()) return undefined;
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
-        await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection));
+        const { serverMaxOffset } = await withDeadline(
+          "reconcile",
+          reconcileLocalMirrorWithServer(election.connection),
+        );
         // Re-check after every await: a step that settles late (after this
         // election was superseded) must not write runtime-wide fields like
         // lastDeliveredOffset over the current election's values.
@@ -646,9 +684,53 @@ function createStreamRuntime(
         // subscription, no probe, and no error.
         const checkpoint = await withDeadline("checkpoint read", processor.snapshot());
         if (!ownsRuntime()) return undefined;
-        lastDeliveredOffset = checkpoint.offset;
+
+        // Far behind the head? PULL history with paged reads before opening the
+        // one-directional subscription (see the flow-control block up top). Each
+        // page is fetched, applied, and checkpointed before the next is
+        // requested, so the server can never outrun the mirror here — and a
+        // page failure just reconnects and resumes from the checkpoint.
+        let catchUpOffset = checkpoint.offset;
+        let serverHead = serverMaxOffset;
+        if (serverHead - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
+          console.info(
+            `[stream ${args.streamPath} ${slug}] mirror is ${serverHead - catchUpOffset} events behind; pull-paging before subscribing`,
+          );
+          for (;;) {
+            if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) {
+              // The head we were chasing was captured before these pages
+              // applied. A stream that kept appending meanwhile could be far
+              // ahead of it — re-read the live head before trusting the exit,
+              // or the subscription would dump the accumulated gap after all.
+              const { coreProcessorState: rawHeadState } = await withDeadline(
+                "catch-up head re-read",
+                election.connection.runtimeState(),
+              );
+              if (!ownsRuntime()) return undefined;
+              serverHead = parseBrowserCoreProcessorState(rawHeadState).maxOffset;
+              if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) break;
+            }
+            const page = (await withDeadline(
+              "catch-up page read",
+              election.connection.getEvents({
+                afterOffset: catchUpOffset,
+                limit: CATCHUP_PAGE_LIMIT,
+              }),
+            )) as StreamEvent[];
+            if (!ownsRuntime()) return undefined;
+            if (page.length === 0) break; // server truth moved (reset?); subscribe reconciles
+            deliveryArrivals += 1;
+            lastBatchEvents = page.length;
+            totalDeliveredEvents += page.length;
+            await processor.ingest({ events: page, streamMaxOffset: serverHead });
+            if (!ownsRuntime()) return undefined;
+            catchUpOffset = page.at(-1)!.offset;
+            lastDeliveredOffset = catchUpOffset;
+          }
+        }
+        lastDeliveredOffset = catchUpOffset;
         return {
-          replayAfterOffset: checkpoint.offset,
+          replayAfterOffset: catchUpOffset,
           subscriber: {
             description: "browser",
             processor: {
@@ -724,6 +806,20 @@ function createStreamRuntime(
     // checkpoint of) the current election's processor on the same tables — and
     // it must not count as delivery progress either (see below).
     if (disposed || stream !== election.connection) return;
+    // Live-tail safety valve (see MAX_PENDING_INGEST_EVENTS): the server pump
+    // is one-directional and can outrun SQLite; queued-but-unapplied events
+    // otherwise accumulate in JS memory without bound. Cutting the connection
+    // discards the queue (every queued ingest bails on the superseded-election
+    // guard above) and the fresh election pull-pages from the checkpoint.
+    pendingIngestEvents += batch.events.length;
+    if (pendingIngestEvents > MAX_PENDING_INGEST_EVENTS) {
+      pendingIngestEvents = 0;
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] delivery outran the local mirror (> ${MAX_PENDING_INGEST_EVENTS} events queued); reconnecting to catch up at the mirror's pace`,
+      );
+      scheduleReconnect("delivery outran the local mirror", 0);
+      return;
+    }
     // Count the arrival HERE, for the current election only, and BEFORE the
     // (possibly slow) ingest await: the liveness probe reads a bumped counter
     // as "deliveries are flowing", so a long ingest must not look stalled,
@@ -733,6 +829,7 @@ function createStreamRuntime(
     totalDeliveredEvents += batch.events.length;
     try {
       await processor.ingest(batch);
+      pendingIngestEvents = Math.max(0, pendingIngestEvents - batch.events.length);
       ingestFailureCount = 0;
       lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
     } catch (error) {
@@ -937,6 +1034,7 @@ function createStreamRuntime(
     totalDeliveredEvents,
     lastBatchEvents,
     ingestFailures,
+    pendingIngestEvents,
     reconciledIncarnation,
     started,
     disposed,
@@ -981,9 +1079,33 @@ function createStreamRuntime(
   return {
     streamDatabase,
     appendBatch(appendArgs) {
-      // The itx Stream capability appends variadically; the batch
-      // arg shape is kept for consumers of the store.
-      return callWhenReady((rpc) => rpc.append(...appendArgs.events) as Promise<StreamEvent[]>);
+      // The itx Stream capability appends variadically; the batch arg shape is
+      // kept for consumers of the store.
+      //
+      // Durability: every event gets an idempotency key (unless the caller set
+      // one), which makes retrying safe — a batch that COMMITTED but lost its
+      // ack (socket died, DO evicted/killed/overloaded mid-response) returns
+      // the same committed events on retry instead of appending duplicates.
+      // Combined with callWhenReady's reconnect-wait, an appendBatch caller
+      // survives a stream DO eviction mid-blast with zero loss and zero dupes.
+      const events = appendArgs.events.map((event) =>
+        event.idempotencyKey === undefined
+          ? { ...event, idempotencyKey: crypto.randomUUID() }
+          : event,
+      );
+      const promise = (async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await callWhenReady((rpc) => rpc.append(...events) as Promise<StreamEvent[]>);
+          } catch (error) {
+            if (disposed || attempt >= APPEND_MAX_RETRIES) throw error;
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),
+            );
+          }
+        }
+      })();
+      return Object.assign(promise, { [Symbol.dispose]() {} });
     },
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);

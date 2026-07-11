@@ -230,3 +230,76 @@ describe("browser raw events schema version reset", () => {
     await expect(insert(2)).rejects.toThrow(/offsets must increase/);
   });
 });
+
+// The event_type_counts table replaces the UI's reactive COUNT(*) full scans
+// (they starve ingest on deep mirrors — see the schema comment). Its one
+// invariant: it always equals what COUNT(*) GROUP BY type would return.
+describe("browser raw events incremental type counts", () => {
+  const typedEvent = (offset: number, type: string): StreamEvent => ({
+    ...rawEvent(offset),
+    type,
+  });
+
+  const countsByType = async (sql: SqlClient) =>
+    Object.fromEntries(
+      (await sql.exec(`SELECT type, n FROM event_type_counts ORDER BY type`)).map((row) => [
+        row.type,
+        Number(row.n),
+      ]),
+    );
+
+  it("tracks per-type counts through ingest, matching COUNT(*)", async () => {
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+
+    await processor.ingest({
+      events: [typedEvent(1, "a"), typedEvent(2, "b"), typedEvent(3, "a")],
+      streamMaxOffset: 3,
+    });
+    await processor.ingest({ events: [typedEvent(4, "a")], streamMaxOffset: 4 });
+
+    expect(await countsByType(sql)).toEqual({ a: 3, b: 1 });
+    const scanned = await sql.exec(`SELECT type, COUNT(*) AS n FROM events GROUP BY type`);
+    expect(Object.fromEntries(scanned.map((row) => [row.type, Number(row.n)]))).toEqual(
+      await countsByType(sql),
+    );
+  });
+
+  it("does not double-count a replayed duplicate (RAISE IGNORE skips the count trigger)", async () => {
+    const db = new DatabaseSync(":memory:");
+    const firstLoad = createRawEventsProcessor(wrap(db));
+    await firstLoad.ingest({
+      events: [typedEvent(1, "a"), typedEvent(2, "a")],
+      streamMaxOffset: 2,
+    });
+
+    // A fresh page load resumes and the server replays an already-mirrored
+    // offset: the before-insert trigger swallows it, so the count trigger
+    // must never fire for it.
+    const secondLoad = createRawEventsProcessor(wrap(db));
+    await secondLoad.ingest({
+      events: [typedEvent(2, "a"), typedEvent(3, "a")],
+      streamMaxOffset: 3,
+    });
+
+    expect(await countsByType(wrap(db))).toEqual({ a: 3 });
+  });
+
+  it("a schema version reset drops the counts with the mirror", async () => {
+    const db = new DatabaseSync(":memory:");
+    const firstLoad = createRawEventsProcessor(wrap(db));
+    await firstLoad.ingest({ events: [typedEvent(1, "a")], streamMaxOffset: 1 });
+    expect(await countsByType(wrap(db))).toEqual({ a: 1 });
+
+    db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION - 1}`);
+    const secondLoad = createRawEventsProcessor(wrap(db));
+    await secondLoad.ingest({
+      events: [typedEvent(1, "b"), typedEvent(2, "b")],
+      streamMaxOffset: 2,
+    });
+
+    // Only the rebuilt mirror's counts survive; nothing carried over from the
+    // dropped generation.
+    expect(await countsByType(wrap(db))).toEqual({ b: 2 });
+  });
+});

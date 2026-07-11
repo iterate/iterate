@@ -553,7 +553,7 @@ describe("StreamSubscribers", () => {
 
     h.subscribers.wake();
     await h.settle();
-    for (let round = 0; round < 20 && h.row("k")?.ackedOffset !== 4; round += 1) {
+    for (let round = 0; round < 40 && h.row("k")?.ackedOffset !== 4; round += 1) {
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
       h.advanceTo(Math.max(h.now(), next) + 1);
@@ -562,21 +562,28 @@ describe("StreamSubscribers", () => {
     }
 
     // The full deterministic delivery transcript: batch limits halve toward 1
-    // (100, 50, 25, 12, 6, 3, 1) until offset 2 is isolated, the lone event
-    // must fail SKIP_CONFIRM_ATTEMPTS deliveries, then delivery steps over it.
+    // (1000, 500, 250, 125, 62, 31, 15, 7, 3, 1) until offset 2 is isolated,
+    // the lone event must fail SKIP_CONFIRM_ATTEMPTS deliveries, then delivery
+    // steps over it.
     expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
-      [1, 2, 3, 4], // limit 100
-      [1, 2, 3, 4], // limit 50
-      [1, 2, 3, 4], // limit 25
-      [1, 2, 3, 4], // limit 12
-      [1, 2, 3, 4], // limit 6
+      [1, 2, 3, 4], // limit 1000
+      [1, 2, 3, 4], // limit 500
+      [1, 2, 3, 4], // limit 250
+      [1, 2, 3, 4], // limit 125
+      [1, 2, 3, 4], // limit 62
+      [1, 2, 3, 4], // limit 31
+      [1, 2, 3, 4], // limit 15
+      [1, 2, 3, 4], // limit 7
       [1, 2, 3], // limit 3
       [1], // limit 1 — clean, delivered; bisect window resets
-      [2, 3, 4], // limit 100 again
-      [2, 3, 4], // limit 50
-      [2, 3, 4], // limit 25
-      [2, 3, 4], // limit 12
-      [2, 3, 4], // limit 6
+      [2, 3, 4], // limit 1000 again
+      [2, 3, 4], // limit 500
+      [2, 3, 4], // limit 250
+      [2, 3, 4], // limit 125
+      [2, 3, 4], // limit 62
+      [2, 3, 4], // limit 31
+      [2, 3, 4], // limit 15
+      [2, 3, 4], // limit 7
       [2, 3, 4], // limit 3
       [2], // isolated: confirm attempt 1 -> backoff
       [2], // confirm attempt 2 (alarm) -> backoff

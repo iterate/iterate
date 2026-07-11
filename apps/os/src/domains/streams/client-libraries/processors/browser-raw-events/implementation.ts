@@ -5,7 +5,15 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 5;
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 6;
+
+/**
+ * Tables this processor owns. Views pass this to the runtime so a mirror
+ * discard clears the projection AND its derived counts together — clearing
+ * `events` alone would leave stale totals behind (rows are append-only, so
+ * the counts trigger has no delete arm to reconcile them).
+ */
+export const BROWSER_RAW_EVENTS_TABLES = ["events", "event_type_counts"];
 
 export type BrowserRawEventsState = Record<string, never>;
 
@@ -68,7 +76,9 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
       await sql.batch(
         [
           { sql: `DROP TRIGGER IF EXISTS events_before_insert` },
+          { sql: `DROP TRIGGER IF EXISTS events_count_after_insert` },
           { sql: `DROP TABLE IF EXISTS events` },
+          { sql: `DROP TABLE IF EXISTS event_type_counts` },
           { sql: `PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION}` },
         ],
         { transaction: true },
@@ -104,6 +114,39 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
         {
           sql: `
             CREATE INDEX IF NOT EXISTS events_type_local_index ON events (type, local_index)
+          `,
+        },
+        {
+          sql: `
+            -- Incrementally-maintained per-type row counts. The UI's reactive
+            -- count queries (total, per-type, filter dropdown) re-run after
+            -- every delivered batch; COUNT(*) over the events table rescans
+            -- the whole mirror, and because reads and ingest writes share the
+            -- one OPFS connection, those rescans throttle live-tail apply on
+            -- deep mirrors (measured: 1M rows → ~12s tail lag at 5k events/s
+            -- with the counts as full scans). Reading this table is O(#types).
+            --
+            -- Kept correct by events_count_after_insert below. There is no
+            -- delete arm on purpose: mirror rows are append-only, and the only
+            -- delete is the whole-mirror clear, which clears this table in the
+            -- same discard (see BROWSER_RAW_EVENTS_TABLES).
+            CREATE TABLE IF NOT EXISTS event_type_counts (
+              type TEXT PRIMARY KEY,
+              n INTEGER NOT NULL
+            ) WITHOUT ROWID
+          `,
+        },
+        {
+          sql: `
+            -- Fires only for rows that actually insert: a replayed duplicate is
+            -- swallowed by events_before_insert's RAISE(IGNORE) first, so it
+            -- never double-counts.
+            CREATE TRIGGER IF NOT EXISTS events_count_after_insert
+            AFTER INSERT ON events
+            BEGIN
+              INSERT INTO event_type_counts (type, n) VALUES (NEW.type, 1)
+              ON CONFLICT (type) DO UPDATE SET n = n + 1;
+            END
           `,
         },
         {

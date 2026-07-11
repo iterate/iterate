@@ -58,6 +58,7 @@ import type {
   ParameterDeclaration,
   TypeAliasDeclaration,
 } from "@typescript/native-preview/unstable/ast";
+import { stripComments } from "../src/domains/itx/itx-api-graph.ts";
 import type { ItxApiDeclaration } from "../src/domains/itx/itx-api-graph.ts";
 
 const projectDir = fileURLToPath(new URL("..", import.meta.url));
@@ -333,7 +334,7 @@ export function generateItxApi(): string {
     // zod's JSON helper prints its internal alias; the public name is JsonValue.
     out = out.replaceAll(/\bz\.core\.util\.JSONType\b/g, "JsonValue");
     // Scan code only — docstring prose is full of capitalized words.
-    const codeOnly = out.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
+    const codeOnly = stripComments(out);
     for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
       const name = match[0];
       if (exclude?.has(name)) continue;
@@ -623,10 +624,7 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
   // stripped) that name another declaration in this graph.
   const allNames = new Set(declarations.map(({ record }) => record.name));
   for (const { statement, record } of declarations) {
-    const codeOnly = statement
-      .getText()
-      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
-      .replaceAll(/\/\/[^\n]*/g, "");
+    const codeOnly = stripComments(statement.getText());
     const referenced = new Set<string>();
     for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
       if (match[0] !== record.name && allNames.has(match[0])) referenced.add(match[0]);

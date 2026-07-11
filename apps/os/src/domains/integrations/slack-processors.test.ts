@@ -175,6 +175,9 @@ function humanMessageWebhookPayload(input: {
     headers: { slackEventId: input.eventId ?? "Ev123", slackRequestTimestamp: "1" },
     body: {
       type: "event_callback",
+      // Real webhooks carry the verification secret; the transcriber must
+      // strip it (asserted below) while the router still reads the rest.
+      token: "verification-secret",
       team_id: TEAM_ID,
       event_id: input.eventId ?? "Ev123",
       authorizations: [{ is_bot: true, user_id: "UBOT", bot_id: "BBOT" }],
@@ -184,6 +187,7 @@ function humanMessageWebhookPayload(input: {
         user: "UHUMAN",
         text: input.text ?? "hello agent",
         ts: input.ts ?? "111.222",
+        blocks: [{ type: "rich_text", elements: [] }],
         ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
       },
     },
@@ -610,6 +614,16 @@ describe("SlackAgentProcessor", () => {
     expect(payload.content).toContain("hello agent");
     // The contract default (triggering) policy applies.
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+
+    // The transcript is CURATED: the webhook's verification token must never
+    // reach the LLM provider, and envelope/rich-text noise stays out while
+    // the facts (channel, sender, ts) stay in.
+    expect(payload.content).not.toContain("verification-secret");
+    expect(payload.content).not.toContain("authorizations");
+    expect(payload.content).not.toContain("blocks");
+    expect(payload.content).toContain("C123");
+    expect(payload.content).toContain("UHUMAN");
+    expect(payload.content).toContain("111.222");
 
     expect(slackCalls).toContainEqual({
       method: "reactions.add",
