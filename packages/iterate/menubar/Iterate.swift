@@ -493,7 +493,13 @@ final class ComputerController: ObservableObject {
       guard let id = event["id"] as? Int,
         let index = recentCalls.firstIndex(where: { $0.id == id })
       else { return }
-      recentCalls[index].running = false
+      // Reassign the whole element (not a nested mutation) so the @Published
+      // array reliably republishes — otherwise the spinner, `inUse`, and the
+      // menu-bar dot can stay stuck after the call finishes. Same idiom as
+      // ApprovalController.setSubmitting.
+      var call = recentCalls[index]
+      call.running = false
+      recentCalls[index] = call
     default:
       break
     }
