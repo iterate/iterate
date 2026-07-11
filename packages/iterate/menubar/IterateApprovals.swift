@@ -74,6 +74,7 @@ final class ApprovalController: ObservableObject {
   private let config = MenuBarConfig.load()
   private var process: Process?
   private var stdinHandle: FileHandle?
+  private var stdoutHandle: FileHandle?
   private var buffer = Data()
 
   func start() {
@@ -88,6 +89,7 @@ final class ApprovalController: ObservableObject {
     process.standardOutput = stdout
     process.standardInput = stdin
     self.stdinHandle = stdin.fileHandleForWriting
+    self.stdoutHandle = stdout.fileHandleForReading
 
     stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
@@ -99,12 +101,17 @@ final class ApprovalController: ObservableObject {
       }
       DispatchQueue.main.async { self?.ingest(chunk) }
     }
-    // The watcher exited (needs-login, auth loss, or crash): drop the now-stale
-    // pending rows and reflect that we're disconnected.
+    // The watcher exited: drop the now-stale rows. Don't touch `loggedIn` —
+    // the status line is authoritative (a needs-login exit already set it
+    // false). If we were connected and it died unexpectedly, reconnect once
+    // after a short delay; a needs-login exit leaves the Sign in button.
     process.terminationHandler = { [weak self] _ in
       DispatchQueue.main.async {
-        self?.loggedIn = false
-        self?.requests = []
+        guard let self else { return }
+        self.requests = []
+        if self.loggedIn {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.start() }
+        }
       }
     }
     do {
@@ -120,12 +127,18 @@ final class ApprovalController: ObservableObject {
     process?.terminate()
     process = nil
     stdinHandle = nil
+    // Detach the old pipe's reader so a late chunk can't land in the next
+    // watcher's buffer.
+    stdoutHandle?.readabilityHandler = nil
+    stdoutHandle = nil
     requests = []
     buffer = Data()  // a partial line from the old watcher must not bleed into the next
   }
 
-  /// Kick off `iterate login` (browser OAuth), then restart the watcher.
+  /// Kick off `iterate login` (browser OAuth), then restart the watcher. Stop
+  /// the current watcher first so login never overlaps a running approve.
   func login() {
+    stop()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["login"])
