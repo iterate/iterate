@@ -65,6 +65,15 @@ const myComputer = {
     // `swift -` reads a whole program from stdin and runs it.
     return await run("swift", ["-"], code);
   },
+
+  /**
+   * A liveness probe, deliberately absent from the declared types so agents
+   * never see it. The provider self-calls it over the full agent path to keep
+   * the capability-host warm and detect a dropped mount — see keepMountAlive.
+   */
+  async ["__ping"]() {
+    return { ok: true as const };
+  },
 };
 
 /** Prose + a type signature so agents (and `__describe()`) know how to call this. */
@@ -170,12 +179,55 @@ async function connectAndProvide(
   return itx;
 }
 
-/** Keep the mount routable — a live capability only serves while its socket is warm — and never return. */
-function holdWarm(itx: RpcStub<Project>): Promise<never> {
-  const heartbeat = () => itx.__describe().catch(() => {});
-  heartbeat();
-  setInterval(heartbeat, 5_000);
-  return new Promise<never>(() => {});
+const HEALTH_CHECK_INTERVAL_MS = 8_000;
+
+/** Call the mount over the FULL agent path (`itx.<name>.__ping()`) — the same route an agent uses. */
+function pingMount(itx: RpcStub<Project>, name: string): Promise<{ ok: true }> {
+  return (itx as unknown as Record<string, { __ping(): Promise<{ ok: true }> }>)[name].__ping();
+}
+
+/**
+ * Keep the live mount routable for as long as we run, and never return. A live
+ * capability's provider ref lives only in the capability-host DO's memory, so a
+ * DO eviction or a dropped socket silently takes it "offline" while this process
+ * keeps happily running. So we don't just heartbeat — every few seconds we
+ * self-call the mount over the full agent path: that round-trip keeps the host
+ * DO warm AND proves the mount still answers. If it doesn't, we re-provide on the
+ * current socket (recovers a DO eviction that dropped the ref but left our
+ * connection intact); if THAT fails the connection is dead, so we reconnect and
+ * provide fresh. `onReprovided` fires whenever we had to re-establish it.
+ */
+async function keepMountAlive(input: {
+  itx: RpcStub<Project>;
+  connect: ConnectInput;
+  name: string;
+  capability: typeof myComputer;
+  onReprovided?: () => void;
+}): Promise<never> {
+  let itx = input.itx;
+  const provide = (stub: RpcStub<Project>) =>
+    stub.provideCapability({
+      type: "live",
+      path: [input.name],
+      capability: input.capability,
+      instructions: INSTRUCTIONS,
+      types: TYPES,
+    });
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, HEALTH_CHECK_INTERVAL_MS));
+    try {
+      await pingMount(itx, input.name);
+      continue; // mount answered — still live
+    } catch {
+      // Mount not answering: re-provide on the current socket, else reconnect.
+      try {
+        await provide(itx);
+      } catch {
+        itx = await connectAndProvide(input.connect, input.name, input.capability);
+      }
+      input.onReprovided?.();
+    }
+  }
 }
 
 /**
@@ -190,7 +242,13 @@ export async function shareMyComputer(
   const itx = await connectAndProvide(input, name, myComputer);
   log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
   log(agentPrompt(name));
-  return holdWarm(itx);
+  return keepMountAlive({
+    itx,
+    connect: input,
+    name,
+    capability: myComputer,
+    onReprovided: () => log(`↻ re-shared itx.${name} after the mount dropped.`),
+  });
 }
 
 /**
@@ -205,13 +263,16 @@ export async function shareMyComputer(
  */
 export async function runUseMyComputerJson(input: ConnectInput): Promise<never> {
   const name = input.name ?? proposeComputerName();
-  const itx = await connectAndProvide(input, name, withActivity(myComputer));
-  emitJson({ type: "status", loggedIn: true, project: input.projectId, name });
+  const capability = withActivity(myComputer);
+  const itx = await connectAndProvide(input, name, capability);
+  const status = () => emitJson({ type: "status", loggedIn: true, project: input.projectId, name });
+  status();
   // If the menu-bar parent goes away, stdin closes — stop sharing rather than
   // leaving the computer silently lent with no window onto it.
   process.stdin.on("end", () => process.exit(0));
   process.stdin.resume();
-  return holdWarm(itx);
+  // Re-emit status on every re-establish so the app knows it's still live.
+  return keepMountAlive({ itx, connect: input, name, capability, onReprovided: status });
 }
 
 /** One NDJSON line to stdout — the machine protocol's only output channel. */
@@ -234,6 +295,12 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
   let nextId = 0;
   const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
   for (const [method, fn] of Object.entries(capability)) {
+    // Internal probes (e.g. __ping) pass through unwrapped — they're not agent
+    // activity and must not spam the NDJSON stream every health check.
+    if (method.startsWith("__")) {
+      wrapped[method] = fn as (arg: never) => Promise<unknown>;
+      continue;
+    }
     wrapped[method] = async (arg: never) => {
       const id = (nextId += 1);
       emitJson({
