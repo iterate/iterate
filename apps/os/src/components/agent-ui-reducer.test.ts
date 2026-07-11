@@ -955,7 +955,7 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/agent/token-usage-reported",
         payload: {
           llmRequestOffset: 7,
-          model: "@cf/moonshotai/kimi-k2.7-code",
+          model: "@cf/test/totals-only-model",
           maxContextTokens: 256_000,
           inputTokens: 2_000,
           outputTokens: 150,
@@ -969,7 +969,7 @@ describe("agent-ui reducer", () => {
       totalCachedInputTokens: 800,
       totalReasoningOutputTokens: 10,
       lastReport: {
-        model: "@cf/moonshotai/kimi-k2.7-code",
+        model: "@cf/test/totals-only-model",
         maxContextTokens: 256_000,
         inputTokens: 2_000,
         outputTokens: 150,

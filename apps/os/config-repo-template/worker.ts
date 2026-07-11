@@ -1,33 +1,28 @@
-import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import {
-  BaseProjectEntrypoint,
-  type ItxBinding,
-  type StreamEvent,
-  type StreamEventBatch,
-} from "iterate/sdk";
+import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 // The whole seeded worker in ONE file, so reading this module is reading the
 // whole system: the root project worker (default export) routes HTTP and
 // reacts to project events, and the example apps are named exports — a
-// stateless WorkerEntrypoint (HelloApp) and a stateful Durable Object with
-// live WebSocket updates (CounterApp). Both apps build from THIS file with a
-// different entry class; split an app into its own file (and point its ref's
-// entryPoint at it) when it earns one.
+// stateless HelloApp and a stateful CounterApp with live WebSocket updates.
+// Both apps build from THIS file with a different entry class; split an app
+// into its own file (and point its ref's entryPoint at it) when it earns one.
+//
+// Everything extends the iterate/sdk base classes — IterateWorkerEntrypoint
+// (stateless) and IterateDurableObject (stateful) — which carry the platform
+// surface: `processEventBatch`/`processEvent` (event delivery — override
+// `processEvent` to react), `invokeCapability` (flattened `itx.worker.<path>`
+// dispatch — any getter or method you add becomes a capability surface), and
+// `fetchDynamicWorker` (HTTP into sibling workers, WebSockets included). Env
+// defaults to `{ ITX: ItxBinding }`, the one binding the platform supplies.
 
-/** Bindings the platform supplies to every project worker. `ItxBinding`
- * (iterate/sdk) documents the two channels: `get()` for capability method
- * calls, `fetch()` for HTTP into sibling workers. */
-type Env = { ITX: ItxBinding };
-
-export default class ProjectWorker extends BaseProjectEntrypoint {
+export default class ProjectWorker extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
     // Each app is a repo-backed dynamic worker; ingress selects one via the
     // trusted x-iterate-app header (hosts like hello--<slug>.<base> or
     // <app>.<custom-hostname>). Requests with no app selected get the static
-    // homepage below. `fetchDynamicWorker` (from BaseProjectEntrypoint,
-    // iterate/sdk) dispatches over the platform's fetch-native worker lane —
-    // its docstring explains why app HTTP must ride a real fetch hop, never
-    // an RPC method call.
+    // homepage below. `fetchDynamicWorker` dispatches over the platform's
+    // fetch-native worker lane — its docstring explains why app HTTP must
+    // ride a real fetch hop, never an RPC method call.
     const app = req.headers.get("x-iterate-app");
     if (app === "hello") {
       return this.fetchDynamicWorker(req, {
@@ -79,23 +74,12 @@ export default class ProjectWorker extends BaseProjectEntrypoint {
     );
   }
 
-  /**
-   * The platform delivers every committed event on every stream in this
-   * project as checkpointed per-stream batches — in per-stream order,
-   * at-least-once. This unpacks them into one `processEvent(event)` call per
-   * event; throwing (or a worker that fails to build) leaves that stream's
-   * checkpoint in place and the whole batch is redelivered later, so return
-   * normally to advance past events you don't care about.
-   */
-  async processEventBatch(batch: StreamEventBatch): Promise<void> {
-    for (const event of batch.events) await this.processEvent(event);
-  }
-
+  // The base class delivers every committed event on every stream in this
+  // project here, one call per event — in per-stream order, at-least-once
+  // (its docstring has the full contract). React with one `if` per reaction,
+  // keyed on event.path + event.type; anything a reaction appends should
+  // carry an idempotency key.
   async processEvent(event: StreamEvent): Promise<void> {
-    // React to anything happening anywhere in the project: one `if` per
-    // reaction, keyed on event.path + event.type. Delivery is at-least-once,
-    // so anything a reaction appends carries an idempotency key.
-
     // THIS WORKER configures new agents. When any stream under /agents/ is
     // born (a web chat, the onboarding agent, a chat or email thread), the
     // platform announces it on the project root stream and this
@@ -126,35 +110,13 @@ export default class ProjectWorker extends BaseProjectEntrypoint {
       }
     }
   }
-
-  /**
-   * The platform dispatches dotted calls on this worker as ONE flattened
-   * `invokeCapability({ path, args })` call, and this userspace method walks
-   * the path over the worker itself. That is what lets a getter you add to
-   * this class hand back a raw SDK client (say, a vendor SDK installed from
-   * package.json): nothing ever crosses RPC except the final method's
-   * arguments and result, so `itx.worker.<getter>.<method>({...})` — or any
-   * nested surface a getter returns — is a single round trip into plain
-   * userland code.
-   */
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    let receiver: unknown = this;
-    for (const segment of path.slice(0, -1)) {
-      receiver = await Reflect.get(Object(receiver), segment);
-    }
-    const method = path.at(-1)!;
-    const handler = Reflect.get(Object(receiver), method);
-    if (typeof handler !== "function") {
-      throw new Error(`"${path.join(".")}" is not a method on this project worker`);
-    }
-    return await Reflect.apply(handler, receiver, args);
-  }
 }
 
-// A stateless app: a plain WorkerEntrypoint the root project worker routes
-// to when ingress selects the "hello" app. It still gets the full project
-// itx through env.ITX.
-export class HelloApp extends WorkerEntrypoint<Env> {
+// A stateless app the root project worker routes to when ingress selects the
+// "hello" app. It gets the full project itx through env.ITX, and the same
+// base-class surface as the root worker — add a getter here and it's an
+// `itx.worker` capability on THIS app via `project.workers.get(ref)`.
+export class HelloApp extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
     const project = await this.env.ITX.get();
     try {
@@ -174,15 +136,14 @@ export class HelloApp extends WorkerEntrypoint<Env> {
   }
 }
 
-// A stateful app: a Durable Object class hosted as a repo-backed stateful
-// dynamic worker. State survives across requests under its durableWorkerKey,
-// and every open page gets live updates over a WebSocket. The /ws upgrade's
-// 101 response reaches this Durable Object over the platform's fetch-native
-// worker lane (the ProjectWorker router above: `this.env.ITX.fetch(...)` with
-// the app's ref in the x-iterate-worker-dispatch header) — an `app.fetch(req)`
-// RPC method call could not carry a socket. Copy this shape for anything
-// real-time.
-export class CounterApp extends DurableObject {
+// A stateful app: a Durable Object hosted as a repo-backed stateful dynamic
+// worker. State survives across requests under its durableWorkerKey, and
+// every open page gets live updates over a WebSocket. The /ws upgrade's 101
+// response reaches this Durable Object over the platform's fetch-native
+// worker lane (the ProjectWorker router above, via `fetchDynamicWorker`) —
+// an `app.fetch(req)` RPC method call could not carry a socket. Copy this
+// shape for anything real-time.
+export class CounterApp extends IterateDurableObject {
   private sockets = new Set<WebSocket>();
 
   async fetch(req: Request): Promise<Response> {

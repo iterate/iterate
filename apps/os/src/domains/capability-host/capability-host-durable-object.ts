@@ -10,6 +10,7 @@ import type {
 } from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
+import { checkCapabilityTypes } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
@@ -66,6 +67,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         parent: this.#parentCapabilityHost(),
         path: this.#name.path,
         scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
+        validateCapabilityTypes: (types) =>
+          checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       }),
   );
 

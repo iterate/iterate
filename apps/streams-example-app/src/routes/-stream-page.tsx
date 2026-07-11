@@ -33,6 +33,7 @@ import {
 import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
+  BROWSER_RAW_EVENTS_TABLES,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
@@ -204,7 +205,7 @@ function useStreamProcessor(
 const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
   slug: BrowserRawEventsContract.slug,
   schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  tables: ["events"],
+  tables: BROWSER_RAW_EVENTS_TABLES,
   createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
     const storage = browserProcessorStateStorage<BrowserRawEventsState>({
       sql,
@@ -233,17 +234,24 @@ function useRawEventsView(args: {
     streamProjectId: args.streamProjectId,
     ...RAW_EVENTS_RUNTIME,
   });
-  const totalCountResult = useStreamQuery(db, `SELECT COUNT(*) AS count FROM events`);
+  // Counts come from the trigger-maintained event_type_counts table, not
+  // COUNT(*) over the mirror: these queries re-run reactively after every
+  // delivered batch, and a full-scan count on a deep mirror starves the shared
+  // OPFS connection that ingest writes ride on (see the processor's schema).
+  const totalCountResult = useStreamQuery(
+    db,
+    `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
+  );
   const countResult = useStreamQuery(
     db,
     args.eventTypeFilter === ""
-      ? `SELECT COUNT(*) AS count FROM events`
-      : `SELECT COUNT(*) AS count FROM events WHERE type = ?`,
+      ? `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`
+      : `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts WHERE type = ?`,
     args.eventTypeFilter === "" ? [] : [args.eventTypeFilter],
   );
   const eventTypesResult = useStreamQuery(
     db,
-    `SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY type ASC`,
+    `SELECT type, n AS count FROM event_type_counts ORDER BY type ASC`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const totalEventCount = Number(totalCountResult.data[0]?.count ?? 0);

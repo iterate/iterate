@@ -851,7 +851,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       // so the label spells out the reply door.
       const content =
         from.kind === "agent"
-          ? `Message from agent ${from.path} (that agent cannot see your web chat — to reply to it: await itx.agents.get(${JSON.stringify(from.path)}).message(text)):\n${event.payload.content}`
+          ? `Message from agent ${from.path} (that agent cannot see this conversation — to reply to it: await itx.agents.get(${JSON.stringify(from.path)}).message(text)):\n${event.payload.content}`
           : event.payload.content;
       return {
         ...state,
@@ -1113,8 +1113,33 @@ export function buildAgentLlmRequestBody(input: {
   const state = reduceAgentEvents(
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
+  // Without a clock the model's "now" is its training cutoff — every web
+  // search for something recent, every scheduler cron, every "how old is
+  // this?" judgment silently wrong, with no error signal. The request's own
+  // llm-request-requested append time is the stamp: journaled, so refolds
+  // and the UI trace replay reproduce the exact request byte for byte. It
+  // rides as the LAST message, never inside the system prompt: a per-request
+  // value at the head of the request would change the prefix every turn and
+  // zero out the provider's prompt cache for the whole conversation behind
+  // it (the tail position leaves every cached prefix intact).
+  const requestedAt = input.events.find(
+    (event) =>
+      event.offset === input.llmRequestOffset &&
+      event.type === "events.iterate.com/agent/llm-request-requested",
+  )?.createdAt;
   return {
-    messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
+    messages: [
+      { role: "system" as const, content: state.systemPrompt },
+      ...state.history,
+      ...(requestedAt === undefined
+        ? []
+        : [
+            {
+              role: "system" as const,
+              content: `Current date and time (UTC): ${requestedAt}`,
+            },
+          ]),
+    ],
   };
 }
 
@@ -1174,12 +1199,10 @@ const AGENT_COMPACTION_PROMPT = [
  * inherit their family's window. The OpenAI figures are our OPERATING window,
  * not the documented one: gpt-5.5's real window is 1.05M tokens, but 272k is
  * where OpenAI's pricing doubles, so compaction should treat that as full.
- * Kimi's documented window is 262,144; 256k is the safe round-down.
  */
 const MODEL_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
   "openai/gpt-5.5": 272_000,
   "openai/gpt-5": 272_000,
-  "@cf/moonshotai/kimi-k2.7-code": 256_000,
 };
 
 /** Conservative floor for models not in the map. */
@@ -1286,23 +1309,36 @@ async function scriptResultAgentInput(
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
   if (payload.error !== undefined) {
-    return `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\``;
+    // Advertise the recovery tools at the moment of failure — a wrong call
+    // is exactly when docs.typecheck's did-you-mean and docs.search's
+    // working examples pay off, and nothing else tells the model they exist.
+    return (
+      `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\`\n` +
+      `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
+      `scope's real types (typos come back as "did you mean …"), and ` +
+      `\`await itx.docs.search({ q: "several related words" })\` finds working examples.`
+    );
   }
   if (payload.result === undefined) return null;
   const text = stringifyScriptResult(payload.result);
+  // String results are raw text, not JSON — the fence label, the spill
+  // file's extension, and the read-it-back recipe all say so honestly.
+  const isRawText = typeof payload.result === "string";
+  const fence = isRawText ? "```" : "```json";
   if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
     try {
       const spilledPath = await spillScriptResult({
         executionId: payload.executionId,
+        extension: isRawText ? "txt" : "json",
         text,
         writeWorkspaceFile,
       });
       return [
         "Your script returned:",
-        "```json",
+        fence,
         text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT),
         "```",
-        spillNotice({ path: spilledPath, totalChars: text.length }),
+        spillNotice({ isRawText, path: spilledPath, totalChars: text.length }),
       ].join("\n");
     } catch (error) {
       // Spilling is best effort: a workspace that cannot clone or write must
@@ -1313,10 +1349,16 @@ async function scriptResultAgentInput(
       });
     }
   }
-  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(text)}\n\`\`\``;
+  return `Your script returned:\n${fence}\n${truncateScriptResult(text)}\n\`\`\``;
 }
 
 function stringifyScriptResult(result: unknown): string {
+  // A returned string renders as itself: JSON.stringify would escape every
+  // newline and quote, turning a fetched page or file into one unreadable
+  // escaped line the model pays to mentally unescape (seen live: an 8.8KB
+  // worker.ts as a single escape-riddled JSON string). Non-strings keep the
+  // pretty-printed JSON shape.
+  if (typeof result === "string") return result;
   try {
     return JSON.stringify(result, null, 2) ?? String(result);
   } catch {
@@ -1343,6 +1385,7 @@ const SCRIPT_RESULT_SPILL_DIR = "/script-results";
 /** Writes the full result text into the agent's workspace; returns its path. */
 async function spillScriptResult(input: {
   executionId: string;
+  extension: "json" | "txt";
   text: string;
   writeWorkspaceFile: NonNullable<AgentProcessorDeps["writeWorkspaceFile"]>;
 }): Promise<string> {
@@ -1350,7 +1393,7 @@ async function spillScriptResult(input: {
   // nested ignore every spill would ride along into workspace snapshot
   // commits (the overlay publish honors .gitignore).
   await input.writeWorkspaceFile({ content: "*\n", path: `${SCRIPT_RESULT_SPILL_DIR}/.gitignore` });
-  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
+  const path = `${SCRIPT_RESULT_SPILL_DIR}/${input.executionId.replace(/[^A-Za-z0-9._-]+/g, "-")}.${input.extension}`;
   await input.writeWorkspaceFile({ content: input.text, path });
   return path;
 }
@@ -1360,13 +1403,21 @@ async function spillScriptResult(input: {
  * lives and a concrete next-script recipe for paging it, so the model reads
  * the file with plain JavaScript instead of re-running the expensive fetch.
  */
-function spillNotice(input: { path: string; totalChars: number }): string {
+function spillNotice(input: { isRawText: boolean; path: string; totalChars: number }): string {
+  const readRecipe = input.isRawText
+    ? [
+        `  const text = await itx.workspace.readFile(${JSON.stringify(input.path)});`,
+        "  return text.slice(30_000, 60_000); // page/regex to return only what you need",
+      ]
+    : [
+        `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
+        "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+      ];
   return [
     `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
     "```js",
     "async (itx) => {",
-    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
-    "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+    ...readRecipe,
     "}",
     "```",
   ].join("\n");

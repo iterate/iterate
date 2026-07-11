@@ -98,6 +98,25 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
+  it("renders string results raw — no JSON escaping, no json fence label", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: 'line one\nline "two"' },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const content = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    )?.payload?.content as string;
+    // The model reads the text itself, not an escaped JSON string of it.
+    expect(content).toContain('line one\nline "two"');
+    expect(content).not.toContain("\\n");
+    expect(content).not.toContain("```json");
+  });
+
   it("spills an oversized script result to a workspace file and references it", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
@@ -159,8 +178,9 @@ describe("minimal web-chat agent processors", () => {
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
     const files = writes.filter((write) => !write.path.endsWith(".gitignore"));
-    expect(files.map((write) => write.path)).toEqual(["/script-results/agent-output-7.json"]);
-    expect(files[0]!.content).toBe(JSON.stringify(result, null, 2));
+    // A string result spills as itself — raw text file, no JSON escaping.
+    expect(files.map((write) => write.path)).toEqual(["/script-results/agent-output-7.txt"]);
+    expect(files[0]!.content).toBe(result);
   });
 
   it("falls back to inline truncation when the workspace spill fails", async () => {
@@ -353,7 +373,15 @@ describe("minimal web-chat agent processors", () => {
     expect(aiCalls).toHaveLength(1);
     expect(aiCalls[0]).toMatchObject({
       stream: true,
-      messages: [expect.objectContaining({ role: "system" }), { role: "user", content: "hello" }],
+      messages: [
+        expect.objectContaining({ role: "system" }),
+        { role: "user", content: "hello" },
+        // The trailing clock stamp (prompt-cache-safe tail position).
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("Current date and time (UTC):"),
+        }),
+      ],
     });
   });
 
@@ -1650,7 +1678,6 @@ describe("token usage and history reset", () => {
   it("longest-prefix matches context windows, with a conservative default", () => {
     expect(contextWindowTokens("openai/gpt-5.5")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5-2026-01-15")).toBe(272_000);
-    expect(contextWindowTokens("@cf/moonshotai/kimi-k2.7-code")).toBe(256_000);
     expect(contextWindowTokens("@cf/qwen/qwen3-coder-plus")).toBe(128_000);
   });
 

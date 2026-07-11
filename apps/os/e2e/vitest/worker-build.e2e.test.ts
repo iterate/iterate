@@ -102,18 +102,19 @@ describe("worker builds", () => {
         });
         await project.repo.edit({
           path: "worker.ts",
-          oldString: 'import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";',
+          oldString:
+            'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
           newString: [
-            'import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";',
+            'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
             'import { WebClient } from "@slack/web-api";',
           ].join("\n"),
           message: "Import the Slack SDK",
         });
         await project.repo.edit({
           path: "worker.ts",
-          oldString: "export default class ProjectWorker extends BaseProjectEntrypoint {",
+          oldString: "export default class ProjectWorker extends IterateWorkerEntrypoint {",
           newString: [
-            "export default class ProjectWorker extends BaseProjectEntrypoint {",
+            "export default class ProjectWorker extends IterateWorkerEntrypoint {",
             "  get slack(): WebClient {",
             `    const client = new WebClient("xoxb-e2e-test-token", { slackApiUrl: ${JSON.stringify(mock.url)} });`,
             "    // The SDK's axios defaults to its node-http adapter, which hangs",
@@ -162,7 +163,7 @@ describe("worker builds", () => {
         await expect(
           // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
           project.worker.ocado.mum.noSuchMethod(),
-        ).rejects.toThrow(/"ocado.mum.noSuchMethod" is not a method on this project worker/);
+        ).rejects.toThrow(/"ocado.mum.noSuchMethod" is not a method on this worker/);
       } finally {
         await mock.close();
       }

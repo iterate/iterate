@@ -50,7 +50,7 @@ test(
       {
         description: "the proof event to land on the target stream",
         intervalMs: 1_000,
-        // Kimi turns run 15-60s under preview-account load (measured live
+        // Turns run 15-60s under preview-account load (measured live
         // 2026-07-10: a healthy turn with a 31s LLM response); two turns plus
         // boot must fit, so this sits just under the 240s test ceiling.
         timeoutMs: 180_000,
@@ -92,8 +92,8 @@ test(
 
     const response = await agent.ask({
       message: "Reply with a short greeting.",
-      // Workers AI under preview load can sit past the 45s default — a kimi
-      // turn alone measured 31s healthy, worse when the shared per-minute
+      // Gateway turns under preview load can sit past the 45s default — a
+      // single turn measured 31s healthy, worse when the shared per-minute
       // budget is saturated and the retry backoff (10/20/60s) is riding.
       timeoutMs: 180_000,
     });

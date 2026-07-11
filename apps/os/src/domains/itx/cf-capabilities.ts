@@ -136,3 +136,35 @@ export type CfVideoTransformInput = {
   transform?: CfVideoTransformOptions;
   output: CfVideoOutputOptions;
 };
+
+/**
+ * Unwraps a Browser Run quick-action Response to the caller-facing result:
+ * JSON envelopes (`{ success, result }`) yield their `result` (throwing the
+ * envelope's error on failure), binary media (screenshot, pdf) yields bytes.
+ * Pure so the unwrap contract is unit-testable — the binding itself is an
+ * external service local dev cannot dial.
+ */
+export async function unwrapBrowserRunQuickAction(
+  action: string,
+  response: Response,
+): Promise<string | Uint8Array | unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    // Binary actions (screenshot, pdf) respond with the media itself.
+    return new Uint8Array(await response.arrayBuffer());
+  }
+  const envelope = (await response.json()) as {
+    success?: boolean;
+    result?: unknown;
+    error?: unknown;
+  } | null;
+  if (envelope !== null && typeof envelope === "object" && "success" in envelope) {
+    if (envelope.success !== true) {
+      throw new Error(
+        `Browser Run ${action} failed: ${JSON.stringify(envelope.error ?? envelope).slice(0, 500)}`,
+      );
+    }
+    return envelope.result;
+  }
+  return envelope;
+}

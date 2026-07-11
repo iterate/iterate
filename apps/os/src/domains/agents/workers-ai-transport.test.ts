@@ -4,6 +4,8 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
+import { agentDefaultsForPath } from "./agent-defaults.ts";
+import { buildAgentLlmRequestBody } from "./agent-processor-implementation.ts";
 
 describe("runWorkersAiAttempt", () => {
   it("cancels the response stream on deadline so no chunk lands after the failure", async () => {
@@ -59,7 +61,7 @@ describe("runWorkersAiAttempt", () => {
         return { response: "ok" };
       },
     };
-    for (const model of ["openai/gpt-5.5", "@cf/moonshotai/kimi-k2.7-code"]) {
+    for (const model of ["openai/gpt-5.5", "@cf/test/non-openai-model"]) {
       await runWorkersAiAttempt({
         ai,
         deadlineMs: 1_000,
@@ -231,7 +233,7 @@ describe("the BYOK gateway lane", () => {
       },
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
-      model: "@cf/moonshotai/kimi-k2.7-code",
+      model: "@cf/test/non-openai-model",
       onChunk: async () => {},
       transport: { kind: "byok", gatewayId: "default", openaiApiKey: "sk-test" },
     });
@@ -299,5 +301,95 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(masked).toContain("exp=MASKED");
     expect(masked).toContain("sig=MASKED");
     expect(masked).not.toContain("deadbeef123");
+  });
+
+  it("masks the clock stamp and the boot-context project line — birth turns share a key across projects", () => {
+    // Two projects' onboarding births differ ONLY in per-project boot facts
+    // and the per-request clock; the response cache must see them as equal
+    // (the preview-burn protection from the response-cache work).
+    const bodyFor = (name: string, slug: string, at: string) =>
+      JSON.stringify({
+        messages: [
+          { role: "system", content: "You are an agent." },
+          {
+            role: "user",
+            content: `Platform context for this agent:\n- Project: "${name}" (slug ${slug}, id prj_${"0".repeat(32)}) — the project worker/website serves https://${slug}.iterate-preview-4.app\n- Your agent stream path: /agents/onboarding`,
+          },
+          { role: "system", content: `Current date and time (UTC): ${at}` },
+        ],
+      });
+    const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(
+      bodyFor("Snake Game", "snake", "2026-07-11T10:00:00.000Z"),
+    );
+    const maskedB = maskCloudflareAiGatewayResponseCacheEntropy(
+      bodyFor("Crossword Helper", "crossword", "2026-07-12T18:30:00.000Z"),
+    );
+    expect(maskedA).toBe(maskedB);
+    expect(maskedA).toContain("Current date and time (UTC): MASKED");
+    expect(maskedA).toContain("- Project: MASKED");
+    expect(maskedA).not.toContain("snake");
+  });
+
+  it("REAL birth-turn bodies from the defaults pipeline mask to one key across projects", async () => {
+    // Not a hand-built string: run the actual birth machinery for two
+    // projects — agentDefaultsForPath events folded through
+    // buildAgentLlmRequestBody — and require the masked serializations (and
+    // so the cache keys) to be byte-identical. This is the preview-burn
+    // guarantee itself.
+    const birthBody = (input: {
+      projectId: string;
+      name: string;
+      slug: string;
+      workerUrl: string;
+      requestedAt: string;
+    }) => {
+      const defaults = agentDefaultsForPath({
+        agentPath: "/agents/onboarding",
+        projectId: input.projectId,
+        project: { name: input.name, slug: input.slug, workerUrl: input.workerUrl },
+      });
+      const events = [
+        ...defaults.events.map((event, index) => ({
+          ...event,
+          offset: index + 1,
+          createdAt: input.requestedAt,
+          path: "/agents/onboarding",
+        })),
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: { model: "openai/gpt-5.5", requestId: "llm-request:gen-0" },
+          offset: defaults.events.length + 1,
+          createdAt: input.requestedAt,
+          path: "/agents/onboarding",
+        },
+      ];
+      return buildAgentLlmRequestBody({
+        events: events as never,
+        llmRequestOffset: events.length,
+      });
+    };
+    const bodyA = birthBody({
+      projectId: `prj_${"a".repeat(32)}`,
+      name: "Snake Game",
+      slug: "snake",
+      workerUrl: "https://snake.iterate-preview-4.app",
+      requestedAt: "2026-07-11T10:00:00.000Z",
+    });
+    const bodyB = birthBody({
+      projectId: `prj_${"b".repeat(32)}`,
+      name: "Crossword Helper",
+      slug: "crossword-helper",
+      workerUrl: "https://crossword-helper.iterate-preview-4.app",
+      requestedAt: "2026-07-12T18:30:00.000Z",
+    });
+    const [keyA, keyB] = await Promise.all([
+      cloudflareAiGatewayResponseCacheKey(bodyA),
+      cloudflareAiGatewayResponseCacheKey(bodyB),
+    ]);
+    const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(bodyA));
+    expect(maskedA).toBe(maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(bodyB)));
+    expect(keyA).toBe(keyB);
+    expect(maskedA).not.toContain("snake");
+    expect(maskedA).not.toContain("Crossword");
   });
 });

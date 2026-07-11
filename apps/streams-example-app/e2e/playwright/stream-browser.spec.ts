@@ -879,6 +879,140 @@ test("kill reconnects and appends a new woken event", async ({ page }) => {
   await expect(eventMeta(page, "events.iterate.com/stream/woken")).toHaveCount(2);
 });
 
+// The stream DO can die at any moment (eviction, deploy, explicit kill) and browser-side
+// appends must survive it with zero loss AND zero duplication: appendBatch stamps an
+// idempotency key on every event and retries across the reconnect, so a batch that
+// committed-but-lost-its-ack dedupes instead of double-appending, and one that never
+// committed lands after the DO reboots.
+test("killing the stream DO mid-blast loses no appends and duplicates none", async ({ page }) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const insertedCount = 3000;
+  await page.getByLabel("Count").fill(String(insertedCount));
+  await page.getByLabel("Batch size").fill("50");
+  await page.getByLabel("Seconds").fill("3");
+  await page.getByRole("button", { name: "Stream random events" }).click();
+  await expect(page.getByTestId("insert-state")).toHaveText("inserting");
+
+  // Kill the DO while the blast is in flight (twice, for good measure).
+  await page.waitForTimeout(500);
+  await page.getByRole("button", { name: "Kill" }).click();
+  await page.waitForTimeout(1_000);
+  await page.getByRole("button", { name: "Kill" }).click();
+
+  // The blast must still complete cleanly — retried batches, not errors.
+  await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+
+  // Exactly `insertedCount` generated events: none lost, none duplicated.
+  // Control events (created/woken/subscriber-*) vary with the kills, so count
+  // only the generated types via the filter dropdown.
+  await expect
+    .poll(
+      () =>
+        page.getByLabel("Event type filter").evaluate((element) => {
+          if (!(element instanceof HTMLSelectElement)) throw new Error("not a select");
+          return [...element.options]
+            .filter((option) => option.value.startsWith("events.iterate.com/random/"))
+            .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
+        }),
+      { timeout: 60_000 },
+    )
+    .toBe(insertedCount);
+});
+
+// Same guarantee from a FOLLOWER tab: appends ride the follower's own connection (no
+// leadership required), survive a mid-blast DO kill, and both tabs' mirrors converge on
+// the exact same count.
+test("two tabs: follower blast survives a DO kill and both mirrors converge", async ({
+  context,
+  page,
+}) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  const otherPage = await context.newPage();
+  await Promise.all([
+    page.goto(streamRoute({ path: streamPath })),
+    otherPage.goto(streamRoute({ path: streamPath })),
+  ]);
+  await Promise.all([
+    expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible(),
+    expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
+  ]);
+
+  const leader = (await isLeader(page)) ? page : otherPage;
+  const follower = leader === page ? otherPage : page;
+  await expect(follower.getByTestId("subscription-status")).toContainText(/follower|leader/);
+
+  const insertedCount = 2000;
+  await follower.getByLabel("Count").fill(String(insertedCount));
+  await follower.getByLabel("Batch size").fill("50");
+  await follower.getByLabel("Seconds").fill("3");
+  await follower.getByRole("button", { name: "Stream random events" }).click();
+  await expect(follower.getByTestId("insert-state")).toHaveText("inserting");
+
+  await leader.waitForTimeout(500);
+  await leader.getByRole("button", { name: "Kill" }).click();
+
+  await expect(follower.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+
+  const generatedCount = (scope: Page) =>
+    scope.getByLabel("Event type filter").evaluate((element) => {
+      if (!(element instanceof HTMLSelectElement)) throw new Error("not a select");
+      return [...element.options]
+        .filter((option) => option.value.startsWith("events.iterate.com/random/"))
+        .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
+    });
+  await expect.poll(() => generatedCount(leader), { timeout: 60_000 }).toBe(insertedCount);
+  await expect.poll(() => generatedCount(follower), { timeout: 60_000 }).toBe(insertedCount);
+});
+
+// A cold mirror far behind the head must PULL history (paged getEvents, client-paced)
+// instead of letting the one-directional subscription blast the whole backlog at it —
+// that's the flow-control fix for the 1M-replay memory blowup. This pins the behavior:
+// a fresh browser context opening a stream thousands of events deep catches up exactly
+// (no loss, no duplication) and ends live-subscribed.
+test("cold open of a deep stream pull-pages history and converges exactly", async ({ browser }) => {
+  const seedContext = await browser.newContext();
+  const seedPage = await seedContext.newPage();
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await seedPage.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(seedPage, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const insertedCount = 5000;
+  await seedPage.getByLabel("Count").fill(String(insertedCount));
+  await seedPage.getByLabel("Batch size").fill("500");
+  await seedPage.getByLabel("Seconds").fill("0");
+  await seedPage.getByRole("button", { name: "Stream random events" }).click();
+  await expect(seedPage.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+  await seedContext.close();
+
+  // Fresh context = fresh OPFS origin = checkpoint 0, thousands behind the head.
+  const coldContext = await browser.newContext();
+  const coldPage = await coldContext.newPage();
+  const consoleLines: string[] = [];
+  coldPage.on("console", (message) => consoleLines.push(message.text()));
+  await coldPage.goto(streamRoute({ path: streamPath }));
+  await expect(coldPage.getByTestId("stream-status")).toHaveText("subscribed", {
+    timeout: 60_000,
+  });
+  await expect
+    .poll(
+      () =>
+        coldPage.getByLabel("Event type filter").evaluate((element) => {
+          if (!(element instanceof HTMLSelectElement)) throw new Error("not a select");
+          return [...element.options]
+            .filter((option) => option.value.startsWith("events.iterate.com/random/"))
+            .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
+        }),
+      { timeout: 120_000 },
+    )
+    .toBe(insertedCount);
+  // The catch-up must have gone through the pull lane, not the subscription blast.
+  expect(consoleLines.some((line) => line.includes("pull-paging before subscribing"))).toBe(true);
+  await coldContext.close();
+});
+
 // Catches stale local OPFS mirrors after server reset. This is the deployed-worker race that
 // led to old local rows surviving; the browser now discards impossible local state and shows
 // the fresh server stream.

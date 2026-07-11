@@ -15,6 +15,31 @@ timers, inline snapshots, `test.for` tables), see
 | TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                 | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                              |
 | Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)       | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                             |
 
+## Don't over-test
+
+We prefer e2e tests from very far away — through the itx surface or the
+browser, against a live deployment — because they prove behavior users
+actually get. Unit tests are for when there's a good reason: typically a
+large number of cases that would be too slow or too expensive to run e2e
+(fold/reduce logic, parsers, pure functions with wide input tables). Stream
+processors are the deliberate example — they get purpose-built node test
+harnesses (see [Writing & testing stream processors](writing-stream-processors.md))
+exactly so their many event-ordering and redelivery cases can run as fast
+unit tests.
+
+What we do NOT want:
+
+- **Unit tests that re-assert another test's fixtures.** Example of the
+  anti-pattern: a worker-build e2e edits the seeded template with
+  exact-string anchors, and template edits kept breaking those anchors — the
+  tempting "fix" was a unit test pinning the anchor strings so the breakage
+  showed up in the fast lane. That test asserts nothing about behavior, only
+  that two files agree, and every template edit now has to update it too.
+  The e2e is the real check; the remedy at edit time is grepping for
+  verbatim couplings, not a guard test.
+- Unit tests for arg parsing of internal scripts, trivial glue, or anything
+  a covering e2e already proves by existing.
+
 ## Running a lane against an environment
 
 Every non-unit lane targets a live deployment and is invoked the same way:
