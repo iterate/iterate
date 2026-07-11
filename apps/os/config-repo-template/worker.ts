@@ -1,87 +1,76 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import type { DynamicWorkerRef, ItxBinding, StreamEvent, StreamEventBatch } from "iterate/sdk";
+import {
+  BaseProjectEntrypoint,
+  type ItxBinding,
+  type StreamEvent,
+  type StreamEventBatch,
+} from "iterate/sdk";
 
 // The whole seeded worker in ONE file, so reading this module is reading the
 // whole system: the root project worker (default export) routes HTTP and
 // reacts to project events, and the example apps are named exports — a
 // stateless WorkerEntrypoint (HelloApp) and a stateful Durable Object with
-// live WebSocket updates (CounterApp). Each APPS entry below builds from THIS
-// file with a different entry class; split an app into its own file (and
-// point its ref's entryPoint at it) when it earns one.
+// live WebSocket updates (CounterApp). Both apps build from THIS file with a
+// different entry class; split an app into its own file (and point its ref's
+// entryPoint at it) when it earns one.
 
 /** Bindings the platform supplies to every project worker. `ItxBinding`
  * (iterate/sdk) documents the two channels: `get()` for capability method
  * calls, `fetch()` for HTTP into sibling workers. */
 type Env = { ITX: ItxBinding };
 
-// The root project worker is a small ROUTER over the project's apps. Each app
-// is its own repo-backed dynamic worker (here: a different exported class of
-// this same module); ingress selects one via the trusted x-iterate-app header
-// (hosts like hello--<slug>.<base> or <app>.<custom-hostname>). Requests with
-// no app selected get the static homepage below.
-const APPS = {
-  hello: {
-    type: "stateless",
-    path: "/",
-    entrypoint: "HelloApp",
-    source: {
-      files: { type: "repo", repoPath: "/repos/config" },
-      options: { entryPoint: "worker.ts" },
-    },
-  },
-  counter: {
-    type: "stateful",
-    path: "/",
-    className: "CounterApp",
-    durableWorkerKey: "app-counter",
-    source: {
-      files: { type: "repo", repoPath: "/repos/config" },
-      options: { entryPoint: "worker.ts" },
-    },
-  },
-} satisfies Record<string, DynamicWorkerRef>;
-
-export default class ProjectWorker extends WorkerEntrypoint<Env> {
+export default class ProjectWorker extends BaseProjectEntrypoint {
   async fetch(req: Request): Promise<Response> {
-    const appSlug = req.headers.get("x-iterate-app");
-    if (appSlug) {
-      const ref = Object.hasOwn(APPS, appSlug) ? APPS[appSlug as keyof typeof APPS] : undefined;
-      if (!ref) return new Response(`unknown app: ${appSlug}`, { status: 404 });
-
-      // Every app request — pages, APIs, streaming bodies, WebSocket upgrades
-      // — dispatches over the platform's fetch-native worker lane:
-      // `env.ITX.fetch` with the target ref in the x-iterate-worker-dispatch
-      // header (JSON { ref, buildBudgetMs? } — same ref shape as
-      // project.workers.get). Real fetch hops are what let a 101 upgrade
-      // tunnel through; an `app.fetch(req)` RPC method call cannot carry one.
-      // A cold build answers a 503 building page that refreshes itself
-      // (marked with x-iterate-worker-building — intercept it here to render
-      // your own). Method calls on apps still go through
-      // `project.workers.get(ref)` RPC dispatch; HTTP never does.
-      const headers = new Headers(req.headers);
-      headers.set("x-iterate-worker-dispatch", JSON.stringify({ buildBudgetMs: 15_000, ref }));
-      return await this.env.ITX.fetch(new Request(req, { headers }));
+    // Each app is a repo-backed dynamic worker; ingress selects one via the
+    // trusted x-iterate-app header (hosts like hello--<slug>.<base> or
+    // <app>.<custom-hostname>). Requests with no app selected get the static
+    // homepage below. `fetchDynamicWorker` (from BaseProjectEntrypoint,
+    // iterate/sdk) dispatches over the platform's fetch-native worker lane —
+    // its docstring explains why app HTTP must ride a real fetch hop, never
+    // an RPC method call.
+    const app = req.headers.get("x-iterate-app");
+    if (app === "hello") {
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        entrypoint: "HelloApp",
+        source: {
+          files: { type: "repo", repoPath: "/repos/config" },
+          options: { entryPoint: "worker.ts" },
+        },
+      });
     }
+    if (app === "counter") {
+      return this.fetchDynamicWorker(req, {
+        type: "stateful",
+        path: "/",
+        className: "CounterApp",
+        durableWorkerKey: "app-counter",
+        source: {
+          files: { type: "repo", repoPath: "/repos/config" },
+          options: { entryPoint: "worker.ts" },
+        },
+      });
+    }
+    if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
     // The seeded homepage is a static page linking to the apps. Platform
     // hosts use "<app>--<project>.<base>"; custom domains use
     // "<app>.<custom-hostname>".
     const url = new URL(req.url);
     const hostKind = req.headers.get("x-iterate-host-kind");
-    const appLinks = Object.entries(APPS)
-      .map(([slug, ref]) => {
-        const appHost = hostKind === "custom" ? `${slug}.${url.host}` : `${slug}--${url.host}`;
-        const href = `${url.protocol}//${appHost}/`;
-        return `<li><a href="${href}">${slug}</a> (${ref.type})</li>`;
-      })
-      .join("\n");
+    const appUrl = (slug: string) =>
+      `${url.protocol}//${hostKind === "custom" ? `${slug}.${url.host}` : `${slug}--${url.host}`}/`;
     return new Response(
       `<!doctype html>
         <html>
           <body>
             <main>
               <p>Hello from your Iterate project worker.</p>
-              <ul>${appLinks}</ul>
+              <ul>
+                <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
+                <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
+              </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>
           </body>

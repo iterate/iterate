@@ -15,6 +15,9 @@ export default defineConfig([
     // `tsc -p tsconfig.sdk.json` in the build script instead.
     entry: ["src/sdk.ts"],
     format: "esm",
+    deps: {
+      neverBundle: ["cloudflare:workers"],
+    },
     dts: false,
     sourcemap: true,
     clean: false,

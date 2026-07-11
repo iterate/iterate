@@ -1,0 +1,12 @@
+// The `iterate/sdk` runtime (packages/iterate/src/sdk.ts) compiled to plain
+// JavaScript — virtual modules load under esbuild's "js" loader — and
+// embedded as a string. worker-loader.ts injects it into every bundled
+// dynamic worker build as `virtualModules["iterate/sdk"]`, so worker code
+// can `import { BaseProjectEntrypoint } from "iterate/sdk"` without the
+// bundler npm-installing the package (its installer is registry-semver-only
+// and the seeded devDependency is a pkg.pr.new URL). Edit the sdk, then
+// `pnpm lint --fix` regenerates this file; drift is a lint error. This file
+// is oxfmt-ignored: the codegen preset owns its formatting.
+// codegen:start {preset: custom, source: ./iterate-sdk-virtual-module.codegen.cjs, export: iterateSdkVirtualModule}
+export const ITERATE_SDK_VIRTUAL_MODULE = "import { WorkerEntrypoint } from \"cloudflare:workers\";\nclass BaseProjectEntrypoint extends WorkerEntrypoint {\n  /**\n   * Forward a request to one of the project's dynamic workers (an \"app\") —\n   * pages, APIs, streaming bodies, and WebSocket upgrades all ride through.\n   *\n   * Why this is a real `env.ITX.fetch` hop with the ref in a header, and not\n   * a method call on the app: workerd only performs protocol work — WebSocket\n   * 101 upgrades, streaming response bodies — through genuine `fetch` handler\n   * hops between workers. Calling `fetch` (or anything else) on an app handle\n   * from `project.workers.get(ref)` is ordinary RPC: arguments and results\n   * are serialized copies, so a Response carrying a socket cannot cross it\n   * (workerd throws a DataCloneError). And because a fetch hop's only side\n   * channel for \"which worker do I mean\" is the request itself, the target\n   * ref rides the x-iterate-worker-dispatch header (JSON\n   * `{ ref, buildBudgetMs? }` — the same ref shape `project.workers.get`\n   * takes). Method calls on apps still go through `project.workers.get(ref)`\n   * RPC dispatch; HTTP never does.\n   *\n   * A cold build past `buildBudgetMs` (default 15s) answers a 503 building\n   * page that refreshes itself, marked with x-iterate-worker-building —\n   * intercept that response here to render your own.\n   */\n  async fetchDynamicWorker(req, ref, opts) {\n    const headers = new Headers(req.headers);\n    headers.set(\n      \"x-iterate-worker-dispatch\",\n      JSON.stringify({ buildBudgetMs: opts?.buildBudgetMs ?? 15e3, ref })\n    );\n    return await this.env.ITX.fetch(new Request(req, { headers }));\n  }\n}\nexport {\n  BaseProjectEntrypoint\n};\n";
+// codegen:end

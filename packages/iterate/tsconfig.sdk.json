@@ -3,7 +3,7 @@
   // (rolldown-plugin-dts → @babel/generator) crashes on the generated itx
   // contract's getter signatures, so sdk declarations are emitted with plain
   // tsc instead (see the sdk entry in tsdown.config.ts + the build script).
-  "files": ["src/sdk.ts"],
+  "files": ["src/sdk.ts", "src/cloudflare-workers.d.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
