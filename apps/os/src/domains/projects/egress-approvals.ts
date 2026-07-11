@@ -123,7 +123,14 @@ export function matchEgressRule(
   rules: readonly EgressRule[],
   request: { method: string; url: string; secretPaths: readonly string[] },
 ): EgressRule | undefined {
-  const url = new URL(request.url);
+  let url: URL;
+  try {
+    url = new URL(request.url);
+  } catch {
+    // An unparseable URL can't match host/path rules; don't throw out of the
+    // gate — treat it as no match and let the egress lanes handle the bad URL.
+    return undefined;
+  }
   const method = request.method.toUpperCase();
   return rules.find((rule) => {
     const match = rule.match;

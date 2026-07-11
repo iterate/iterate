@@ -77,6 +77,12 @@ describe("matchEgressRule", () => {
     // A rule with an empty match object matches everything.
     expect(matchEgressRule([rule({ ruleKey: "all" })], request())?.ruleKey).toBe("all");
   });
+
+  test("an unparseable URL never throws — it's a no-match, not a gate crash", () => {
+    const all = rule({ ruleKey: "all" });
+    expect(() => matchEgressRule([all], request({ url: "not a url" }))).not.toThrow();
+    expect(matchEgressRule([all], request({ url: "not a url" }))).toBeUndefined();
+  });
 });
 
 describe("canonical approval message", () => {

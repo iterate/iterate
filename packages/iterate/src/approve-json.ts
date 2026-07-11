@@ -11,7 +11,9 @@
 //   {"type":"status","loggedIn":true,"principal":"jane@acme.com",
 //    "projectId":"prj_…","key":{"kind":"secure-enclave","keyId":"…"}|null}
 //   {"type":"requested","offset":42,"method":"POST","url":"…","host":"…",
-//    "secretPaths":[…],"ruleKey":"…","expiresAt":"…","bodyPreview":"…"|null}
+//    "secretPaths":[…],"ruleKey":"…","expiresAt":"…","bodyPreview":"…"|null,
+//    "submitted":false}   // submitted=true ⇒ a grant already exists (awaiting the door)
+//   {"type":"submitted","offset":42}   // a grant landed; the row is now awaiting the door
 //   {"type":"settled","offset":42,"outcome":"released","status":200}
 //   {"type":"settled","offset":42,"outcome":"rejected","reason":"expired"}
 //   {"type":"error","offset":42,"message":"…"}
@@ -122,7 +124,7 @@ export async function runApprovalJson(input: {
     try {
       event = await stream.waitForEvent({
         afterOffset: tail,
-        eventTypes: [EVENT.requested, ...RESOLUTION_TYPES],
+        eventTypes: [EVENT.requested, EVENT.granted, ...RESOLUTION_TYPES],
         timeoutMs: 60_000,
       });
     } catch (error) {
@@ -147,12 +149,10 @@ async function reconcileBacklog(
   pending: Map<number, RequestedPayload>,
 ): Promise<number> {
   const requests = new Map<number, RequestedPayload>();
-  const resolved = new Set<number>();
+  const resolved = new Set<number>(); // terminal: settled or rejected
+  const submitted = new Set<number>(); // a grant exists, but the door hasn't settled it
   let cursor = 0;
   while (true) {
-    // `granted` counts as decided here (though it's not a settle): a request
-    // already granted must not reappear as pending on restart and get
-    // re-approved. The live tail deliberately does NOT treat granted this way.
     const page = await stream.getEvents({
       afterOffset: cursor,
       eventTypes: [EVENT.requested, EVENT.granted, ...RESOLUTION_TYPES],
@@ -162,18 +162,24 @@ async function reconcileBacklog(
       cursor = event.offset;
       if (event.type === EVENT.requested) {
         requests.set(event.offset, event.payload as RequestedPayload);
-      } else {
-        const ref = (event.payload as { approvalRequestEventOffset?: number })
-          .approvalRequestEventOffset;
-        if (typeof ref === "number") resolved.add(ref);
+        continue;
       }
+      const ref = (event.payload as { approvalRequestEventOffset?: number })
+        .approvalRequestEventOffset;
+      if (typeof ref !== "number") continue;
+      // A grant alone is NOT terminal — the door may ignore an unsigned/invalid
+      // one and the hold stays open. So only settled/rejected resolve; a grant
+      // marks the request "submitted" (shown, but awaiting the door — not a
+      // fresh approve prompt).
+      if (event.type === EVENT.granted) submitted.add(ref);
+      else resolved.add(ref);
     }
   }
   for (const [offset, payload] of requests) {
     if (resolved.has(offset)) continue;
     if (Date.parse(payload.expiresAt) <= Date.now()) continue;
     pending.set(offset, payload);
-    emitRequested(offset, payload, key);
+    emitRequested(offset, payload, key, submitted.has(offset));
   }
   return cursor;
 }
@@ -187,7 +193,7 @@ function dispatch(
     const payload = event.payload as RequestedPayload;
     if (Date.parse(payload.expiresAt) <= Date.now()) return;
     pending.set(event.offset, payload);
-    emitRequested(event.offset, payload, key);
+    emitRequested(event.offset, payload, key, false);
     return;
   }
   const outcome = event.payload as {
@@ -198,6 +204,12 @@ function dispatch(
   };
   const offset = outcome.approvalRequestEventOffset;
   if (typeof offset !== "number") return;
+  // A grant is not terminal: mark the row submitted (awaiting the door), keep
+  // it pending. Only settled/rejected remove it.
+  if (event.type === EVENT.granted) {
+    if (pending.has(offset)) emit({ type: "submitted", offset });
+    return;
+  }
   pending.delete(offset);
   if (event.type === EVENT.rejected) {
     emit({ type: "settled", offset, outcome: "rejected", reason: outcome.reason ?? "human" });
@@ -212,6 +224,7 @@ function emitRequested(
   offset: number,
   payload: RequestedPayload,
   key: StoredApprovalKey | null,
+  submitted: boolean,
 ): void {
   emit({
     type: "requested",
@@ -224,6 +237,7 @@ function emitRequested(
     expiresAt: payload.expiresAt,
     bodyPreview: payload.bodyPreview,
     signed: key !== null,
+    submitted, // a grant already exists — awaiting the door, not fresh
   });
 }
 

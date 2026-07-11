@@ -210,13 +210,7 @@ final class ApprovalController: ObservableObject {
   /// action. The CLI does the signing (Touch ID pops there); the row shows a
   /// spinner until the settle/error comes back.
   func decide(offset: Int, _ decision: String) {
-    if let index = requests.firstIndex(where: { $0.offset == offset }) {
-      // Reassign the element (not an in-place field write) so the @Published
-      // array reliably republishes.
-      var updated = requests[index]
-      updated.submitting = true
-      requests[index] = updated
-    }
+    setSubmitting(offset, true)
     let line = #"{"offset":\#(offset),"decision":"\#(decision)"}"# + "\n"
     stdinHandle?.write(Data(line.utf8))
   }
@@ -251,7 +245,7 @@ final class ApprovalController: ObservableObject {
       }
     case "requested":
       guard let offset = event["offset"] as? Int else { return }
-      let request = HeldRequest(
+      var request = HeldRequest(
         offset: offset,
         method: event["method"] as? String ?? "?",
         host: event["host"] as? String ?? "?",
@@ -260,10 +254,17 @@ final class ApprovalController: ObservableObject {
         ruleKey: event["ruleKey"] as? String ?? "",
         bodyPreview: event["bodyPreview"] as? String
       )
-      if !requests.contains(request) {
+      // A backlog request that already has a grant is shown awaiting the door
+      // (spinner), not as a fresh Approve prompt.
+      request.submitting = event["submitted"] as? Bool ?? false
+      if !requests.contains(where: { $0.offset == offset }) {
         requests.append(request)
-        notify(request)
+        if !request.submitting { notify(request) }
       }
+    case "submitted":
+      // A grant landed (this app's or another approver's): show the row
+      // awaiting the door rather than a fresh prompt.
+      setSubmitting(event["offset"] as? Int, true)
     case "settled":
       if let offset = event["offset"] as? Int {
         requests.removeAll { $0.offset == offset }
@@ -272,14 +273,19 @@ final class ApprovalController: ObservableObject {
       lastError = event["message"] as? String
       // A signing/append failure (e.g. cancelled Touch ID) leaves the request
       // pending — clear its spinner so Approve/Reject come back for a retry.
-      if let offset = event["offset"] as? Int,
-        let index = requests.firstIndex(where: { $0.offset == offset })
-      {
-        requests[index].submitting = false
-      }
+      setSubmitting(event["offset"] as? Int, false)
     default:
       break
     }
+  }
+
+  /// Set a row's spinner, reassigning the element so the @Published array
+  /// reliably republishes.
+  private func setSubmitting(_ offset: Int?, _ value: Bool) {
+    guard let offset, let index = requests.firstIndex(where: { $0.offset == offset }) else { return }
+    var updated = requests[index]
+    updated.submitting = value
+    requests[index] = updated
   }
 
   /// Ping the human when a request lands, even with the dropdown closed. When

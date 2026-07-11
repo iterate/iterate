@@ -394,96 +394,102 @@ export class ProjectDurableObject extends DurableObject<Env> {
       "events.iterate.com/project/human-approval-rejected",
     ];
     let cursor = input.approvalRequestEventOffset;
-    while (true) {
-      const remaining = input.deadline - Date.now();
+
+    // Live phase: chunked one-shot waits until the wall-clock deadline.
+    while (Date.now() < input.deadline) {
       let event;
-      if (remaining <= 0) {
-        // Final sweep before declaring expiry: a verdict appended in the last
-        // wait-chunk's shadow must still win — a human who granted just in
-        // time is honored, not expired. Same processing path, page reads
-        // instead of live waits. The sweep is bounded to events CREATED
-        // before the deadline: the first younger event ends it, so other
-        // holds' ongoing resolutions on a busy stream can't keep an expired
-        // hold open.
-        const [swept] = await stream.getEvents({
+      try {
+        event = await stream.waitForEvent({
           afterOffset: cursor,
           eventTypes: resolutionEventTypes,
+          timeoutMs: Math.min(input.deadline - Date.now(), 25_000),
         });
-        if (swept === undefined || Date.parse(swept.createdAt) > input.deadline) return "expired";
-        event = swept;
-      } else {
-        try {
-          event = await stream.waitForEvent({
-            afterOffset: cursor,
-            eventTypes: resolutionEventTypes,
-            timeoutMs: Math.min(remaining, 25_000),
-          });
-        } catch (error) {
-          // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
-          // (and transient stream restarts) just re-arm from the same cursor.
-          if (
-            error instanceof Error &&
-            error.message.includes("Timed out waiting for stream event")
-          ) {
-            continue;
-          }
-          throw error;
-        }
-      }
-
-      cursor = event.offset;
-
-      if (event.type === "events.iterate.com/project/human-approval-rejected") {
-        const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+      } catch (error) {
+        // waitForEvent is a one-shot, not a durable waiter: chunk timeouts
+        // (and transient stream restarts) just re-arm from the same cursor.
         if (
-          rejection.success &&
-          rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
+          error instanceof Error &&
+          error.message.includes("Timed out waiting for stream event")
         ) {
-          return "rejected";
+          continue;
         }
-        continue;
+        throw error;
       }
-
-      const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
-      if (
-        !grant.success ||
-        grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset
-      ) {
-        continue;
-      }
-
-      // Judge the grant against FRESH key state: push delivery to this
-      // processor can lag the stream, so an unsigned grant must not slip
-      // through while a human-approval-key-added event is committed but not
-      // yet folded. A grant we cannot judge (catch-up failed) or that
-      // evaluateGrant refuses is IGNORED, never fatal: the hold keeps
-      // waiting for a good grant, a human rejection, or expiry.
-      const verdict = await this.#processorHost
-        .catchUp(ProjectProcessorContract.slug)
-        .then(() =>
-          evaluateGrant({
-            grant: grant.data,
-            keys: this.#projectProcessor.currentState.humanApprovalKeys,
-            message: buildApprovalMessage({
-              projectId: this.#name.projectId,
-              approvalRequestEventOffset: input.approvalRequestEventOffset,
-              requested: input.requestedPayload,
-              decision: "granted",
-            }),
-          }),
-        )
-        .catch((error: unknown) => ({
-          accepted: false as const,
-          reason: `key state catch-up failed: ${error instanceof Error ? error.message : String(error)}`,
-        }));
-      if (verdict.accepted) return "granted";
-      console.warn("egress approval: grant ignored", {
-        approvalRequestEventOffset: input.approvalRequestEventOffset,
-        keyId: grant.data.keyId,
-        projectId: this.#name.projectId,
-        reason: verdict.reason,
-      });
+      cursor = event.offset;
+      const verdict = await this.#judgeResolution(event, input);
+      if (verdict !== null) return verdict;
     }
+
+    // Expiry sweep: a verdict appended in the last chunk's shadow must still
+    // win — a human who granted just in time is honored. Scan whole pages and
+    // STOP at the first event created after the deadline, so other holds'
+    // ongoing resolutions on a busy stream can't delay this expiry.
+    while (true) {
+      const page = await stream.getEvents({
+        afterOffset: cursor,
+        eventTypes: resolutionEventTypes,
+      });
+      if (page.length === 0) return "expired";
+      for (const event of page) {
+        if (Date.parse(event.createdAt) > input.deadline) return "expired";
+        cursor = event.offset;
+        const verdict = await this.#judgeResolution(event, input);
+        if (verdict !== null) return verdict;
+      }
+    }
+  }
+
+  /**
+   * Judge one resolution event for a specific held request: "rejected" for our
+   * matching rejection, "granted" for a matching grant that passes signature
+   * policy against FRESH key state, or null (not ours, or an ignored grant —
+   * unsigned/bad-sig/catch-up-failed — which is never fatal to the hold).
+   */
+  async #judgeResolution(
+    event: { type: string; offset: number; payload?: unknown },
+    input: { approvalRequestEventOffset: number; requestedPayload: HumanApprovalRequestedPayload },
+  ): Promise<"granted" | "rejected" | null> {
+    if (event.type === "events.iterate.com/project/human-approval-rejected") {
+      const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+      return rejection.success &&
+        rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
+        ? "rejected"
+        : null;
+    }
+
+    const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
+    if (
+      !grant.success ||
+      grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset
+    ) {
+      return null;
+    }
+    const verdict = await this.#processorHost
+      .catchUp(ProjectProcessorContract.slug)
+      .then(() =>
+        evaluateGrant({
+          grant: grant.data,
+          keys: this.#projectProcessor.currentState.humanApprovalKeys,
+          message: buildApprovalMessage({
+            projectId: this.#name.projectId,
+            approvalRequestEventOffset: input.approvalRequestEventOffset,
+            requested: input.requestedPayload,
+            decision: "granted",
+          }),
+        }),
+      )
+      .catch((error: unknown) => ({
+        accepted: false as const,
+        reason: `key state catch-up failed: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+    if (verdict.accepted) return "granted";
+    console.warn("egress approval: grant ignored", {
+      approvalRequestEventOffset: input.approvalRequestEventOffset,
+      keyId: grant.data.keyId,
+      projectId: this.#name.projectId,
+      reason: verdict.reason,
+    });
+    return null;
   }
 
   /** This Durable Object's own stream (the project stream for the "/" egress instance). */
