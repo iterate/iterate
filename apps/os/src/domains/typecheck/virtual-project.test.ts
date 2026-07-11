@@ -14,6 +14,7 @@ import { runTypecheck, npmPackagesMentioned } from "./run-typecheck.ts";
 import {
   checkCapabilityTypes,
   checkItxScript,
+  checkItxScriptForExecution,
   mountModuleText,
   type Typechecker,
 } from "./virtual-project.ts";
@@ -347,4 +348,216 @@ test("openapi: references materialize at check time — schemas never ride the j
     typechecker,
   });
   expect(broken.some((p) => p.includes("type generation failed"))).toBe(true);
+});
+
+// ─── The execution gate: checkItxScriptForExecution ─────────────────────────
+// Same compiler, different policy: only PROVABLE errors in the script's own
+// code block a run. The suite below is half true-positives, half attempts to
+// break the gate with scripts that run fine at runtime and must not bounce.
+
+async function gate(code: string, capabilities: CapabilityDescription[] = []) {
+  return await checkItxScriptForExecution({ capabilities, code, typechecker });
+}
+
+test("execution gate: a wrong call into the typed surface blocks with the caller's line numbers", async () => {
+  const checked = await gate(`async (itx) => {\n  return await itx.streams.gett("/");\n}`);
+  expect(checked.verdict).toBe("problems");
+  const problems = (checked as { problems: string[] }).problems;
+  expect(problems[0]).toContain("script:2");
+  expect(problems[0]).toContain("Did you mean 'get'");
+});
+
+test("execution gate: a near-miss typo on a typed mount blocks; anything else on mounts runs", async () => {
+  const typo = await gate("async (itx) => itx.tools.weather.forecastt({ city: 'Berlin' })", [
+    WEATHER_MOUNT,
+  ]);
+  expect(typo.verdict).toBe("problems");
+  expect((typo as { problems: string[] }).problems[0]).toContain("Did you mean 'forecast'");
+
+  const untyped = await gate("async (itx) => itx.legacy.whatever(1, { deep: true })", [
+    { path: ["legacy"], type: "live" },
+  ]);
+  expect(untyped).toEqual({ verdict: "clean" });
+});
+
+test("execution gate: only NEAR-MISS proof blocks — bare mismatches are unprovable and run", async () => {
+  // The declared surface lags the runtime in places (preview e2e:
+  // CloudflareSandbox.exec exists at runtime but not in types, handle results
+  // declared {}), so property/argument mismatches without a did-you-mean must
+  // never block. These all failed loudly in preview until this policy.
+  for (const code of [
+    // A capability nobody declared — journal-legal via dynamic provides.
+    "async (itx) => itx.nonexistent.doThing()",
+    // Wrong argument type into the platform surface — types may lag runtime.
+    "async (itx) => itx.docs.search(42)",
+    // Wrong argument shape into a typed mount.
+    "async (itx) => itx.tools.weather.forecast({ city: 42 })",
+  ]) {
+    const checked = await gate(code, [WEATHER_MOUNT]);
+    expect(checked, code).toEqual({ verdict: "clean" });
+  }
+});
+
+test("execution gate: provide-then-use in one script stays green (dynamic mounts are invisible to a static check)", async () => {
+  // The canonical catalogue example shape that preview e2e runs: mount a
+  // capability, then call it through the itx proxy two lines later.
+  const checked = await gate(
+    `async (itx) => {
+      await itx.capabilityHost.provideCapability({
+        type: "itx-expression",
+        path: ["demoStream"],
+        expression: ["streams", ["get", "/"]],
+      });
+      return await itx.demoStream.getEvents({ afterOffset: 0, limit: 10 });
+    }`,
+  );
+  expect(checked).toEqual({ verdict: "clean" });
+});
+
+test("execution gate: a stale BROKEN mount never vetoes a script that doesn't deserve it", async () => {
+  const staleMount: CapabilityDescription[] = [
+    { path: ["stale"], type: "live", types: "export type Stale = Goone;" },
+  ];
+  // A clean script in a scope with a rotten journaled declaration runs.
+  expect(await gate("async (itx) => itx.stale.anything()", staleMount)).toEqual({
+    verdict: "clean",
+  });
+  // …but the script's OWN provable errors still block in the same scope.
+  const ownTypo = await gate("async (itx) => itx.streams.gett('/')", staleMount);
+  expect(ownTypo.verdict).toBe("problems");
+});
+
+test("execution gate: unresolved modules never block (acquisition failure ≠ proof)", async () => {
+  // fake-gone 404s in the fake registry — the mount module errors AND the
+  // script's own import errors are both unresolved-module class, so it runs.
+  const checked = await gate('async (itx) => { const m = await import("fake-gone"); return m; }', [
+    { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
+  ]);
+  expect(checked).toEqual({ verdict: "clean" });
+});
+
+test("execution gate: shapes the checker doesn't model run unchecked (raw runScript callers)", async () => {
+  for (const code of [
+    "(itx) => itx.streams.gett('/')", // plain arrow — runtime accepts it
+    "(async function (itx) { return 1; })",
+    "function f(itx) { return 1; }",
+  ]) {
+    const checked = await gate(code);
+    expect(checked.verdict, code).toBe("unchecked");
+  }
+});
+
+test("execution gate: oversized scripts and non-string code run unchecked", async () => {
+  const huge = await gate(`async (itx) => { ${"x;".repeat(150_000)} }`);
+  expect(huge.verdict).toBe("unchecked");
+  const notString = await checkItxScriptForExecution({
+    capabilities: [],
+    code: ["async (itx) => {}"] as unknown as string,
+    typechecker,
+  });
+  expect(notString.verdict).toBe("unchecked");
+});
+
+test("execution gate: a compiler crash and an unreachable checker both run unchecked", async () => {
+  const crashing: Typechecker = {
+    check: (input) =>
+      runTypecheck({
+        compiler: {
+          compile: () => {
+            throw new Error("Worker exceeded memory limit.");
+          },
+        },
+        fetchImpl: () => Promise.reject(new Error("no network")),
+        files: input.files,
+      }),
+  };
+  const crashed = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => {}",
+    typechecker: crashing,
+  });
+  expect(crashed.verdict).toBe("unchecked");
+
+  const unreachable: Typechecker = {
+    check: () => Promise.reject(new Error("sidecar dial failed")),
+  };
+  const failed = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => {}",
+    typechecker: unreachable,
+  });
+  expect(failed.verdict).toBe("unchecked");
+});
+
+test("execution gate: a hanging checker hits the deadline and runs unchecked", async () => {
+  const hanging: Typechecker = { check: () => new Promise(() => {}) };
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => {}",
+    deadlineMs: 25,
+    typechecker: hanging,
+  });
+  expect(checked.verdict).toBe("unchecked");
+  expect((checked as { reason: string }).reason).toContain("exceeded 25ms");
+});
+
+test("execution gate: runtime idioms that execute fine stay green", async () => {
+  const scripts = [
+    // Extra declared params — the runtime calls fn(itx), extras are undefined.
+    "async (itx, extra, more) => itx.docs.search({ q: 'x' })",
+    // Destructured itx parameter.
+    "async ({ streams, docs }) => { await streams.get('/'); await docs.search({ q: 'x' }); }",
+    // Runtime globals: web platform + nodejs_compat.
+    `async (itx) => {
+      const res = await fetch(new URL("https://example.com/?q=" + crypto.randomUUID()));
+      const body = new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      console.log(structuredClone({ body: atob(btoa(body)) }), performance.now());
+      return Buffer.from(process?.env?.HOME ?? "x").toString("base64");
+    }`,
+    // using-declarations: the runtime's own wrapper uses \`using\`, so the
+    // shimmed Symbol.dispose/Disposable must keep scripts with them green.
+    `async (itx) => {
+      const handle = { [Symbol.dispose]: () => {} };
+      { using h = handle; void h; }
+      return null;
+    }`,
+    // Async generators, for-await, Map/Set, regex, template literals, classes.
+    `async (itx) => {
+      class Acc { total = 0; add(n) { this.total += n; return this; } }
+      async function* numbers() { yield 1; yield 2; }
+      const acc = new Acc();
+      for await (const n of numbers()) acc.add(n);
+      const seen = new Map([["k", new Set([1])]]);
+      return \`total=\${acc.total} \${/\\d+/.test("42")} \${seen.size}\`;
+    }`,
+    // try/catch with unknown error narrowing and rethrow.
+    `async (itx) => {
+      try {
+        return await itx.streams.get("/");
+      } catch (error) {
+        throw new Error("wrapped: " + (error instanceof Error ? error.message : String(error)));
+      }
+    }`,
+  ];
+  for (const code of scripts) {
+    const checked = await gate(code);
+    expect(checked, code.slice(0, 60)).toEqual({ verdict: "clean" });
+  }
+});
+
+test("execution gate: provable script bugs the run would only surface at runtime DO block", async () => {
+  const buggy = [
+    // Misspelled local with a near-miss — TS2552 names the fix.
+    "async (itx) => { const count = 1; return cuont + 1; }",
+    // Misspelled platform member with a near-miss — TS2551 names the fix.
+    "async (itx) => itx.streams.gett('/')",
+    // Syntax errors — the runtime's loader would reject these anyway.
+    "async (itx) => { const = 1; }",
+    "async (itx) => { return JSON.parse('{'; }",
+  ];
+  for (const code of buggy) {
+    const checked = await gate(code);
+    expect(checked.verdict, code).toBe("problems");
+  }
 });

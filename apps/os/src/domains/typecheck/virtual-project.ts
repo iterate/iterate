@@ -69,6 +69,16 @@ ${[
   "TextDecoder",
   "AbortController",
   "AbortSignal",
+  // nodejs_compat globals — dynamic workers run with the flag, so scripts
+  // legitimately reach these; unshimmed, code that runs fine reports errors
+  // to every reader (the docs door, the execution gate's near-miss check).
+  "Buffer",
+  "Event",
+  "EventTarget",
+  "DOMException",
+  "MessageChannel",
+  "MessagePort",
+  "WebSocketPair",
 ]
   // Optional type params so generic uses (ReadableStream<Uint8Array>,
   // workers-flavored Request<CfProperties>) resolve like the bare name.
@@ -87,6 +97,13 @@ ${[
   "btoa",
   "crypto",
   "performance",
+  // nodejs_compat / workerd value-only globals (see the typed list above).
+  "process",
+  "navigator",
+  "caches",
+  "scheduler",
+  "self",
+  "reportError",
 ]
   .map((name) => `declare var ${name}: any;`)
   .join("\n")}
@@ -189,12 +206,31 @@ export async function checkItxScript(input: {
         "before it, comments included.",
     ];
   }
+  const project = assembleScriptProject(input.capabilities, input.code);
+  const { diagnostics, notes } = await input.typechecker.check({ files: project.files });
+  const problems = formatProblems(diagnostics, {
+    label: "script",
+    primaryFile: "script.ts",
+    // The script's first line is preceded by the prelude lines, so subtract
+    // them: reported positions match the code the caller sent.
+    lineOffset: -project.preludeLineCount,
+  });
+  // Notes only contextualize failures — see checkCapabilityTypes.
+  return problems.length > 0 ? [...problems, ...notes] : [];
+}
+
+/** The virtual project for one script check — shared by the advisory door
+ * (checkItxScript) and the execution gate (checkItxScriptForExecution). */
+function assembleScriptProject(
+  capabilities: CapabilityDescription[],
+  code: string,
+): { files: Record<string, string>; preludeLineCount: number } {
   const files: Record<string, string> = { ...SHARED_FILES };
   // Each mount is its own single-path intersection term: `{ tools: { weather:
   // T } } & { tools: U }` merges correctly even when one mount's path prefixes
   // another's (both are journal-legal — dispatch is longest-prefix).
   const mountTerms: string[] = [];
-  for (const capability of input.capabilities) {
+  for (const capability of capabilities) {
     if (capability.type === "builtin") continue;
     const dottedPath = capability.path.join(".");
     const exportedName = capability.types ? firstExportedTypeName(capability.types) : undefined;
@@ -211,24 +247,130 @@ export async function checkItxScript(input: {
         .reduce((type, segment) => `{ ${segment}: ${type} }`, typeReference),
     );
   }
-
   const prelude = [
     `import type { Project } from "./itx-types";`,
     `type Itx = ${["Project", ...mountTerms].join(" & ")};`,
-    `const script: (itx: Itx) => unknown = (`,
+    // Rest params so a script declaring extra parameters (the runtime calls
+    // fn(itx), extras just stay undefined) stays assignable.
+    `const script: (itx: Itx, ...rest: any[]) => unknown = (`,
   ];
-  files["script.ts"] = [...prelude, input.code, ");"].join("\n");
+  files["script.ts"] = [...prelude, code, ");"].join("\n");
+  return { files, preludeLineCount: prelude.length };
+}
 
-  const { diagnostics, notes } = await input.typechecker.check({ files });
-  const problems = formatProblems(diagnostics, {
+/**
+ * How the execution gate reads a script check: `problems` blocks the run;
+ * `clean` and `unchecked` both let it proceed. Distinct from checkItxScript
+ * (the advisory docs door), which reports everything — the gate blocks only
+ * on errors it can PROVE against surfaces it can see, because a script must
+ * never be stopped by what the checker doesn't know.
+ */
+export type ScriptExecutionCheck =
+  | { verdict: "clean" }
+  | { verdict: "problems"; problems: string[] }
+  | { verdict: "unchecked"; reason: string };
+
+/** Wall-clock budget for the pre-execution check. Generous enough for a cold
+ * sidecar isolate (wasm instantiation + first compile) plus npm type
+ * acquisition; past it the script runs unchecked rather than stall. */
+const EXECUTION_CHECK_DEADLINE_MS = 10_000;
+
+/**
+ * What the gate may block on — an ALLOWLIST, because blocking is only sound
+ * for errors that hold regardless of how complete the declared type surface
+ * is. Near-miss typos qualify: the compiler PROVED a correct alternative
+ * exists ("Did you mean 'get'?"). Bare "does not exist" / wrong-argument
+ * errors do not: capabilities are provided dynamically (a script may mount
+ * `itx.demoStream` and call it two lines later — journal-legal, invisible to
+ * a static check), and the declared surface demonstrably lags the runtime in
+ * places (preview e2e: `CloudflareSandbox.exec` exists at runtime but not in
+ * types, handle results declared `{}`). The advisory door (checkItxScript)
+ * still reports everything.
+ */
+const NEAR_MISS_TYPO_CODES = new Set([
+  2551, // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
+  2552, // Cannot find name 'X'. Did you mean 'Y'?
+]);
+
+/** TS grammar diagnostics live in the 1xxx range. Unparseable code is the one
+ * verdict that needs no type knowledge at all — the runtime's module loader
+ * would reject the same script with a worse message. */
+const isSyntaxError = (code: number) => code >= 1000 && code < 2000;
+
+/**
+ * The pre-execution typecheck for a `script-execution-requested` block:
+ * everything checkItxScript checks, read through the permissive-by-default
+ * policy above. Blocking requires an error diagnostic in the script's OWN
+ * code (`script.ts`) from the allowlist: a syntax error or a near-miss typo.
+ * Everything the checker cannot vouch for runs instead — property/argument
+ * mismatches (dynamic mounts and surface gaps make them unprovable), shapes
+ * the agent extractor never produces (raw runScript callers send plain
+ * function expressions), oversized scripts, broken mount declarations (stale
+ * journals must not veto unrelated scripts), compiler crashes, an unreachable
+ * typechecker, and the deadline. Never throws.
+ */
+export async function checkItxScriptForExecution(input: {
+  capabilities: CapabilityDescription[];
+  code: string;
+  typechecker: Typechecker;
+  deadlineMs?: number;
+}): Promise<ScriptExecutionCheck> {
+  if (typeof input.code !== "string") {
+    return { verdict: "unchecked", reason: `code is ${typeof input.code}, not a string` };
+  }
+  if (input.code.length > MAX_SCRIPT_CHARS) {
+    return {
+      verdict: "unchecked",
+      reason: `script is ${input.code.length} characters, over the check limit`,
+    };
+  }
+  if (!RUNTIME_SCRIPT_SHAPE.test(input.code.trim())) {
+    return { verdict: "unchecked", reason: "not the async block shape the checker models" };
+  }
+  const project = assembleScriptProject(input.capabilities, input.code);
+  let checked: TypecheckResult;
+  try {
+    checked = await withDeadline(
+      input.typechecker.check({ files: project.files }),
+      input.deadlineMs ?? EXECUTION_CHECK_DEADLINE_MS,
+    );
+  } catch (error) {
+    return { verdict: "unchecked", reason: `typechecker unavailable (${String(error)})` };
+  }
+  // runTypecheck's crash guard reports a compiler crash as a code-0 error
+  // diagnostic — a check that DIDN'T HAPPEN, not a verdict on the script.
+  if (checked.diagnostics.some((diagnostic) => diagnostic.code === 0)) {
+    return { verdict: "unchecked", reason: "type checking crashed" };
+  }
+  const blocking = checked.diagnostics.filter(
+    (diagnostic) =>
+      diagnostic.category === "error" &&
+      diagnostic.fileName === "script.ts" &&
+      (isSyntaxError(diagnostic.code) || NEAR_MISS_TYPO_CODES.has(diagnostic.code)),
+  );
+  if (blocking.length === 0) return { verdict: "clean" };
+  const problems = formatProblems(blocking, {
     label: "script",
     primaryFile: "script.ts",
-    // The script's first line is preceded by the prelude lines, so subtract
-    // them: reported positions match the code the caller sent.
-    lineOffset: -prelude.length,
+    lineOffset: -project.preludeLineCount,
   });
-  // Notes only contextualize failures — see checkCapabilityTypes.
-  return problems.length > 0 ? [...problems, ...notes] : [];
+  return { verdict: "problems", problems: [...problems, ...checked.notes] };
+}
+
+/** Race a check against its wall-clock budget. Promise.race keeps a handler
+ * on the losing check, so a late rejection never surfaces as unhandled. */
+async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`typecheck exceeded ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
