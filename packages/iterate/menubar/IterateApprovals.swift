@@ -79,6 +79,7 @@ final class ApprovalController: ObservableObject {
   private var sawStatus = false  // did THIS watcher session emit a status line?
   private var sessionStart = Date()
   private var reconnectAttempts = 0
+  private var generation = 0  // bumped on every stop(); voids stale queued reconnects
 
   func start() {
     stop()
@@ -130,13 +131,20 @@ final class ApprovalController: ObservableObject {
     guard loggedIn, sawStatus else { return }  // never connected → no reconnect
     if reconnectAttempts < 5 {
       reconnectAttempts += 1
-      DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.start() }
+      // Void this reconnect if the user meanwhile signs in / quits (which
+      // bumps the generation) so it can't overlap a login or a fresh watcher.
+      let scheduled = generation
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        guard let self, self.generation == scheduled else { return }
+        self.start()
+      }
     } else {
       lastError = "Approver keeps exiting — click Sign in to retry."
     }
   }
 
   func stop() {
+    generation += 1  // any in-flight reconnect scheduled before now is void
     process?.terminationHandler = nil
     process?.terminate()
     process = nil
