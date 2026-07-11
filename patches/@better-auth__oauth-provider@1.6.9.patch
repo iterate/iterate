@@ -1,5 +1,5 @@
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..4b1e31f6dc736c83c5deef265eef910499068b6c 100644
+index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..8665ae8c125fdd191288bea0a5131485e4266bc6 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -91,8 +91,11 @@ async function consentEndpoint(ctx, opts) {
@@ -16,7 +16,67 @@ index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..4b1e31f6dc736c83c5deef265eef9104
  	return {
  		redirect: true,
  		url
-@@ -3761,7 +3764,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
+@@ -423,7 +426,11 @@ async function createRefreshToken(ctx, opts, user, referenceId, client, scopes,
+ 	const exp = payload?.exp ?? iat + (opts.refreshTokenExpiresIn ?? 2592e3);
+ 	const token = opts.generateRefreshToken ? await opts.generateRefreshToken() : generateRandomString(32, "A-Z", "a-z");
+ 	const sessionId = payload?.sid;
+-	if (originalRefresh?.id) await ctx.context.adapter.update({
++	// iterate patch: don't re-stamp an already-revoked token when a grace-window
++	// fork rotates from it (handleRefreshTokenGrant) — the reuse grace must run
++	// from the FIRST rotation, or replaying the same token every few seconds
++	// would extend the window forever.
++	if (originalRefresh?.id && !originalRefresh.revoked) await ctx.context.adapter.update({
+ 		model: "oauthRefreshToken",
+ 		where: [{
+ 			field: "id",
+@@ -745,20 +752,32 @@ async function handleRefreshTokenGrant(ctx, opts) {
+ 		error: "invalid_grant"
+ 	});
+ 	if (refreshToken.revoked) {
+-		await ctx.context.adapter.deleteMany({
+-			model: "oauthRefreshToken",
+-			where: [{
+-				field: "clientId",
+-				value: client_id
+-			}, {
+-				field: "userId",
+-				value: refreshToken.userId
+-			}]
+-		});
+-		throw new APIError("BAD_REQUEST", {
+-			error_description: "invalid refresh token",
+-			error: "invalid_grant"
+-		});
++		// iterate patch: reuse grace window for rotated refresh tokens. Cookie
++		// relying parties (apps/os) fire bursts of parallel requests that race
++		// the rotation across worker isolates — the losers present the token
++		// the winner just rotated. Within the grace window that is a benign
++		// race, not theft: issue a fresh token pair (forking the chain) instead
++		// of deleting the user's every refresh token for this client. Reuse
++		// after the window keeps upstream's theft response.
++		const REFRESH_TOKEN_REUSE_GRACE_MS = 6e4;
++		const revokedAt = normalizeTimestampValue(refreshToken.revoked);
++		const withinReuseGrace = revokedAt != null && Date.now() - revokedAt.getTime() <= REFRESH_TOKEN_REUSE_GRACE_MS;
++		if (!withinReuseGrace) {
++			await ctx.context.adapter.deleteMany({
++				model: "oauthRefreshToken",
++				where: [{
++					field: "clientId",
++					value: client_id
++				}, {
++					field: "userId",
++					value: refreshToken.userId
++				}]
++			});
++			throw new APIError("BAD_REQUEST", {
++				error_description: "invalid refresh token",
++				error: "invalid_grant"
++			});
++		}
+ 	}
+ 	const scopes = refreshToken?.scopes;
+ 	const requestedScopes = scope?.split(" ");
+@@ -3761,7 +3780,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
  		try {
  			const registered = new URL(url);
  			const requested = new URL(query.redirect_uri);

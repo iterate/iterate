@@ -20,6 +20,7 @@ on:
       - apps/os/src/domains/streams/**
       - packages/shared/**
       - packages/ui/**
+      - patches/**
   workflow_dispatch:
     inputs:
       ref:
