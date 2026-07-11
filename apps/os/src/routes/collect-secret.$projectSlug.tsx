@@ -44,17 +44,44 @@ export const Route = createFileRoute("/collect-secret/$projectSlug")({
     return { project: await getProjectBySlugServerFn({ data: { slug: params.projectSlug } }) };
   },
   component: CollectSecretPage,
+  // A truncated/rewritten link (chat clients mangle long URLs) fails
+  // validateSearch — this page's audience is a person holding a link, so
+  // they get the malformed-link card, not the dev-flavored root error.
+  errorComponent: () => (
+    <main className="flex min-h-screen items-center justify-center p-4">
+      <MalformedLinkCard />
+    </main>
+  ),
 });
+
+function MalformedLinkCard() {
+  return (
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <CardTitle>This link is malformed</CardTitle>
+        <CardDescription>
+          It does not describe a usable secret. Ask whoever sent it for a fresh link.
+        </CardDescription>
+      </CardHeader>
+    </Card>
+  );
+}
 
 function CollectSecretPage() {
   const { project } = Route.useRouteContext();
+  const search = Route.useSearch();
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
-      <Suspense fallback={<ItxResourceLoading label="project" />}>
-        <ItxProvider projectId={project.id}>
-          <CollectSecretCard />
-        </ItxProvider>
-      </Suspense>
+      {search.egress.length === 0 ? (
+        // A pin to nothing can never be used — say so before dialing anything.
+        <MalformedLinkCard />
+      ) : (
+        <Suspense fallback={<ItxResourceLoading label="secret" />}>
+          <ItxProvider projectId={project.id}>
+            <CollectSecretCard />
+          </ItxProvider>
+        </Suspense>
+      )}
     </main>
   );
 }
@@ -84,10 +111,10 @@ function CollectSecretCard() {
       const secret = itx.secrets.get(search.path);
       // Material and egress land in ONE update, so the secret is born already
       // pinned to its hosts — no window where it exists but cannot be used.
-      const event = await secret.update({ material: value, egress: { urls: search.egress } });
-      // The processor folds the journal asynchronously; only announce the
-      // secret once the fold has passed our update and reports material.
-      await secret.processor.waitUntilEvent({ offset: event.offset, timeoutMs: 15_000 });
+      await secret.update({ material: value, egress: { urls: search.egress } });
+      // describe() is read-your-writes (the secret DO catches up its own fold
+      // before snapshotting), so one assertion — no wait — is the honest
+      // "stored and usable" check before anything is announced.
       if ((await secret.__describe()).hasMaterial !== true) {
         throw new Error(`The secret at ${search.path} did not report stored material.`);
       }
@@ -103,27 +130,16 @@ function CollectSecretCard() {
               `to use with getSecret placeholders.`,
           );
         return "notified";
-      } catch {
+      } catch (error) {
+        // The secret is stored either way; surface the notify failure to the
+        // user as copy (below) and keep the cause diagnosable.
+        console.error(`collect-secret: failed to notify ${search.notify}`, error);
         return "notify-failed";
       }
     },
     onSuccess: (outcome) => setSaved(outcome),
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
-
-  if (search.egress.length === 0) {
-    return (
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>This link is malformed</CardTitle>
-          <CardDescription>
-            It pins the secret to no egress hosts, so the value could never be used. Ask whoever
-            sent it for a fresh link.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    );
-  }
 
   if (saved !== null) {
     return (

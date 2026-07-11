@@ -1699,17 +1699,29 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
    */
   async collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink> {
     const path = normalizeSecretPath(input.path);
-    if (input.egress.urls.length === 0) {
+    if (!path.isWellFormed()) {
+      throw new Error("collectFromUser paths must be well-formed strings (no lone surrogates).");
+    }
+    const egressUrls = [...new Set(input.egress.urls)];
+    if (egressUrls.length === 0) {
       throw new Error(
         "collectFromUser needs at least one egress URL: the user is shown where the value can ever be sent, and a secret pinned to nothing can never be used.",
       );
     }
     // Validate the pin at mint, so a bad list fails on the caller that can
     // fix it — not as a raw "Invalid URL" in the user's face at submit time.
-    for (const url of input.egress.urls) {
-      if (!URL.canParse(url) || !/^https?:$/.test(new URL(url).protocol)) {
+    // Userinfo is rejected: it would ride a plaintext, shareable chat URL
+    // while origin-pinning ignores it anyway.
+    for (const url of egressUrls) {
+      const parsed = URL.canParse(url) ? new URL(url) : null;
+      if (parsed === null || !/^https?:$/.test(parsed.protocol)) {
         throw new Error(
           `collectFromUser egress URLs must be absolute http(s) URLs; got ${JSON.stringify(url)}.`,
+        );
+      }
+      if (parsed.username !== "" || parsed.password !== "") {
+        throw new Error(
+          `collectFromUser egress URLs must not carry credentials; got ${JSON.stringify(url)}.`,
         );
       }
     }
@@ -1717,13 +1729,19 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     if (!project?.slug) {
       throw new Error(`Project ${this.props.projectId} has no slug; cannot build a page URL.`);
     }
+    // Unlike read-only viewer links, this link WRITES a secret — never fall
+    // back to a default host that could belong to a different deployment.
+    const baseUrl = parseConfig(env).baseUrl;
+    if (baseUrl === undefined) {
+      throw new Error("collectFromUser needs APP_CONFIG_BASE_URL to build the page URL.");
+    }
     const scopePath = this.props.scopePath;
     const url = buildCollectSecretUrl({
-      baseUrl: parseConfig(env).baseUrl,
+      baseUrl,
       projectSlug: project.slug,
       search: {
         path,
-        egress: input.egress.urls,
+        egress: egressUrls,
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
       },

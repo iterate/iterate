@@ -27,12 +27,15 @@ export const CollectSecretSearch = z.object({
 });
 export type CollectSecretSearch = z.infer<typeof CollectSecretSearch>;
 
+// No default-host fallback here on purpose: this link WRITES a secret, so a
+// deployment that cannot name its own base URL must fail at mint rather than
+// point the user at another deployment's form.
 export function buildCollectSecretUrl(input: {
-  baseUrl: string | undefined;
+  baseUrl: string;
   projectSlug: string;
   search: CollectSecretSearch;
 }) {
-  const url = new URL(input.baseUrl ?? "https://os.iterate.com");
+  const url = new URL(input.baseUrl);
   url.pathname = `/collect-secret/${encodeURIComponent(input.projectSlug)}`;
   url.searchParams.set("path", input.search.path);
   url.searchParams.set("egress", JSON.stringify(input.search.egress));
