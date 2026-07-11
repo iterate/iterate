@@ -1274,6 +1274,84 @@ describe("interrupt and stray-request hygiene", () => {
     });
   });
 
+  it("an interrupt mid-stream feeds the response so far back as model-visible input", async () => {
+    const encoder = new TextEncoder();
+    let sse!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        sse = controller;
+      },
+    });
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          return body;
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append(...agentRequestEvents("tell me a long story"));
+    await deliver(); // reconcile drives the requested obligation; the attempt starts draining
+    sse.enqueue(encoder.encode(`data: ${JSON.stringify({ response: "Once upon a time" })}\n\n`));
+    // The chunk event is the evidence the accumulator has seen the text.
+    await vi.waitFor(() => {
+      expect(
+        stream.events.some((event) => event.type === "events.iterate.com/agent/llm-response-chunk"),
+      ).toBe(true);
+    });
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "stop — different question",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      },
+    });
+    await deliver(); // appends the cancel + the response-so-far input
+
+    const partialInput = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("Once upon a time"),
+    );
+    expect(partialInput?.payload?.content).toContain("Your response so far");
+    expect(partialInput?.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    });
+    // The partial folds into history, so the NEXT request's prompt carries it.
+    const state = reduceAgentEvents(stream.events);
+    expect(
+      state.history.some(
+        (item) =>
+          item.role === "user" &&
+          typeof item.content === "string" &&
+          item.content.includes("Once upon a time"),
+      ),
+    ).toBe(true);
+
+    // Let the doomed attempt finish: its completion settles as stale, so no
+    // output-added doubles up with the partial already in history.
+    sse.enqueue(encoder.encode("data: [DONE]\n\n"));
+    sse.close();
+    await vi.waitFor(() => {
+      expect(
+        stream.events.some(
+          (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/output-added"),
+    ).toBe(false);
+  });
+
   it("settles a stray non-current requested obligation without dialing the AI binding", async () => {
     const stream = new MemoryStream();
     let dials = 0;

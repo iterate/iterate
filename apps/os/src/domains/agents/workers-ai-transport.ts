@@ -367,7 +367,7 @@ function extractAssistantText(raw: unknown): string {
   throw new Error("AI response did not contain assistant text.");
 }
 
-function extractChunkText(chunk: unknown): string {
+export function extractChunkText(chunk: unknown): string {
   if (typeof chunk === "string") return chunk;
   if (typeof chunk !== "object" || chunk === null) return "";
   if ("response" in chunk && typeof chunk.response === "string") return chunk.response;
