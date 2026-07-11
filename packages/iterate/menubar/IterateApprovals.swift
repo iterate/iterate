@@ -76,9 +76,14 @@ final class ApprovalController: ObservableObject {
   private var stdinHandle: FileHandle?
   private var stdoutHandle: FileHandle?
   private var buffer = Data()
+  private var sawStatus = false  // did THIS watcher session emit a status line?
+  private var sessionStart = Date()
+  private var reconnectAttempts = 0
 
   func start() {
     stop()
+    sawStatus = false
+    sessionStart = Date()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["approve", "--json"])
@@ -101,24 +106,33 @@ final class ApprovalController: ObservableObject {
       }
       DispatchQueue.main.async { self?.ingest(chunk) }
     }
-    // The watcher exited: drop the now-stale rows. Don't touch `loggedIn` —
-    // the status line is authoritative (a needs-login exit already set it
-    // false). If we were connected and it died unexpectedly, reconnect once
-    // after a short delay; a needs-login exit leaves the Sign in button.
     process.terminationHandler = { [weak self] _ in
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.requests = []
-        if self.loggedIn {
-          DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.start() }
-        }
-      }
+      DispatchQueue.main.async { self?.watcherExited() }
     }
     do {
       try process.run()
       self.process = process
     } catch {
+      // Launch failed — we are not connected; clear stale session state.
       self.lastError = "Could not launch iterate: \(error.localizedDescription)"
+      self.loggedIn = false
+      self.requests = []
+    }
+  }
+
+  /// The watcher process exited. Drop stale rows; don't touch `loggedIn` (the
+  /// status line is authoritative). Reconnect only if this session actually
+  /// connected (emitted a status) and still believes it's signed in — bounded,
+  /// so a watcher that never connects or keeps dying fast won't hot-loop.
+  private func watcherExited() {
+    requests = []
+    if Date().timeIntervalSince(sessionStart) > 10 { reconnectAttempts = 0 }  // it was stable
+    guard loggedIn, sawStatus else { return }  // never connected → no reconnect
+    if reconnectAttempts < 5 {
+      reconnectAttempts += 1
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.start() }
+    } else {
+      lastError = "Approver keeps exiting — click Sign in to retry."
     }
   }
 
@@ -139,6 +153,7 @@ final class ApprovalController: ObservableObject {
   /// the current watcher first so login never overlaps a running approve.
   func login() {
     stop()
+    reconnectAttempts = 0  // an explicit retry clears the give-up counter
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["login"])
@@ -146,7 +161,13 @@ final class ApprovalController: ObservableObject {
     process.terminationHandler = { [weak self] _ in
       Task { @MainActor in self?.start() }
     }
-    try? process.run()
+    do {
+      try process.run()
+    } catch {
+      // Login couldn't even launch — don't leave the app with no watcher.
+      lastError = "Could not start login: \(error.localizedDescription)"
+      start()
+    }
   }
 
   func decide(_ request: HeldRequest, _ decision: String) {
@@ -172,6 +193,7 @@ final class ApprovalController: ObservableObject {
   private func handle(_ event: [String: Any]) {
     switch event["type"] as? String {
     case "status":
+      sawStatus = true  // this watcher connected and spoke
       loggedIn = event["loggedIn"] as? Bool ?? false
       principal = event["principal"] as? String
       project = event["projectId"] as? String
