@@ -1494,6 +1494,25 @@ export type ProjectProcessorState = {
     createdAt: string;
     updatedAt: string;
   }[];
+  egressRules: {
+    ruleKey: string;
+    description: string;
+    match: {
+      hosts?: string[] | undefined;
+      methods?: string[] | undefined;
+      pathPrefix?: string | undefined;
+      secretPaths?: string[] | undefined;
+    };
+    verdict: "deny" | "hold";
+    approvalTimeoutMs: number;
+  }[];
+  humanApprovalKeys: {
+    keyId: string;
+    publicKey: string;
+    label: string;
+    addedAt: string;
+    revokedAt: string | null;
+  }[];
 };
 
 /**

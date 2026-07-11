@@ -5,6 +5,14 @@ import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { StreamListItem } from "../streams/schemas.ts";
+import {
+  EgressRule,
+  HumanApprovalGrantedPayload,
+  HumanApprovalKey,
+  HumanApprovalRejectedPayload,
+  HumanApprovalRequestedPayload,
+  HumanApprovalSettledPayload,
+} from "./egress-approvals.ts";
 
 const ProjectCustomDomainStatus = z.enum([
   "requested",
@@ -72,6 +80,10 @@ export const ProjectProcessorContract = defineProcessorContract({
     secrets: z.array(StreamListItem).default([]),
     streams: z.array(StreamListItem).default([]),
     customDomains: z.array(ProjectCustomDomain).default([]),
+    /** Egress approval rules, replaced wholesale by egress-rules-configured. */
+    egressRules: z.array(EgressRule).default([]),
+    /** Enrolled human-approval public keys; once any is active, grants must be signed. */
+    humanApprovalKeys: z.array(HumanApprovalKey).default([]),
   }),
   events: {
     "events.iterate.com/project/create-requested": {
@@ -256,9 +268,173 @@ export const ProjectProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/project/egress-rules-configured": {
+      description:
+        "Replace the project's egress approval rules wholesale. Every outbound request is matched " +
+        "against the ordered list at the Project DO's egress decision point (first match wins, no " +
+        "match allows): a `hold` verdict parks the request until a human grants or rejects it on " +
+        "this stream, `deny` refuses it outright.",
+      payloadSchema: z.object({
+        rules: z.array(EgressRule),
+      }),
+      examples: [
+        {
+          description:
+            "Mutating Stripe calls need a human; anything spending the production Stripe secret is held too, wherever it goes.",
+          payload: {
+            rules: [
+              {
+                ruleKey: "stripe-mutations",
+                description: "Mutating calls to the Stripe API",
+                match: { hosts: ["api.stripe.com"], methods: ["POST", "PUT", "DELETE"] },
+                verdict: "hold",
+                approvalTimeoutMs: 600_000,
+              },
+              {
+                ruleKey: "stripe-prod-secret",
+                description: "Any request spending the production Stripe key",
+                match: { secretPaths: ["/secrets/stripe/prod"] },
+                verdict: "hold",
+              },
+            ],
+          },
+        },
+      ],
+    },
+    "events.iterate.com/project/human-approval-key-added": {
+      description:
+        "Enroll a public key whose holder may grant held egress requests. Once any active key " +
+        "exists, grants MUST carry a valid ECDSA P-256 signature over the canonical approval " +
+        "message (approval.v1) — unsigned grants are ignored. Rejections never require a signature.",
+      payloadSchema: z.object({
+        keyId: z.string(),
+        /** Base64 uncompressed P-256 public point (65 bytes, 0x04‖X‖Y). */
+        publicKey: z.string(),
+        label: z.string().optional(),
+      }),
+      examples: [
+        {
+          description:
+            "The owner enrolled their MacBook's Secure Enclave key via `iterate approve --enroll`.",
+          payload: {
+            keyId: "9f2c47a1b8d3e605",
+            publicKey:
+              "BGx1uJ9lZ7Yw2cQ4vX8pR3nK6tA1sD5fG0hJ9kL2mN4oP7qS8uV3wY6zB1cE4gI7jM0nQ5rT8vX2yA5bD8fH1kN4pS7u",
+            label: "jonas-macbook-enclave",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/project/human-approval-key-revoked": {
+      description: "Revoke an enrolled approval key; signatures from it stop being accepted.",
+      payloadSchema: z.object({
+        keyId: z.string(),
+      }),
+      examples: [
+        {
+          description: "The owner rotated their laptop and revoked the old enclave key.",
+          payload: {
+            keyId: "9f2c47a1b8d3e605",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/project/human-approval-requested": {
+      description:
+        "An outbound request matched a `hold` rule and is parked at the egress door awaiting a " +
+        "human. Everything is placeholder form — getSecret(...) references, never material. The " +
+        "requested event's offset IS the held request's identity: grants and rejections reference " +
+        "it as approvalRequestEventOffset.",
+      payloadSchema: HumanApprovalRequestedPayload,
+      examples: [
+        {
+          description:
+            "An agent tried to move money: a POST to Stripe spending the production key waits for approval.",
+          payload: {
+            method: "POST",
+            url: "https://api.stripe.com/v1/transfers",
+            headers: {
+              authorization: 'Bearer getSecret({ path: "/secrets/stripe/prod" })',
+              "content-type": "application/x-www-form-urlencoded",
+            },
+            bodySha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
+            bodyPreview: "amount=420000&currency=gbp&destination=acct_1MTfjCQ9PRzxCzLK",
+            secretPaths: ["/secrets/stripe/prod"],
+            ruleKey: "stripe-mutations",
+            expiresAt: "2026-07-10T12:34:56.000Z",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/project/human-approval-granted": {
+      description:
+        "A human approved a held egress request. When the project has active approval keys, " +
+        "`keyId` + `signature` (raw 64-byte r‖s ECDSA P-256 over the canonical approval.v1 " +
+        "message, base64) are required and verified before the request is released.",
+      payloadSchema: HumanApprovalGrantedPayload,
+      examples: [
+        {
+          description: "A signed grant from an enrolled Secure Enclave key releases the request.",
+          payload: {
+            approvalRequestEventOffset: 42,
+            keyId: "9f2c47a1b8d3e605",
+            signature:
+              "MEUCIQDx4Zc7HqzUnkl3RaW0mYtVbGJ5cD8fH1kN4pS7uMEUCIQDx4Zc7HqzUnkl3RaW0mYtVbGJ5c=",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/project/human-approval-rejected": {
+      description:
+        "A held egress request was refused — by a human, or automatically when its hold expired. " +
+        "Rejections are deliberately unsigned: deny is the fail-safe direction.",
+      payloadSchema: HumanApprovalRejectedPayload,
+      examples: [
+        {
+          description: "A human refused the request from the approval CLI.",
+          payload: {
+            approvalRequestEventOffset: 42,
+            reason: "human",
+          },
+        },
+        {
+          description:
+            "Nobody answered within the rule's approvalTimeoutMs; the hold auto-rejected.",
+          payload: {
+            approvalRequestEventOffset: 42,
+            reason: "expired",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/project/human-approval-settled": {
+      description:
+        "What actually happened after a granted request was released: the upstream status, or the " +
+        "delivery failure. Approval and outcome are separate facts — audits want both.",
+      payloadSchema: HumanApprovalSettledPayload,
+      examples: [
+        {
+          description: "The released Stripe transfer succeeded.",
+          payload: {
+            approvalRequestEventOffset: 42,
+            status: 200,
+          },
+        },
+        {
+          description: "The upstream call failed after release.",
+          payload: {
+            approvalRequestEventOffset: 42,
+            error: "connection refused",
+          },
+        },
+      ],
+    },
   },
   consumes: [
     "*",
+    "events.iterate.com/project/egress-rules-configured",
+    "events.iterate.com/project/human-approval-key-added",
+    "events.iterate.com/project/human-approval-key-revoked",
     "events.iterate.com/project/custom-domain-add-requested",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
     "events.iterate.com/project/custom-domain-provision-failed",

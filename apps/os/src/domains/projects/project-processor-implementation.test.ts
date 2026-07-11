@@ -40,6 +40,8 @@ function projectState(
     created: true,
     createRequest: { projectId: project.id, slug: project.slug },
     customDomains,
+    egressRules: [],
+    humanApprovalKeys: [],
     onboardingActive: false,
     onboardingCompletedAt: null,
     repos: [],
