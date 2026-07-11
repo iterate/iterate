@@ -869,7 +869,8 @@ export interface Search {
   /**
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on).
+   * incrementally from here on). Runs on the repo Durable Object's own write
+   * chain so its stale-key sweep can't race post-commit indexing.
    */
   indexRepo(input: { path: string }): Promise<{
     deleted: number;

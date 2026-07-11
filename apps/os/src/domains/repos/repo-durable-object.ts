@@ -947,32 +947,44 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * SPIKE: best-effort re-index of this repo's default-branch HEAD into the
-   * itx.search corpus after a write lands. Same never-fail-the-write posture
-   * as the GitHub mirror push; a failure just leaves the index one commit
-   * stale until the next write (or an explicit `itx.search.indexRepo`).
+   * SPIKE: re-index this repo's HEAD into the itx.search corpus NOW, and
+   * return the sweep/write counts. The public entry point behind
+   * `itx.search.indexRepo` — a manual backfill/repair.
    *
-   * Chained onto `#serializeWrite` (like `#scheduleGithubMirrorPush`) so
-   * snapshots run in commit order: each reads HEAD and runs a stale-key sweep,
-   * and two overlapping snapshots finishing out of order would let an older
-   * sweep delete objects a newer snapshot wrote (or resurrect deleted files),
-   * leaving repo search results wrong until the next index. Serializing makes
-   * the last-committed snapshot the last to run, so the corpus converges on
-   * current HEAD.
+   * Serialized on `#serializeWrite`: a snapshot reads HEAD and runs a
+   * stale-key sweep, so a manual reindex that overlapped a post-commit index
+   * (or another manual one) and finished out of order could let an older
+   * sweep delete objects a newer snapshot wrote. Running on the same write
+   * chain as commits and `#scheduleSearchIndex` makes the last-committed
+   * snapshot the last to run, so the corpus converges on current HEAD.
    */
-  #scheduleSearchIndex(branch: string): void {
+  reindexSearch(): Promise<{ deleted: number; indexed: number; skipped: number }> {
     const projectId = this.#name.projectId;
-    if (branch !== REPO_DEFAULT_BRANCH || projectId === null) return;
-    const indexed = this.#serializeWrite(async () => {
-      const snapshot = await this.getFilesSnapshot({ branch });
-      await indexRepoSnapshotToSearchIndex({
+    if (projectId === null) {
+      throw new Error("search indexing requires a project-scoped repo");
+    }
+    return this.#serializeWrite(async () => {
+      const snapshot = await this.getFilesSnapshot({ branch: REPO_DEFAULT_BRANCH });
+      return indexRepoSnapshotToSearchIndex({
         files: snapshot.files,
         projectId,
         repoPath: this.#name.path,
       });
     });
+  }
+
+  /**
+   * SPIKE: best-effort re-index of this repo's default-branch HEAD into the
+   * itx.search corpus after a write lands. Same never-fail-the-write posture
+   * as the GitHub mirror push; a failure just leaves the index one commit
+   * stale until the next write (or an explicit `itx.search.indexRepo`).
+   * Shares the serialized `reindexSearch` path so post-commit and manual
+   * reindexes can never race each other's stale-key sweeps.
+   */
+  #scheduleSearchIndex(branch: string): void {
+    if (branch !== REPO_DEFAULT_BRANCH || this.#name.projectId === null) return;
     this.ctx.waitUntil(
-      indexed.catch((error: unknown) => {
+      this.reindexSearch().catch((error: unknown) => {
         console.warn("search index repo snapshot failed", error);
       }),
     );

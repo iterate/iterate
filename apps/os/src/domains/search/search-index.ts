@@ -286,10 +286,12 @@ type MirrorFileOutcome = "mirrored" | "skipped" | "failed";
 /**
  * Mirror one itx.files write into the search index. Raw bytes with the
  * original content type — AI Search converts rich formats (pdf, images,
- * docx, …) to markdown itself. Oversized files are skipped (AI Search would
- * skip them anyway). Best-effort: never throws — it returns the outcome
- * instead ("failed" on a swallowed error) so `backfillFiles` can count what
- * actually landed rather than assuming every call succeeded.
+ * docx, …) to markdown itself. Oversized files can't be indexed (AI Search
+ * skips them too), so on a skip we also DELETE any prior index object for the
+ * path — otherwise re-uploading a previously-indexed file above the cap would
+ * leave the stale smaller version searchable. Best-effort: never throws — it
+ * returns the outcome instead ("failed" on a swallowed error) so
+ * `backfillFiles` can count what actually landed rather than assuming success.
  */
 export async function mirrorFileToSearchIndex(input: {
   bytes: Uint8Array;
@@ -297,13 +299,17 @@ export async function mirrorFileToSearchIndex(input: {
   path: string;
   projectId: string;
 }): Promise<MirrorFileOutcome> {
+  const key = fileSearchKey({ projectId: input.projectId, path: input.path });
   try {
-    if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) return "skipped";
-    await itxEnv.SEARCH_BUCKET.put(
-      fileSearchKey({ projectId: input.projectId, path: input.path }),
-      input.bytes,
-      { httpMetadata: { contentType: input.contentType } },
-    );
+    if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) {
+      // Can't index it; drop any stale prior entry so search never returns the
+      // old version as if it were current.
+      await itxEnv.SEARCH_BUCKET.delete(key);
+      return "skipped";
+    }
+    await itxEnv.SEARCH_BUCKET.put(key, input.bytes, {
+      httpMetadata: { contentType: input.contentType },
+    });
     return "mirrored";
   } catch (error) {
     console.error("search index file mirror failed", { path: input.path, error });

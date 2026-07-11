@@ -197,7 +197,6 @@ import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   indexEntireStream,
-  indexRepoSnapshotToSearchIndex,
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
   projectSearchFilter,
@@ -1993,25 +1992,20 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   /**
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on).
+   * incrementally from here on). Runs on the repo Durable Object's own write
+   * chain so its stale-key sweep can't race post-commit indexing.
    */
-  async indexRepo(input: { path: string }): Promise<{
+  indexRepo(input: { path: string }): Promise<{
     deleted: number;
     indexed: number;
     skipped: number;
   }> {
-    const stub = env.REPO.getByName(
+    return env.REPO.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
         path: normalizePath(input.path),
       }),
-    );
-    const snapshot = await stub.getFilesSnapshot();
-    return await indexRepoSnapshotToSearchIndex({
-      files: snapshot.files,
-      projectId: this.props.projectId,
-      repoPath: normalizePath(input.path),
-    });
+    ).reindexSearch();
   }
 
   /**
