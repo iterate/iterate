@@ -393,25 +393,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       });
       if (resetsSinceMeasurement.length > 0) return;
 
-      const transcript = state.history
-        .map(
-          (message) =>
-            `${message.role === "user" ? "User" : "Assistant"}:\n${flattenMessageToText(message)}`,
-        )
-        .join("\n\n");
+      // Same transport as normal turns: BYOK carries the per-agent
+      // prompt_cache_key, so this request lands on the shard that already
+      // holds the conversation's prefix (and the cache discount lands on our
+      // bill — the unified lane meters cached tokens at the uncached price).
       const summary = await runWorkersAiAttempt({
         ai,
+        transport: this.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        messages: [
-          { role: "system", content: AGENT_COMPACTION_PROMPT },
-          { role: "user", content: transcript },
-        ],
+        messages: buildAgentCompactionRequestBody(state).messages.map((message) => ({
+          role: message.role,
+          content: flattenMessageToText(message),
+        })),
         model: state.llmConfig.model,
         onChunk: async () => {},
       });
 
       const stateNow = reduceAgentEvents(await this.#readConsumedEvents());
       const carriedForward = stateNow.history.slice(state.history.length);
+      // The summary turn's own usage rides the reason string: compaction has
+      // no llm-request-requested offset, so a token-usage-reported event (its
+      // reducer keys on one, and its processEvent arm is this very trigger)
+      // does not fit — but the cached/input split is the whole evidence that
+      // the prefix-reuse above worked, so it must land in the journal.
+      const usage = normalizeLlmUsage(summary.usage);
+      const usageNote =
+        usage === undefined
+          ? ""
+          : `; summary llm usage: input=${usage.inputTokens} cached=${usage.cachedInputTokens ?? 0} output=${usage.outputTokens}`;
       await this.append({
         type: "events.iterate.com/agent/history-reset",
         idempotencyKey: this.idempotencyKey(`history-reset@${triggerOffset}`),
@@ -424,7 +433,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             },
             ...carriedForward,
           ],
-          reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
+          reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}${usageNote}`,
         },
       });
     } catch {
@@ -1176,12 +1185,20 @@ function renderFileHintLine(file: AgentFileAttachment): string {
 // =============================================================================
 
 /**
- * System prompt for the summary turn. The summary becomes the agent's ENTIRE
+ * Instruction for the summary turn. The summary becomes the agent's ENTIRE
  * memory of everything before the reset, so it optimizes for retrieval keys —
  * names, paths, ids, decisions — over narrative flow.
+ *
+ * It rides as the LAST message of the compaction request, behind the
+ * conversation exactly as normal turns send it — never as a fresh system
+ * prompt with the transcript re-rendered behind it. Compaction fires at the
+ * biggest prompt this agent will ever send (~half the context window), and
+ * the tail position means that whole prompt is a prefix the provider already
+ * has cached from the previous turn (90% input discount on gpt-5.5) instead
+ * of a from-scratch prompt sharing no bytes with it.
  */
 const AGENT_COMPACTION_PROMPT = [
-  "You are compacting an AI agent's conversation history because it is close to overflowing the model's context window. Write a summary that will REPLACE the transcript below as the agent's only memory of it.",
+  "You are compacting this AI agent conversation because it is close to overflowing the model's context window. Do not respond to the messages above. Instead, write a summary that will REPLACE everything above as the agent's only memory of it.",
   "",
   "Preserve, with their exact spellings:",
   "- who the user is, what they are trying to achieve, and their standing preferences or instructions",
@@ -1192,6 +1209,27 @@ const AGENT_COMPACTION_PROMPT = [
   "",
   "Write dense prose. No preamble, no headings about the summarization itself — output only the summary.",
 ].join("\n");
+
+/**
+ * The compaction request: the conversation EXACTLY as `buildAgentLlmRequestBody`
+ * sends it — same system prompt, same history messages — with the summarize
+ * instruction appended as the trailing message. Byte-identity with the normal
+ * turn's prefix is the point (guarded by a test): the provider's prompt cache
+ * matches on exact prefixes, so any re-rendering of the transcript would turn
+ * the most expensive request in an agent's life into a full cache miss.
+ */
+export function buildAgentCompactionRequestBody(state: {
+  systemPrompt: AgentState["systemPrompt"];
+  history: AgentState["history"];
+}): { messages: AgentChatMessage[] } {
+  return {
+    messages: [
+      { role: "system" as const, content: state.systemPrompt },
+      ...state.history,
+      { role: "system" as const, content: AGENT_COMPACTION_PROMPT },
+    ],
+  };
+}
 
 // =============================================================================
 // Context windows: model → the window the token-usage-reported payload claims.
