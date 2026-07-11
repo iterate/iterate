@@ -122,10 +122,11 @@ final class ApprovalController: ObservableObject {
       try process.run()
       self.process = process
     } catch {
-      // Launch failed — we are not connected; clear stale session state.
+      // Launch failed — that's a broken CLI path, NOT a lost session. stop()
+      // already cleared `connected`/`requests`; leave `loggedIn` alone so a
+      // valid session shows Disconnected + Reconnect rather than routing to a
+      // needless browser login.
       self.lastError = "Could not launch iterate: \(error.localizedDescription)"
-      self.loggedIn = false
-      self.requests = []
     }
   }
 
