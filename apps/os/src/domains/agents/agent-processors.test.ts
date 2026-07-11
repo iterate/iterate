@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   AgentProcessor,
+  buildAgentCompactionRequestBody,
   buildAgentLlmRequestBody,
   contextWindowTokens,
   flattenMessageToText,
@@ -1934,6 +1935,27 @@ describe("token usage and history reset", () => {
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/history-reset"),
     ).toHaveLength(1);
+  });
+
+  it("buildAgentCompactionRequestBody extends the conversation verbatim with the instruction last", () => {
+    const state = {
+      systemPrompt: "You are terse.",
+      history: [
+        { role: "user" as const, content: "remember: I like teal" },
+        { role: "assistant" as const, content: "noted!" },
+      ],
+    };
+    const body = buildAgentCompactionRequestBody(state);
+    // The cached-prefix property: everything but the trailing instruction is
+    // the conversation exactly as buildAgentLlmRequestBody sends it.
+    expect(body.messages.slice(0, -1)).toEqual([
+      { role: "system", content: "You are terse." },
+      ...state.history,
+    ]);
+    expect(body.messages.at(-1)).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("compacting this AI agent conversation"),
+    });
   });
 
   it("compaction rides the BYOK transport with the conversation's prompt cache key and journals the cache split", async () => {
