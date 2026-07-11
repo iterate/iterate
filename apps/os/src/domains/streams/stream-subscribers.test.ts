@@ -27,7 +27,7 @@ import {
   SKIP_CONFIRM_ATTEMPTS,
   computeBackoffMs,
 } from "./subscriber-math.ts";
-import type { RetainedProcessEventBatch } from "./subscriber-sinks.ts";
+import { retainProcessEventBatch, type RetainedProcessEventBatch } from "./subscriber-sinks.ts";
 
 const PARKED = "events.iterate.com/stream/subscription-parked";
 const ERROR_OCCURRED = "events.iterate.com/stream/error-occurred";
@@ -151,6 +151,7 @@ function makeHarness() {
   const facts: StreamEventInput[] = [];
   const armedAlarms: number[] = [];
   const kept: Promise<unknown>[] = [];
+  const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
@@ -225,6 +226,7 @@ function makeHarness() {
           if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
         }
       },
+      recordEgress: (count, bytes) => egress.push({ count, bytes }),
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
@@ -247,6 +249,7 @@ function makeHarness() {
     store,
     facts,
     armedAlarms,
+    egress,
     pokes,
     pushes,
     pushOutcomes,
@@ -1346,5 +1349,159 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
     await h.settle();
     expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Runtime metrics: real lag/bytes/latency accounting and the mutual ping.
+// ---------------------------------------------------------------------------
+
+describe("StreamSubscribers runtime metrics", () => {
+  it("connections report real lag, delivered events, and delivered bytes", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+
+    const { sink } = makeSink();
+    h.subscribers.openEphemeral({ subscriptionKey: "watcher", sink, replayAfterOffset: 0 });
+    await h.settle();
+
+    const connection = h.subscribers.connectionRuntimeState()["watcher"]!;
+    expect(connection.cursor).toBe(3);
+    expect(connection.lag).toBe(0); // cursor caught the head
+    expect(connection.eventsSent).toBe(3);
+    expect(connection.bytesSent).toBeGreaterThan(0);
+    // No pings answered, results disposed unpulled: both stats stay ABSENT
+    // (the UI renders a dash) instead of carrying a synthesized zero.
+    expect(connection.pingRttMs).toBeUndefined();
+    expect(connection.settleLatencyMs).toBeUndefined();
+    // Delivery throughput landed in the stream-level egress hook.
+    expect(h.egress).toEqual([{ count: 3, bytes: connection.bytesSent }]);
+  });
+
+  it("push lane records delivery duration, commit→acked settle latency, and bytes", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c")); // createdAt = epoch 1..3ms
+    h.advanceTo(1_000);
+    h.dialImpl.push = async () => {
+      h.advanceTo(h.now() + 50); // the receiver took 50ms to ack
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    const subscription = h.subscribers.subscriptionRuntimeState()["k"]!;
+    expect(subscription.deliveryDurationMs).toMatchObject({ last: 50, samples: 1 });
+    // Stream clock only: dispatched at 1000 + 50ms ack − newest createdAt (3).
+    expect(subscription.settleLatencyMs).toMatchObject({ last: 1_047, samples: 1 });
+    expect(subscription.bytesSent).toBeGreaterThan(0);
+    expect(h.egress).toEqual([{ count: 3, bytes: subscription.bytesSent }]);
+  });
+
+  it("wake-lane settle latency: the pulled batch result settling records commit→consumed", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b")); // createdAt = epoch 1..2ms
+    h.advanceTo(500);
+    h.configure(wakePayload(), 0);
+
+    let settleBatch: (() => void) | undefined;
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      // Retained exactly like the real dial does (durable lane pulls results),
+      // so the spine's onSettled option is exercised for real.
+      sink: retainProcessEventBatch(
+        () =>
+          new Promise<void>((resolve) => {
+            settleBatch = resolve;
+          }),
+        { onDeliveryError: () => {} },
+      ),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(settleBatch).toBeDefined();
+    expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
+
+    h.advanceTo(600);
+    settleBatch!();
+    await h.settle();
+    // Settled at 600 − newest event createdAt (2) — both on the stream clock.
+    expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toMatchObject({
+      last: 598,
+      samples: 1,
+    });
+  });
+
+  it("mutual ping: NTP math cancels responder clock skew; rounds are throttled", async () => {
+    const h = makeHarness();
+    const SKEW = 100_000; // responder clock runs far ahead
+    let pings = 0;
+    const ping = (input: { t0: number }) => {
+      pings += 1;
+      const t1 = h.now() + SKEW + 0; // received "now" on the skewed clock
+      h.advanceTo(h.now() + 40); // 40ms of round-trip elapses on OUR clock
+      return { t0: input.t0, t1, t2: t1 + 5 }; // 5ms of responder processing
+    };
+    h.subscribers.openEphemeral({ subscriptionKey: "watcher", sink: makeSink().sink, ping });
+    await h.settle();
+
+    h.subscribers.samplePingsSoon();
+    h.subscribers.samplePingsSoon(); // throttled: same round
+    await h.settle();
+    expect(pings).toBe(1);
+    // rtt = (t3−t0) − (t2−t1) = 40 − 5, regardless of the 100s skew.
+    expect(h.subscribers.connectionRuntimeState()["watcher"]!.pingRttMs).toMatchObject({
+      last: 35,
+      samples: 1,
+    });
+
+    h.advanceTo(h.now() + 5_001);
+    h.subscribers.samplePingsSoon();
+    await h.settle();
+    expect(pings).toBe(2);
+  });
+
+  it("a garbage or rejecting ping drops the sample and touches nothing else", async () => {
+    const h = makeHarness();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "garbage",
+      sink: makeSink().sink,
+      ping: () => ({}) as never,
+    });
+    const rejecting = h.subscribers.openEphemeral({
+      subscriptionKey: "rejecting",
+      sink: makeSink().sink,
+      ping: () => Promise.reject(new Error("no pings today")),
+    });
+    await h.settle();
+
+    h.subscribers.samplePingsSoon();
+    await h.settle();
+
+    const connections = h.subscribers.connectionRuntimeState();
+    expect(connections["garbage"]!.pingRttMs).toBeUndefined();
+    expect(connections["rejecting"]!.pingRttMs).toBeUndefined();
+    expect(rejecting.isLive()).toBe(true); // pings are observational, never liveness
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+  });
+
+  it("the retained ping capability is disposed with its connection", async () => {
+    const h = makeHarness();
+    let disposed = false;
+    const ping = Object.assign((input: { t0: number }) => ({ t0: input.t0, t1: 0, t2: 0 }), {
+      [Symbol.dispose]: () => {
+        disposed = true;
+      },
+    });
+    const connection = h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: makeSink().sink,
+      ping,
+    });
+    await h.settle();
+    expect(disposed).toBe(false);
+    connection.close("unsubscribed");
+    expect(disposed).toBe(true);
   });
 });

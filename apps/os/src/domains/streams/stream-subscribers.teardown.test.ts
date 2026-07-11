@@ -145,6 +145,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         webhook: async () => undefined,
       },
       appendFact: append,
+      recordEgress: () => undefined,
       now: () => Date.now(),
       random: () => 0.5,
       armAlarm: () => undefined,

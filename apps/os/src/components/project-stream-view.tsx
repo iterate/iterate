@@ -13,7 +13,10 @@ import { parseBrowserCoreProcessorState } from "~/domains/streams/client-librari
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamProcessorStore } from "~/domains/streams/client-libraries/browser/hooks/use-stream-processor-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import {
+  asBrowserStreamClient,
+  type StreamBrowserStore,
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BROWSER_RAW_EVENTS_TABLES,
@@ -50,7 +53,7 @@ import {
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { connectItxBrowser, evictItxSocket } from "~/itx/itx-react.tsx";
-import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
+import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
   streamViewMode,
@@ -196,7 +199,9 @@ export function ProjectStreamView({
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(feedStore.streamDatabase);
-  const metrics = useSimulatedRttMetrics();
+  // Real, browser-measured: transport RTT from RPCs the store already makes,
+  // plus the hosted processor's self-measured consumption report.
+  const metrics = useBrowserStreamMetrics(store);
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
@@ -240,6 +245,7 @@ export function ProjectStreamView({
 
   const { getProcessorRuntimeState, getStreamRuntimeState } = useProcessorsPanelDebugState({
     resolvedStreamSource,
+    store,
     streamPath,
   });
 
@@ -511,9 +517,10 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
+  store: StreamBrowserStore;
   streamPath: string;
 }) {
-  const { resolvedStreamSource, streamPath } = args;
+  const { resolvedStreamSource, store, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
       const stream = await resolvedStreamSource(streamPath);
@@ -531,10 +538,11 @@ function useProcessorsPanelDebugState(args: {
     },
     [resolvedStreamSource, streamPath],
   );
+  // Through the store's leader socket, not a fresh dial: the same call then
+  // doubles as a transport-RTT sample for the header/panel metrics.
   const getStreamRuntimeState = useCallback(
-    async (): Promise<StreamRuntimeDebugState> =>
-      (await resolvedStreamSource(streamPath)).runtimeState(),
-    [resolvedStreamSource, streamPath],
+    (): Promise<StreamRuntimeDebugState> => store.debugRuntimeState(),
+    [store],
   );
   return { getProcessorRuntimeState, getStreamRuntimeState };
 }

@@ -13,10 +13,12 @@
 // hosts the processor over a fresh subscription, mirroring the Durable-Object-side
 // stream processor host.
 
-import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
+import type { ProcessorRuntimeState, StreamPingInput, SubscriptionKey } from "../../rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
 import type { Stream } from "../../../../itx-api.generated.ts";
 import { announceContract, type AnyHostedProcessor } from "../../stream-processor-host.ts";
+import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
+import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
@@ -124,6 +126,23 @@ export type StreamRuntimeState = {
   coreProcessorState: unknown;
 };
 
+/** The full server runtime debug view (connections, subscriptions, throughput). */
+export type StreamServerRuntimeState = Awaited<ReturnType<Stream["runtimeState"]>>;
+
+/**
+ * This browser's own REAL stream metrics — every value is measured, never
+ * synthesized. `transportRttMs` samples come from timing RPCs the store makes
+ * anyway (liveness probes, nudges, debug polls). `subscriber` is the hosted
+ * processor's self-measured consumption report (append round trip,
+ * consume-own-append loop, ingest stats) — present only on the leader tab,
+ * which is the tab that actually consumes; followers report `undefined` and
+ * UIs render "—".
+ */
+export type BrowserStreamMetrics = {
+  transportRttMs: LatencyStats | null;
+  subscriber: SubscriberMetricsReport | undefined;
+};
+
 /**
  * What `appendBatch`/`runtimeState` return. When the connection is ready this is the genuine
  * capnweb `RpcPromise` (lazy + disposable). When the connection is transiently reconnecting
@@ -159,6 +178,14 @@ export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
+  /**
+   * The full server runtime debug view, RTT-timed: each call also lands one
+   * transport-RTT sample in {@link StreamBrowserStore.metrics}. The processors
+   * panel polls this while open.
+   */
+  debugRuntimeState(): Promise<StreamServerRuntimeState>;
+  /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). Poll-friendly. */
+  metrics(): BrowserStreamMetrics;
   getProcessorRuntimeState(args: {
     subscriptionKey: SubscriptionKey;
   }): StreamRpcResult<ProcessorRuntimeState | null>;
@@ -341,6 +368,25 @@ function createStreamRuntime(
   let totalDeliveredEvents = 0;
   let lastBatchEvents = 0;
   let ingestFailures = 0;
+  // Real transport-RTT samples from RPCs the store makes anyway (probes,
+  // nudges, debug polls). Success-only: a timed-out call is not a sample.
+  const transportRtt = new LatencyRing();
+  // The leader election's live hosted processor. Its StreamProcessor-provided
+  // `subscriberMetrics` is the ONE place this browser's consumption metrics
+  // live: appendBatch feeds committed offsets in, the base class's ingest
+  // closes the consume-own-append loop, and stream-side pings land their
+  // clock-offset estimate here too. Followers host no processor → no
+  // self-measured metrics, honestly.
+  let currentProcessor: BrowserHostedProcessor | undefined;
+
+  /** Time one RPC into the transport-RTT ring (success only). */
+  function timed<T>(promise: Promise<T>): Promise<T> {
+    const t0 = Date.now();
+    return promise.then((value) => {
+      transportRtt.record(Date.now() - t0, Date.now());
+      return value;
+    });
+  }
 
   function resolveReadyWaiters() {
     const waiters = readyWaiters;
@@ -782,6 +828,7 @@ function createStreamRuntime(
           sql,
           subscriptionKey,
         });
+        currentProcessor = processor;
         // The checkpoint read goes to the shared db worker; an un-deadlined
         // hang here would park the runtime as a forever-"leader" with no
         // subscription, no probe, and no error.
@@ -847,7 +894,29 @@ function createStreamRuntime(
           },
           // The live capability rides as a SIBLING of the serializable
           // descriptor — the same position the wake handshake gives it.
-          getRuntimeState: () => processor.getRuntimeState(),
+          // Merged host-side (not inside getRuntimeState) so a processor
+          // override with its own `runtime` bag cannot drop the metrics.
+          getRuntimeState: async () => {
+            const state = await processor.getRuntimeState();
+            const metrics = processor.subscriberMetrics?.report();
+            return metrics === undefined
+              ? state
+              : { ...state, runtime: { ...state.runtime, metrics } };
+          },
+          // The mutual ping's responder half: the stream measures its RTT to
+          // this tab, and the observed timestamps (plus half our own measured
+          // RTT as the one-way estimate) give the processor its clock-offset
+          // correction for delivery ages.
+          ping: (input: StreamPingInput) => {
+            const t1 = Date.now();
+            const rtt = transportRtt.stats();
+            processor.subscriberMetrics?.notePingObserved({
+              t0: input.t0,
+              t1,
+              ...(rtt === null ? {} : { oneWayEstimateMs: rtt.p50 / 2 }),
+            });
+            return { t0: input.t0, t1, t2: Date.now() };
+          },
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -867,6 +936,7 @@ function createStreamRuntime(
             replayAfterOffset: ready.replayAfterOffset,
             subscriber: ready.subscriber,
             getRuntimeState: ready.getRuntimeState,
+            ping: ready.ping,
           }),
         );
       })
@@ -988,6 +1058,11 @@ function createStreamRuntime(
     subscriptionHandle = undefined;
     writerRole?.release();
     writerRole = undefined;
+    // In-flight own-append correlations belong to the dying subscription; the
+    // fresh election replays, and a replayed delivery must not close a stale
+    // loop with an inflated sample.
+    currentProcessor?.subscriberMetrics?.clearPendingAppends();
+    currentProcessor = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
   }
@@ -1100,7 +1175,7 @@ function createStreamRuntime(
           let rawCoreProcessorState: unknown;
           try {
             ({ coreProcessorState: rawCoreProcessorState } = await raceWithTimeout(
-              Promise.resolve(connection.runtimeState()),
+              timed(Promise.resolve(connection.runtimeState())),
               LIVENESS_PROBE_TIMEOUT_MS,
               "liveness probe timed out",
             ));
@@ -1178,7 +1253,7 @@ function createStreamRuntime(
       const arrivalsBefore = deliveryArrivals;
       const readState = () =>
         raceWithTimeout(
-          Promise.resolve(connection.runtimeState()),
+          timed(Promise.resolve(connection.runtimeState())),
           LIVENESS_PROBE_TIMEOUT_MS,
           "delivery nudge timed out",
         );
@@ -1357,9 +1432,28 @@ function createStreamRuntime(
           : event,
       );
       const promise = (async () => {
+        // Real consume-own-append measurement: t0 is when the CALLER asked
+        // for the append (retries included — that wait is part of the honest
+        // number); the loop closes when this tab's own subscription ingests
+        // the committed offset (StreamProcessor.noteBatchIngested).
+        const t0 = Date.now();
         for (let attempt = 0; ; attempt++) {
           try {
-            return await callWhenReady((rpc) => rpc.append(...events) as Promise<StreamEvent[]>);
+            const committed = await callWhenReady(
+              (rpc) => rpc.append(...events) as Promise<StreamEvent[]>,
+            );
+            const maxCommittedOffset = committed.reduce(
+              (max, event) => Math.max(max, event.offset),
+              0,
+            );
+            if (maxCommittedOffset > 0) {
+              currentProcessor?.subscriberMetrics?.noteAppendCommitted({
+                maxCommittedOffset,
+                t0,
+                atMs: Date.now(),
+              });
+            }
+            return committed;
           } catch (error) {
             if (disposed || attempt >= APPEND_MAX_RETRIES) throw error;
             await new Promise((resolve) =>
@@ -1373,6 +1467,15 @@ function createStreamRuntime(
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);
     },
+    debugRuntimeState() {
+      return callWhenReady((rpc) =>
+        timed(Promise.resolve(rpc.runtimeState() as Promise<StreamServerRuntimeState>)),
+      );
+    },
+    metrics: () => ({
+      transportRttMs: transportRtt.stats(),
+      subscriber: currentProcessor?.subscriberMetrics?.report(),
+    }),
     getProcessorRuntimeState(args) {
       return callWhenReady(
         (rpc) => rpc.getProcessorRuntimeState(args) as Promise<ProcessorRuntimeState | null>,

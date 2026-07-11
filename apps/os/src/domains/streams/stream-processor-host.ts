@@ -59,9 +59,11 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
   StreamEventBatch,
+  StreamPingInput,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "./rpc-types.ts";
+import type { SubscriberMetricsReport } from "./subscriber-metrics.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
@@ -115,6 +117,17 @@ export type AnyHostedProcessor = {
   currentState: unknown;
   /** Whether `currentState` is the fold and not the schema default (see StreamProcessor.isLoaded). */
   readonly isLoaded: boolean;
+  /**
+   * Self-measured consumption metrics (StreamProcessor provides one; optional
+   * so structurally-foreign processors still fit). Hosts merge its report
+   * into the `getRuntimeState` answer and feed observed pings into it.
+   */
+  readonly subscriberMetrics?: {
+    report(): SubscriberMetricsReport;
+    notePingObserved(args: { t0: number; t1: number; oneWayEstimateMs?: number }): void;
+    noteAppendCommitted(args: { maxCommittedOffset: number; t0: number; atMs: number }): void;
+    clearPendingAppends(): void;
+  };
   /** Host confirmation that the journal is folded through head (the zero-batch catch-up case). */
   markLoaded(): void;
   /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
@@ -579,7 +592,24 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         subscriber: {
           processor: { announcement: announceContract(entry.processor.contract) },
         },
-        getRuntimeState: () => entry.processor.getRuntimeState(),
+        // Merged HERE rather than inside getRuntimeState so a processor
+        // subclass that overrides getRuntimeState with its own `runtime` bag
+        // cannot accidentally drop the self-measured metrics.
+        getRuntimeState: async () => {
+          const state = await entry.processor.getRuntimeState();
+          const metrics = entry.processor.subscriberMetrics?.report();
+          return metrics === undefined
+            ? state
+            : { ...state, runtime: { ...state.runtime, metrics } };
+        },
+        // The mutual ping's responder half (see rpc-types.ts). Also feeds the
+        // processor's clock-offset estimate — same Cloudflare clock domain,
+        // so the one-way term is omitted and the estimate is ~zero.
+        ping: (input: StreamPingInput) => {
+          const t1 = now();
+          entry.processor.subscriberMetrics?.notePingObserved({ t0: input.t0, t1 });
+          return { t0: input.t0, t1, t2: now() };
+        },
       };
     },
   };

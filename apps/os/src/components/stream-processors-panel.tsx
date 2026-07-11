@@ -11,12 +11,12 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
 import type { Stream } from "../itx-api.generated.ts";
 import {
-  hashString,
+  formatBytesPerSecond,
   presenceColorClasses,
   presenceInitials,
   presenceLabel,
   sparklinePoints,
-  type RttMetrics,
+  type BrowserStreamMetricsView,
 } from "~/lib/stream-presence.ts";
 
 export function PresenceAvatar({
@@ -59,7 +59,9 @@ export function PresenceAvatar({
 /**
  * One abstraction for presence, metrics, and processor detail — everything is
  * a facet of "the stream's consumers". Overview lists every consumer with
- * (simulated) RTT/lag; clicking one drills into its announced contract.
+ * REAL RTT/lag from the stream's runtime table (polled while open — the poll
+ * is also what drives the stream's observer-gated ping sampling); clicking
+ * one drills into its announced contract and self-reported metrics.
  */
 export type StreamRuntimeDebugState = Awaited<ReturnType<Stream["runtimeState"]>>;
 
@@ -74,7 +76,7 @@ type ProcessorPanelEntry = {
   deliveryMode?: "wake" | "push" | "webhook";
   configuredAtOffset?: number;
   runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
-  runtimeConnection?: Record<string, unknown>;
+  runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
 };
 
 type StreamRuntimeLoad =
@@ -82,6 +84,12 @@ type StreamRuntimeLoad =
   | { status: "loading" }
   | { status: "loaded"; state: StreamRuntimeDebugState }
   | { status: "error"; message: string };
+
+/**
+ * Overview poll cadence while the sheet is open. Also the observer signal for
+ * the stream's throttled ping sampling (see runtimeState in rpc-targets.ts).
+ */
+const STREAM_RUNTIME_POLL_MS = 2_000;
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
 const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
@@ -132,7 +140,7 @@ export function StreamProcessorsPanel({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   presence: readonly AgentUiPresenceEntry[];
-  metrics: RttMetrics;
+  metrics: BrowserStreamMetricsView;
   eventCount: number;
   busy: boolean;
   /** Subscription key of the focused processor (URL-backed); null = overview. */
@@ -148,27 +156,44 @@ export function StreamProcessorsPanel({
     status: "idle",
   });
   const [streamRefreshKey, setStreamRefreshKey] = useState(0);
+  // Poll while open (never in parallel): every poll refreshes the live
+  // metrics AND asks the stream for a ping round (its RTT sampling is
+  // observer-gated on exactly this call). Only the first fetch shows a
+  // loading state; later polls swap data in place.
   useEffect(() => {
     if (!open) {
       setStreamRuntimeLoad({ status: "idle" });
       return;
     }
     let disposed = false;
-    setStreamRuntimeLoad({ status: "loading" });
-    void getStreamRuntimeState()
-      .then((state) => {
-        if (!disposed) setStreamRuntimeLoad({ status: "loaded", state });
-      })
-      .catch((error: unknown) => {
-        if (!disposed) {
-          setStreamRuntimeLoad({
-            status: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
+    let inFlight = false;
+    const load = () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      setStreamRuntimeLoad((previous) =>
+        previous.status === "loaded" ? previous : { status: "loading" },
+      );
+      void getStreamRuntimeState()
+        .then((state) => {
+          if (!disposed) setStreamRuntimeLoad({ status: "loaded", state });
+        })
+        .catch((error: unknown) => {
+          if (!disposed) {
+            setStreamRuntimeLoad({
+              status: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    load();
+    const timer = setInterval(load, STREAM_RUNTIME_POLL_MS);
     return () => {
       disposed = true;
+      clearInterval(timer);
     };
   }, [getStreamRuntimeState, open, streamRefreshKey]);
 
@@ -338,7 +363,7 @@ function ProcessorsOverview({
   streamRuntimeLoad,
 }: {
   entries: readonly ProcessorPanelEntry[];
-  metrics: RttMetrics;
+  metrics: BrowserStreamMetricsView;
   eventCount: number;
   busy: boolean;
   focusedKey: string | null;
@@ -352,6 +377,10 @@ function ProcessorsOverview({
   const points = sparklinePoints(metrics.spark, 368, 44);
   const area = `2,42 ${points} 366,42`;
   const sections = processorEntrySections(entries);
+  const rtt = metrics.transportRttMs;
+  const subscriber = metrics.subscriber;
+  const throughput =
+    streamRuntimeLoad.status === "loaded" ? streamRuntimeLoad.state.runtime.metrics : undefined;
 
   return (
     <>
@@ -368,30 +397,76 @@ function ProcessorsOverview({
         <div className="rounded-2xl bg-muted/40 px-4 py-3.5">
           <div className="flex items-baseline justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Append round-trip
+              Connection RTT
             </span>
-            <span className="font-mono text-[10px] text-muted-foreground/70">simulated</span>
+            <span className="font-mono text-[10px] text-muted-foreground/70">this browser</span>
           </div>
           <div className="mt-2 flex items-end gap-3">
             <span className="font-mono text-2xl font-semibold leading-none">
-              {metrics.rttNow}
+              {rtt === null ? "—" : rtt.last}
               <span className="text-xs text-muted-foreground">ms</span>
             </span>
-            <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
-              <polygon points={area} className="fill-emerald-500/10" />
-              <polyline
-                points={points}
-                fill="none"
-                className="stroke-emerald-600"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-            </svg>
+            {metrics.spark.length === 0 ? (
+              <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
+            ) : (
+              <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
+                <polygon points={area} className="fill-emerald-500/10" />
+                <polyline
+                  points={points}
+                  fill="none"
+                  className="stroke-emerald-600"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
           </div>
-          <div className="mt-3 flex gap-5">
-            <MetricStat label="p50" value={`${metrics.p50}ms`} />
-            <MetricStat label="p95" value={`${metrics.p95}ms`} />
-            <MetricStat label="events/s" value={(0.4 + (metrics.rttNow % 7) / 10).toFixed(1)} />
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+            <MetricStat label="p50" value={rtt === null ? "—" : `${rtt.p50}ms`} />
+            <MetricStat label="p95" value={rtt === null ? "—" : `${rtt.p95}ms`} />
+            <MetricStat
+              label="append"
+              title="Append call → commit acknowledged (this browser's own appends)"
+              value={
+                subscriber?.appendRoundTripMs == null
+                  ? "—"
+                  : `${subscriber.appendRoundTripMs.last}ms`
+              }
+            />
+            <MetricStat
+              label="own loop"
+              title="Append call → this browser's own subscription ingested the committed event"
+              value={
+                subscriber?.consumeOwnAppendMs == null
+                  ? "—"
+                  : `${subscriber.consumeOwnAppendMs.last}ms`
+              }
+            />
+            <MetricStat
+              label="events/s"
+              title="Appends committed on this stream over the last minute"
+              value={
+                throughput === undefined ? "—" : throughput.ingressLastMinute.perSecond.toFixed(1)
+              }
+            />
+            <MetricStat
+              label="in"
+              title="Bytes appended over the last minute"
+              value={
+                throughput === undefined
+                  ? "—"
+                  : formatBytesPerSecond(throughput.ingressLastMinute.bytes)
+              }
+            />
+            <MetricStat
+              label="out"
+              title="Bytes delivered to all subscribers over the last minute"
+              value={
+                throughput === undefined
+                  ? "—"
+                  : formatBytesPerSecond(throughput.egressLastMinute.bytes)
+              }
+            />
             <MetricStat label="head" value={`#${eventCount}`} />
           </div>
           <div className="mt-3 flex justify-end">
@@ -440,7 +515,6 @@ function ProcessorsOverview({
             entries={section.entries}
             busy={busy}
             focusedKey={focusedKey}
-            metrics={metrics}
             onFocus={onFocus}
           />
         ))}
@@ -455,7 +529,6 @@ function ProcessorEntrySection({
   entries,
   busy,
   focusedKey,
-  metrics,
   onFocus,
 }: {
   title: string;
@@ -463,7 +536,6 @@ function ProcessorEntrySection({
   entries: readonly ProcessorPanelEntry[];
   busy: boolean;
   focusedKey: string | null;
-  metrics: RttMetrics;
   onFocus: (subscriptionKey: string) => void;
 }) {
   return (
@@ -483,7 +555,6 @@ function ProcessorEntrySection({
               entry={entry}
               busy={busy}
               focused={entry.subscriptionKey === focusedKey}
-              metrics={metrics}
               onFocus={onFocus}
             />
           ))
@@ -497,17 +568,26 @@ function ProcessorEntryButton({
   entry,
   busy,
   focused,
-  metrics,
   onFocus,
 }: {
   entry: ProcessorPanelEntry;
   busy: boolean;
   focused: boolean;
-  metrics: RttMetrics;
   onFocus: (subscriptionKey: string) => void;
 }) {
+  // Real numbers only: the ping RTT when the subscriber answers pings, else
+  // the last commit→settled sample (wake) or delivery-call duration
+  // (push/webhook). "—" until data exists — never a synthesized value.
+  const rttMs = entry.connected
+    ? (entry.runtimeConnection?.pingRttMs?.last ??
+      entry.runtimeConnection?.settleLatencyMs?.last ??
+      entry.runtimeSubscription?.deliveryDurationMs?.last ??
+      null)
+    : null;
   const lag =
-    entry.kind === "core" ? "0" : (entry.runtimeSubscription?.lag ?? fakeLag(entry, busy));
+    entry.kind === "core"
+      ? "0"
+      : (entry.runtimeSubscription?.lag ?? entry.runtimeConnection?.lag ?? null);
   return (
     <button
       type="button"
@@ -538,15 +618,15 @@ function ProcessorEntryButton({
         </span>
       </span>
       <span className="text-right font-mono text-xs text-muted-foreground">
-        {entry.connected ? `${fakeRtt(entry.subscriptionKey, metrics.rttNow)}ms` : "—"}
+        {rttMs == null ? "—" : `${rttMs}ms`}
       </span>
       <span
         className={cn(
           "text-right font-mono text-xs",
-          String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
+          lag == null || String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
         )}
       >
-        {entry.kind === "core" || entry.connected || entry.runtimeSubscription != null ? lag : "—"}
+        {lag == null ? "—" : String(lag)}
       </span>
     </button>
   );
@@ -572,14 +652,12 @@ function buildProcessorPanelEntries(
   for (const entry of presence) {
     const coreConnection = coreConnections[entry.subscriptionKey];
     const subscriptionType = readSubscriptionType(coreConnection) ?? "ephemeral";
-    const runtimeConnection = readRuntimeRecord(
-      streamRuntime?.runtime.connections[entry.subscriptionKey],
-    );
+    const runtimeConnection = streamRuntime?.runtime.connections[entry.subscriptionKey];
     entries.set(entry.subscriptionKey, {
       ...entry,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
       subscriptionType,
-      runtimeConnection,
+      ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
       ...(configured[entry.subscriptionKey]?.deliveryMode === undefined
         ? {}
         : { deliveryMode: configured[entry.subscriptionKey].deliveryMode }),
@@ -605,7 +683,9 @@ function buildProcessorPanelEntries(
         : {}),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
-      runtimeConnection: readRuntimeRecord(streamRuntime?.runtime.connections[subscriptionKey]),
+      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
+        ? {}
+        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
       ...(configured[subscriptionKey]?.deliveryMode === undefined
         ? {}
         : { deliveryMode: configured[subscriptionKey].deliveryMode }),
@@ -620,11 +700,11 @@ function buildProcessorPanelEntries(
   // exist ONLY in the runtime connection table (core state v14), and this
   // client's presence roster may not know consumers that connected before its
   // mirror subscribed. The runtime table is the authority on "connected now".
-  for (const [subscriptionKey, value] of Object.entries(streamRuntime?.runtime.connections ?? {})) {
+  for (const [subscriptionKey, runtimeConnection] of Object.entries(
+    streamRuntime?.runtime.connections ?? {},
+  )) {
     if (entries.has(subscriptionKey)) continue;
-    const runtimeConnection = readRuntimeRecord(value);
-    if (runtimeConnection == null) continue;
-    const subscriptionType = readSubscriptionType(runtimeConnection) ?? "ephemeral";
+    const subscriptionType = runtimeConnection.subscriptionType;
     const subscriber = readRuntimeRecord(runtimeConnection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
     entries.set(subscriptionKey, {
@@ -671,7 +751,9 @@ function buildProcessorPanelEntries(
       deliveryMode: config.deliveryMode,
       configuredAtOffset: config.configuredAtOffset,
       runtimeSubscription,
-      runtimeConnection: readRuntimeRecord(streamRuntime?.runtime.connections[subscriptionKey]),
+      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
+        ? {}
+        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
     });
   }
 
@@ -827,19 +909,9 @@ function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
   return ["agent", "capability-host"].includes(slug);
 }
 
-/** Deterministic fake RTT for preview data; stable per subscription but still visibly live. */
-function fakeRtt(subscriptionKey: string, rttNow: number): number {
-  return 14 + (hashString(subscriptionKey) % 38) + (rttNow % 9);
-}
-
-function fakeLag(entry: AgentUiPresenceEntry, busy: boolean): string {
-  if (busy && isLlmish(entry)) return String(1 + (hashString(entry.subscriptionKey) % 3));
-  return "0";
-}
-
-function MetricStat({ label, value }: { label: string; value: string }) {
+function MetricStat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div>
+    <div {...(title === undefined ? {} : { title })}>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
       <div className="mt-0.5 font-mono text-sm">{value}</div>
     </div>
@@ -1039,15 +1111,73 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
     return null;
   }
   const runtime = entry.runtimeSubscription;
+  const connection = entry.runtimeConnection;
   return (
     <div>
       <SectionHeading>Delivery</SectionHeading>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat label="type" value={entry.subscriptionType ?? "unknown"} />
         <RuntimeStateStat label="mode" value={entry.deliveryMode ?? runtime?.mode ?? "live"} />
-        <RuntimeStateStat label="acked" value={runtime == null ? "—" : `#${runtime.ackedOffset}`} />
-        <RuntimeStateStat label="lag" value={runtime == null ? "—" : String(runtime.lag)} />
+        <RuntimeStateStat
+          label="acked"
+          value={
+            runtime != null
+              ? `#${runtime.ackedOffset}`
+              : connection != null
+                ? `#${connection.cursor}`
+                : "—"
+          }
+        />
+        <RuntimeStateStat
+          label="lag"
+          value={
+            runtime != null
+              ? String(runtime.lag)
+              : connection != null
+                ? String(connection.lag)
+                : "—"
+          }
+        />
       </div>
+      {connection == null && runtime?.settleLatencyMs == null ? null : (
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <RuntimeStateStat
+            label="ping rtt"
+            value={
+              connection?.pingRttMs == null
+                ? "—"
+                : `${connection.pingRttMs.last}ms · p95 ${connection.pingRttMs.p95}ms`
+            }
+          />
+          <RuntimeStateStat
+            label="settle"
+            value={(() => {
+              const stats = connection?.settleLatencyMs ?? runtime?.settleLatencyMs;
+              return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
+            })()}
+          />
+          <RuntimeStateStat
+            label="delivered"
+            value={
+              connection != null
+                ? `${connection.eventsSent} ev`
+                : runtime?.bytesSent != null
+                  ? formatBytes(runtime.bytesSent)
+                  : "—"
+            }
+          />
+          <RuntimeStateStat
+            label="bytes"
+            value={
+              connection != null
+                ? formatBytes(connection.bytesSent)
+                : runtime?.bytesSent != null
+                  ? formatBytes(runtime.bytesSent)
+                  : "—"
+            }
+          />
+        </div>
+      )}
       {entry.configuredAtOffset == null && runtime?.lastError == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
@@ -1339,6 +1469,12 @@ function previewChatMessage(message: Record<string, unknown>): { role: string; t
   text = text.replace(/\s+/g, " ").trim();
   if (text.length > 160) text = `${text.slice(0, 157)}…`;
   return { role, text: text || "(empty)" };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function RuntimeStateMessage({

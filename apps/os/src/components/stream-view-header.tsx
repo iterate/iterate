@@ -23,7 +23,11 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
-import { presenceLabel, sparklinePoints, type RttMetrics } from "~/lib/stream-presence.ts";
+import {
+  presenceLabel,
+  sparklinePoints,
+  type BrowserStreamMetricsView,
+} from "~/lib/stream-presence.ts";
 import {
   defaultModeForStream,
   modeCapabilities,
@@ -68,7 +72,8 @@ export function StreamViewHeader({
    * the sheet instead).
    */
   eventsToggle?: { eventCount: number };
-  metrics: RttMetrics;
+  /** This browser's REAL measured metrics (see useBrowserStreamMetrics) — "—" until samples exist. */
+  metrics: BrowserStreamMetricsView;
   presence: readonly AgentUiPresenceEntry[];
   streamPath: string;
 }) {
@@ -134,16 +139,18 @@ export function StreamViewHeader({
           onClick={openProcessorsOverview}
           className="font-mono text-xs font-normal text-muted-foreground"
         >
-          <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
-            <polyline
-              points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
-              fill="none"
-              className="stroke-emerald-600"
-              strokeWidth="1.4"
-              strokeLinejoin="round"
-            />
-          </svg>
-          {metrics.rttNow}ms
+          {metrics.spark.length === 0 ? null : (
+            <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
+              <polyline
+                points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
+                fill="none"
+                className="stroke-emerald-600"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+          {metrics.transportRttMs === null ? "—" : `${metrics.transportRttMs.last}ms`}
         </Button>
         {eventsToggle != null ? (
           <Button

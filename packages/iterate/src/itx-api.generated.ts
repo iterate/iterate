@@ -1071,11 +1071,43 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
+  /**
+   * Live debug view of the stream Durable Object: core processor state, open
+   * connections with real delivery metrics (lag, bytes, commit→settled
+   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * stream's own throughput windows. All runtime metrics are in-memory and
+   * reset on eviction (`metrics.measuredSince` says how long the window has
+   * been collecting); latency stats fields are absent until a real sample
+   * exists — no value is ever synthesized. Calling this also requests a
+   * throttled mutual-ping round over the live connections (observer-driven
+   * sampling), so a polling debug UI sees RTTs populate.
+   */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
-      connections: Record<string, unknown>;
+      connections: Record<
+        string,
+        {
+          subscriptionType: "configured" | "ephemeral";
+          startedAt: string;
+          cursor: number;
+          lag: number;
+          batchesSent: number;
+          eventsSent: number;
+          bytesSent: number;
+          lastDeliveredAt?: string;
+          settleLatencyMs?: {
+            last: number;
+            p50: number;
+            p95: number;
+            samples: number;
+            lastAt: number;
+          };
+          pingRttMs?: { last: number; p50: number; p95: number; samples: number; lastAt: number };
+          subscriber?: unknown;
+          hasPendingDelivery: boolean;
+        }
+      >;
       subscriptions: Record<
         string,
         {
@@ -1087,8 +1119,28 @@ export interface Stream {
           lastError: string | null;
           parkedAtOffset: number | null;
           connected: boolean;
+          bytesSent?: number;
+          settleLatencyMs?: {
+            last: number;
+            p50: number;
+            p95: number;
+            samples: number;
+            lastAt: number;
+          };
+          deliveryDurationMs?: {
+            last: number;
+            p50: number;
+            p95: number;
+            samples: number;
+            lastAt: number;
+          };
         }
       >;
+      metrics: {
+        measuredSince: string;
+        ingressLastMinute: { count: number; bytes: number; perSecond: number };
+        egressLastMinute: { count: number; bytes: number; perSecond: number };
+      };
     };
   }>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -1113,6 +1165,13 @@ export interface Stream {
     subscriber?: unknown;
     /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
+    /**
+     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
+     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * pings it — throttled, and only while someone is watching runtimeState —
+     * to measure real transport RTT to this subscriber.
+     */
+    ping?: StreamSubscriberPing;
   }): Promise<StreamSubscriptionHandle>;
   /**
    * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
@@ -1717,6 +1776,8 @@ export type StreamSubscriberWakeResponse = {
   subscriber?: unknown;
   /** Live runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */
+  ping?: StreamSubscriberPing;
 };
 
 /**
@@ -2422,6 +2483,15 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 /**
+ * Optional ping capability a subscriber hands the stream (ephemeral
+ * `subscribe()` argument or wake-handshake field). Absent on older
+ * subscribers — the stream then simply has no RTT samples for them.
+ */
+export type StreamSubscriberPing = (
+  input: StreamPingInput,
+) => StreamPingReply | Promise<StreamPingReply>;
+
+/**
  * Live subscription handle returned by `Stream.subscribe`.
  *
  * `ping()` reports liveness: `true` while
@@ -2725,6 +2795,23 @@ export type StreamEventBatch = {
   streamMaxOffset: number;
   state: unknown;
 };
+
+/**
+ * The mutual ping's request half (NTP-style, for real latency measurement
+ * between a stream and its subscribers): the requester stamps `t0` on its own
+ * clock and observes `t3` when the reply lands.
+ */
+export type StreamPingInput = { t0: number };
+
+/**
+ * The mutual ping's reply half: the responder echoes `t0` and reports when it
+ * received the request (`t1`) and sent the reply (`t2`) on ITS clock.
+ * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and
+ * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock
+ * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:
+ * ping failures drop the sample and never affect delivery or liveness.
+ */
+export type StreamPingReply = { t0: number; t1: number; t2: number };
 
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection
